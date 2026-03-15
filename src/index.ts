@@ -1,0 +1,42 @@
+import 'dotenv/config';
+import express from 'express';
+import cors from 'cors';
+import helmet from 'helmet';
+import authRoutes from './routes/auth';
+import jobRoutes from './routes/jobs';
+import uploadRoutes from './routes/upload';
+import employeeRoutes from './routes/employees';
+import locationRoutes from './routes/location';
+
+const app = express();
+const PORT = parseInt(process.env.PORT || '3001', 10);
+
+// Security
+app.use(helmet());
+app.use(cors({
+  origin: process.env.FRONTEND_URL || 'http://localhost:8081',
+  credentials: true,
+}));
+
+// Body parsing with size limits
+app.use(express.json({ limit: '100kb' }));
+app.use(express.urlencoded({ extended: true, limit: '100kb' }));
+
+// Health check
+app.get('/api/health', (_req, res) => {
+  res.json({ status: 'ok', timestamp: new Date().toISOString() });
+});
+
+// Routes
+app.use('/api/auth', authRoutes);
+app.use('/api/jobs', jobRoutes);
+app.use('/api/upload', uploadRoutes);
+app.use('/api/employees', employeeRoutes);
+app.use('/api/location', locationRoutes);
+
+// Start server
+app.listen(PORT, () => {
+  console.log(`ASAP server running on http://localhost:${PORT}`);
+});
+
+export default app;
