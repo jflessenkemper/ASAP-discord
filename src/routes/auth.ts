@@ -1,9 +1,13 @@
 import { Router, Request, Response } from 'express';
 import bcrypt from 'bcrypt';
 import rateLimit from 'express-rate-limit';
+import { OAuth2Client } from 'google-auth-library';
+import appleSignin from 'apple-signin-auth';
 import pool from '../db/pool';
 import { createSession, invalidateSession, AuthRequest, requireAuth } from '../middleware/auth';
 import { generateCode, sendTwoFactorCode } from '../services/email';
+
+const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 
 const router = Router();
 
@@ -16,107 +20,123 @@ const loginLimiter = rateLimit({
   legacyHeaders: false,
 });
 
-// ─── Client Registration ───
-router.post('/client/register', async (req: Request, res: Response) => {
+// ─── Social Auth (Apple / Google) ───
+router.post('/social', loginLimiter, async (req: Request, res: Response) => {
   try {
-    const { first_name, last_name, email, phone, password, gender, date_of_birth, latitude, longitude } = req.body;
+    const { provider, id_token } = req.body;
 
-    if (!first_name || !email || !phone || !password) {
-      res.status(400).json({ error: 'First name, email, phone, and password are required' });
+    if (!provider || !id_token) {
+      res.status(400).json({ error: 'Provider and id_token are required' });
       return;
     }
 
-    if (String(first_name).length > 100 || String(last_name || '').length > 100) {
-      res.status(400).json({ error: 'Name must be 100 characters or less' });
+    if (provider !== 'apple' && provider !== 'google') {
+      res.status(400).json({ error: 'Provider must be "apple" or "google"' });
       return;
     }
 
-    if (String(email).length > 255) {
-      res.status(400).json({ error: 'Email must be 255 characters or less' });
+    let email: string | undefined;
+    let firstName: string | undefined;
+    let lastName: string | undefined;
+    let providerSub: string | undefined;
+
+    // ── Verify token with the appropriate provider ──
+    if (provider === 'google') {
+      const ticket = await googleClient.verifyIdToken({
+        idToken: id_token,
+        audience: process.env.GOOGLE_CLIENT_ID,
+      });
+      const payload = ticket.getPayload();
+      if (!payload || !payload.email) {
+        res.status(401).json({ error: 'Invalid Google token' });
+        return;
+      }
+      email = payload.email;
+      firstName = payload.given_name || '';
+      lastName = payload.family_name || '';
+      providerSub = payload.sub;
+    } else {
+      // Apple
+      const payload = await appleSignin.verifyIdToken(id_token, {
+        audience: process.env.APPLE_SERVICE_ID,
+        ignoreExpiration: false,
+      });
+      if (!payload || !payload.email) {
+        res.status(401).json({ error: 'Invalid Apple token' });
+        return;
+      }
+      email = payload.email;
+      providerSub = payload.sub;
+      // Apple only sends name on first authorization — handled via optional name fields from client
+      firstName = req.body.first_name || '';
+      lastName = req.body.last_name || '';
+    }
+
+    if (!email || !providerSub) {
+      res.status(401).json({ error: 'Could not verify identity' });
       return;
     }
 
-    if (String(phone).length > 20) {
-      res.status(400).json({ error: 'Phone must be 20 characters or less' });
+    const normalizedEmail = email.toLowerCase().trim();
+
+    // ── Look up existing account by provider + provider_id ──
+    let clientResult = await pool.query(
+      'SELECT id, first_name, last_name, email, phone, address, gender, date_of_birth, latitude, longitude, first_job_used, created_at FROM clients WHERE auth_provider = $1 AND auth_provider_id = $2',
+      [provider, providerSub]
+    );
+
+    if (clientResult.rows.length > 0) {
+      // Existing social account — log in
+      const client = clientResult.rows[0];
+      const token = await createSession(client.id, 'client');
+      res.json({ token, user: client });
       return;
     }
 
-    if (password.length < 8) {
-      res.status(400).json({ error: 'Password must be at least 8 characters' });
+    // ── Fall back to email match (link existing password account to social) ──
+    clientResult = await pool.query(
+      'SELECT id, first_name, last_name, email, phone, address, gender, date_of_birth, latitude, longitude, first_job_used, created_at FROM clients WHERE email = $1',
+      [normalizedEmail]
+    );
+
+    if (clientResult.rows.length > 0) {
+      // Link social provider to existing account
+      const client = clientResult.rows[0];
+      await pool.query(
+        'UPDATE clients SET auth_provider = $1, auth_provider_id = $2 WHERE id = $3',
+        [provider, providerSub, client.id]
+      );
+      const token = await createSession(client.id, 'client');
+      res.json({ token, user: client });
       return;
     }
 
-    // Check if email already exists
-    const existing = await pool.query('SELECT id FROM clients WHERE email = $1', [email.toLowerCase()]);
-    if (existing.rows.length > 0) {
-      res.status(409).json({ error: 'An account with this email already exists' });
-      return;
-    }
-
-    const passwordHash = await bcrypt.hash(password, 12);
-    const result = await pool.query(
-      `INSERT INTO clients (first_name, last_name, email, phone, address, password_hash, gender, date_of_birth, latitude, longitude, last_location_update)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+    // ── Create new account ──
+    const newResult = await pool.query(
+      `INSERT INTO clients (first_name, last_name, email, phone, address, auth_provider, auth_provider_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
        RETURNING id, first_name, last_name, email, phone, address, gender, date_of_birth, latitude, longitude, first_job_used, created_at`,
       [
-        first_name.trim(),
-        (last_name || '').trim(),
-        email.toLowerCase().trim(),
-        phone.trim(),
-        '', // address no longer collected at signup
-        passwordHash,
-        gender || null,
-        date_of_birth || null,
-        typeof latitude === 'number' ? latitude : null,
-        typeof longitude === 'number' ? longitude : null,
-        typeof latitude === 'number' ? new Date() : null,
+        (firstName || 'ASAP').trim(),
+        (lastName || 'User').trim(),
+        normalizedEmail,
+        '',
+        '',
+        provider,
+        providerSub,
       ]
     );
 
-    const client = result.rows[0];
+    const client = newResult.rows[0];
     const token = await createSession(client.id, 'client');
-
     res.status(201).json({ token, user: client });
-  } catch (err) {
-    console.error('Client registration error:', err);
-    res.status(500).json({ error: 'Registration failed' });
-  }
-});
-
-// ─── Client Login ───
-router.post('/client/login', loginLimiter, async (req: Request, res: Response) => {
-  try {
-    const { email, password } = req.body;
-
-    if (!email || !password) {
-      res.status(400).json({ error: 'Email and password are required' });
+  } catch (err: any) {
+    console.error('Social auth error:', err);
+    if (err.message?.includes('Token used too late') || err.message?.includes('Invalid')) {
+      res.status(401).json({ error: 'Authentication failed. Please try again.' });
       return;
     }
-
-    const result = await pool.query(
-      'SELECT id, first_name, last_name, email, phone, address, password_hash, gender, date_of_birth, latitude, longitude, first_job_used, created_at FROM clients WHERE email = $1',
-      [email.toLowerCase()]
-    );
-
-    if (result.rows.length === 0) {
-      res.status(401).json({ error: 'Invalid email or password' });
-      return;
-    }
-
-    const client = result.rows[0];
-    const valid = await bcrypt.compare(password, client.password_hash);
-    if (!valid) {
-      res.status(401).json({ error: 'Invalid email or password' });
-      return;
-    }
-
-    const token = await createSession(client.id, 'client');
-    const { password_hash, ...safeClient } = client;
-
-    res.json({ token, user: safeClient });
-  } catch (err) {
-    console.error('Client login error:', err);
-    res.status(500).json({ error: 'Login failed' });
+    res.status(500).json({ error: 'Authentication failed' });
   }
 });
 

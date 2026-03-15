@@ -1,5 +1,6 @@
 import 'dotenv/config';
 import express from 'express';
+import path from 'path';
 import cors from 'cors';
 import helmet from 'helmet';
 import authRoutes from './routes/auth';
@@ -12,7 +13,9 @@ const app = express();
 const PORT = parseInt(process.env.PORT || '3001', 10);
 
 // Security
-app.use(helmet());
+app.use(helmet({
+  contentSecurityPolicy: false, // Expo web needs inline scripts
+}));
 app.use(cors({
   origin: process.env.FRONTEND_URL || 'http://localhost:8081',
   credentials: true,
@@ -33,6 +36,14 @@ app.use('/api/jobs', jobRoutes);
 app.use('/api/upload', uploadRoutes);
 app.use('/api/employees', employeeRoutes);
 app.use('/api/location', locationRoutes);
+
+// Serve Expo web build in production
+const clientDir = path.join(__dirname, '..', '..', 'dist');
+app.use(express.static(clientDir));
+// SPA fallback: any non-API route serves index.html
+app.get(/^\/(?!api\/).*/, (_req, res) => {
+  res.sendFile(path.join(clientDir, 'index.html'));
+});
 
 // Start server
 app.listen(PORT, () => {
