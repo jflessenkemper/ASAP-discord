@@ -18,7 +18,7 @@ app.use(helmet({
   contentSecurityPolicy: false, // Expo web needs inline scripts
 }));
 app.use(cors({
-  origin: process.env.FRONTEND_URL || 'http://localhost:8081',
+  origin: process.env.FRONTEND_URL || /^http:\/\/localhost:\d+$/,
   credentials: true,
 }));
 
