@@ -23,10 +23,10 @@ const loginLimiter = rateLimit({
 // ─── Social Auth (Apple / Google) ───
 router.post('/social', loginLimiter, async (req: Request, res: Response) => {
   try {
-    const { provider, id_token } = req.body;
+    const { provider, id_token, access_token } = req.body;
 
-    if (!provider || !id_token) {
-      res.status(400).json({ error: 'Provider and id_token are required' });
+    if (!provider || (!id_token && !access_token)) {
+      res.status(400).json({ error: 'Provider and id_token or access_token are required' });
       return;
     }
 
@@ -41,7 +41,25 @@ router.post('/social', loginLimiter, async (req: Request, res: Response) => {
     let providerSub: string | undefined;
 
     // ── Verify token with the appropriate provider ──
-    if (provider === 'google') {
+    if (provider === 'google' && access_token) {
+      // Web flow: verify access_token via Google userinfo endpoint
+      const userinfoRes = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
+        headers: { Authorization: `Bearer ${access_token}` },
+      });
+      if (!userinfoRes.ok) {
+        res.status(401).json({ error: 'Invalid Google access token' });
+        return;
+      }
+      const userinfo = await userinfoRes.json() as { email?: string; given_name?: string; family_name?: string; sub?: string };
+      if (!userinfo.email) {
+        res.status(401).json({ error: 'Invalid Google token' });
+        return;
+      }
+      email = userinfo.email;
+      firstName = userinfo.given_name || '';
+      lastName = userinfo.family_name || '';
+      providerSub = userinfo.sub;
+    } else if (provider === 'google') {
       const ticket = await googleClient.verifyIdToken({
         idToken: id_token,
         audience: process.env.GOOGLE_CLIENT_ID,
