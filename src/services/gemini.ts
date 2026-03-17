@@ -50,7 +50,20 @@ Respond ONLY with valid JSON, no markdown, no explanation. Example: {"difficulty
       estimatedMinutes: Math.max(5, Math.round(parsed.estimatedMinutes)),
     };
   } catch (err) {
-    console.error('Gemini assessment error:', err);
+    // Retry once on failure
+    try {
+      const retryResult = await model.generateContent(prompt);
+      const retryText = retryResult.response.text().trim();
+      const retryMatch = retryText.match(/\{[\s\S]*\}/);
+      if (retryMatch) {
+        const parsed = JSON.parse(retryMatch[0]);
+        return {
+          difficulty: Math.min(10, Math.max(1, Math.round(parsed.difficulty))),
+          estimatedMinutes: Math.max(5, Math.round(parsed.estimatedMinutes)),
+        };
+      }
+    } catch { /* fall through to default */ }
+    console.error('Gemini assessment error:', err instanceof Error ? err.message : 'Unknown error');
     return { difficulty: 5, estimatedMinutes: 60 };
   }
 }

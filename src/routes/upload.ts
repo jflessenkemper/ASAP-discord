@@ -25,6 +25,13 @@ router.post(
   async (req: AuthRequest, res: Response) => {
     try {
       const jobId = req.params.jobId as string;
+
+      // Validate jobId to prevent path traversal in storage
+      if (!/^[a-f0-9-]+$/i.test(jobId)) {
+        res.status(400).json({ error: 'Invalid job ID format' });
+        return;
+      }
+
       const file = req.file;
 
       if (!file) {
@@ -38,7 +45,7 @@ router.post(
 
       res.status(201).json({ url });
     } catch (err) {
-      console.error('Upload error:', err);
+      console.error('Upload error:', err instanceof Error ? err.message : 'Unknown error');
       res.status(500).json({ error: 'Upload failed' });
     }
   }

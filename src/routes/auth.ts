@@ -4,7 +4,7 @@ import rateLimit from 'express-rate-limit';
 import { OAuth2Client } from 'google-auth-library';
 import appleSignin from 'apple-signin-auth';
 import pool from '../db/pool';
-import { createSession, invalidateSession, AuthRequest, requireAuth } from '../middleware/auth';
+import { createSession, invalidateSession, AuthRequest, requireAuth, setAuthCookie, clearAuthCookie } from '../middleware/auth';
 import { generateCode, sendTwoFactorCode } from '../services/email';
 
 const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
@@ -89,6 +89,7 @@ router.post('/social', loginLimiter, async (req: Request, res: Response) => {
       // Existing social account — log in
       const client = clientResult.rows[0];
       const token = await createSession(client.id, 'client');
+      setAuthCookie(res, token);
       res.json({ token, user: client });
       return;
     }
@@ -107,6 +108,7 @@ router.post('/social', loginLimiter, async (req: Request, res: Response) => {
         [provider, providerSub, client.id]
       );
       const token = await createSession(client.id, 'client');
+      setAuthCookie(res, token);
       res.json({ token, user: client });
       return;
     }
@@ -129,9 +131,10 @@ router.post('/social', loginLimiter, async (req: Request, res: Response) => {
 
     const client = newResult.rows[0];
     const token = await createSession(client.id, 'client');
+    setAuthCookie(res, token);
     res.status(201).json({ token, user: client });
   } catch (err: any) {
-    console.error('Social auth error:', err);
+    console.error('Social auth error:', err instanceof Error ? err.message : 'Unknown error');
     if (err.message?.includes('Token used too late') || err.message?.includes('Invalid')) {
       res.status(401).json({ error: 'Authentication failed. Please try again.' });
       return;
@@ -162,6 +165,7 @@ router.post('/email-signup', loginLimiter, async (req: Request, res: Response) =
       // Existing account — log them in
       const client = existing.rows[0];
       const token = await createSession(client.id, 'client');
+      setAuthCookie(res, token);
       res.json({ token, user: client });
       return;
     }
@@ -176,9 +180,10 @@ router.post('/email-signup', loginLimiter, async (req: Request, res: Response) =
 
     const client = newResult.rows[0];
     const token = await createSession(client.id, 'client');
+    setAuthCookie(res, token);
     res.status(201).json({ token, user: client });
   } catch (err: any) {
-    console.error('Email signup error:', err);
+    console.error('Email signup error:', err instanceof Error ? err.message : 'Unknown error');
     res.status(500).json({ error: 'Sign-up failed' });
   }
 });
@@ -240,7 +245,7 @@ router.post('/employee/login', loginLimiter, async (req: Request, res: Response)
       employee_id: employee.id,
     });
   } catch (err) {
-    console.error('Employee login error:', err);
+    console.error('Employee login error:', err instanceof Error ? err.message : 'Unknown error');
     res.status(500).json({ error: 'Login failed' });
   }
 });
@@ -279,9 +284,10 @@ router.post('/employee/verify-2fa', loginLimiter, async (req: Request, res: Resp
     const employee = empResult.rows[0];
     const token = await createSession(employee.id, 'employee');
 
+    setAuthCookie(res, token);
     res.json({ token, user: employee });
   } catch (err) {
-    console.error('2FA verification error:', err);
+    console.error('2FA verification error:', err instanceof Error ? (err as Error).message : 'Unknown error');
     res.status(500).json({ error: 'Verification failed' });
   }
 });
@@ -289,25 +295,41 @@ router.post('/employee/verify-2fa', loginLimiter, async (req: Request, res: Resp
 // ─── Logout ───
 router.post('/logout', requireAuth, async (req: AuthRequest, res: Response) => {
   try {
-    const token = req.headers.authorization!.slice(7);
-    await invalidateSession(token);
+    // Get token from header or cookie
+    const header = req.headers.authorization;
+    const token = header?.startsWith('Bearer ') ? header.slice(7) : req.cookies?.asap_token;
+    if (token) await invalidateSession(token);
+    clearAuthCookie(res);
     res.json({ message: 'Logged out' });
   } catch (err) {
-    console.error('Logout error:', err);
+    console.error('Logout error:', err instanceof Error ? (err as Error).message : 'Unknown error');
     res.status(500).json({ error: 'Logout failed' });
   }
 });
+
+// Allowlist for user-type → table/fields (prevents SQL interpolation)
+const USER_TYPE_CONFIG = {
+  client: {
+    table: 'clients',
+    fields: 'id, first_name, last_name, email, phone, address, gender, date_of_birth, latitude, longitude, first_job_used, created_at',
+  },
+  employee: {
+    table: 'employees',
+    fields: 'id, username, email, rate_per_minute, is_active, total_minutes, profile_picture_url, banner_url, bio, latitude, longitude, created_at',
+  },
+} as const;
 
 // ─── Get current user ───
 router.get('/me', requireAuth, async (req: AuthRequest, res: Response) => {
   try {
     const { userId, userType } = req.auth!;
-    const table = userType === 'client' ? 'clients' : 'employees';
-    const fields = userType === 'client'
-      ? 'id, first_name, last_name, email, phone, address, gender, date_of_birth, latitude, longitude, first_job_used, created_at'
-      : 'id, username, email, rate_per_minute, is_active, total_minutes, profile_picture_url, banner_url, bio, latitude, longitude, created_at';
+    const config = USER_TYPE_CONFIG[userType];
+    if (!config) {
+      res.status(400).json({ error: 'Invalid user type' });
+      return;
+    }
 
-    const result = await pool.query(`SELECT ${fields} FROM ${table} WHERE id = $1`, [userId]);
+    const result = await pool.query(`SELECT ${config.fields} FROM ${config.table} WHERE id = $1`, [userId]);
 
     if (result.rows.length === 0) {
       res.status(401).json({ error: 'Invalid session' });
@@ -316,7 +338,7 @@ router.get('/me', requireAuth, async (req: AuthRequest, res: Response) => {
 
     res.json({ userType, user: result.rows[0] });
   } catch (err) {
-    console.error('Get user error:', err);
+    console.error('Get user error:', err instanceof Error ? err.message : 'Unknown error');
     res.status(500).json({ error: 'Failed to fetch user' });
   }
 });

@@ -3,6 +3,7 @@ import express from 'express';
 import path from 'path';
 import cors from 'cors';
 import helmet from 'helmet';
+import cookieParser from 'cookie-parser';
 import authRoutes from './routes/auth';
 import jobRoutes from './routes/jobs';
 import uploadRoutes from './routes/upload';
@@ -15,7 +16,17 @@ const PORT = parseInt(process.env.PORT || '3001', 10);
 
 // Security
 app.use(helmet({
-  contentSecurityPolicy: false, // Expo web needs inline scripts
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      scriptSrc: ["'self'", "'unsafe-inline'", "'unsafe-eval'", "https://accounts.google.com", "https://apis.google.com", "https://maps.googleapis.com"],
+      styleSrc: ["'self'", "'unsafe-inline'", "https://accounts.google.com", "https://fonts.googleapis.com"],
+      imgSrc: ["'self'", "blob:", "data:", "https://storage.googleapis.com", "https://maps.googleapis.com", "https://maps.gstatic.com"],
+      fontSrc: ["'self'", "https://fonts.gstatic.com"],
+      connectSrc: ["'self'", "https://accounts.google.com", "https://maps.googleapis.com"],
+      frameSrc: ["'self'", "https://accounts.google.com"],
+    },
+  },
 }));
 app.use(cors({
   origin: process.env.FRONTEND_URL || /^http:\/\/localhost:\d+$/,
@@ -25,6 +36,7 @@ app.use(cors({
 // Body parsing with size limits
 app.use(express.json({ limit: '100kb' }));
 app.use(express.urlencoded({ extended: true, limit: '100kb' }));
+app.use(cookieParser());
 
 // Health check
 app.get('/api/health', (_req, res) => {

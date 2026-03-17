@@ -1,11 +1,12 @@
-import { Router, Request, Response } from 'express';
+import { Router, Response } from 'express';
 import jwt from 'jsonwebtoken';
+import { AuthRequest, requireAuth } from '../middleware/auth';
 
 const router = Router();
 
-// MapKit JS token endpoint
+// MapKit JS token endpoint (requires authentication)
 // Requires env vars: APPLE_TEAM_ID, APPLE_MAPKIT_KEY_ID, APPLE_MAPKIT_PRIVATE_KEY
-router.get('/token', (_req: Request, res: Response) => {
+router.get('/token', requireAuth, (_req: AuthRequest, res: Response) => {
   const teamId = process.env.APPLE_TEAM_ID;
   const keyId = process.env.APPLE_MAPKIT_KEY_ID;
   const privateKey = process.env.APPLE_MAPKIT_PRIVATE_KEY;

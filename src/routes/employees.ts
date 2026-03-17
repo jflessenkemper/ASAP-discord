@@ -40,7 +40,7 @@ router.get('/profile', requireAuth, requireEmployee, async (req: AuthRequest, re
     const levelInfo = computeLevel(emp.total_minutes || 0);
     res.json({ ...emp, ...levelInfo });
   } catch (err) {
-    console.error('Get profile error:', err);
+    console.error('Get profile error:', err instanceof Error ? err.message : 'Unknown error');
     res.status(500).json({ error: 'Failed to fetch profile' });
   }
 });
@@ -95,7 +95,7 @@ router.patch('/profile', requireAuth, requireEmployee, upload.fields([
 
     res.json({ message: 'Profile updated', ...result.rows[0] });
   } catch (err) {
-    console.error('Update profile error:', err);
+    console.error('Update profile error:', err instanceof Error ? err.message : 'Unknown error');
     res.status(500).json({ error: 'Failed to update profile' });
   }
 });
@@ -116,7 +116,7 @@ router.patch('/rate', requireAuth, requireEmployee, async (req: AuthRequest, res
 
     res.json({ message: 'Rate updated', rate_per_minute });
   } catch (err) {
-    console.error('Update rate error:', err);
+    console.error('Update rate error:', err instanceof Error ? err.message : 'Unknown error');
     res.status(500).json({ error: 'Failed to update rate' });
   }
 });
@@ -155,7 +155,7 @@ router.post('/change-password', requireAuth, requireEmployee, async (req: AuthRe
 
     res.json({ message: 'Password changed' });
   } catch (err) {
-    console.error('Change password error:', err);
+    console.error('Change password error:', err instanceof Error ? err.message : 'Unknown error');
     res.status(500).json({ error: 'Failed to change password' });
   }
 });
@@ -243,7 +243,7 @@ router.get('/earnings', requireAuth, requireEmployee, async (req: AuthRequest, r
       recent_jobs: recentJobs,
     });
   } catch (err) {
-    console.error('Get earnings error:', err);
+    console.error('Get earnings error:', err instanceof Error ? err.message : 'Unknown error');
     res.status(500).json({ error: 'Failed to fetch earnings' });
   }
 });

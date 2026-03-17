@@ -29,7 +29,12 @@ router.post('/', requireAuth, locationLimiter, async (req: AuthRequest, res: Res
       return;
     }
 
-    const table = userType === 'client' ? 'clients' : 'employees';
+    const LOCATION_TABLES: Record<string, string> = { client: 'clients', employee: 'employees' };
+    const table = LOCATION_TABLES[userType];
+    if (!table) {
+      res.status(400).json({ error: 'Invalid user type' });
+      return;
+    }
     await pool.query(
       `UPDATE ${table} SET latitude = $1, longitude = $2, last_location_update = NOW() WHERE id = $3`,
       [latitude, longitude, userId]
@@ -37,7 +42,7 @@ router.post('/', requireAuth, locationLimiter, async (req: AuthRequest, res: Res
 
     res.json({ message: 'Location updated' });
   } catch (err) {
-    console.error('Location update error:', err);
+    console.error('Location update error:', err instanceof Error ? err.message : 'Unknown error');
     res.status(500).json({ error: 'Failed to update location' });
   }
 });

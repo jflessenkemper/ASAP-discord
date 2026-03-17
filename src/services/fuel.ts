@@ -74,7 +74,7 @@ export async function getNearestSupreme98Price(
       stationAddress: '',
     };
   } catch (err) {
-    console.error('Fuel API error:', err);
+    console.error('Fuel API error:', err instanceof Error ? err.message : 'Unknown error');
     return {
       pricePerLitre: FALLBACK_PRICE_PER_LITRE,
       stationName: 'API unavailable',
@@ -96,15 +96,17 @@ async function getDrivingDistanceKm(
   }
 
   try {
-    const res = await fetch(
-      `https://maps.googleapis.com/maps/api/distancematrix/json?origins=${fromLat},${fromLng}&destinations=${toLat},${toLng}&key=${encodeURIComponent(apiKey)}`
-    );
+    const url = new URL('https://maps.googleapis.com/maps/api/distancematrix/json');
+    url.searchParams.set('origins', `${fromLat},${fromLng}`);
+    url.searchParams.set('destinations', `${toLat},${toLng}`);
+    url.searchParams.set('key', apiKey);
+    const res = await fetch(url.toString());
     const data = await res.json();
     if ((data as any).rows?.[0]?.elements?.[0]?.distance?.value) {
       return (data as any).rows[0].elements[0].distance.value / 1000; // meters → km
     }
   } catch (err) {
-    console.error('Distance Matrix error:', err);
+    console.error('Distance Matrix error:', err instanceof Error ? err.message : 'Unknown error');
   }
 
   return haversineKm(fromLat, fromLng, toLat, toLng);

@@ -96,13 +96,13 @@ router.post('/', requireAuth, requireClient, async (req: AuthRequest, res: Respo
           [assessment.difficulty, assessment.estimatedMinutes, job.id]
         );
       } catch (err) {
-        console.error('Failed to update job difficulty:', err);
+        console.error('Failed to update job difficulty:', err instanceof Error ? err.message : 'Unknown error');
       }
     });
 
     res.status(201).json(job);
   } catch (err) {
-    console.error('Create job error:', err);
+    console.error('Create job error:', err instanceof Error ? err.message : 'Unknown error');
     res.status(500).json({ error: 'Failed to create job' });
   }
 });
@@ -121,7 +121,7 @@ router.get('/client', requireAuth, requireClient, async (req: AuthRequest, res: 
     );
     res.json(result.rows);
   } catch (err) {
-    console.error('Get client jobs error:', err);
+    console.error('Get client jobs error:', err instanceof Error ? err.message : 'Unknown error');
     res.status(500).json({ error: 'Failed to fetch jobs' });
   }
 });
@@ -139,7 +139,13 @@ router.get('/employee', requireAuth, requireEmployee, async (req: AuthRequest, r
     const empLat = empLocResult.rows[0]?.latitude;
     const empLng = empLocResult.rows[0]?.longitude;
 
-    // Get all jobs (assigned to this employee OR pending/unassigned)
+    // Get all jobs (assigned to this employee OR pending/unassigned — only active employees see pending)
+    const empActiveResult = await pool.query(
+      'SELECT is_active FROM employees WHERE id = $1',
+      [employeeId]
+    );
+    const isActive = empActiveResult.rows[0]?.is_active;
+
     const result = await pool.query(
       `SELECT j.*,
               c.first_name as client_first_name, c.last_name as client_last_name,
@@ -147,7 +153,7 @@ router.get('/employee', requireAuth, requireEmployee, async (req: AuthRequest, r
               c.latitude as client_latitude, c.longitude as client_longitude
        FROM jobs j
        JOIN clients c ON j.client_id = c.id
-       WHERE j.employee_id = $1 OR (j.status = 'pending' AND j.employee_id IS NULL)
+       WHERE j.employee_id = $1${isActive ? " OR (j.status = 'pending' AND j.employee_id IS NULL)" : ''}
        ORDER BY j.created_at DESC`,
       [employeeId]
     );
@@ -175,7 +181,7 @@ router.get('/employee', requireAuth, requireEmployee, async (req: AuthRequest, r
 
     res.json(jobs);
   } catch (err) {
-    console.error('Get employee jobs error:', err);
+    console.error('Get employee jobs error:', err instanceof Error ? err.message : 'Unknown error');
     res.status(500).json({ error: 'Failed to fetch jobs' });
   }
 });
@@ -183,10 +189,16 @@ router.get('/employee', requireAuth, requireEmployee, async (req: AuthRequest, r
 // ─── Upload photo to job (client or employee) ───
 router.post('/:id/photos', requireAuth, upload.single('file'), async (req: AuthRequest, res: Response) => {
   try {
-    const jobId = req.params.id;
+    const jobId = req.params.id as string;
     const { userId, userType } = req.auth!;
     const caption = (req.body.caption as string) || '';
     const file = req.file;
+
+    // Validate jobId format
+    if (!/^[a-f0-9-]+$/i.test(jobId)) {
+      res.status(400).json({ error: 'Invalid job ID format' });
+      return;
+    }
 
     if (!file) {
       res.status(400).json({ error: 'No file uploaded' });
@@ -227,7 +239,7 @@ router.post('/:id/photos', requireAuth, upload.single('file'), async (req: AuthR
 
     res.status(201).json(photoResult.rows[0]);
   } catch (err) {
-    console.error('Upload photo error:', err);
+    console.error('Upload photo error:', err instanceof Error ? err.message : 'Unknown error');
     res.status(500).json({ error: 'Failed to upload photo' });
   }
 });
@@ -241,7 +253,7 @@ router.get('/:id/photos', requireAuth, async (req: AuthRequest, res: Response) =
     );
     res.json(result.rows);
   } catch (err) {
-    console.error('Get photos error:', err);
+    console.error('Get photos error:', err instanceof Error ? err.message : 'Unknown error');
     res.status(500).json({ error: 'Failed to fetch photos' });
   }
 });
@@ -309,7 +321,7 @@ router.post('/:id/accept', requireAuth, requireEmployee, async (req: AuthRequest
       fuel_distance_km: fuelDistanceKm,
     });
   } catch (err) {
-    console.error('Accept job error:', err);
+    console.error('Accept job error:', err instanceof Error ? err.message : 'Unknown error');
     res.status(500).json({ error: 'Failed to accept job' });
   }
 });
@@ -358,7 +370,7 @@ router.get('/:id', requireAuth, async (req: AuthRequest, res: Response) => {
 
     res.json({ ...job, timeline: timelineResult.rows, photos: photosResult.rows });
   } catch (err) {
-    console.error('Get job error:', err);
+    console.error('Get job error:', err instanceof Error ? err.message : 'Unknown error');
     res.status(500).json({ error: 'Failed to fetch job' });
   }
 });
@@ -400,7 +412,7 @@ router.post('/:id/timer/start', requireAuth, requireEmployee, async (req: AuthRe
 
     res.json({ message: `Timer ${eventType}` });
   } catch (err) {
-    console.error('Timer start error:', err);
+    console.error('Timer start error:', err instanceof Error ? err.message : 'Unknown error');
     res.status(500).json({ error: 'Failed to start timer' });
   }
 });
@@ -440,7 +452,7 @@ router.post('/:id/timer/pause', requireAuth, requireEmployee, async (req: AuthRe
 
     res.json({ message: 'Timer paused' });
   } catch (err) {
-    console.error('Timer pause error:', err);
+    console.error('Timer pause error:', err instanceof Error ? err.message : 'Unknown error');
     res.status(500).json({ error: 'Failed to pause timer' });
   }
 });
@@ -506,7 +518,7 @@ router.post('/:id/timer/stop', requireAuth, requireEmployee, async (req: AuthReq
 
     res.json({ message: 'Job completed', total_seconds: elapsed_seconds, total_cost: totalCost, xp_earned: elapsedMinutes });
   } catch (err) {
-    console.error('Timer stop error:', err);
+    console.error('Timer stop error:', err instanceof Error ? err.message : 'Unknown error');
     res.status(500).json({ error: 'Failed to stop timer' });
   }
 });
@@ -548,7 +560,7 @@ router.post('/:id/timeline', requireAuth, async (req: AuthRequest, res: Response
 
     res.status(201).json(result.rows[0]);
   } catch (err) {
-    console.error('Add timeline entry error:', err);
+    console.error('Add timeline entry error:', err instanceof Error ? err.message : 'Unknown error');
     res.status(500).json({ error: 'Failed to add timeline entry' });
   }
 });
@@ -563,7 +575,7 @@ router.get('/:id/timeline', requireAuth, async (req: AuthRequest, res: Response)
     );
     res.json(result.rows);
   } catch (err) {
-    console.error('Get timeline error:', err);
+    console.error('Get timeline error:', err instanceof Error ? err.message : 'Unknown error');
     res.status(500).json({ error: 'Failed to fetch timeline' });
   }
 });

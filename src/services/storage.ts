@@ -22,8 +22,11 @@ export async function uploadEvidence(
     metadata: { contentType: mimeType },
   });
 
-  // Make publicly readable (or use signed URLs in production)
-  await file.makePublic();
+  // Return a signed URL (valid for 7 days) instead of making files public
+  const [signedUrl] = await file.getSignedUrl({
+    action: 'read',
+    expires: Date.now() + 7 * 24 * 60 * 60 * 1000,
+  });
 
-  return `https://storage.googleapis.com/${bucketName}/${fileName}`;
+  return signedUrl;
 }
