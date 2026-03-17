@@ -8,6 +8,7 @@ import jobRoutes from './routes/jobs';
 import uploadRoutes from './routes/upload';
 import employeeRoutes from './routes/employees';
 import locationRoutes from './routes/location';
+import mapkitRoutes from './routes/mapkit';
 
 const app = express();
 const PORT = parseInt(process.env.PORT || '3001', 10);
@@ -36,6 +37,7 @@ app.use('/api/jobs', jobRoutes);
 app.use('/api/upload', uploadRoutes);
 app.use('/api/employees', employeeRoutes);
 app.use('/api/location', locationRoutes);
+app.use('/api/mapkit', mapkitRoutes);
 
 // Serve Expo web build in production
 const clientDir = path.join(__dirname, '..', '..', 'dist');

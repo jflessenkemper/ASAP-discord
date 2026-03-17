@@ -140,6 +140,49 @@ router.post('/social', loginLimiter, async (req: Request, res: Response) => {
   }
 });
 
+// ─── Email Sign-Up ───
+router.post('/email-signup', loginLimiter, async (req: Request, res: Response) => {
+  try {
+    const { first_name, last_name, email } = req.body;
+
+    if (!first_name || !last_name || !email) {
+      res.status(400).json({ error: 'First name, last name, and email are required' });
+      return;
+    }
+
+    const normalizedEmail = email.toLowerCase().trim();
+
+    // Check if email already exists
+    const existing = await pool.query(
+      'SELECT id, first_name, last_name, email, phone, address, gender, date_of_birth, latitude, longitude, first_job_used, created_at FROM clients WHERE email = $1',
+      [normalizedEmail]
+    );
+
+    if (existing.rows.length > 0) {
+      // Existing account — log them in
+      const client = existing.rows[0];
+      const token = await createSession(client.id, 'client');
+      res.json({ token, user: client });
+      return;
+    }
+
+    // Create new account
+    const newResult = await pool.query(
+      `INSERT INTO clients (first_name, last_name, email, phone, address)
+       VALUES ($1, $2, $3, $4, $5)
+       RETURNING id, first_name, last_name, email, phone, address, gender, date_of_birth, latitude, longitude, first_job_used, created_at`,
+      [first_name.trim(), last_name.trim(), normalizedEmail, '', '']
+    );
+
+    const client = newResult.rows[0];
+    const token = await createSession(client.id, 'client');
+    res.status(201).json({ token, user: client });
+  } catch (err: any) {
+    console.error('Email signup error:', err);
+    res.status(500).json({ error: 'Sign-up failed' });
+  }
+});
+
 // ─── Employee Login (Step 1: credentials → send 2FA) ───
 router.post('/employee/login', loginLimiter, async (req: Request, res: Response) => {
   try {
