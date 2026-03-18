@@ -2,7 +2,7 @@ import { Router, Response } from 'express';
 import multer from 'multer';
 import pool from '../db/pool';
 import { AuthRequest, requireAuth, requireClient, requireEmployee } from '../middleware/auth';
-import { assessJobDifficulty } from '../services/gemini';
+import { assessJobDifficulty, transcribeAudio, categorizeJob } from '../services/gemini';
 import { calculateFuelCost, haversineKm } from '../services/fuel';
 import { uploadEvidence } from '../services/storage';
 
@@ -12,7 +12,8 @@ const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 10 * 1024 * 1024 },
   fileFilter: (_req, file, cb) => {
-    const allowed = ['image/jpeg', 'image/png', 'image/webp', 'image/heic', 'video/mp4'];
+    const allowed = ['image/jpeg', 'image/png', 'image/webp', 'image/heic', 'video/mp4',
+      'audio/webm', 'audio/ogg', 'audio/mp4', 'audio/mpeg', 'audio/wav'];
     if (allowed.includes(file.mimetype)) cb(null, true);
     else cb(new Error('File type not allowed'));
   },
@@ -104,6 +105,80 @@ router.post('/', requireAuth, requireClient, async (req: AuthRequest, res: Respo
   } catch (err) {
     console.error('Create job error:', err instanceof Error ? err.message : 'Unknown error');
     res.status(500).json({ error: 'Failed to create job' });
+  }
+});
+
+// ─── Transcribe audio (client) ───
+router.post('/transcribe', requireAuth, requireClient, upload.single('audio'), async (req: AuthRequest, res: Response) => {
+  try {
+    if (!req.file) {
+      res.status(400).json({ error: 'Audio file is required' });
+      return;
+    }
+
+    const text = await transcribeAudio(req.file.buffer, req.file.mimetype);
+    res.json({ text });
+  } catch (err) {
+    console.error('Transcribe error:', err instanceof Error ? err.message : 'Unknown');
+    res.status(500).json({ error: 'Failed to transcribe audio' });
+  }
+});
+
+// ─── Find businesses for a job description (client) ───
+router.post('/find-businesses', requireAuth, requireClient, async (req: AuthRequest, res: Response) => {
+  try {
+    const { description, lat, lng } = req.body;
+    if (!description || !description.trim()) {
+      res.status(400).json({ error: 'Description is required' });
+      return;
+    }
+    if (!lat || !lng || isNaN(Number(lat)) || isNaN(Number(lng))) {
+      res.status(400).json({ error: 'Valid lat and lng are required' });
+      return;
+    }
+
+    // Step 1: Gemini categorizes the job into a search query
+    const searchQuery = await categorizeJob(description.trim());
+
+    // Step 2: Google Places text search
+    const placesKey = process.env.GOOGLE_MAPS_API_KEY;
+    if (!placesKey) {
+      res.json({ businesses: [], query: searchQuery });
+      return;
+    }
+
+    const placesUrl = new URL('https://maps.googleapis.com/maps/api/place/textsearch/json');
+    placesUrl.searchParams.set('query', searchQuery);
+    placesUrl.searchParams.set('location', `${lat},${lng}`);
+    placesUrl.searchParams.set('radius', '15000');
+    placesUrl.searchParams.set('key', placesKey);
+
+    const placesRes = await fetch(placesUrl.toString());
+    const placesData = await placesRes.json() as any;
+    const results = (placesData.results || []).slice(0, 10);
+
+    const businesses = results.map((p: any) => ({
+      name: p.name || '',
+      rating: p.rating || 0,
+      totalRatings: p.user_ratings_total || 0,
+      address: p.formatted_address || '',
+      lat: p.geometry?.location?.lat || 0,
+      lng: p.geometry?.location?.lng || 0,
+      distanceKm: parseFloat(
+        haversineKm(Number(lat), Number(lng), p.geometry?.location?.lat || 0, p.geometry?.location?.lng || 0).toFixed(1)
+      ),
+      placeId: p.place_id || '',
+      icon: p.icon || '',
+      openNow: p.opening_hours?.open_now ?? null,
+    }));
+
+    // Sort by rating descending (preference for highly rated)
+    businesses.sort((a: any, b: any) => b.rating - a.rating);
+
+    res.json({ businesses, query: searchQuery });
+  } catch (err) {
+    console.error('Find businesses error:', err instanceof Error ? err.message : 'Unknown');
+    res.status(500).json({ error: 'Failed to find businesses' });
   }
 });
 
