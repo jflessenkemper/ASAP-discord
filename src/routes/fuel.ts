@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express';
 import rateLimit from 'express-rate-limit';
 import { getBestPricesByType } from '../services/fuel';
+import { AuthRequest, requireAuth } from '../middleware/auth';
 
 const router = Router();
 
@@ -11,7 +12,7 @@ const fuelLimiter = rateLimit({
 });
 
 // GET /api/fuel/best-prices?lat=X&lng=Y&radius=15
-router.get('/best-prices', fuelLimiter, async (req: Request, res: Response) => {
+router.get('/best-prices', requireAuth, fuelLimiter, async (req: AuthRequest, res: Response) => {
   try {
     const lat = parseFloat(req.query.lat as string);
     const lng = parseFloat(req.query.lng as string);

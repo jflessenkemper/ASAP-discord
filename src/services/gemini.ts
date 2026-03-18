@@ -1,4 +1,4 @@
-import { GoogleGenerativeAI } from '@google/generative-ai';
+import { GoogleGenerativeAI, DynamicRetrievalMode } from '@google/generative-ai';
 
 const genAI = process.env.GEMINI_API_KEY
   ? new GoogleGenerativeAI(process.env.GEMINI_API_KEY)
@@ -6,6 +6,20 @@ const genAI = process.env.GEMINI_API_KEY
 
 function getModel() {
   return genAI?.getGenerativeModel({ model: 'gemini-1.5-flash' }) ?? null;
+}
+
+function getGroundedModel() {
+  return genAI?.getGenerativeModel({
+    model: 'gemini-1.5-flash',
+    tools: [{
+      googleSearchRetrieval: {
+        dynamicRetrievalConfig: {
+          mode: DynamicRetrievalMode.MODE_DYNAMIC,
+          dynamicThreshold: 0.3,
+        },
+      },
+    }],
+  }) ?? null;
 }
 
 interface DifficultyAssessment {
@@ -127,12 +141,12 @@ export interface ProductResult {
 export async function searchBestPrices(
   query: string,
 ): Promise<ProductResult[]> {
-  const model = getModel();
+  const model = getGroundedModel() || getModel();
   if (!model) throw new Error('Gemini API key not configured');
 
   const sanitized = query.replace(/[\r\n]+/g, ' ').slice(0, 200);
 
-  const prompt = `Search for the best prices on "${sanitized}" available in Australia. Check major retailers (JB Hi-Fi, Harvey Norman, Officeworks, Kmart, Big W, Target, Bunnings), Amazon Australia, eBay Australia, Gumtree, and Facebook Marketplace.
+  const prompt = `Find the current best prices for "${sanitized}" available to buy in Australia right now. Check major Australian retailers including JB Hi-Fi, Harvey Norman, Officeworks, Kmart, Big W, Target, Bunnings, Amazon Australia, and eBay Australia.
 
 Return a JSON array of up to 10 results, sorted by price ascending (cheapest first). Each result:
 {

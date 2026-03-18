@@ -1,5 +1,6 @@
 import { Router, Response } from 'express';
 import multer from 'multer';
+import rateLimit from 'express-rate-limit';
 import pool from '../db/pool';
 import { AuthRequest, requireAuth, requireClient, requireEmployee } from '../middleware/auth';
 import { assessJobDifficulty, transcribeAudio, categorizeJob } from '../services/gemini';
@@ -7,6 +8,12 @@ import { calculateFuelCost, haversineKm } from '../services/fuel';
 import { uploadEvidence } from '../services/storage';
 
 const router = Router();
+
+const createJobLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 5,
+  message: { error: 'Too many job requests, try again shortly' },
+});
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -20,7 +27,7 @@ const upload = multer({
 });
 
 // ─── Create a job (client) ───
-router.post('/', requireAuth, requireClient, async (req: AuthRequest, res: Response) => {
+router.post('/', requireAuth, requireClient, createJobLimiter, async (req: AuthRequest, res: Response) => {
   try {
     const clientId = req.auth!.userId;
     const { description } = req.body;
@@ -35,14 +42,6 @@ router.post('/', requireAuth, requireClient, async (req: AuthRequest, res: Respo
       return;
     }
 
-    // Check if this is the client's first job
-    const clientResult = await pool.query(
-      'SELECT first_job_used FROM clients WHERE id = $1',
-      [clientId]
-    );
-    const isFree = !clientResult.rows[0].first_job_used;
-    const calloutFree = isFree;
-
     // Get default rate from an available employee (or use 5.00)
     const empResult = await pool.query(
       'SELECT id, rate_per_minute FROM employees WHERE is_active = TRUE LIMIT 1'
@@ -52,16 +51,14 @@ router.post('/', requireAuth, requireClient, async (req: AuthRequest, res: Respo
 
     const jobResult = await pool.query(
       `INSERT INTO jobs (client_id, employee_id, description, status, rate_per_minute, is_free, callout_free, assigned_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+       VALUES ($1, $2, $3, $4, $5, FALSE, FALSE, $6)
        RETURNING *`,
       [
         clientId,
         assignedEmployeeId,
         description.trim(),
         assignedEmployeeId ? 'assigned' : 'pending',
-        isFree ? 0 : rate,
-        isFree,
-        calloutFree,
+        rate,
         assignedEmployeeId ? new Date() : null,
       ]
     );
@@ -82,11 +79,6 @@ router.post('/', requireAuth, requireClient, async (req: AuthRequest, res: Respo
          VALUES ($1, 'assigned', 'Job auto-assigned to technician', 'system', $2)`,
         [job.id, assignedEmployeeId]
       );
-    }
-
-    // Mark client's first job as used
-    if (isFree) {
-      await pool.query('UPDATE clients SET first_job_used = TRUE WHERE id = $1', [clientId]);
     }
 
     // Assess difficulty via Gemini (async — don't block response)
@@ -563,7 +555,7 @@ router.post('/:id/timer/stop', requireAuth, requireEmployee, async (req: AuthReq
 
     if (job.started_at) {
       const wallClockSeconds = Math.floor((Date.now() - new Date(job.started_at).getTime()) / 1000);
-      const maxAllowed = wallClockSeconds + 60; // 60s grace
+      const maxAllowed = wallClockSeconds + 10; // 10s grace
       if (elapsed_seconds > maxAllowed) {
         res.status(400).json({ error: 'elapsed_seconds exceeds wall-clock time' });
         return;

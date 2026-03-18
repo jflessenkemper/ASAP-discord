@@ -1,4 +1,5 @@
 import nodemailer from 'nodemailer';
+import { randomInt } from 'crypto';
 
 const transporter = nodemailer.createTransport({
   service: 'gmail',
@@ -9,7 +10,7 @@ const transporter = nodemailer.createTransport({
 });
 
 export function generateCode(): string {
-  return Math.floor(100000 + Math.random() * 900000).toString();
+  return randomInt(100000, 1000000).toString();
 }
 
 export async function sendTwoFactorCode(email: string, code: string): Promise<void> {

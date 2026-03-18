@@ -1,6 +1,8 @@
-import { Router, Request, Response } from 'express';
+import { Router, Response } from 'express';
 import rateLimit from 'express-rate-limit';
 import { searchBestPrices } from '../services/gemini';
+import { AuthRequest, requireAuth, requireClient } from '../middleware/auth';
+import pool from '../db/pool';
 
 const router = Router();
 
@@ -11,8 +13,9 @@ const shopLimiter = rateLimit({
 });
 
 // POST /api/shop/search
-router.post('/search', shopLimiter, async (req: Request, res: Response) => {
+router.post('/search', requireAuth, requireClient, shopLimiter, async (req: AuthRequest, res: Response) => {
   try {
+    const clientId = req.auth!.userId;
     const { query } = req.body;
     if (!query || typeof query !== 'string' || !query.trim()) {
       res.status(400).json({ error: 'Search query is required' });
@@ -25,10 +28,33 @@ router.post('/search', shopLimiter, async (req: Request, res: Response) => {
     }
 
     const results = await searchBestPrices(query.trim());
+
+    // Store search + results linked to the client
+    await pool.query(
+      `INSERT INTO price_searches (client_id, query, results) VALUES ($1, $2, $3)`,
+      [clientId, query.trim(), JSON.stringify(results)]
+    );
+
     res.json({ results });
   } catch (err) {
     console.error('Shop search error:', err instanceof Error ? err.message : 'Unknown');
     res.status(500).json({ error: 'Failed to search products' });
+  }
+});
+
+// GET /api/shop/history — retrieve past searches for the logged-in client
+router.get('/history', requireAuth, requireClient, async (req: AuthRequest, res: Response) => {
+  try {
+    const clientId = req.auth!.userId;
+    const result = await pool.query(
+      `SELECT id, query, results, created_at FROM price_searches
+       WHERE client_id = $1 ORDER BY created_at DESC LIMIT 50`,
+      [clientId]
+    );
+    res.json({ searches: result.rows });
+  } catch (err) {
+    console.error('Shop history error:', err instanceof Error ? err.message : 'Unknown');
+    res.status(500).json({ error: 'Failed to fetch search history' });
   }
 });
 

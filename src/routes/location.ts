@@ -29,16 +29,20 @@ router.post('/', requireAuth, locationLimiter, async (req: AuthRequest, res: Res
       return;
     }
 
-    const LOCATION_TABLES: Record<string, string> = { client: 'clients', employee: 'employees' };
-    const table = LOCATION_TABLES[userType];
-    if (!table) {
+    if (userType === 'client') {
+      await pool.query(
+        'UPDATE clients SET latitude = $1, longitude = $2, last_location_update = NOW() WHERE id = $3',
+        [latitude, longitude, userId]
+      );
+    } else if (userType === 'employee') {
+      await pool.query(
+        'UPDATE employees SET latitude = $1, longitude = $2, last_location_update = NOW() WHERE id = $3',
+        [latitude, longitude, userId]
+      );
+    } else {
       res.status(400).json({ error: 'Invalid user type' });
       return;
     }
-    await pool.query(
-      `UPDATE ${table} SET latitude = $1, longitude = $2, last_location_update = NOW() WHERE id = $3`,
-      [latitude, longitude, userId]
-    );
 
     res.json({ message: 'Location updated' });
   } catch (err) {

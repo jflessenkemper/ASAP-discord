@@ -87,7 +87,7 @@ export async function getNearestSupreme98Price(
       );
       const station = sevenEleven || (data as any).stations[0];
       return {
-        pricePerLitre: station.price / 10, // API returns tenths of cents → dollars
+        pricePerLitre: station.price / 100, // API returns cents → dollars
         stationName: station.name || station.brand || 'Unknown',
         stationAddress: station.address || '',
       };
@@ -192,7 +192,7 @@ export async function getBestPricesByType(
       return {
         fuelType,
         fuelLabel: FUEL_TYPE_LABELS[fuelType],
-        pricePerLitre: s.price / 10, // API returns tenths of cents → dollars
+        pricePerLitre: s.price / 100, // API returns cents → dollars
         stationName: s.name || s.brand || 'Unknown',
         stationBrand: s.brand || '',
         stationAddress: s.address || '',
