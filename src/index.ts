@@ -28,8 +28,12 @@ app.use(helmet({
     },
   },
 }));
+const CORS_ORIGIN: cors.CorsOptions['origin'] = process.env.NODE_ENV === 'production'
+  ? process.env.FRONTEND_URL || false
+  : /^http:\/\/localhost:\d+$/;
+
 app.use(cors({
-  origin: process.env.FRONTEND_URL || /^http:\/\/localhost:\d+$/,
+  origin: CORS_ORIGIN,
   credentials: true,
 }));
 
