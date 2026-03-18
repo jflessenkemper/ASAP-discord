@@ -164,7 +164,7 @@ router.post('/social', loginLimiter, async (req: Request, res: Response) => {
 // ─── Email Sign-Up ───
 router.post('/email-signup', loginLimiter, async (req: Request, res: Response) => {
   try {
-    const { first_name, last_name, email } = req.body;
+    const { first_name, last_name, email, address, latitude, longitude } = req.body;
 
     if (!first_name || !last_name || !email) {
       res.status(400).json({ error: 'First name, last name, and email are required' });
@@ -190,10 +190,10 @@ router.post('/email-signup', loginLimiter, async (req: Request, res: Response) =
 
     // Create new account
     const newResult = await pool.query(
-      `INSERT INTO clients (first_name, last_name, email, phone, address)
-       VALUES ($1, $2, $3, $4, $5)
+      `INSERT INTO clients (first_name, last_name, email, phone, address, latitude, longitude)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
        RETURNING id, first_name, last_name, email, phone, address, gender, date_of_birth, latitude, longitude, first_job_used, created_at`,
-      [first_name.trim(), last_name.trim(), normalizedEmail, '', '']
+      [first_name.trim(), last_name.trim(), normalizedEmail, '', address?.trim() || '', latitude || null, longitude || null]
     );
 
     const client = newResult.rows[0];
