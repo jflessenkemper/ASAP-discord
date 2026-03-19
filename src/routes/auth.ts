@@ -20,7 +20,7 @@ const loginLimiter = rateLimit({
   legacyHeaders: false,
 });
 
-// ─── Social Auth (Apple / Google) ───
+// ─── Social Auth (Apple / Google / Facebook) ───
 router.post('/social', loginLimiter, async (req: Request, res: Response) => {
   try {
     const { provider, id_token, access_token } = req.body;
@@ -30,8 +30,8 @@ router.post('/social', loginLimiter, async (req: Request, res: Response) => {
       return;
     }
 
-    if (provider !== 'apple' && provider !== 'google') {
-      res.status(400).json({ error: 'Provider must be "apple" or "google"' });
+    if (provider !== 'apple' && provider !== 'google' && provider !== 'facebook') {
+      res.status(400).json({ error: 'Provider must be "apple", "google", or "facebook"' });
       return;
     }
 
@@ -73,6 +73,22 @@ router.post('/social', loginLimiter, async (req: Request, res: Response) => {
       firstName = payload.given_name || '';
       lastName = payload.family_name || '';
       providerSub = payload.sub;
+    } else if (provider === 'facebook' && access_token) {
+      // Facebook: verify access token via Graph API
+      const fbRes = await fetch(`https://graph.facebook.com/me?fields=id,first_name,last_name,email&access_token=${encodeURIComponent(access_token)}`);
+      if (!fbRes.ok) {
+        res.status(401).json({ error: 'Invalid Facebook access token' });
+        return;
+      }
+      const fbUser = await fbRes.json() as { id?: string; first_name?: string; last_name?: string; email?: string };
+      if (!fbUser.id) {
+        res.status(401).json({ error: 'Invalid Facebook token' });
+        return;
+      }
+      email = fbUser.email;
+      firstName = fbUser.first_name || '';
+      lastName = fbUser.last_name || '';
+      providerSub = fbUser.id;
     } else {
       // Apple
       const payload = await appleSignin.verifyIdToken(id_token, {
