@@ -12,6 +12,7 @@ import locationRoutes from './routes/location';
 import mapkitRoutes from './routes/mapkit';
 import fuelRoutes from './routes/fuel';
 import shopRoutes from './routes/shop';
+import favoritesRoutes from './routes/favorites';
 
 const app = express();
 const PORT = parseInt(process.env.PORT || '3001', 10);
@@ -58,6 +59,7 @@ app.use('/api/location', locationRoutes);
 app.use('/api/mapkit', mapkitRoutes);
 app.use('/api/fuel', fuelRoutes);
 app.use('/api/shop', shopRoutes);
+app.use('/api/favorites', favoritesRoutes);
 
 // Serve Expo web build in production
 const clientDir = path.join(__dirname, '..', '..', 'dist');

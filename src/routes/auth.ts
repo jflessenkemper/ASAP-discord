@@ -399,4 +399,40 @@ router.get('/me', requireAuth, async (req: AuthRequest, res: Response) => {
   }
 });
 
+// ─── Test Login (dev/QA only) ───
+router.post('/test-login', loginLimiter, async (req: Request, res: Response) => {
+  try {
+    const { username, password } = req.body;
+    if (username !== 'testuser' || password !== 'testpass') {
+      res.status(401).json({ error: 'Invalid test credentials' });
+      return;
+    }
+
+    const testEmail = 'test@asap.dev';
+    // Upsert test client
+    let clientResult = await pool.query(
+      'SELECT id, first_name, last_name, email, phone, address, gender, date_of_birth, latitude, longitude, first_job_used, created_at FROM clients WHERE email = $1',
+      [testEmail]
+    );
+
+    if (clientResult.rows.length === 0) {
+      clientResult = await pool.query(
+        `INSERT INTO clients (first_name, last_name, email, phone, address, auth_provider, auth_provider_id, latitude, longitude)
+         VALUES ('Test', 'User', $1, '', '', 'test', 'test-user-001', -33.8688, 151.2093)
+         RETURNING id, first_name, last_name, email, phone, address, gender, date_of_birth, latitude, longitude, first_job_used, created_at`,
+        [testEmail]
+      );
+    }
+
+    const client = clientResult.rows[0];
+    const token = await createSession(client.id, 'client');
+    setAuthCookie(res, token);
+    logAuthEvent(req, 'login', client.id, 'client', 'test');
+    res.json({ token, user: client });
+  } catch (err) {
+    console.error('Test login error:', err instanceof Error ? err.message : 'Unknown');
+    res.status(500).json({ error: 'Test login failed' });
+  }
+});
+
 export default router;
