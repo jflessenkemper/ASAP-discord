@@ -8,7 +8,7 @@ const router = Router();
 
 const fuelLimiter = rateLimit({
   windowMs: 60 * 1000,
-  max: 10,
+  max: 30,
   message: { error: 'Too many requests, try again shortly' },
 });
 

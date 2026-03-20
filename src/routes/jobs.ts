@@ -124,7 +124,7 @@ router.post('/find-businesses', requireAuth, requireClient, async (req: AuthRequ
       res.status(400).json({ error: 'Description is required' });
       return;
     }
-    if (!lat || !lng || isNaN(Number(lat)) || isNaN(Number(lng))) {
+    if (lat == null || lng == null || isNaN(Number(lat)) || isNaN(Number(lng))) {
       res.status(400).json({ error: 'Valid lat and lng are required' });
       return;
     }
