@@ -2,6 +2,7 @@ import { Router, Request, Response } from 'express';
 import rateLimit from 'express-rate-limit';
 import { getBestPricesByType } from '../services/fuel';
 import { AuthRequest, requireAuth } from '../middleware/auth';
+import pool from '../db/pool';
 
 const router = Router();
 
@@ -25,6 +26,13 @@ router.get('/best-prices', requireAuth, fuelLimiter, async (req: AuthRequest, re
 
     const clampedRadius = Math.min(Math.max(radius, 1), 50);
     const prices = await getBestPricesByType(lat, lng, clampedRadius);
+
+    // Persist search for history/analytics (non-blocking)
+    pool.query(
+      `INSERT INTO fuel_searches (client_id, latitude, longitude, radius_km, results) VALUES ($1, $2, $3, $4, $5)`,
+      [req.auth!.userId, lat, lng, clampedRadius, JSON.stringify(prices)]
+    ).catch(err => console.error('Failed to log fuel search:', err instanceof Error ? err.message : 'Unknown'));
+
     res.json({ prices });
   } catch (err) {
     console.error('Fuel prices error:', err instanceof Error ? err.message : 'Unknown');

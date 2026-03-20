@@ -45,7 +45,7 @@ export function clearAuthCookie(res: Response): void {
   });
 }
 
-export function requireAuth(req: AuthRequest, res: Response, next: NextFunction): void {
+export async function requireAuth(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
   // Try Authorization header first, then fall back to httpOnly cookie
   let token: string | undefined;
   const header = req.headers.authorization;
@@ -62,6 +62,18 @@ export function requireAuth(req: AuthRequest, res: Response, next: NextFunction)
 
   try {
     const payload = verifyToken(token);
+
+    // Verify session still exists in DB and hasn't expired
+    const sessionResult = await pool.query(
+      'SELECT id FROM sessions WHERE token = $1 AND expires_at > NOW()',
+      [token]
+    );
+    if (sessionResult.rows.length === 0) {
+      clearAuthCookie(res);
+      res.status(401).json({ error: 'Session expired or invalidated' });
+      return;
+    }
+
     req.auth = payload;
     next();
   } catch {

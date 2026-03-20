@@ -11,6 +11,16 @@ const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 
 const router = Router();
 
+// Non-blocking auth event logger
+function logAuthEvent(req: Request, event: string, userId?: string, userType?: string, provider?: string) {
+  const ip = req.ip || req.socket.remoteAddress || null;
+  const ua = req.headers['user-agent'] || null;
+  pool.query(
+    `INSERT INTO auth_events (user_id, user_type, event, provider, ip_address, user_agent) VALUES ($1, $2, $3, $4, $5, $6)`,
+    [userId || null, userType || null, event, provider || null, ip, ua]
+  ).catch(err => console.error('Failed to log auth event:', err instanceof Error ? err.message : 'Unknown'));
+}
+
 // Rate limit login attempts
 const loginLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
@@ -124,6 +134,7 @@ router.post('/social', loginLimiter, async (req: Request, res: Response) => {
       const client = clientResult.rows[0];
       const token = await createSession(client.id, 'client');
       setAuthCookie(res, token);
+      logAuthEvent(req, 'login', client.id, 'client', provider);
       res.json({ token, user: client });
       return;
     }
@@ -143,6 +154,7 @@ router.post('/social', loginLimiter, async (req: Request, res: Response) => {
       );
       const token = await createSession(client.id, 'client');
       setAuthCookie(res, token);
+      logAuthEvent(req, 'login', client.id, 'client', provider);
       res.json({ token, user: client });
       return;
     }
@@ -166,8 +178,10 @@ router.post('/social', loginLimiter, async (req: Request, res: Response) => {
     const client = newResult.rows[0];
     const token = await createSession(client.id, 'client');
     setAuthCookie(res, token);
+    logAuthEvent(req, 'login', client.id, 'client', provider);
     res.status(201).json({ token, user: client });
   } catch (err: any) {
+    logAuthEvent(req, 'login_failed', undefined, 'client', req.body?.provider);
     console.error('Social auth error:', err instanceof Error ? err.message : 'Unknown error');
     if (err.message?.includes('Token used too late') || err.message?.includes('Invalid')) {
       res.status(401).json({ error: 'Authentication failed. Please try again.' });
@@ -238,6 +252,7 @@ router.post('/employee/login', loginLimiter, async (req: Request, res: Response)
     );
 
     if (result.rows.length === 0) {
+      logAuthEvent(req, 'login_failed', undefined, 'employee', 'password');
       res.status(401).json({ error: 'Invalid credentials' });
       return;
     }
@@ -245,12 +260,14 @@ router.post('/employee/login', loginLimiter, async (req: Request, res: Response)
     const employee = result.rows[0];
 
     if (!employee.is_active) {
+      logAuthEvent(req, 'login_failed', employee.id, 'employee', 'password');
       res.status(403).json({ error: 'Account is deactivated' });
       return;
     }
 
     const valid = await bcrypt.compare(password, employee.password_hash);
     if (!valid) {
+      logAuthEvent(req, 'login_failed', employee.id, 'employee', 'password');
       res.status(401).json({ error: 'Invalid credentials' });
       return;
     }
@@ -272,6 +289,8 @@ router.post('/employee/login', loginLimiter, async (req: Request, res: Response)
 
     // Send 2FA email
     await sendTwoFactorCode(employee.email, code);
+
+    logAuthEvent(req, '2fa_sent', employee.id, 'employee', 'password');
 
     // Return employee_id for the 2FA verification step (not the full user)
     res.json({
@@ -302,6 +321,7 @@ router.post('/employee/verify-2fa', loginLimiter, async (req: Request, res: Resp
     );
 
     if (result.rows.length === 0) {
+      logAuthEvent(req, '2fa_failed', employee_id, 'employee', 'password');
       res.status(401).json({ error: 'Invalid or expired code' });
       return;
     }
@@ -319,6 +339,7 @@ router.post('/employee/verify-2fa', loginLimiter, async (req: Request, res: Resp
     const token = await createSession(employee.id, 'employee');
 
     setAuthCookie(res, token);
+    logAuthEvent(req, 'login', employee.id, 'employee', 'password');
     res.json({ token, user: employee });
   } catch (err) {
     console.error('2FA verification error:', err instanceof Error ? (err as Error).message : 'Unknown error');
@@ -334,6 +355,7 @@ router.post('/logout', requireAuth, async (req: AuthRequest, res: Response) => {
     const token = header?.startsWith('Bearer ') ? header.slice(7) : req.cookies?.asap_token;
     if (token) await invalidateSession(token);
     clearAuthCookie(res);
+    logAuthEvent(req, 'logout', req.auth?.userId, req.auth?.userType);
     res.json({ message: 'Logged out' });
   } catch (err) {
     console.error('Logout error:', err instanceof Error ? (err as Error).message : 'Unknown error');
