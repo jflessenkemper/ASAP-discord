@@ -51,4 +51,49 @@ router.post('/', requireAuth, locationLimiter, async (req: AuthRequest, res: Res
   }
 });
 
+// ─── Geocode suburb/postcode → lat/lng (AU only) ───
+const geocodeLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 10,
+  message: { error: 'Too many geocode requests. Try again shortly.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+router.get('/geocode', requireAuth, geocodeLimiter, async (req: AuthRequest, res: Response) => {
+  try {
+    const q = typeof req.query.q === 'string' ? req.query.q.trim() : '';
+    if (!q || q.length > 100) {
+      res.status(400).json({ error: 'A search query is required (max 100 chars)' });
+      return;
+    }
+
+    const apiKey = process.env.GOOGLE_MAPS_API_KEY;
+    if (!apiKey) {
+      res.status(500).json({ error: 'Geocoding service unavailable' });
+      return;
+    }
+
+    const url = `https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(q)}&components=country:AU&key=${encodeURIComponent(apiKey)}`;
+    const resp = await fetch(url);
+    const data = await resp.json();
+
+    if (data.status !== 'OK' || !data.results?.length) {
+      res.json({ results: [] });
+      return;
+    }
+
+    const results = data.results.slice(0, 3).map((r: any) => ({
+      formatted_address: r.formatted_address,
+      latitude: r.geometry.location.lat,
+      longitude: r.geometry.location.lng,
+    }));
+
+    res.json({ results });
+  } catch (err) {
+    console.error('Geocode error:', err instanceof Error ? err.message : 'Unknown error');
+    res.status(500).json({ error: 'Geocoding failed' });
+  }
+});
+
 export default router;
