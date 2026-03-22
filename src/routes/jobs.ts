@@ -30,7 +30,7 @@ const upload = multer({
 router.post('/', requireAuth, requireClient, createJobLimiter, async (req: AuthRequest, res: Response) => {
   try {
     const clientId = req.auth!.userId;
-    const { description } = req.body;
+    const { description, business_name, business_place_id, business_address } = req.body;
 
     if (!description || !description.trim()) {
       res.status(400).json({ error: 'Description is required' });
@@ -42,6 +42,11 @@ router.post('/', requireAuth, requireClient, createJobLimiter, async (req: AuthR
       return;
     }
 
+    // Sanitise optional business fields
+    const bizName = typeof business_name === 'string' ? business_name.slice(0, 200) : null;
+    const bizPlaceId = typeof business_place_id === 'string' ? business_place_id.slice(0, 200) : null;
+    const bizAddress = typeof business_address === 'string' ? business_address.slice(0, 500) : null;
+
     // Get default rate from a random available employee (or use 5.00)
     const empResult = await pool.query(
       'SELECT id, rate_per_minute FROM employees WHERE is_active = TRUE ORDER BY RANDOM() LIMIT 1'
@@ -50,8 +55,8 @@ router.post('/', requireAuth, requireClient, createJobLimiter, async (req: AuthR
     const assignedEmployeeId = empResult.rows.length > 0 ? empResult.rows[0].id : null;
 
     const jobResult = await pool.query(
-      `INSERT INTO jobs (client_id, employee_id, description, status, rate_per_minute, is_free, callout_free, assigned_at)
-       VALUES ($1, $2, $3, $4, $5, FALSE, FALSE, $6)
+      `INSERT INTO jobs (client_id, employee_id, description, status, rate_per_minute, is_free, callout_free, assigned_at, business_name, business_place_id, business_address)
+       VALUES ($1, $2, $3, $4, $5, FALSE, FALSE, $6, $7, $8, $9)
        RETURNING *`,
       [
         clientId,
@@ -60,6 +65,9 @@ router.post('/', requireAuth, requireClient, createJobLimiter, async (req: AuthR
         assignedEmployeeId ? 'assigned' : 'pending',
         rate,
         assignedEmployeeId ? new Date() : null,
+        bizName,
+        bizPlaceId,
+        bizAddress,
       ]
     );
 

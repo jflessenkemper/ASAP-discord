@@ -485,4 +485,115 @@ router.post('/test-login', loginLimiter, async (req: Request, res: Response) => 
   }
 });
 
+// ─── Update Client Profile ───
+const profileLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 10,
+  message: { error: 'Too many requests, try again shortly' },
+});
+
+router.patch('/profile', requireAuth, profileLimiter, async (req: AuthRequest, res: Response) => {
+  try {
+    if (req.auth!.userType !== 'client') {
+      res.status(403).json({ error: 'Only clients can update their profile here' });
+      return;
+    }
+
+    const { first_name, last_name, phone } = req.body;
+    const updates: string[] = [];
+    const values: any[] = [];
+    let idx = 1;
+
+    if (typeof first_name === 'string') {
+      const trimmed = first_name.trim();
+      if (!trimmed || trimmed.length > 100) {
+        res.status(400).json({ error: 'First name must be 1-100 characters' });
+        return;
+      }
+      updates.push(`first_name = $${idx++}`);
+      values.push(trimmed);
+    }
+
+    if (typeof last_name === 'string') {
+      const trimmed = last_name.trim();
+      if (trimmed.length > 100) {
+        res.status(400).json({ error: 'Last name must be 100 characters or less' });
+        return;
+      }
+      updates.push(`last_name = $${idx++}`);
+      values.push(trimmed);
+    }
+
+    if (typeof phone === 'string') {
+      const trimmed = phone.trim();
+      if (trimmed.length > 20) {
+        res.status(400).json({ error: 'Phone number must be 20 characters or less' });
+        return;
+      }
+      updates.push(`phone = $${idx++}`);
+      values.push(trimmed);
+    }
+
+    if (updates.length === 0) {
+      res.status(400).json({ error: 'No valid fields to update' });
+      return;
+    }
+
+    values.push(req.auth!.userId);
+    const result = await pool.query(
+      `UPDATE clients SET ${updates.join(', ')} WHERE id = $${idx}
+       RETURNING id, first_name, last_name, email, phone, address, gender, date_of_birth, latitude, longitude, first_job_used, created_at`,
+      values
+    );
+
+    if (result.rows.length === 0) {
+      res.status(404).json({ error: 'Account not found' });
+      return;
+    }
+
+    logAuthEvent(req, 'profile_update', req.auth!.userId, 'client');
+    res.json({ user: result.rows[0] });
+  } catch (err) {
+    console.error('Profile update error:', err instanceof Error ? err.message : 'Unknown');
+    res.status(500).json({ error: 'Couldn\u2019t update profile. Please try again.' });
+  }
+});
+
+// ─── Delete Client Account ───
+router.delete('/account', requireAuth, profileLimiter, async (req: AuthRequest, res: Response) => {
+  try {
+    if (req.auth!.userType !== 'client') {
+      res.status(403).json({ error: 'Only clients can delete their account here' });
+      return;
+    }
+
+    const clientId = req.auth!.userId;
+
+    // Cascade delete: sessions, auth_events, fuel_searches, price_searches, saved_items, job_timeline, jobs
+    await pool.query('DELETE FROM sessions WHERE user_id = $1', [clientId]);
+    await pool.query('DELETE FROM auth_events WHERE user_id = $1', [clientId]);
+    await pool.query('DELETE FROM fuel_searches WHERE client_id = $1', [clientId]);
+    await pool.query('DELETE FROM price_searches WHERE client_id = $1', [clientId]);
+    await pool.query('DELETE FROM saved_items WHERE client_id = $1', [clientId]);
+    // Delete job-related data
+    await pool.query(
+      `DELETE FROM job_timeline WHERE job_id IN (SELECT id FROM jobs WHERE client_id = $1)`,
+      [clientId]
+    );
+    await pool.query(
+      `DELETE FROM job_photos WHERE job_id IN (SELECT id FROM jobs WHERE client_id = $1)`,
+      [clientId]
+    );
+    await pool.query('DELETE FROM jobs WHERE client_id = $1', [clientId]);
+    await pool.query('DELETE FROM clients WHERE id = $1', [clientId]);
+
+    clearAuthCookie(res);
+    logAuthEvent(req, 'account_deleted', clientId, 'client');
+    res.json({ message: 'Account deleted' });
+  } catch (err) {
+    console.error('Account deletion error:', err instanceof Error ? err.message : 'Unknown');
+    res.status(500).json({ error: 'Couldn\u2019t delete account. Please try again.' });
+  }
+});
+
 export default router;

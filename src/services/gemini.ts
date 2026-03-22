@@ -129,6 +129,36 @@ Examples:
   return result.response.text().trim().slice(0, 100);
 }
 
+// ─── Fuel Price Summary ───
+export async function summarizeFuelPrices(
+  prices: Array<{ fuelType: string; fuelLabel: string; pricePerLitre: number; stationName: string; stationAddress: string; distanceKm: number }>
+): Promise<string> {
+  const model = getModel();
+  if (!model || prices.length === 0) {
+    return '';
+  }
+
+  const table = prices
+    .slice(0, 20)
+    .map(p => `${p.fuelLabel}: $${p.pricePerLitre.toFixed(3)}/L at ${p.stationName} (${p.distanceKm.toFixed(1)} km)`)
+    .join('\n');
+
+  const prompt = `You are a helpful Australian fuel price assistant. Given these nearby fuel prices, write a brief 1-2 sentence summary highlighting the cheapest option and any notable savings. Be concise and friendly. Use Australian English.
+
+Fuel prices:
+${table}
+
+Return ONLY the summary text, no markdown, no bullet points.`;
+
+  try {
+    const result = await model.generateContent(prompt);
+    return result.response.text().trim().slice(0, 500);
+  } catch (err) {
+    console.error('Gemini fuel summary error:', err instanceof Error ? err.message : 'Unknown');
+    return '';
+  }
+}
+
 // ─── Product Price Search ───
 export interface ProductResult {
   title: string;
