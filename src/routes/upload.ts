@@ -64,7 +64,7 @@ router.post(
       res.status(201).json({ url });
     } catch (err) {
       console.error('Upload error:', err instanceof Error ? err.message : 'Unknown error');
-      res.status(500).json({ error: 'Upload failed' });
+      res.status(500).json({ error: 'Upload failed. Please try again.' });
     }
   }
 );

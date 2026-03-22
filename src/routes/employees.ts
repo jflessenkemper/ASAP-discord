@@ -1,6 +1,7 @@
 import { Router, Response } from 'express';
 import bcrypt from 'bcryptjs';
 import multer from 'multer';
+import rateLimit from 'express-rate-limit';
 import pool from '../db/pool';
 import { AuthRequest, requireAuth, requireEmployee } from '../middleware/auth';
 import { uploadEvidence } from '../services/storage';
@@ -41,7 +42,7 @@ router.get('/profile', requireAuth, requireEmployee, async (req: AuthRequest, re
     res.json({ ...emp, ...levelInfo });
   } catch (err) {
     console.error('Get profile error:', err instanceof Error ? err.message : 'Unknown error');
-    res.status(500).json({ error: 'Failed to fetch profile' });
+    res.status(500).json({ error: 'Couldn\u2019t load your profile. Please try again.' });
   }
 });
 
@@ -96,7 +97,7 @@ router.patch('/profile', requireAuth, requireEmployee, upload.fields([
     res.json({ message: 'Profile updated', ...result.rows[0] });
   } catch (err) {
     console.error('Update profile error:', err instanceof Error ? err.message : 'Unknown error');
-    res.status(500).json({ error: 'Failed to update profile' });
+    res.status(500).json({ error: 'Couldn\u2019t update your profile. Please try again.' });
   }
 });
 
@@ -117,12 +118,20 @@ router.patch('/rate', requireAuth, requireEmployee, async (req: AuthRequest, res
     res.json({ message: 'Rate updated', rate_per_minute });
   } catch (err) {
     console.error('Update rate error:', err instanceof Error ? err.message : 'Unknown error');
-    res.status(500).json({ error: 'Failed to update rate' });
+    res.status(500).json({ error: 'Couldn\u2019t update the rate. Please try again.' });
   }
 });
 
 // ─── Change password ───
-router.post('/change-password', requireAuth, requireEmployee, async (req: AuthRequest, res: Response) => {
+const changePasswordLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 5,
+  message: { error: 'Too many password change attempts. Try again in 15 minutes.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+router.post('/change-password', requireAuth, requireEmployee, changePasswordLimiter, async (req: AuthRequest, res: Response) => {
   try {
     const { current_password, new_password } = req.body;
 
@@ -131,8 +140,8 @@ router.post('/change-password', requireAuth, requireEmployee, async (req: AuthRe
       return;
     }
 
-    if (new_password.length < 8) {
-      res.status(400).json({ error: 'New password must be at least 8 characters' });
+    if (new_password.length < 8 || new_password.length > 128) {
+      res.status(400).json({ error: 'New password must be between 8 and 128 characters' });
       return;
     }
 
@@ -156,7 +165,7 @@ router.post('/change-password', requireAuth, requireEmployee, async (req: AuthRe
     res.json({ message: 'Password changed' });
   } catch (err) {
     console.error('Change password error:', err instanceof Error ? err.message : 'Unknown error');
-    res.status(500).json({ error: 'Failed to change password' });
+    res.status(500).json({ error: 'Couldn\u2019t change your password. Please try again.' });
   }
 });
 
@@ -165,59 +174,41 @@ router.get('/earnings', requireAuth, requireEmployee, async (req: AuthRequest, r
   try {
     const employeeId = req.auth!.userId;
 
-    // Get employee level info
-    const empResult = await pool.query(
-      'SELECT total_minutes FROM employees WHERE id = $1',
-      [employeeId]
-    );
+    // Run independent queries in parallel: employee info, aggregated earnings, recent jobs
+    const [empResult, earningsResult, recentResult] = await Promise.all([
+      pool.query(
+        'SELECT total_minutes FROM employees WHERE id = $1',
+        [employeeId]
+      ),
+      // Single query with conditional aggregation replaces 4 separate SUM queries
+      pool.query(
+        `SELECT
+           COALESCE(SUM(total_cost), 0) as all_time_total,
+           COUNT(*) as job_count,
+           COALESCE(SUM(CASE WHEN completed_at >= CURRENT_DATE THEN total_cost ELSE 0 END), 0) as today,
+           COALESCE(SUM(CASE WHEN completed_at >= date_trunc('week', CURRENT_DATE) THEN total_cost ELSE 0 END), 0) as this_week,
+           COALESCE(SUM(CASE WHEN completed_at >= date_trunc('month', CURRENT_DATE) THEN total_cost ELSE 0 END), 0) as this_month
+         FROM jobs
+         WHERE employee_id = $1 AND status = 'completed'`,
+        [employeeId]
+      ),
+      pool.query(
+        `SELECT j.id, j.description, j.total_seconds, j.total_cost, j.is_free,
+                j.completed_at, j.fuel_cost, j.difficulty_rating,
+                c.first_name as client_first_name, c.last_name as client_last_name
+         FROM jobs j
+         JOIN clients c ON j.client_id = c.id
+         WHERE j.employee_id = $1 AND j.status = 'completed'
+         ORDER BY j.completed_at DESC
+         LIMIT 20`,
+        [employeeId]
+      ),
+    ]);
+
     const levelInfo = computeLevel(empResult.rows[0]?.total_minutes || 0);
-
-    // Today
-    const todayResult = await pool.query(
-      `SELECT COALESCE(SUM(total_cost), 0) as total
-       FROM jobs WHERE employee_id = $1 AND status = 'completed'
-       AND completed_at >= CURRENT_DATE`,
-      [employeeId]
-    );
-
-    // This week
-    const weekResult = await pool.query(
-      `SELECT COALESCE(SUM(total_cost), 0) as total
-       FROM jobs WHERE employee_id = $1 AND status = 'completed'
-       AND completed_at >= date_trunc('week', CURRENT_DATE)`,
-      [employeeId]
-    );
-
-    // This month
-    const monthResult = await pool.query(
-      `SELECT COALESCE(SUM(total_cost), 0) as total
-       FROM jobs WHERE employee_id = $1 AND status = 'completed'
-       AND completed_at >= date_trunc('month', CURRENT_DATE)`,
-      [employeeId]
-    );
-
-    // All time
-    const allTimeResult = await pool.query(
-      `SELECT COALESCE(SUM(total_cost), 0) as total, COUNT(*) as job_count
-       FROM jobs WHERE employee_id = $1 AND status = 'completed'`,
-      [employeeId]
-    );
-
-    // Recent completed jobs with per-job tax breakdown
-    const recentResult = await pool.query(
-      `SELECT j.id, j.description, j.total_seconds, j.total_cost, j.is_free,
-              j.completed_at, j.fuel_cost, j.difficulty_rating,
-              c.first_name as client_first_name, c.last_name as client_last_name
-       FROM jobs j
-       JOIN clients c ON j.client_id = c.id
-       WHERE j.employee_id = $1 AND j.status = 'completed'
-       ORDER BY j.completed_at DESC
-       LIMIT 20`,
-      [employeeId]
-    );
-
     const taxRate = levelInfo.taxRate / 100;
-    const allTimeGross = parseFloat(allTimeResult.rows[0].total);
+    const earnings = earningsResult.rows[0];
+    const allTimeGross = parseFloat(earnings.all_time_total);
 
     const recentJobs = recentResult.rows.map((j: any) => {
       const gross = parseFloat(j.total_cost) || 0;
@@ -231,14 +222,14 @@ router.get('/earnings', requireAuth, requireEmployee, async (req: AuthRequest, r
     });
 
     res.json({
-      today: parseFloat(todayResult.rows[0].total),
-      this_week: parseFloat(weekResult.rows[0].total),
-      this_month: parseFloat(monthResult.rows[0].total),
+      today: parseFloat(earnings.today),
+      this_week: parseFloat(earnings.this_week),
+      this_month: parseFloat(earnings.this_month),
       all_time_gross: allTimeGross,
       all_time_tax: parseFloat((allTimeGross * taxRate).toFixed(2)),
       all_time_net: parseFloat((allTimeGross * (1 - taxRate)).toFixed(2)),
       tax_rate_percent: levelInfo.taxRate,
-      total_jobs: parseInt(allTimeResult.rows[0].job_count, 10),
+      total_jobs: parseInt(earnings.job_count, 10),
       level: levelInfo.level,
       recent_jobs: recentJobs,
     });

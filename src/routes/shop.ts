@@ -38,7 +38,7 @@ router.post('/search', requireAuth, requireClient, shopLimiter, async (req: Auth
     res.json({ results });
   } catch (err) {
     console.error('Shop search error:', err instanceof Error ? err.message : 'Unknown');
-    res.status(500).json({ error: 'Failed to search products' });
+    res.status(500).json({ error: 'Couldn\u2019t search products. Please try again.' });
   }
 });
 
@@ -51,10 +51,10 @@ router.get('/history', requireAuth, requireClient, async (req: AuthRequest, res:
        WHERE client_id = $1 ORDER BY created_at DESC LIMIT 50`,
       [clientId]
     );
-    res.json({ searches: result.rows });
+    res.json({ history: result.rows });
   } catch (err) {
     console.error('Shop history error:', err instanceof Error ? err.message : 'Unknown');
-    res.status(500).json({ error: 'Failed to fetch search history' });
+    res.status(500).json({ error: 'Couldn\u2019t load search history. Please try again.' });
   }
 });
 

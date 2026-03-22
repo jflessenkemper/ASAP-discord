@@ -36,8 +36,8 @@ export async function sendTwoFactorCode(email: string, code: string): Promise<vo
               <!-- Body -->
               <tr>
                 <td style="padding: 32px;">
-                  <p style="margin: 0 0 6px; font-size: 18px; font-weight: 600; color: #FFFFFF;">Employee Login Verification</p>
-                  <p style="margin: 0 0 28px; font-size: 14px; color: #9E9E9E; line-height: 1.5;">Use the code below to complete your sign-in. Do not share this code with anyone.</p>
+                  <p style="margin: 0 0 6px; font-size: 18px; font-weight: 600; color: #FFFFFF;">Employee login verification</p>
+                  <p style="margin: 0 0 28px; font-size: 14px; color: #9E9E9E; line-height: 1.5;">Use the code below to complete your sign-in. Don't share this code with anyone.</p>
                   <!-- Code box -->
                   <table width="100%" cellpadding="0" cellspacing="0">
                     <tr><td align="center" style="background-color: #1A1A1A; border: 1px solid #363636; border-radius: 12px; padding: 28px 20px;">

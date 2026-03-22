@@ -36,7 +36,7 @@ router.get('/best-prices', requireAuth, fuelLimiter, async (req: AuthRequest, re
     res.json({ prices });
   } catch (err) {
     console.error('Fuel prices error:', err instanceof Error ? err.message : 'Unknown');
-    res.status(500).json({ error: 'Failed to fetch fuel prices' });
+    res.status(500).json({ error: 'Couldn\u2019t load fuel prices. Please try again.' });
   }
 });
 

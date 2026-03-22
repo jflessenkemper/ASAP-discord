@@ -1,11 +1,11 @@
 import { Router, Response } from 'express';
-import { AuthRequest, requireAuth } from '../middleware/auth';
+import { AuthRequest, requireAuth, requireClient } from '../middleware/auth';
 import pool from '../db/pool';
 
 const router = Router();
 
 // GET /api/favorites — list all saved items for current client
-router.get('/', requireAuth, async (req: AuthRequest, res: Response) => {
+router.get('/', requireAuth, requireClient, async (req: AuthRequest, res: Response) => {
   try {
     const result = await pool.query(
       'SELECT id, item_type, item_data, created_at FROM saved_items WHERE client_id = $1 ORDER BY created_at DESC',
@@ -14,12 +14,12 @@ router.get('/', requireAuth, async (req: AuthRequest, res: Response) => {
     res.json({ items: result.rows });
   } catch (err) {
     console.error('Get favorites error:', err instanceof Error ? err.message : 'Unknown');
-    res.status(500).json({ error: 'Failed to load favorites' });
+    res.status(500).json({ error: 'Couldn\u2019t load your saved items. Please try again.' });
   }
 });
 
 // POST /api/favorites — save a new item
-router.post('/', requireAuth, async (req: AuthRequest, res: Response) => {
+router.post('/', requireAuth, requireClient, async (req: AuthRequest, res: Response) => {
   try {
     const { item_type, item_data } = req.body;
     if (!item_type || !item_data) {
@@ -31,20 +31,27 @@ router.post('/', requireAuth, async (req: AuthRequest, res: Response) => {
       return;
     }
 
+    // Limit stored JSON size to prevent abuse
+    const serialized = JSON.stringify(item_data);
+    if (serialized.length > 10000) {
+      res.status(400).json({ error: 'item_data is too large' });
+      return;
+    }
+
     const result = await pool.query(
       `INSERT INTO saved_items (client_id, item_type, item_data) VALUES ($1, $2, $3)
        RETURNING id, item_type, item_data, created_at`,
-      [req.auth!.userId, item_type, JSON.stringify(item_data)]
+      [req.auth!.userId, item_type, serialized]
     );
     res.status(201).json(result.rows[0]);
   } catch (err) {
     console.error('Save favorite error:', err instanceof Error ? err.message : 'Unknown');
-    res.status(500).json({ error: 'Failed to save favorite' });
+    res.status(500).json({ error: 'Couldn\u2019t save this item. Please try again.' });
   }
 });
 
 // DELETE /api/favorites/:id — remove a saved item
-router.delete('/:id', requireAuth, async (req: AuthRequest, res: Response) => {
+router.delete('/:id', requireAuth, requireClient, async (req: AuthRequest, res: Response) => {
   try {
     const { id } = req.params;
     const result = await pool.query(
@@ -58,7 +65,7 @@ router.delete('/:id', requireAuth, async (req: AuthRequest, res: Response) => {
     res.json({ success: true });
   } catch (err) {
     console.error('Remove favorite error:', err instanceof Error ? err.message : 'Unknown');
-    res.status(500).json({ error: 'Failed to remove favorite' });
+    res.status(500).json({ error: 'Couldn\u2019t remove this item. Please try again.' });
   }
 });
 

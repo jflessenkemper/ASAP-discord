@@ -28,10 +28,22 @@ async function migrate() {
 
     const sql = fs.readFileSync(path.join(migrationsDir, file), 'utf-8');
     console.log(`Running migration: ${file}`);
-    await pool.query(sql);
-    await pool.query('INSERT INTO applied_migrations (filename) VALUES ($1)', [file]);
-    console.log(`  ✓ ${file} applied`);
-    appliedCount++;
+    // Wrap migration + tracking in a transaction so they succeed or fail atomically.
+    // If the process crashes between SQL and INSERT, re-running won't skip a half-applied migration.
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query(sql);
+      await client.query('INSERT INTO applied_migrations (filename) VALUES ($1)', [file]);
+      await client.query('COMMIT');
+      console.log(`  ✓ ${file} applied`);
+      appliedCount++;
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
+    }
   }
 
   console.log(`Migrations complete. ${appliedCount} new, ${applied.size} previously applied.`);

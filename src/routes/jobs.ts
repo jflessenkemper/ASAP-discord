@@ -42,9 +42,9 @@ router.post('/', requireAuth, requireClient, createJobLimiter, async (req: AuthR
       return;
     }
 
-    // Get default rate from an available employee (or use 5.00)
+    // Get default rate from a random available employee (or use 5.00)
     const empResult = await pool.query(
-      'SELECT id, rate_per_minute FROM employees WHERE is_active = TRUE LIMIT 1'
+      'SELECT id, rate_per_minute FROM employees WHERE is_active = TRUE ORDER BY RANDOM() LIMIT 1'
     );
     const rate = empResult.rows.length > 0 ? empResult.rows[0].rate_per_minute : 5.00;
     const assignedEmployeeId = empResult.rows.length > 0 ? empResult.rows[0].id : null;
@@ -91,17 +91,23 @@ router.post('/', requireAuth, requireClient, createJobLimiter, async (req: AuthR
       } catch (err) {
         console.error('Failed to update job difficulty:', err instanceof Error ? err.message : 'Unknown error');
       }
-    });
+    }).catch(err => console.error('Gemini assessment failed:', err instanceof Error ? err.message : 'Unknown'));
 
     res.status(201).json(job);
   } catch (err) {
     console.error('Create job error:', err instanceof Error ? err.message : 'Unknown error');
-    res.status(500).json({ error: 'Failed to create job' });
+    res.status(500).json({ error: 'Couldn\u2019t create the job. Please try again.' });
   }
 });
 
 // ─── Transcribe audio (client) ───
-router.post('/transcribe', requireAuth, requireClient, upload.single('audio'), async (req: AuthRequest, res: Response) => {
+const transcribeLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 10,
+  message: { error: 'Too many transcription requests, try again shortly' },
+});
+
+router.post('/transcribe', requireAuth, requireClient, transcribeLimiter, upload.single('audio'), async (req: AuthRequest, res: Response) => {
   try {
     if (!req.file) {
       res.status(400).json({ error: 'Audio file is required' });
@@ -112,16 +118,26 @@ router.post('/transcribe', requireAuth, requireClient, upload.single('audio'), a
     res.json({ text });
   } catch (err) {
     console.error('Transcribe error:', err instanceof Error ? err.message : 'Unknown');
-    res.status(500).json({ error: 'Failed to transcribe audio' });
+    res.status(500).json({ error: 'Couldn\u2019t transcribe the audio. Please try again.' });
   }
 });
 
 // ─── Find businesses for a job description (client) ───
-router.post('/find-businesses', requireAuth, requireClient, async (req: AuthRequest, res: Response) => {
+const businessSearchLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 10,
+  message: { error: 'Too many search requests, try again shortly' },
+});
+
+router.post('/find-businesses', requireAuth, requireClient, businessSearchLimiter, async (req: AuthRequest, res: Response) => {
   try {
     const { description, lat, lng } = req.body;
     if (!description || !description.trim()) {
       res.status(400).json({ error: 'Description is required' });
+      return;
+    }
+    if (description.trim().length > 2000) {
+      res.status(400).json({ error: 'Description must be 2000 characters or less' });
       return;
     }
     if (lat == null || lng == null || isNaN(Number(lat)) || isNaN(Number(lng))) {
@@ -170,7 +186,7 @@ router.post('/find-businesses', requireAuth, requireClient, async (req: AuthRequ
     res.json({ businesses, query: searchQuery });
   } catch (err) {
     console.error('Find businesses error:', err instanceof Error ? err.message : 'Unknown');
-    res.status(500).json({ error: 'Failed to find businesses' });
+    res.status(500).json({ error: 'Couldn\u2019t find businesses. Please try again.' });
   }
 });
 
@@ -178,18 +194,22 @@ router.post('/find-businesses', requireAuth, requireClient, async (req: AuthRequ
 router.get('/client', requireAuth, requireClient, async (req: AuthRequest, res: Response) => {
   try {
     const clientId = req.auth!.userId;
+    const limit = Math.min(Math.max(parseInt(req.query.limit as string) || 50, 1), 100);
+    const offset = Math.max(parseInt(req.query.offset as string) || 0, 0);
+
     const result = await pool.query(
       `SELECT j.*, e.username as employee_name
        FROM jobs j
        LEFT JOIN employees e ON j.employee_id = e.id
        WHERE j.client_id = $1
-       ORDER BY j.created_at DESC`,
-      [clientId]
+       ORDER BY j.created_at DESC
+       LIMIT $2 OFFSET $3`,
+      [clientId, limit, offset]
     );
-    res.json(result.rows);
+    res.json({ jobs: result.rows });
   } catch (err) {
     console.error('Get client jobs error:', err instanceof Error ? err.message : 'Unknown error');
-    res.status(500).json({ error: 'Failed to fetch jobs' });
+    res.status(500).json({ error: 'Couldn\u2019t load your jobs. Please try again.' });
   }
 });
 
@@ -198,20 +218,17 @@ router.get('/employee', requireAuth, requireEmployee, async (req: AuthRequest, r
   try {
     const employeeId = req.auth!.userId;
 
-    // Get employee location
-    const empLocResult = await pool.query(
-      'SELECT latitude, longitude FROM employees WHERE id = $1',
-      [employeeId]
-    );
-    const empLat = empLocResult.rows[0]?.latitude;
-    const empLng = empLocResult.rows[0]?.longitude;
+    const limit = Math.min(Math.max(parseInt(req.query.limit as string) || 50, 1), 100);
+    const offset = Math.max(parseInt(req.query.offset as string) || 0, 0);
 
-    // Get all jobs (assigned to this employee OR pending/unassigned — only active employees see pending)
-    const empActiveResult = await pool.query(
-      'SELECT is_active FROM employees WHERE id = $1',
+    // Get employee location + active status in one query
+    const empResult = await pool.query(
+      'SELECT latitude, longitude, is_active FROM employees WHERE id = $1',
       [employeeId]
     );
-    const isActive = empActiveResult.rows[0]?.is_active;
+    const empLat = empResult.rows[0]?.latitude;
+    const empLng = empResult.rows[0]?.longitude;
+    const isActive = empResult.rows[0]?.is_active;
 
     const result = await pool.query(
       `SELECT j.*,
@@ -221,15 +238,23 @@ router.get('/employee', requireAuth, requireEmployee, async (req: AuthRequest, r
        FROM jobs j
        JOIN clients c ON j.client_id = c.id
        WHERE j.employee_id = $1${isActive ? " OR (j.status = 'pending' AND j.employee_id IS NULL)" : ''}
-       ORDER BY j.created_at DESC`,
-      [employeeId]
+       ORDER BY j.created_at DESC
+       LIMIT $2 OFFSET $3`,
+      [employeeId, limit, offset]
     );
 
-    // Compute distance and sort
-    let jobs = result.rows.map((j: any) => ({
-      ...j,
-      client_name: `${j.client_first_name} ${j.client_last_name}`.trim(),
-    }));
+    // Compute distance and sort; redact client PII for pending (unassigned) jobs
+    let jobs = result.rows.map((j: any) => {
+      const isAssignedToMe = j.employee_id === employeeId;
+      return {
+        ...j,
+        client_name: isAssignedToMe ? `${j.client_first_name} ${j.client_last_name}`.trim() : 'Client',
+        client_phone: isAssignedToMe ? j.client_phone : undefined,
+        client_address: isAssignedToMe ? j.client_address : undefined,
+        client_first_name: isAssignedToMe ? j.client_first_name : undefined,
+        client_last_name: isAssignedToMe ? j.client_last_name : undefined,
+      };
+    });
 
     if (empLat && empLng) {
       jobs = jobs.map((j: any) => {
@@ -246,10 +271,10 @@ router.get('/employee', requireAuth, requireEmployee, async (req: AuthRequest, r
       });
     }
 
-    res.json(jobs);
+    res.json({ jobs });
   } catch (err) {
     console.error('Get employee jobs error:', err instanceof Error ? err.message : 'Unknown error');
-    res.status(500).json({ error: 'Failed to fetch jobs' });
+    res.status(500).json({ error: 'Couldn\u2019t load jobs. Please try again.' });
   }
 });
 
@@ -337,7 +362,7 @@ router.get('/:id/photos', requireAuth, async (req: AuthRequest, res: Response) =
       'SELECT * FROM job_photos WHERE job_id = $1 ORDER BY created_at ASC',
       [jobId]
     );
-    res.json(result.rows);
+    res.json({ photos: result.rows });
   } catch (err) {
     console.error('Get photos error:', err instanceof Error ? err.message : 'Unknown error');
     res.status(500).json({ error: 'Failed to fetch photos' });
@@ -362,18 +387,18 @@ router.post('/:id/accept', requireAuth, requireEmployee, async (req: AuthRequest
 
     const job = jobResult.rows[0];
 
-    // Get employee info
-    const empResult = await pool.query(
-      'SELECT rate_per_minute, latitude, longitude FROM employees WHERE id = $1',
-      [employeeId]
-    );
+    // Get employee info and client location in parallel
+    const [empResult, clientResult] = await Promise.all([
+      pool.query(
+        'SELECT rate_per_minute, latitude, longitude FROM employees WHERE id = $1',
+        [employeeId]
+      ),
+      pool.query(
+        'SELECT latitude, longitude FROM clients WHERE id = $1',
+        [job.client_id]
+      ),
+    ]);
     const emp = empResult.rows[0];
-
-    // Get client location
-    const clientResult = await pool.query(
-      'SELECT latitude, longitude FROM clients WHERE id = $1',
-      [job.client_id]
-    );
     const client = clientResult.rows[0];
 
     // Calculate fuel cost if both locations available
@@ -388,12 +413,17 @@ router.post('/:id/accept', requireAuth, requireEmployee, async (req: AuthRequest
       fuelDistanceKm = fuelResult.distanceKm;
     }
 
-    await pool.query(
+    const updateResult = await pool.query(
       `UPDATE jobs SET employee_id = $1, status = 'assigned', rate_per_minute = $2,
        assigned_at = NOW(), fuel_cost = $3, fuel_distance_km = $4
-       WHERE id = $5`,
+       WHERE id = $5 AND status = 'pending'`,
       [employeeId, job.is_free ? 0 : emp.rate_per_minute, fuelCost, fuelDistanceKm, id]
     );
+
+    if (updateResult.rowCount === 0) {
+      res.status(409).json({ error: 'Job was already accepted by another technician' });
+      return;
+    }
 
     await pool.query(
       `INSERT INTO job_timeline (job_id, event_type, description, created_by_type, created_by_id)
@@ -574,7 +604,7 @@ router.post('/:id/timer/stop', requireAuth, requireEmployee, async (req: AuthReq
 
     if (job.started_at) {
       const wallClockSeconds = Math.floor((Date.now() - new Date(job.started_at).getTime()) / 1000);
-      const maxAllowed = wallClockSeconds + 10; // 10s grace
+      const maxAllowed = wallClockSeconds + 60; // 60s grace for network latency
       if (elapsed_seconds > maxAllowed) {
         res.status(400).json({ error: 'elapsed_seconds exceeds wall-clock time' });
         return;
@@ -616,8 +646,22 @@ router.post('/:id/timeline', requireAuth, async (req: AuthRequest, res: Response
     const { userId, userType } = req.auth!;
     const { event_type, description, evidence_url } = req.body;
 
-    if (!description) {
+    if (!description || typeof description !== 'string') {
       res.status(400).json({ error: 'Description is required' });
+      return;
+    }
+
+    if (description.length > 2000) {
+      res.status(400).json({ error: 'Description must be 2000 characters or less' });
+      return;
+    }
+
+    const allowedEventTypes = ['note', 'photo', 'created', 'assigned', 'started', 'paused', 'resumed', 'completed'];
+    const safeEventType = allowedEventTypes.includes(event_type) ? event_type : 'note';
+
+    // Validate evidence_url is HTTPS if provided
+    if (evidence_url && (typeof evidence_url !== 'string' || !/^https:\/\//.test(evidence_url))) {
+      res.status(400).json({ error: 'evidence_url must be a valid HTTPS URL' });
       return;
     }
 
@@ -641,7 +685,7 @@ router.post('/:id/timeline', requireAuth, async (req: AuthRequest, res: Response
     const result = await pool.query(
       `INSERT INTO job_timeline (job_id, event_type, description, evidence_url, created_by_type, created_by_id)
        VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
-      [id, event_type || 'note', description, evidence_url || null, userType, userId]
+      [id, safeEventType, description.trim(), evidence_url || null, userType, userId]
     );
 
     res.status(201).json(result.rows[0]);
@@ -677,7 +721,7 @@ router.get('/:id/timeline', requireAuth, async (req: AuthRequest, res: Response)
       'SELECT * FROM job_timeline WHERE job_id = $1 ORDER BY created_at ASC',
       [jobId]
     );
-    res.json(result.rows);
+    res.json({ timeline: result.rows });
   } catch (err) {
     console.error('Get timeline error:', err instanceof Error ? err.message : 'Unknown error');
     res.status(500).json({ error: 'Failed to fetch timeline' });

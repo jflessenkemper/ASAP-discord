@@ -112,8 +112,8 @@ router.post('/social', loginLimiter, async (req: Request, res: Response) => {
       email = payload.email;
       providerSub = payload.sub;
       // Apple only sends name on first authorization — handled via optional name fields from client
-      firstName = req.body.first_name || '';
-      lastName = req.body.last_name || '';
+      firstName = String(req.body.first_name || '').slice(0, 100);
+      lastName = String(req.body.last_name || '').slice(0, 100);
     }
 
     if (!email || !providerSub) {
@@ -195,7 +195,7 @@ router.post('/social', loginLimiter, async (req: Request, res: Response) => {
       res.status(401).json({ error: 'Authentication failed. Please try again.' });
       return;
     }
-    res.status(500).json({ error: 'Authentication failed' });
+    res.status(500).json({ error: 'Authentication failed. Please try again.' });
   }
 });
 
@@ -209,20 +209,27 @@ router.post('/email-signup', loginLimiter, async (req: Request, res: Response) =
       return;
     }
 
+    if (typeof email !== 'string' || email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      res.status(400).json({ error: 'Please enter a valid email address' });
+      return;
+    }
+
+    if (typeof first_name !== 'string' || first_name.trim().length > 100 || typeof last_name !== 'string' || last_name.trim().length > 100) {
+      res.status(400).json({ error: 'Name fields must be 100 characters or less' });
+      return;
+    }
+
     const normalizedEmail = email.toLowerCase().trim();
 
     // Check if email already exists
     const existing = await pool.query(
-      'SELECT id, first_name, last_name, email, phone, address, gender, date_of_birth, latitude, longitude, first_job_used, created_at FROM clients WHERE email = $1',
+      'SELECT id FROM clients WHERE email = $1',
       [normalizedEmail]
     );
 
     if (existing.rows.length > 0) {
-      // Existing account — log them in
-      const client = existing.rows[0];
-      const token = await createSession(client.id, 'client');
-      setAuthCookie(res, token);
-      res.json({ token, user: client });
+      // Do NOT auto-login — that would let anyone claim an existing account without email verification
+      res.status(409).json({ error: 'An account with this email already exists. Please sign in instead.' });
       return;
     }
 
@@ -240,7 +247,7 @@ router.post('/email-signup', loginLimiter, async (req: Request, res: Response) =
     res.status(201).json({ token, user: client });
   } catch (err: any) {
     console.error('Email signup error:', err instanceof Error ? err.message : 'Unknown error');
-    res.status(500).json({ error: 'Sign-up failed' });
+    res.status(500).json({ error: 'Sign-up failed. Please try again.' });
   }
 });
 
@@ -307,7 +314,7 @@ router.post('/employee/login', loginLimiter, async (req: Request, res: Response)
     });
   } catch (err) {
     console.error('Employee login error:', err instanceof Error ? err.message : 'Unknown error');
-    res.status(500).json({ error: 'Login failed' });
+    res.status(500).json({ error: 'Login failed. Please try again.' });
   }
 });
 
@@ -367,14 +374,21 @@ router.post('/employee/verify-2fa', twoFactorLimiter, async (req: Request, res: 
     );
 
     const employee = empResult.rows[0];
+
+    // Compute level info so client gets full EmployeeUser shape
+    const totalMinutes = employee.total_minutes || 0;
+    const level = Math.min(1000, Math.floor(totalMinutes / 1000));
+    const xp = totalMinutes % 1000;
+    const taxRate = parseFloat(Math.max(10, 25 - level * 0.015).toFixed(2));
+
     const token = await createSession(employee.id, 'employee');
 
     setAuthCookie(res, token);
     logAuthEvent(req, 'login', employee.id, 'employee', 'password');
-    res.json({ token, user: employee });
+    res.json({ token, user: { ...employee, level, xp, xpToNext: 1000, taxRate } });
   } catch (err) {
     console.error('2FA verification error:', err instanceof Error ? (err as Error).message : 'Unknown error');
-    res.status(500).json({ error: 'Verification failed' });
+    res.status(500).json({ error: 'Verification failed. Please try again.' });
   }
 });
 
