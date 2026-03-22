@@ -2,6 +2,7 @@ import { Router, Response } from 'express';
 import multer from 'multer';
 import { AuthRequest, requireAuth, requireEmployee } from '../middleware/auth';
 import { uploadEvidence } from '../services/storage';
+import pool from '../db/pool';
 
 const router = Router();
 const upload = multer({
@@ -25,10 +26,27 @@ router.post(
   async (req: AuthRequest, res: Response) => {
     try {
       const jobId = req.params.jobId as string;
+      const { userId, userType } = req.auth!;
 
       // Validate jobId to prevent path traversal in storage
       if (!/^[a-f0-9-]+$/i.test(jobId)) {
         res.status(400).json({ error: 'Invalid job ID format' });
+        return;
+      }
+
+      // Verify job exists and user has access
+      const jobResult = await pool.query('SELECT client_id, employee_id FROM jobs WHERE id = $1', [jobId]);
+      if (jobResult.rows.length === 0) {
+        res.status(404).json({ error: 'Job not found' });
+        return;
+      }
+      const job = jobResult.rows[0];
+      if (userType === 'client' && job.client_id !== userId) {
+        res.status(403).json({ error: 'Access denied' });
+        return;
+      }
+      if (userType === 'employee' && job.employee_id !== userId) {
+        res.status(403).json({ error: 'Access denied' });
         return;
       }
 

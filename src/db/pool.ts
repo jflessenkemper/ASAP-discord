@@ -1,9 +1,16 @@
 import { Pool } from 'pg';
 
+const IS_PRODUCTION = process.env.NODE_ENV === 'production';
+
+// In production, validate SSL certificates. Only skip validation in local dev.
+const sslConfig = IS_PRODUCTION
+  ? { rejectUnauthorized: true, ...(process.env.DATABASE_CA_CERT ? { ca: process.env.DATABASE_CA_CERT } : {}) }
+  : { rejectUnauthorized: false };
+
 const pool = process.env.DATABASE_URL
   ? new Pool({
       connectionString: process.env.DATABASE_URL,
-      ssl: { rejectUnauthorized: false },
+      ssl: sslConfig,
     })
   : new Pool({
       host: process.env.DB_HOST || 'localhost',
@@ -11,7 +18,7 @@ const pool = process.env.DATABASE_URL
       user: process.env.DB_USER || 'postgres',
       password: process.env.DB_PASSWORD || '',
       database: process.env.DB_NAME || 'asap',
-      ssl: process.env.DB_HOST && process.env.DB_HOST !== 'localhost' ? { rejectUnauthorized: false } : false,
+      ssl: process.env.DB_HOST && process.env.DB_HOST !== 'localhost' ? sslConfig : false,
     });
 
 pool.on('error', (err) => {

@@ -314,9 +314,28 @@ router.post('/:id/photos', requireAuth, upload.single('file'), async (req: AuthR
 // ─── Get job photos ───
 router.get('/:id/photos', requireAuth, async (req: AuthRequest, res: Response) => {
   try {
+    const { userId, userType } = req.auth!;
+    const jobId = req.params.id;
+
+    // Verify access
+    const jobResult = await pool.query('SELECT client_id, employee_id, status FROM jobs WHERE id = $1', [jobId]);
+    if (jobResult.rows.length === 0) {
+      res.status(404).json({ error: 'Job not found' });
+      return;
+    }
+    const job = jobResult.rows[0];
+    if (userType === 'client' && job.client_id !== userId) {
+      res.status(403).json({ error: 'Access denied' });
+      return;
+    }
+    if (userType === 'employee' && job.employee_id !== userId && job.status !== 'pending') {
+      res.status(403).json({ error: 'Access denied' });
+      return;
+    }
+
     const result = await pool.query(
       'SELECT * FROM job_photos WHERE job_id = $1 ORDER BY created_at ASC',
-      [req.params.id]
+      [jobId]
     );
     res.json(result.rows);
   } catch (err) {
@@ -635,10 +654,28 @@ router.post('/:id/timeline', requireAuth, async (req: AuthRequest, res: Response
 // ─── Get job timeline ───
 router.get('/:id/timeline', requireAuth, async (req: AuthRequest, res: Response) => {
   try {
-    const { id } = req.params;
+    const { userId, userType } = req.auth!;
+    const jobId = req.params.id;
+
+    // Verify access
+    const jobResult = await pool.query('SELECT client_id, employee_id, status FROM jobs WHERE id = $1', [jobId]);
+    if (jobResult.rows.length === 0) {
+      res.status(404).json({ error: 'Job not found' });
+      return;
+    }
+    const job = jobResult.rows[0];
+    if (userType === 'client' && job.client_id !== userId) {
+      res.status(403).json({ error: 'Access denied' });
+      return;
+    }
+    if (userType === 'employee' && job.employee_id !== userId && job.status !== 'pending') {
+      res.status(403).json({ error: 'Access denied' });
+      return;
+    }
+
     const result = await pool.query(
       'SELECT * FROM job_timeline WHERE job_id = $1 ORDER BY created_at ASC',
-      [id]
+      [jobId]
     );
     res.json(result.rows);
   } catch (err) {

@@ -1,5 +1,5 @@
 import { Router, Request, Response } from 'express';
-import bcrypt from 'bcrypt';
+import bcrypt from 'bcryptjs';
 import rateLimit from 'express-rate-limit';
 import { OAuth2Client } from 'google-auth-library';
 import appleSignin from 'apple-signin-auth';
@@ -139,24 +139,32 @@ router.post('/social', loginLimiter, async (req: Request, res: Response) => {
       return;
     }
 
-    // ── Fall back to email match (link existing password account to social) ──
+    // ── Fall back to email match (link existing account to social) ──
+    // Only auto-link if the existing account already has a verified social provider.
+    // If the account was created via email-only signup (no auth_provider), do NOT link —
+    // this prevents an attacker from pre-registering an email and hijacking via social login.
     clientResult = await pool.query(
-      'SELECT id, first_name, last_name, email, phone, address, gender, date_of_birth, latitude, longitude, first_job_used, created_at FROM clients WHERE email = $1',
+      `SELECT id, first_name, last_name, email, phone, address, gender, date_of_birth, latitude, longitude, first_job_used, created_at, auth_provider
+       FROM clients WHERE email = $1`,
       [normalizedEmail]
     );
 
     if (clientResult.rows.length > 0) {
-      // Link social provider to existing account
-      const client = clientResult.rows[0];
-      await pool.query(
-        'UPDATE clients SET auth_provider = $1, auth_provider_id = $2 WHERE id = $3',
-        [provider, providerSub, client.id]
-      );
-      const token = await createSession(client.id, 'client');
-      setAuthCookie(res, token);
-      logAuthEvent(req, 'login', client.id, 'client', provider);
-      res.json({ token, user: client });
-      return;
+      const existingClient = clientResult.rows[0];
+      if (existingClient.auth_provider && existingClient.auth_provider !== 'test') {
+        // Existing social account with different provider — link and log in
+        await pool.query(
+          'UPDATE clients SET auth_provider = $1, auth_provider_id = $2 WHERE id = $3',
+          [provider, providerSub, existingClient.id]
+        );
+        const token = await createSession(existingClient.id, 'client');
+        setAuthCookie(res, token);
+        logAuthEvent(req, 'login', existingClient.id, 'client', provider);
+        res.json({ token, user: existingClient });
+        return;
+      }
+      // Email-only account exists — don't auto-link, create a separate social account
+      // (The user can manually link later via account settings if they own both)
     }
 
     // ── Create new account ──
@@ -303,8 +311,17 @@ router.post('/employee/login', loginLimiter, async (req: Request, res: Response)
   }
 });
 
+// Rate limit 2FA verification (stricter than general login limiter)
+const twoFactorLimiter = rateLimit({
+  windowMs: 10 * 60 * 1000, // 10 minutes
+  max: 5, // 5 attempts per 10 minutes
+  message: { error: 'Too many verification attempts. Try again in 10 minutes.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
 // ─── Employee 2FA Verification (Step 2) ───
-router.post('/employee/verify-2fa', loginLimiter, async (req: Request, res: Response) => {
+router.post('/employee/verify-2fa', twoFactorLimiter, async (req: Request, res: Response) => {
   try {
     const { employee_id, code } = req.body;
 
@@ -322,6 +339,20 @@ router.post('/employee/verify-2fa', loginLimiter, async (req: Request, res: Resp
 
     if (result.rows.length === 0) {
       logAuthEvent(req, '2fa_failed', employee_id, 'employee', 'password');
+
+      // Count recent failed attempts and invalidate all codes after 3 failures
+      const failCount = await pool.query(
+        `SELECT COUNT(*) as cnt FROM auth_events
+         WHERE user_id = $1 AND event = '2fa_failed' AND created_at > NOW() - INTERVAL '10 minutes'`,
+        [employee_id]
+      );
+      if (parseInt(failCount.rows[0].cnt, 10) >= 3) {
+        await pool.query(
+          'UPDATE two_factor_codes SET used = TRUE WHERE employee_id = $1 AND used = FALSE',
+          [employee_id]
+        );
+      }
+
       res.status(401).json({ error: 'Invalid or expired code' });
       return;
     }
@@ -399,8 +430,13 @@ router.get('/me', requireAuth, async (req: AuthRequest, res: Response) => {
   }
 });
 
-// ─── Test Login (dev/QA only) ───
+// ─── Test Login (dev/QA only — DISABLED in production) ───
 router.post('/test-login', loginLimiter, async (req: Request, res: Response) => {
+  if (process.env.NODE_ENV === 'production') {
+    res.status(404).json({ error: 'Not found' });
+    return;
+  }
+
   try {
     const { username, password } = req.body;
     if (username !== 'testuser' || password !== 'testpass') {

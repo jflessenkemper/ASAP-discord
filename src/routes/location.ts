@@ -76,7 +76,7 @@ router.get('/geocode', requireAuth, geocodeLimiter, async (req: AuthRequest, res
 
     const url = `https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(q)}&components=country:AU&key=${encodeURIComponent(apiKey)}`;
     const resp = await fetch(url);
-    const data = await resp.json();
+    const data = await resp.json() as { status: string; results?: Array<{ formatted_address: string; geometry: { location: { lat: number; lng: number } } }> };
 
     if (data.status !== 'OK' || !data.results?.length) {
       res.json({ results: [] });

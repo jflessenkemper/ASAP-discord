@@ -75,8 +75,10 @@ export async function requireAuth(req: AuthRequest, res: Response, next: NextFun
         return;
       }
     } catch (dbErr) {
-      // DB unavailable — fall back to JWT-only validation
-      console.error('Session DB check failed, using JWT-only:', dbErr instanceof Error ? dbErr.message : 'Unknown');
+      // DB unavailable — fail closed (deny access) rather than falling back to JWT-only
+      console.error('Session DB check failed:', dbErr instanceof Error ? dbErr.message : 'Unknown');
+      res.status(503).json({ error: 'Service temporarily unavailable' });
+      return;
     }
 
     req.auth = payload;
