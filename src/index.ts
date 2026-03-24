@@ -13,6 +13,8 @@ import fuelRoutes from './routes/fuel';
 import shopRoutes from './routes/shop';
 import favoritesRoutes from './routes/favorites';
 import publicRoutes from './routes/public';
+import searchRoutes from './routes/search';
+import businessRoutes from './routes/business';
 import pool from './db/pool';
 
 const app = express();
@@ -69,6 +71,8 @@ app.use('/api/fuel', fuelRoutes);
 app.use('/api/shop', shopRoutes);
 app.use('/api/favorites', favoritesRoutes);
 app.use('/api/public', publicRoutes);
+app.use('/api/search', searchRoutes);
+app.use('/api/business', businessRoutes);
 
 // API 404 handler — must come after routes but before SPA fallback
 app.use('/api/*', (_req, res) => {

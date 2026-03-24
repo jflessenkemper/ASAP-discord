@@ -208,3 +208,81 @@ Return ONLY valid JSON array, no markdown, no explanation.`;
     return [];
   }
 }
+
+// ─── Intelligent Search — Intent Classification ───
+export type SearchIntent = 'service' | 'fuel' | 'shop' | 'general';
+
+export interface IntelligentSearchResult {
+  intent: SearchIntent;
+  searchQuery: string;
+  directAnswer?: string;
+}
+
+export async function intelligentSearch(
+  query: string,
+  lat?: number,
+  lng?: number,
+): Promise<IntelligentSearchResult> {
+  const model = getModel();
+  if (!model) {
+    // Fallback: simple keyword matching
+    const lower = query.toLowerCase();
+    if (/fuel|petrol|diesel|gas\s*station|servo/i.test(lower)) {
+      return { intent: 'fuel', searchQuery: query };
+    }
+    if (/buy|price|shop|cheap|product|compare/i.test(lower)) {
+      return { intent: 'shop', searchQuery: query };
+    }
+    if (/fix|repair|install|plumb|electri|mow|clean|build|paint|tradie/i.test(lower)) {
+      return { intent: 'service', searchQuery: query };
+    }
+    return { intent: 'general', searchQuery: query, directAnswer: '' };
+  }
+
+  const sanitized = query.replace(/[\r\n]+/g, ' ').slice(0, 500);
+  const locationCtx = lat != null && lng != null ? ` The user is located at (${lat}, ${lng}) in Australia.` : ' The user is in Australia.';
+
+  const prompt = `You are an intent classifier for an Australian services marketplace app. Given the user's query, classify it into exactly one intent and provide a search query.
+
+Intents:
+- "service": The user needs a tradesperson, technician, or local service provider (plumber, electrician, cleaner, mechanic, gardener, locksmith, etc.)
+- "fuel": The user is asking about fuel prices, petrol stations, cheapest fuel, diesel, etc.
+- "shop": The user wants to buy a product, compare prices, find deals, or check availability
+- "general": General knowledge question, not related to services/fuel/shopping
+
+User query: "${sanitized}"${locationCtx}
+
+Respond ONLY with valid JSON:
+{"intent": "service|fuel|shop|general", "searchQuery": "concise search query for the intent", "directAnswer": "brief answer if intent is general, otherwise omit"}
+
+Examples:
+- "I need a plumber" → {"intent": "service", "searchQuery": "plumber"}
+- "cheapest fuel near me" → {"intent": "fuel", "searchQuery": "fuel prices"}
+- "how much is a PS5" → {"intent": "shop", "searchQuery": "PlayStation 5"}
+- "what time does bunnings close" → {"intent": "general", "searchQuery": "bunnings hours", "directAnswer": "Most Bunnings stores close at 7pm weekdays and 5pm weekends, but hours vary by location."}`;
+
+  try {
+    const result = await model.generateContent(prompt);
+    const text = result.response.text().trim();
+    const jsonMatch = text.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) throw new Error('No JSON in response');
+    const parsed = JSON.parse(jsonMatch[0]);
+
+    const validIntents: SearchIntent[] = ['service', 'fuel', 'shop', 'general'];
+    const intent: SearchIntent = validIntents.includes(parsed.intent) ? parsed.intent : 'general';
+
+    return {
+      intent,
+      searchQuery: String(parsed.searchQuery || query).slice(0, 200),
+      directAnswer: parsed.directAnswer ? String(parsed.directAnswer).slice(0, 1000) : undefined,
+    };
+  } catch (err) {
+    console.error('Gemini intent classification error:', err instanceof Error ? err.message : 'Unknown');
+    // Fallback to keyword matching
+    const lower = query.toLowerCase();
+    if (/fuel|petrol|diesel|servo/i.test(lower)) return { intent: 'fuel', searchQuery: query };
+    if (/buy|price|shop|cheap|product/i.test(lower)) return { intent: 'shop', searchQuery: query };
+    if (/fix|repair|install|plumb|electri|mow|clean|tradie/i.test(lower)) return { intent: 'service', searchQuery: query };
+    return { intent: 'general', searchQuery: query, directAnswer: '' };
+  }
+}

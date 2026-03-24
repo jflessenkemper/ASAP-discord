@@ -4,7 +4,7 @@ import pool from '../db/pool';
 
 export interface AuthPayload {
   userId: string;
-  userType: 'client' | 'employee';
+  userType: 'client' | 'employee' | 'business';
 }
 
 export interface AuthRequest extends Request {
@@ -104,7 +104,15 @@ export function requireEmployee(req: AuthRequest, res: Response, next: NextFunct
   next();
 }
 
-export async function createSession(userId: string, userType: 'client' | 'employee'): Promise<string> {
+export function requireBusiness(req: AuthRequest, res: Response, next: NextFunction): void {
+  if (!req.auth || req.auth.userType !== 'business') {
+    res.status(403).json({ error: 'Business access required' });
+    return;
+  }
+  next();
+}
+
+export async function createSession(userId: string, userType: 'client' | 'employee' | 'business'): Promise<string> {
   const token = generateToken({ userId, userType });
   const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // 7 days
   await pool.query(
