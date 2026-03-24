@@ -418,6 +418,10 @@ const USER_TYPE_CONFIG = {
     table: 'employees',
     fields: 'id, username, email, rate_per_minute, is_active, total_minutes, profile_picture_url, banner_url, bio, latitude, longitude, created_at',
   },
+  business: {
+    table: 'businesses',
+    fields: 'id, name, email, phone, abn, address, access_code, service_categories, latitude, longitude, created_at',
+  },
 } as const;
 
 // ─── Get current user ───

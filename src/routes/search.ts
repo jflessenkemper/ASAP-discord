@@ -230,13 +230,14 @@ router.post('/voice', voiceLimiter, upload.single('audio'), async (req: Request,
 // ─── POST /api/search/voice-response — ElevenLabs TTS ───
 router.post('/voice-response', voiceLimiter, async (req: Request, res: Response) => {
   try {
-    const { text } = req.body;
+    const { text, voiceId } = req.body;
     if (!text || typeof text !== 'string' || !text.trim()) {
       res.status(400).json({ error: 'Text is required' });
       return;
     }
 
-    const audioBuffer = await textToSpeech(text.trim());
+    const resolvedVoiceId = typeof voiceId === 'string' && /^[a-zA-Z0-9]{10,30}$/.test(voiceId) ? voiceId : undefined;
+    const audioBuffer = await textToSpeech(text.trim(), resolvedVoiceId);
     res.setHeader('Content-Type', 'audio/mpeg');
     res.setHeader('Content-Length', audioBuffer.length);
     res.send(audioBuffer);
