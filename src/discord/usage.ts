@@ -147,7 +147,7 @@ export function getUsageEmbed(): EmbedBuilder {
         inline: true,
       }
     )
-    .setFooter({ text: 'Resets at midnight UTC · Updates every minute' })
+    .setFooter({ text: 'Resets at midnight UTC · Updates every hour' })
     .setTimestamp();
 }
 
@@ -186,8 +186,8 @@ export function setLimitsChannel(channel: TextChannel): void {
 }
 
 /**
- * Start periodic dashboard updates (every 1 minute).
- * Posts or edits a single embed in the #limits channel.
+ * Start periodic dashboard updates (every 1 hour).
+ * Clears the channel and posts a fresh embed each time.
  */
 export async function startDashboardUpdates(): Promise<void> {
   if (!limitsChannel) return;
@@ -195,12 +195,12 @@ export async function startDashboardUpdates(): Promise<void> {
   // Post initial dashboard
   await updateDashboard();
 
-  // Update every 1 minute
+  // Update every 1 hour
   updateInterval = setInterval(() => {
     updateDashboard().catch((err) =>
       console.error('Dashboard update error:', err instanceof Error ? err.message : 'Unknown')
     );
-  }, 60 * 1000);
+  }, 60 * 60 * 1000);
 }
 
 export function stopDashboardUpdates(): void {
@@ -213,19 +213,21 @@ export function stopDashboardUpdates(): void {
 async function updateDashboard(): Promise<void> {
   if (!limitsChannel) return;
 
-  const embed = getUsageEmbed();
-
-  if (dashboardMessageId) {
-    try {
-      const msg = await limitsChannel.messages.fetch(dashboardMessageId);
-      await msg.edit({ content: '', embeds: [embed] });
-      return;
-    } catch {
-      // Message was deleted — post a new one
-      dashboardMessageId = null;
+  // Clear all messages in the channel
+  try {
+    const messages = await limitsChannel.messages.fetch({ limit: 50 });
+    if (messages.size > 0) {
+      await limitsChannel.bulkDelete(messages, true).catch(() => {
+        // bulkDelete fails on messages > 14 days old — delete individually
+        messages.forEach((m) => m.delete().catch(() => {}));
+      });
     }
+  } catch {
+    // Ignore cleanup errors
   }
 
+  // Post fresh embed
+  const embed = getUsageEmbed();
   const msg = await limitsChannel.send({ embeds: [embed] });
   dashboardMessageId = msg.id;
 }

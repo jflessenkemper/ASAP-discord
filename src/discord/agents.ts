@@ -107,11 +107,12 @@ export function getAgents(): Map<AgentId, AgentConfig> {
 
   agentCache = new Map();
   for (const id of AGENT_IDS) {
+    const emoji = EMOJI_MAP[id] || '🤖';
     agentCache.set(id, {
       id,
       name: DISPLAY_NAME[id] || id,
-      channelName: id,
-      emoji: EMOJI_MAP[id] || '🤖',
+      channelName: `${emoji}${id}`,
+      emoji,
       voice: VOICE_MAP[id] || 'Kore',
       systemPrompt: loadSystemPrompt(id),
     });
@@ -125,7 +126,7 @@ export function getAgent(id: AgentId): AgentConfig | undefined {
 
 export function getAgentByChannelName(channelName: string): AgentConfig | undefined {
   for (const agent of getAgents().values()) {
-    if (agent.channelName === channelName) return agent;
+    if (agent.channelName === channelName || agent.id === channelName) return agent;
   }
   return undefined;
 }
