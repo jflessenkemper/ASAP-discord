@@ -170,6 +170,20 @@ export async function setupChannels(guild: Guild): Promise<BotChannels> {
     '📊 API usage limits, costs, and remaining credits — updated every 5 minutes'
   );
 
+  // ── Clean up old agent channels without emoji prefix ──
+  const agentIds = [...agents.keys()]; // e.g. 'qa', 'developer', 'lawyer'
+  for (const oldName of agentIds) {
+    const oldChannel = guild.channels.cache.find(
+      (c) => c.type === ChannelType.GuildText && c.name === oldName
+    );
+    if (oldChannel) {
+      try {
+        await oldChannel.delete('Replaced by emoji-prefixed channel');
+        console.log(`  Deleted old channel: #${oldName}`);
+      } catch { /* ignore */ }
+    }
+  }
+
   // ── Clean up old "ASAP Agents" category if empty ──
   const oldCat = guild.channels.cache.find(
     (c) => c.type === ChannelType.GuildCategory && c.name === 'ASAP Agents'
