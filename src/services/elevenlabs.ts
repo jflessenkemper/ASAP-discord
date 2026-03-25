@@ -1,3 +1,5 @@
+import { recordElevenLabsUsage, isElevenLabsOverLimit } from '../discord/usage';
+
 const ELEVENLABS_API_URL = 'https://api.elevenlabs.io/v1/text-to-speech';
 const MAX_TEXT_LENGTH = 500;
 
@@ -7,6 +9,9 @@ export async function textToSpeech(text: string, voiceId?: string): Promise<Buff
 
   if (!apiKey) {
     throw new Error('ElevenLabs API key not configured');
+  }
+  if (isElevenLabsOverLimit()) {
+    throw new Error('Daily ElevenLabs character limit reached');
   }
 
   const truncated = text.slice(0, MAX_TEXT_LENGTH);
@@ -36,5 +41,6 @@ export async function textToSpeech(text: string, voiceId?: string): Promise<Buff
   }
 
   const arrayBuffer = await res.arrayBuffer();
+  recordElevenLabsUsage(truncated.length);
   return Buffer.from(arrayBuffer);
 }

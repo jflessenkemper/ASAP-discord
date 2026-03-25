@@ -1,6 +1,7 @@
 import AnthropicVertex from '@anthropic-ai/vertex-sdk';
 import { AgentConfig } from './agents';
 import { REPO_TOOLS, executeTool } from './tools';
+import { recordClaudeUsage, isClaudeOverLimit } from './usage';
 
 const VERTEX_REGION = process.env.CLAUDE_VERTEX_REGION || 'us-east5';
 const CLAUDE_MODEL = 'claude-sonnet-4-20250514';
@@ -67,6 +68,10 @@ You have access to tools that let you read, write, search, and edit files in the
   // Tool-use loop
   let currentMessages: typeof messages = [...messages];
   for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
+    if (isClaudeOverLimit()) {
+      return '⚠️ Daily Claude token limit reached. Try again tomorrow or adjust DAILY_LIMIT_CLAUDE_TOKENS.';
+    }
+
     const response = await anthropic.messages.create({
       model: CLAUDE_MODEL,
       max_tokens: 4096,
@@ -77,6 +82,8 @@ You have access to tools that let you read, write, search, and edit files in the
 
     // If the model wants to use tools, execute them and continue
     if (response.stop_reason === 'tool_use') {
+      // Track token usage for this round
+      recordClaudeUsage(response.usage?.input_tokens || 0, response.usage?.output_tokens || 0);
       // Add assistant message with tool_use blocks
       currentMessages.push({
         role: 'assistant',
@@ -121,6 +128,7 @@ You have access to tools that let you read, write, search, and edit files in the
     }
 
     // Model finished with text — extract and return it
+    recordClaudeUsage(response.usage?.input_tokens || 0, response.usage?.output_tokens || 0);
     const textBlock = response.content.find((b) => b.type === 'text');
     return textBlock?.text || 'Done.';
   }
@@ -154,6 +162,10 @@ export async function summarizeCall(
   transcript: string[],
   participants: string[]
 ): Promise<string> {
+  if (isClaudeOverLimit()) {
+    return '⚠️ Daily Claude token limit reached — cannot generate summary.';
+  }
+
   const anthropic = getClient();
 
   const response = await anthropic.messages.create({
@@ -167,6 +179,8 @@ export async function summarizeCall(
       },
     ],
   });
+
+  recordClaudeUsage(response.usage?.input_tokens || 0, response.usage?.output_tokens || 0);
 
   const textBlock = response.content.find((b) => b.type === 'text');
   return textBlock?.text || 'Could not generate summary.';

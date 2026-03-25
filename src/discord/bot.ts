@@ -13,6 +13,7 @@ import { endCall, isCallActive } from './handlers/callSession';
 import { setBotChannels } from './handlers/documentation';
 import { registerCommands, handleCommand } from './commands';
 import { setGitHubChannel } from './handlers/github';
+import { setLimitsChannel, startDashboardUpdates, stopDashboardUpdates } from './usage';
 
 let client: Client | null = null;
 let botChannels: BotChannels | null = null;
@@ -67,6 +68,8 @@ export async function startBot(): Promise<void> {
       botChannels = await setupChannels(guild);
       setBotChannels(botChannels);
       setGitHubChannel(botChannels.github);
+      setLimitsChannel(botChannels.limits);
+      await startDashboardUpdates();
       console.log(`Discord channels configured in "${guild.name}"`);
 
       // Register slash commands
@@ -120,6 +123,7 @@ export async function startBot(): Promise<void> {
  * Gracefully shut down the Discord bot.
  */
 export async function stopBot(): Promise<void> {
+  stopDashboardUpdates();
   if (isCallActive()) {
     await endCall();
   }

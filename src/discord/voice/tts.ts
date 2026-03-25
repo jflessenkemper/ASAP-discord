@@ -1,4 +1,5 @@
 import { GoogleGenerativeAI } from '@google/generative-ai';
+import { recordGeminiUsage, isGeminiOverLimit } from '../usage';
 
 const genAI = process.env.GEMINI_API_KEY
   ? new GoogleGenerativeAI(process.env.GEMINI_API_KEY)
@@ -10,6 +11,7 @@ const genAI = process.env.GEMINI_API_KEY
  */
 export async function transcribeVoice(audioBuffer: Buffer): Promise<string> {
   if (!genAI) throw new Error('Gemini API key not configured');
+  if (isGeminiOverLimit()) throw new Error('Daily Gemini API call limit reached');
 
   const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' });
 
@@ -23,6 +25,7 @@ export async function transcribeVoice(audioBuffer: Buffer): Promise<string> {
   ]);
 
   const text = result.response.text().trim();
+  recordGeminiUsage();
   if (!text || text === '[silence]') return '';
   return text;
 }
@@ -38,6 +41,7 @@ export async function textToSpeech(
   // Use Gemini 2.5 Flash with audio output for TTS
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) throw new Error('Gemini API key not configured');
+  if (isGeminiOverLimit()) throw new Error('Daily Gemini API call limit reached');
 
   // Use the REST API directly for TTS since the SDK doesn't support audio output natively
   const response = await fetch(
@@ -87,5 +91,6 @@ export async function textToSpeech(
     throw new Error('No audio data in Gemini TTS response');
   }
 
+  recordGeminiUsage();
   return Buffer.from(audioPart.inlineData.data, 'base64');
 }

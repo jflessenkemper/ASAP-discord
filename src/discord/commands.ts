@@ -13,6 +13,7 @@ import { BotChannels } from './setup';
 import { startCall, endCall, isCallActive } from './handlers/callSession';
 import { clearHistory } from './handlers/textChannel';
 import { handleGoalCommand, getStatusSummary } from './handlers/groupchat';
+import { getUsageReport } from './usage';
 
 const COMMANDS = [
   new SlashCommandBuilder()
@@ -48,6 +49,9 @@ const COMMANDS = [
   new SlashCommandBuilder()
     .setName('clear')
     .setDescription('Reset conversation context'),
+  new SlashCommandBuilder()
+    .setName('limits')
+    .setDescription('Show API usage limits and estimated costs'),
 ];
 
 /**
@@ -96,6 +100,9 @@ export async function handleCommand(
       break;
     case 'clear':
       await handleClearSlash(interaction, channels);
+      break;
+    case 'limits':
+      await handleLimitsSlash(interaction);
       break;
     default:
       await interaction.reply({ content: 'Unknown command.', ephemeral: true });
@@ -207,4 +214,11 @@ async function handleClearSlash(
 ): Promise<void> {
   clearHistory(channels.groupchat.id);
   await interaction.reply({ content: '🧹 Conversation context cleared.', ephemeral: true });
+}
+
+async function handleLimitsSlash(
+  interaction: ChatInputCommandInteraction
+): Promise<void> {
+  const report = getUsageReport();
+  await interaction.reply(report);
 }

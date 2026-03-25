@@ -11,6 +11,7 @@ const CATEGORY_NAME = 'ASAP Agents';
 const GROUPCHAT_NAME = 'groupchat';
 const GITHUB_NAME = 'github';
 const CALL_LOG_NAME = 'call-log';
+const LIMITS_NAME = 'limits';
 const VOICE_CHANNEL_NAME = 'command';
 
 export interface BotChannels {
@@ -19,6 +20,7 @@ export interface BotChannels {
   groupchat: TextChannel;
   github: TextChannel;
   callLog: TextChannel;
+  limits: TextChannel;
   voiceChannel: VoiceChannel;
 }
 
@@ -141,6 +143,23 @@ export async function setupChannels(guild: Guild): Promise<BotChannels> {
     });
   }
 
+  // Create limits channel — usage dashboard
+  let limits = guild.channels.cache.find(
+    (c) =>
+      c.type === ChannelType.GuildText &&
+      c.name === LIMITS_NAME &&
+      c.parentId === category.id
+  ) as TextChannel | undefined;
+
+  if (!limits) {
+    limits = await guild.channels.create({
+      name: LIMITS_NAME,
+      type: ChannelType.GuildText,
+      parent: category,
+      topic: '📊 API usage limits, costs, and remaining credits — updated every 5 minutes',
+    });
+  }
+
   // Create voice channel
   let voiceChannel = guild.channels.cache.find(
     (c) =>
@@ -157,5 +176,5 @@ export async function setupChannels(guild: Guild): Promise<BotChannels> {
     });
   }
 
-  return { category, agentChannels, groupchat, github, callLog, voiceChannel };
+  return { category, agentChannels, groupchat, github, callLog, limits, voiceChannel };
 }
