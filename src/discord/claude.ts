@@ -162,6 +162,22 @@ function formatToolSummary(toolName: string, input: Record<string, string>): str
       return 'Listing open PRs';
     case 'run_tests':
       return `Running tests${input.test_pattern ? ` (${input.test_pattern})` : ''}`;
+    case 'list_channels':
+      return 'Listing Discord channels';
+    case 'delete_channel':
+      return `Deleting channel #${input.channel_name}`;
+    case 'create_channel':
+      return `Creating channel #${input.channel_name}`;
+    case 'rename_channel':
+      return `Renaming #${input.old_name} → #${input.new_name}`;
+    case 'set_channel_topic':
+      return `Setting topic on #${input.channel_name}`;
+    case 'send_channel_message':
+      return `Sending message to #${input.channel_name}`;
+    case 'delete_category':
+      return `Deleting category ${input.category_name}`;
+    case 'move_channel':
+      return `Moving #${input.channel_name} to ${input.category}`;
     default:
       return `Using ${toolName}`;
   }

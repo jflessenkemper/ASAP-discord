@@ -8,7 +8,7 @@ import {
 import { setupChannels, BotChannels } from './setup';
 import { getAgentByChannelName } from './agents';
 import { handleAgentMessage } from './handlers/textChannel';
-import { setCommandAuditCallback, setPRReviewCallback } from './tools';
+import { setCommandAuditCallback, setPRReviewCallback, setDiscordGuild } from './tools';
 import { autoReviewPR } from './handlers/review';
 import { handleGroupchatMessage } from './handlers/groupchat';
 import { endCall, isCallActive } from './handlers/callSession';
@@ -75,6 +75,7 @@ export async function startBot(): Promise<void> {
       setBotChannels(botChannels);
       setGitHubChannel(botChannels.github);
       setLimitsChannel(botChannels.limits);
+      setDiscordGuild(guild);
       await startDashboardUpdates();
 
       // Wire command audit to #github channel

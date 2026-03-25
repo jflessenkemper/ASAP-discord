@@ -2,6 +2,12 @@ import fs from 'fs';
 import path from 'path';
 import { execSync } from 'child_process';
 import {
+  Guild,
+  ChannelType,
+  TextChannel,
+  CategoryChannel,
+} from 'discord.js';
+import {
   createBranch,
   createPullRequest,
   mergePullRequest,
@@ -10,6 +16,19 @@ import {
   deleteBranch,
 } from '../services/github';
 import { getRequiredReviewers } from './handlers/review';
+
+// ────────────────────────────────────────────
+// Discord guild reference — set from bot.ts
+// ────────────────────────────────────────────
+
+let discordGuild: Guild | null = null;
+
+export function setDiscordGuild(guild: Guild): void {
+  discordGuild = guild;
+}
+
+/** Channels that must never be deleted by agents */
+const PROTECTED_CHANNELS = ['groupchat', 'command', 'github', 'call-log', 'limits'];
 
 /** Callback for triggering auto-review on PR creation — set from bot.ts */
 let prReviewCallback: ((prNumber: number, prTitle: string, changedFiles: string[], diffSummary: string) => Promise<void>) | null = null;
@@ -291,6 +310,150 @@ export const REPO_TOOLS = [
       required: [],
     },
   },
+  // ── Discord management tools ──
+  {
+    name: 'list_channels',
+    description:
+      'List all channels in the Discord server, grouped by category. Shows channel name, type (text/voice/category), and topic.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {},
+      required: [],
+    },
+  },
+  {
+    name: 'delete_channel',
+    description:
+      'Delete a Discord channel by name. Cannot delete protected channels (groupchat, command, github, call-log, limits). Use with caution.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        channel_name: {
+          type: 'string',
+          description: 'Exact channel name to delete',
+        },
+        reason: {
+          type: 'string',
+          description: 'Reason for deletion (logged in audit)',
+        },
+      },
+      required: ['channel_name', 'reason'],
+    },
+  },
+  {
+    name: 'create_channel',
+    description:
+      'Create a new text channel in the Discord server, optionally under a category.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        channel_name: {
+          type: 'string',
+          description: 'Channel name (lowercase, hyphens for spaces)',
+        },
+        category: {
+          type: 'string',
+          description: 'Category name to place the channel under (optional)',
+        },
+        topic: {
+          type: 'string',
+          description: 'Channel topic/description',
+        },
+      },
+      required: ['channel_name'],
+    },
+  },
+  {
+    name: 'rename_channel',
+    description:
+      'Rename a Discord channel.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        old_name: {
+          type: 'string',
+          description: 'Current channel name',
+        },
+        new_name: {
+          type: 'string',
+          description: 'New channel name',
+        },
+      },
+      required: ['old_name', 'new_name'],
+    },
+  },
+  {
+    name: 'set_channel_topic',
+    description:
+      'Update the topic/description of a Discord channel.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        channel_name: {
+          type: 'string',
+          description: 'Channel name',
+        },
+        topic: {
+          type: 'string',
+          description: 'New topic text',
+        },
+      },
+      required: ['channel_name', 'topic'],
+    },
+  },
+  {
+    name: 'send_channel_message',
+    description:
+      'Send a message to a specific Discord channel. Useful for posting announcements, updates, or summaries.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        channel_name: {
+          type: 'string',
+          description: 'Channel name to send to',
+        },
+        message: {
+          type: 'string',
+          description: 'Message content (supports Discord markdown)',
+        },
+      },
+      required: ['channel_name', 'message'],
+    },
+  },
+  {
+    name: 'delete_category',
+    description:
+      'Delete an empty Discord category. Fails if the category still has channels.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        category_name: {
+          type: 'string',
+          description: 'Category name to delete',
+        },
+      },
+      required: ['category_name'],
+    },
+  },
+  {
+    name: 'move_channel',
+    description:
+      'Move a channel to a different category.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        channel_name: {
+          type: 'string',
+          description: 'Channel name to move',
+        },
+        category: {
+          type: 'string',
+          description: 'Target category name',
+        },
+      },
+      required: ['channel_name', 'category'],
+    },
+  },
 ] as const;
 
 // ────────────────────────────────────────────
@@ -327,6 +490,23 @@ export async function executeTool(
         return await ghListPRs();
       case 'run_tests':
         return runTests(input.test_pattern);
+      // Discord management
+      case 'list_channels':
+        return await discordListChannels();
+      case 'delete_channel':
+        return await discordDeleteChannel(input.channel_name, input.reason);
+      case 'create_channel':
+        return await discordCreateChannel(input.channel_name, input.category, input.topic);
+      case 'rename_channel':
+        return await discordRenameChannel(input.old_name, input.new_name);
+      case 'set_channel_topic':
+        return await discordSetTopic(input.channel_name, input.topic);
+      case 'send_channel_message':
+        return await discordSendMessage(input.channel_name, input.message);
+      case 'delete_category':
+        return await discordDeleteCategory(input.category_name);
+      case 'move_channel':
+        return await discordMoveChannel(input.channel_name, input.category);
       default:
         return `Unknown tool: ${toolName}`;
     }
@@ -629,4 +809,164 @@ function runTests(pattern?: string): string {
     const output = (execErr.stdout || '') + '\n' + (execErr.stderr || '');
     return `Test run completed with failures:\n${output.trim().slice(-4000)}`;
   }
+}
+
+// ────────────────────────────────────────────
+// Discord management tools
+// ────────────────────────────────────────────
+
+function requireGuild(): Guild {
+  if (!discordGuild) throw new Error('Discord guild not available');
+  return discordGuild;
+}
+
+async function discordListChannels(): Promise<string> {
+  const guild = requireGuild();
+  await guild.channels.fetch();
+
+  const categories = guild.channels.cache
+    .filter((c) => c.type === ChannelType.GuildCategory)
+    .sort((a, b) => ((a as CategoryChannel).position ?? 0) - ((b as CategoryChannel).position ?? 0));
+
+  const uncategorized = guild.channels.cache.filter(
+    (c) => !c.parentId && c.type !== ChannelType.GuildCategory
+  );
+
+  const lines: string[] = [];
+
+  for (const cat of categories.values()) {
+    lines.push(`📁 ${cat.name.toUpperCase()}`);
+    const children = guild.channels.cache
+      .filter((c) => c.parentId === cat.id)
+      .sort((a, b) => ((a as TextChannel).position ?? 0) - ((b as TextChannel).position ?? 0));
+    for (const ch of children.values()) {
+      const type = ch.type === ChannelType.GuildVoice ? '🔊' : '#';
+      const topic = (ch as TextChannel).topic ? ` — ${(ch as TextChannel).topic}` : '';
+      lines.push(`  ${type} ${ch.name}${topic}`);
+    }
+  }
+
+  if (uncategorized.size > 0) {
+    lines.push('📁 (uncategorized)');
+    for (const ch of uncategorized.values()) {
+      const type = ch.type === ChannelType.GuildVoice ? '🔊' : '#';
+      lines.push(`  ${type} ${ch.name}`);
+    }
+  }
+
+  return lines.join('\n') || 'No channels found.';
+}
+
+async function discordDeleteChannel(channelName: string, reason: string): Promise<string> {
+  const guild = requireGuild();
+
+  if (PROTECTED_CHANNELS.includes(channelName)) {
+    return `Cannot delete protected channel: #${channelName}`;
+  }
+
+  const channel = guild.channels.cache.find(
+    (c) => c.type === ChannelType.GuildText && c.name === channelName
+  );
+  if (!channel) return `Channel not found: #${channelName}`;
+
+  await channel.delete(reason);
+  return `Deleted channel #${channelName} — ${reason}`;
+}
+
+async function discordCreateChannel(
+  channelName: string,
+  categoryName?: string,
+  topic?: string
+): Promise<string> {
+  const guild = requireGuild();
+
+  let parent: CategoryChannel | undefined;
+  if (categoryName) {
+    parent = guild.channels.cache.find(
+      (c) => c.type === ChannelType.GuildCategory && c.name.toLowerCase() === categoryName.toLowerCase()
+    ) as CategoryChannel | undefined;
+    if (!parent) return `Category not found: ${categoryName}`;
+  }
+
+  const channel = await guild.channels.create({
+    name: channelName,
+    type: ChannelType.GuildText,
+    parent,
+    topic,
+  });
+  return `Created channel #${channel.name}${parent ? ` under ${parent.name}` : ''}`;
+}
+
+async function discordRenameChannel(oldName: string, newName: string): Promise<string> {
+  const guild = requireGuild();
+
+  const channel = guild.channels.cache.find(
+    (c) => (c.type === ChannelType.GuildText || c.type === ChannelType.GuildVoice) && c.name === oldName
+  );
+  if (!channel) return `Channel not found: #${oldName}`;
+
+  await channel.setName(newName);
+  return `Renamed #${oldName} → #${newName}`;
+}
+
+async function discordSetTopic(channelName: string, topic: string): Promise<string> {
+  const guild = requireGuild();
+
+  const channel = guild.channels.cache.find(
+    (c) => c.type === ChannelType.GuildText && c.name === channelName
+  ) as TextChannel | undefined;
+  if (!channel) return `Channel not found: #${channelName}`;
+
+  await channel.setTopic(topic);
+  return `Updated topic for #${channelName}`;
+}
+
+async function discordSendMessage(channelName: string, message: string): Promise<string> {
+  const guild = requireGuild();
+
+  const channel = guild.channels.cache.find(
+    (c) => c.type === ChannelType.GuildText && c.name === channelName
+  ) as TextChannel | undefined;
+  if (!channel) return `Channel not found: #${channelName}`;
+
+  // Respect Discord's 2000 char limit
+  const chunks = message.match(/.{1,2000}/gs) || [message];
+  for (const chunk of chunks) {
+    await channel.send(chunk);
+  }
+  return `Sent message to #${channelName} (${message.length} chars)`;
+}
+
+async function discordDeleteCategory(categoryName: string): Promise<string> {
+  const guild = requireGuild();
+
+  const cat = guild.channels.cache.find(
+    (c) => c.type === ChannelType.GuildCategory && c.name.toLowerCase() === categoryName.toLowerCase()
+  );
+  if (!cat) return `Category not found: ${categoryName}`;
+
+  const children = guild.channels.cache.filter((c) => c.parentId === cat.id);
+  if (children.size > 0) {
+    return `Cannot delete category "${categoryName}" — it still has ${children.size} channel(s). Move or delete them first.`;
+  }
+
+  await cat.delete('Removed by agent');
+  return `Deleted category: ${categoryName}`;
+}
+
+async function discordMoveChannel(channelName: string, categoryName: string): Promise<string> {
+  const guild = requireGuild();
+
+  const channel = guild.channels.cache.find(
+    (c) => (c.type === ChannelType.GuildText || c.type === ChannelType.GuildVoice) && c.name === channelName
+  ) as TextChannel | undefined;
+  if (!channel) return `Channel not found: #${channelName}`;
+
+  const category = guild.channels.cache.find(
+    (c) => c.type === ChannelType.GuildCategory && c.name.toLowerCase() === categoryName.toLowerCase()
+  ) as CategoryChannel | undefined;
+  if (!category) return `Category not found: ${categoryName}`;
+
+  await channel.setParent(category, { lockPermissions: false });
+  return `Moved #${channelName} to ${categoryName}`;
 }
