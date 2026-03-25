@@ -58,10 +58,14 @@ export async function startBot(): Promise<void> {
   client.once(Events.ClientReady, async (readyClient) => {
     console.log(`Discord bot logged in as ${readyClient.user.tag}`);
 
-    const guild = readyClient.guilds.cache.get(guildId);
+    let guild = readyClient.guilds.cache.get(guildId);
     if (!guild) {
-      console.error(`Guild ${guildId} not found. Invite the bot first.`);
-      return;
+      try {
+        guild = await readyClient.guilds.fetch(guildId);
+      } catch {
+        console.error(`Guild ${guildId} not found. Invite the bot first.`);
+        return;
+      }
     }
 
     try {
