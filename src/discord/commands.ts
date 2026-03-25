@@ -14,6 +14,7 @@ import { startCall, endCall, isCallActive } from './handlers/callSession';
 import { clearHistory } from './handlers/textChannel';
 import { handleGoalCommand, getStatusSummary } from './handlers/groupchat';
 import { getUsageReport } from './usage';
+import { listRevisions, rollbackToRevision, getCurrentRevision } from '../services/cloudrun';
 
 const COMMANDS = [
   new SlashCommandBuilder()
@@ -52,6 +53,12 @@ const COMMANDS = [
   new SlashCommandBuilder()
     .setName('limits')
     .setDescription('Show API usage limits and estimated costs'),
+  new SlashCommandBuilder()
+    .setName('rollback')
+    .setDescription('Rollback to a previous Cloud Run revision')
+    .addStringOption((opt) =>
+      opt.setName('revision').setDescription('Revision name (leave empty to see list)')
+    ),
 ];
 
 /**
@@ -103,6 +110,9 @@ export async function handleCommand(
       break;
     case 'limits':
       await handleLimitsSlash(interaction);
+      break;
+    case 'rollback':
+      await handleRollbackSlash(interaction);
       break;
     default:
       await interaction.reply({ content: 'Unknown command.', ephemeral: true });
@@ -221,4 +231,41 @@ async function handleLimitsSlash(
 ): Promise<void> {
   const report = getUsageReport();
   await interaction.reply(report);
+}
+
+async function handleRollbackSlash(
+  interaction: ChatInputCommandInteraction
+): Promise<void> {
+  const revision = interaction.options.getString('revision');
+
+  if (!revision) {
+    // Show available revisions
+    await interaction.deferReply();
+    try {
+      const current = await getCurrentRevision();
+      const revisions = await listRevisions(5);
+      const list = revisions.map((r) => {
+        const date = new Date(r.createTime).toLocaleString('en-AU', { timeZone: 'Australia/Sydney' });
+        const tag = r.image.split(':').pop()?.slice(0, 12) || '?';
+        const active = r.name === current ? ' ← **active**' : '';
+        return `\`${r.name}\` — ${date} (${tag})${active}`;
+      }).join('\n');
+
+      await interaction.editReply(
+        `📦 **Cloud Run Revisions**\n\n${list}\n\n` +
+        `Use \`/rollback <revision-name>\` to switch to a previous version.`
+      );
+    } catch (err) {
+      await interaction.editReply(`❌ Failed to list revisions: ${err instanceof Error ? err.message : 'Unknown'}`);
+    }
+    return;
+  }
+
+  await interaction.deferReply();
+  try {
+    const result = await rollbackToRevision(revision);
+    await interaction.editReply(result);
+  } catch (err) {
+    await interaction.editReply(`❌ Rollback failed: ${err instanceof Error ? err.message : 'Unknown'}`);
+  }
 }

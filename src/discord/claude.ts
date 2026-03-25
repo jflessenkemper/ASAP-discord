@@ -150,6 +150,18 @@ function formatToolSummary(toolName: string, input: Record<string, string>): str
       return `Listing \`${input.path || '.'}\``;
     case 'run_command':
       return `Running \`${input.command.slice(0, 100)}\``;
+    case 'git_create_branch':
+      return `Creating branch \`${input.branch_name}\``;
+    case 'create_pull_request':
+      return `Creating PR: ${input.title}`;
+    case 'merge_pull_request':
+      return `Merging PR #${input.pr_number}`;
+    case 'add_pr_comment':
+      return `Commenting on PR #${input.pr_number}`;
+    case 'list_pull_requests':
+      return 'Listing open PRs';
+    case 'run_tests':
+      return `Running tests${input.test_pattern ? ` (${input.test_pattern})` : ''}`;
     default:
       return `Using ${toolName}`;
   }

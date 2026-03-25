@@ -1,6 +1,24 @@
 import fs from 'fs';
 import path from 'path';
 import { execSync } from 'child_process';
+import {
+  createBranch,
+  createPullRequest,
+  mergePullRequest,
+  addPRComment,
+  listPullRequests,
+  deleteBranch,
+} from '../services/github';
+import { getRequiredReviewers } from './handlers/review';
+
+/** Callback for triggering auto-review on PR creation — set from bot.ts */
+let prReviewCallback: ((prNumber: number, prTitle: string, changedFiles: string[], diffSummary: string) => Promise<void>) | null = null;
+
+export function setPRReviewCallback(
+  cb: (prNumber: number, prTitle: string, changedFiles: string[], diffSummary: string) => Promise<void>
+): void {
+  prReviewCallback = cb;
+}
 
 /**
  * Safe repository root — resolved at startup.
@@ -164,6 +182,115 @@ export const REPO_TOOLS = [
       required: ['command'],
     },
   },
+  {
+    name: 'git_create_branch',
+    description:
+      'Create a new git branch from main (or specified base). Use this before making changes for a PR workflow.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        branch_name: {
+          type: 'string',
+          description: 'New branch name (e.g. "feat/add-fuel-tab")',
+        },
+        base_branch: {
+          type: 'string',
+          description: 'Base branch to branch from (default: main)',
+        },
+      },
+      required: ['branch_name'],
+    },
+  },
+  {
+    name: 'create_pull_request',
+    description:
+      'Create a GitHub pull request. Commits must be pushed to the branch first using run_command with git commands.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        title: {
+          type: 'string',
+          description: 'PR title',
+        },
+        body: {
+          type: 'string',
+          description: 'PR description (markdown)',
+        },
+        head: {
+          type: 'string',
+          description: 'Source branch name',
+        },
+        base: {
+          type: 'string',
+          description: 'Target branch (default: main)',
+        },
+      },
+      required: ['title', 'body', 'head'],
+    },
+  },
+  {
+    name: 'merge_pull_request',
+    description:
+      'Merge a pull request by number. Uses squash merge. Tests must pass first (enforced).',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        pr_number: {
+          type: 'number',
+          description: 'Pull request number to merge',
+        },
+        commit_title: {
+          type: 'string',
+          description: 'Optional custom commit title for the squash merge',
+        },
+      },
+      required: ['pr_number'],
+    },
+  },
+  {
+    name: 'add_pr_comment',
+    description:
+      'Add a comment to a pull request. Useful for posting review results, test output, or status updates.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        pr_number: {
+          type: 'number',
+          description: 'Pull request number',
+        },
+        body: {
+          type: 'string',
+          description: 'Comment body (markdown)',
+        },
+      },
+      required: ['pr_number', 'body'],
+    },
+  },
+  {
+    name: 'list_pull_requests',
+    description:
+      'List open pull requests on the ASAP repository.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {},
+      required: [],
+    },
+  },
+  {
+    name: 'run_tests',
+    description:
+      'Run the test suite (npm test). Returns pass/fail with output. Use this before merging PRs.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        test_pattern: {
+          type: 'string',
+          description: 'Optional test file pattern to match (e.g. "auth" to run auth-related tests)',
+        },
+      },
+      required: [],
+    },
+  },
 ] as const;
 
 // ────────────────────────────────────────────
@@ -188,6 +315,18 @@ export async function executeTool(
         return listDirectory(input.path);
       case 'run_command':
         return runCommand(input.command, input.cwd);
+      case 'git_create_branch':
+        return await gitCreateBranch(input.branch_name, input.base_branch);
+      case 'create_pull_request':
+        return await ghCreatePR(input.title, input.body, input.head, input.base);
+      case 'merge_pull_request':
+        return await ghMergePR(parseInt(input.pr_number, 10), input.commit_title);
+      case 'add_pr_comment':
+        return await ghAddComment(parseInt(input.pr_number, 10), input.body);
+      case 'list_pull_requests':
+        return await ghListPRs();
+      case 'run_tests':
+        return runTests(input.test_pattern);
       default:
         return `Unknown tool: ${toolName}`;
     }
@@ -269,25 +408,113 @@ function listDirectory(relativePath: string): string {
     .join('\n');
 }
 
+/**
+ * Allowlist of command prefixes agents may run.
+ * Everything else is blocked by default.
+ */
+const ALLOWED_COMMANDS: Array<{ prefix: string; description: string }> = [
+  // Package management
+  { prefix: 'npm ',         description: 'npm scripts and installs' },
+  { prefix: 'npx tsc',      description: 'TypeScript type-checking' },
+  { prefix: 'npx jest',     description: 'Run tests via jest' },
+  { prefix: 'npx prettier', description: 'Code formatting' },
+  { prefix: 'npx eslint',   description: 'Linting' },
+  // Git (read + safe write operations)
+  { prefix: 'git status',    description: 'Working tree status' },
+  { prefix: 'git diff',      description: 'Show diffs' },
+  { prefix: 'git log',       description: 'Commit history' },
+  { prefix: 'git branch',    description: 'List/create branches' },
+  { prefix: 'git checkout',  description: 'Switch branches' },
+  { prefix: 'git switch',    description: 'Switch branches' },
+  { prefix: 'git add',       description: 'Stage files' },
+  { prefix: 'git commit',    description: 'Commit staged changes' },
+  { prefix: 'git push',      description: 'Push commits' },
+  { prefix: 'git pull',      description: 'Pull remote changes' },
+  { prefix: 'git fetch',     description: 'Fetch remote refs' },
+  { prefix: 'git stash',     description: 'Stash changes' },
+  { prefix: 'git merge',     description: 'Merge branches' },
+  { prefix: 'git show',      description: 'Show commit details' },
+  { prefix: 'git rev-parse', description: 'Resolve refs' },
+  { prefix: 'git remote',    description: 'Manage remotes' },
+  // Read-only system commands
+  { prefix: 'grep ',   description: 'Search file contents' },
+  { prefix: 'find ',   description: 'Find files' },
+  { prefix: 'cat ',    description: 'Read files' },
+  { prefix: 'head ',   description: 'Read file head' },
+  { prefix: 'tail ',   description: 'Read file tail' },
+  { prefix: 'ls ',     description: 'List directory' },
+  { prefix: 'ls\n',    description: 'List directory' },
+  { prefix: 'wc ',     description: 'Count lines/words' },
+  { prefix: 'sort ',   description: 'Sort output' },
+  { prefix: 'uniq ',   description: 'Deduplicate output' },
+  { prefix: 'echo ',   description: 'Echo text' },
+  { prefix: 'pwd',     description: 'Print working directory' },
+  { prefix: 'which ',  description: 'Locate commands' },
+  { prefix: 'node -e', description: 'Run inline JS' },
+  { prefix: 'node --eval', description: 'Run inline JS' },
+];
+
+/** Patterns that are NEVER allowed, even if they match an allowed prefix. */
+const HARD_BLOCKED = [
+  /rm\s+(-rf?|--recursive)\s+\//,  // rm -rf /
+  /mkfs/,
+  /dd\s+if=/,
+  /:\(\)\s*\{/,                     // fork bomb
+  />\s*\/dev\/sd/,                  // write to block devices
+  /curl\s.*\|\s*(ba)?sh/,          // curl | sh (pipe to shell)
+  /wget\s.*\|\s*(ba)?sh/,
+  /eval\s/,                         // eval in shell
+  /\$\(/,                           // command substitution (prevents bypass)
+  /`[^`]+`/,                        // backtick substitution
+  /;\s*(rm|mkfs|dd|curl|wget|nc|ncat|python|perl|ruby)\b/,  // chained dangerous commands
+  /\|\s*(ba)?sh/,                   // piping to shell
+  /&&\s*(rm|mkfs|dd|curl|wget)\b/,
+];
+
+/** Command audit log callback — set externally to post to Discord */
+let auditCallback: ((command: string, allowed: boolean, reason: string) => void) | null = null;
+
+export function setCommandAuditCallback(
+  cb: (command: string, allowed: boolean, reason: string) => void
+): void {
+  auditCallback = cb;
+}
+
 function runCommand(command: string, cwd?: string): string {
-  // Block obviously destructive commands
-  const blocked = ['rm -rf /', 'rm -rf /*', 'mkfs', 'dd if=', ':(){', 'fork bomb'];
-  const lower = command.toLowerCase();
-  for (const b of blocked) {
-    if (lower.includes(b)) {
-      return `Blocked: potentially destructive command.`;
+  const trimmed = command.trim();
+
+  // Check hard blocks first
+  for (const pattern of HARD_BLOCKED) {
+    if (pattern.test(trimmed)) {
+      const reason = 'Hard-blocked pattern detected';
+      auditCallback?.(trimmed, false, reason);
+      return `Blocked: ${reason}. This command is not allowed.`;
     }
   }
+
+  // Check allowlist
+  const allowed = ALLOWED_COMMANDS.find((rule) =>
+    trimmed.startsWith(rule.prefix) || trimmed === rule.prefix.trim()
+  );
+
+  if (!allowed) {
+    const reason = 'Command not in allowlist';
+    auditCallback?.(trimmed, false, reason);
+    return `Blocked: ${reason}. Allowed commands: npm, npx tsc/jest, git, grep, find, cat, ls, node -e, and other read-only utilities.`;
+  }
+
+  auditCallback?.(trimmed, true, allowed.description);
 
   const workDir = cwd ? safePath(cwd) : REPO_ROOT;
 
   try {
-    const result = execSync(command, {
+    const result = execSync(trimmed, {
       cwd: workDir,
       timeout: CMD_TIMEOUT,
       maxBuffer: 512 * 1024,
       encoding: 'utf-8',
       env: { ...process.env, NODE_ENV: 'development' },
+      shell: '/bin/sh',
     });
     const output = result.trim();
     if (output.length > 4000) {
@@ -299,5 +526,107 @@ function runCommand(command: string, cwd?: string): string {
     const stderr = execErr.stderr?.trim() || '';
     const stdout = execErr.stdout?.trim() || '';
     return `Command failed:\n${stderr || stdout || execErr.message || 'Unknown error'}`.slice(0, 4000);
+  }
+}
+
+// ────────────────────────────────────────────
+// GitHub tools
+// ────────────────────────────────────────────
+
+async function gitCreateBranch(branchName: string, baseBranch?: string): Promise<string> {
+  try {
+    return await createBranch(branchName, baseBranch || 'main');
+  } catch (err) {
+    return `Error creating branch: ${err instanceof Error ? err.message : 'Unknown'}`;
+  }
+}
+
+async function ghCreatePR(title: string, body: string, head: string, base?: string): Promise<string> {
+  try {
+    const pr = await createPullRequest(title, body, head, base || 'main');
+
+    // Get changed files for auto-review
+    try {
+      const diffOutput = execSync(`git diff --name-only ${base || 'main'}...${head}`, {
+        cwd: REPO_ROOT, timeout: 10_000, encoding: 'utf-8',
+      }).trim();
+      const changedFiles = diffOutput.split('\n').filter(Boolean);
+
+      // Check if auto-review is needed
+      const reviewers = getRequiredReviewers(changedFiles);
+      if (reviewers.size > 0 && prReviewCallback) {
+        const diffSummary = execSync(`git diff --stat ${base || 'main'}...${head}`, {
+          cwd: REPO_ROOT, timeout: 10_000, encoding: 'utf-8',
+        }).trim();
+        // Fire and forget — don't block PR creation
+        prReviewCallback(pr.number, title, changedFiles, diffSummary).catch(() => {});
+      }
+    } catch {
+      // Git diff might fail if branches aren't fetched locally — that's OK
+    }
+
+    return `✅ PR #${pr.number} created: ${pr.url}`;
+  } catch (err) {
+    return `Error creating PR: ${err instanceof Error ? err.message : 'Unknown'}`;
+  }
+}
+
+async function ghMergePR(prNumber: number, commitTitle?: string): Promise<string> {
+  // Run tests first — refuse to merge if tests fail
+  const testResult = runTests();
+  if (testResult.includes('FAIL') || testResult.includes('Command failed')) {
+    return `❌ Cannot merge PR #${prNumber} — tests failed:\n${testResult.slice(0, 1000)}`;
+  }
+
+  try {
+    const result = await mergePullRequest(prNumber, commitTitle);
+    return `✅ ${result}`;
+  } catch (err) {
+    return `Error merging PR: ${err instanceof Error ? err.message : 'Unknown'}`;
+  }
+}
+
+async function ghAddComment(prNumber: number, body: string): Promise<string> {
+  try {
+    await addPRComment(prNumber, body);
+    return `Comment added to PR #${prNumber}`;
+  } catch (err) {
+    return `Error adding comment: ${err instanceof Error ? err.message : 'Unknown'}`;
+  }
+}
+
+async function ghListPRs(): Promise<string> {
+  try {
+    const prs = await listPullRequests();
+    if (prs.length === 0) return 'No open pull requests.';
+    return prs.map((pr) => `#${pr.number} [${pr.head}] ${pr.title}`).join('\n');
+  } catch (err) {
+    return `Error listing PRs: ${err instanceof Error ? err.message : 'Unknown'}`;
+  }
+}
+
+// ────────────────────────────────────────────
+// Test runner tool
+// ────────────────────────────────────────────
+
+function runTests(pattern?: string): string {
+  const testCmd = pattern
+    ? `npm test -- --testPathPattern="${pattern.replace(/"/g, '')}"`
+    : 'npm test';
+
+  try {
+    const result = execSync(testCmd, {
+      cwd: path.join(REPO_ROOT, 'server'),
+      timeout: 120_000, // 2 minutes for test suite
+      maxBuffer: 1024 * 1024,
+      encoding: 'utf-8',
+      env: { ...process.env, NODE_ENV: 'test', CI: 'true' },
+      shell: '/bin/sh',
+    });
+    return result.trim().slice(-4000) || 'All tests passed (no output)';
+  } catch (err: unknown) {
+    const execErr = err as { stdout?: string; stderr?: string; message?: string };
+    const output = (execErr.stdout || '') + '\n' + (execErr.stderr || '');
+    return `Test run completed with failures:\n${output.trim().slice(-4000)}`;
   }
 }

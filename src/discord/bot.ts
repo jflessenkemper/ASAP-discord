@@ -8,6 +8,8 @@ import {
 import { setupChannels, BotChannels } from './setup';
 import { getAgentByChannelName } from './agents';
 import { handleAgentMessage } from './handlers/textChannel';
+import { setCommandAuditCallback, setPRReviewCallback } from './tools';
+import { autoReviewPR } from './handlers/review';
 import { handleGroupchatMessage } from './handlers/groupchat';
 import { endCall, isCallActive } from './handlers/callSession';
 import { setBotChannels } from './handlers/documentation';
@@ -74,6 +76,18 @@ export async function startBot(): Promise<void> {
       setGitHubChannel(botChannels.github);
       setLimitsChannel(botChannels.limits);
       await startDashboardUpdates();
+
+      // Wire command audit to #github channel
+      setCommandAuditCallback((cmd, allowed, reason) => {
+        const icon = allowed ? '✅' : '🚫';
+        const truncated = cmd.length > 100 ? cmd.slice(0, 100) + '...' : cmd;
+        botChannels!.github.send(`${icon} \`run_command\`: \`${truncated}\` — ${reason}`).catch(() => {});
+      });
+
+      // Wire PR auto-review (Harper + Kane on sensitive files)
+      setPRReviewCallback(async (prNumber, prTitle, changedFiles, diffSummary) => {
+        await autoReviewPR(prNumber, prTitle, changedFiles, diffSummary, botChannels!.groupchat);
+      });
       console.log(`Discord channels configured in "${guild.name}"`);
 
       // Register slash commands
