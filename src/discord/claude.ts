@@ -10,7 +10,10 @@ let client: AnthropicVertex | null = null;
 
 function getClient(): AnthropicVertex {
   if (!client) {
-    client = new AnthropicVertex({ region: VERTEX_REGION });
+    client = new AnthropicVertex({
+      region: VERTEX_REGION,
+      projectId: process.env.GCS_PROJECT_ID || process.env.ANTHROPIC_VERTEX_PROJECT_ID,
+    });
   }
   return client;
 }

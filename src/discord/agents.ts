@@ -6,6 +6,8 @@ export interface AgentConfig {
   name: string;
   channelName: string;
   emoji: string;
+  /** Hex color for Discord embeds */
+  color: number;
   /** Gemini TTS voice name */
   voice: string;
   /** System prompt loaded from .agent.md file */
@@ -42,6 +44,22 @@ const EMOJI_MAP: Record<string, string> = {
   'executive-assistant': '📋',
   'ios-engineer': '🍎',
   'android-engineer': '🤖',
+};
+
+const COLOR_MAP: Record<string, number> = {
+  'executive-assistant': 0x5865F2, // Blurple (Riley)
+  developer:            0x57F287, // Green (Ace)
+  qa:                   0xED4245, // Red (Max)
+  'ux-reviewer':        0xEB459E, // Fuchsia (Sophie)
+  'security-auditor':   0xFEE75C, // Yellow (Kane)
+  'api-reviewer':       0x3498DB, // Blue (Raj)
+  dba:                  0xE67E22, // Orange (Elena)
+  performance:          0x1ABC9C, // Teal (Kai)
+  devops:               0x9B59B6, // Purple (Jude)
+  copywriter:           0xE91E63, // Pink (Liv)
+  lawyer:               0x607D8B, // Blue Grey (Harper)
+  'ios-engineer':       0xA3AAAE, // Silver (Mia)
+  'android-engineer':   0x2ECC71, // Emerald (Leo)
 };
 
 const DISPLAY_NAME: Record<string, string> = {
@@ -113,6 +131,7 @@ export function getAgents(): Map<AgentId, AgentConfig> {
       name: DISPLAY_NAME[id] || id,
       channelName: `${emoji}${id}`,
       emoji,
+      color: COLOR_MAP[id] || 0x99AAB5,
       voice: VOICE_MAP[id] || 'Kore',
       systemPrompt: loadSystemPrompt(id),
     });

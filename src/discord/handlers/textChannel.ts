@@ -1,4 +1,4 @@
-import { Message, TextChannel } from 'discord.js';
+import { Message, TextChannel, EmbedBuilder } from 'discord.js';
 import { AgentConfig } from '../agents';
 import { agentRespond, ConversationMessage } from '../claude';
 import { appendToMemory, getMemoryContext } from '../memory';
@@ -52,7 +52,7 @@ export async function handleAgentMessage(
     ]);
 
     // Split response if over Discord's 2000 char limit
-    await sendLongMessage(channel, `${agent.emoji} **${agent.name}**\n${response}`);
+    await sendAgentMessage(channel, agent, response);
   } catch (err) {
     console.error(`Agent ${agent.name} error:`, err instanceof Error ? err.message : 'Unknown');
     await channel.send(`⚠️ ${agent.name} encountered an error. Please try again.`);
@@ -67,15 +67,39 @@ export function clearHistory(channelId: string): void {
 }
 
 /**
- * Send a message, splitting it if over 2000 characters.
+ * Send an agent response as a colored embed with the agent's name and emoji.
  */
-async function sendLongMessage(channel: TextChannel, content: string): Promise<void> {
+export async function sendAgentMessage(
+  channel: TextChannel,
+  agent: AgentConfig,
+  response: string
+): Promise<void> {
+  // Discord embed description limit is 4096 chars
+  const chunks = splitMessage(response, 4000);
+
+  for (let i = 0; i < chunks.length; i++) {
+    const embed = new EmbedBuilder()
+      .setColor(agent.color)
+      .setDescription(chunks[i]);
+
+    // Only show author header on the first chunk
+    if (i === 0) {
+      embed.setAuthor({ name: `${agent.emoji} ${agent.name}` });
+    }
+
+    await channel.send({ embeds: [embed] });
+  }
+}
+
+/**
+ * Send a plain message, splitting if over 2000 characters.
+ */
+export async function sendLongMessage(channel: TextChannel, content: string): Promise<void> {
   if (content.length <= 2000) {
     await channel.send(content);
     return;
   }
 
-  // Split on newlines, staying under 2000 chars per message
   const lines = content.split('\n');
   let chunk = '';
 
@@ -89,4 +113,23 @@ async function sendLongMessage(channel: TextChannel, content: string): Promise<v
   }
 
   if (chunk) await channel.send(chunk);
+}
+
+function splitMessage(text: string, maxLen: number): string[] {
+  if (text.length <= maxLen) return [text];
+
+  const chunks: string[] = [];
+  const lines = text.split('\n');
+  let chunk = '';
+
+  for (const line of lines) {
+    if (chunk.length + line.length + 1 > maxLen) {
+      if (chunk) chunks.push(chunk);
+      chunk = line;
+    } else {
+      chunk += (chunk ? '\n' : '') + line;
+    }
+  }
+  if (chunk) chunks.push(chunk);
+  return chunks;
 }

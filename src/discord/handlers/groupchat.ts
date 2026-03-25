@@ -3,6 +3,7 @@ import { getAgents, getAgent, AgentConfig, AgentId } from '../agents';
 import { agentRespond, ConversationMessage } from '../claude';
 import { appendToMemory, getMemoryContext } from '../memory';
 import { documentToChannel } from './documentation';
+import { sendAgentMessage, sendLongMessage } from './textChannel';
 
 // Shared groupchat conversation history
 const groupHistory: ConversationMessage[] = [];
@@ -105,7 +106,7 @@ async function handleRileyMessage(
       await groupchat.send(`🔧 ${riley.emoji} → ${summary}`);
     });
 
-    await sendLongMessage(groupchat, `${riley.emoji} **Riley**\n${response}`);
+    await sendAgentMessage(groupchat, riley, response);
     appendToMemory('executive-assistant', [
       { role: 'user', content: contextMessage },
       { role: 'assistant', content: `[Riley]: ${response}` },
@@ -153,7 +154,7 @@ Create a plan for this goal. Be specific about which agents handle which steps. 
     });
 
     goalStatus = '📋 Plan created';
-    await sendLongMessage(groupchat, `${riley.emoji} **Riley**\n${response}`);
+    await sendAgentMessage(groupchat, riley, response);
     appendToMemory('executive-assistant', [
       { role: 'user', content: `[GOAL from ${senderName}]: ${goalDescription}` },
       { role: 'assistant', content: `[Riley]: ${response}` },
@@ -228,7 +229,7 @@ async function handleAgentChain(
           await groupchat.send(`🔧 ${ace.emoji} → ${summary}`);
         });
 
-        await sendLongMessage(groupchat, `${ace.emoji} **Ace**\n${aceResponse}`);
+        await sendAgentMessage(groupchat, ace, aceResponse);
         appendToMemory('developer', [
           { role: 'user', content: `[Riley directed]: ${rileyResponse.slice(0, 1000)}` },
           { role: 'assistant', content: `[Ace]: ${aceResponse}` },
@@ -282,7 +283,7 @@ async function handleSubAgents(
       });
 
       // Report back in groupchat
-      await sendLongMessage(groupchat, `${agent.emoji} **${agent.name.split(' ')[0]}**\n${agentResponse}`);
+      await sendAgentMessage(groupchat, agent, agentResponse);
       appendToMemory(agentId, [
         { role: 'user', content: `[Groupchat directive]: ${directiveContext.slice(0, 500)}` },
         { role: 'assistant', content: `[${agent.name}]: ${agentResponse}` },
@@ -320,7 +321,7 @@ async function handleDirectedMessage(
         await groupchat.send(`🔧 ${agent.emoji} → ${summary}`);
       });
 
-      await sendLongMessage(groupchat, `${agent.emoji} **${agent.name.split(' ')[0]}**\n${response}`);
+      await sendAgentMessage(groupchat, agent, response);
       appendToMemory(agentId, [
         { role: 'user', content: contextMessage },
         { role: 'assistant', content: `[${agent.name}]: ${response}` },
@@ -424,40 +425,4 @@ function trimHistory(): void {
   if (groupHistory.length > MAX_HISTORY * 2) {
     groupHistory.splice(0, groupHistory.length - MAX_HISTORY * 2);
   }
-}
-
-export async function sendLongMessage(channel: TextChannel, content: string): Promise<void> {
-  if (content.length <= 2000) {
-    await channel.send(content);
-    return;
-  }
-
-  // Split on double newlines (paragraphs) to preserve formatting
-  const paragraphs = content.split(/\n\n/);
-  let chunk = '';
-
-  for (const para of paragraphs) {
-    if (chunk.length + para.length + 2 > 1990) {
-      if (chunk) await channel.send(chunk);
-      // If single paragraph exceeds limit, split on newlines
-      if (para.length > 1990) {
-        const lines = para.split('\n');
-        chunk = '';
-        for (const line of lines) {
-          if (chunk.length + line.length + 1 > 1990) {
-            if (chunk) await channel.send(chunk);
-            chunk = line;
-          } else {
-            chunk += (chunk ? '\n' : '') + line;
-          }
-        }
-      } else {
-        chunk = para;
-      }
-    } else {
-      chunk += (chunk ? '\n\n' : '') + para;
-    }
-  }
-
-  if (chunk) await channel.send(chunk);
 }
