@@ -16,6 +16,8 @@ import publicRoutes from './routes/public';
 import searchRoutes from './routes/search';
 import businessRoutes from './routes/business';
 import pool from './db/pool';
+import { startBot, stopBot } from './discord/bot';
+import { verifySignature, handleGitHubEvent } from './discord/handlers/github';
 
 const app = express();
 const PORT = parseInt(process.env.PORT || '3001', 10);
@@ -74,6 +76,28 @@ app.use('/api/public', publicRoutes);
 app.use('/api/search', searchRoutes);
 app.use('/api/business', businessRoutes);
 
+// GitHub webhook endpoint
+app.post('/api/webhooks/github', express.json({ limit: '1mb' }), (req, res) => {
+  const event = req.headers['x-github-event'] as string;
+  const signature = req.headers['x-hub-signature-256'] as string | undefined;
+
+  if (!event) {
+    res.status(400).json({ error: 'Missing x-github-event header' });
+    return;
+  }
+
+  if (!verifySignature(JSON.stringify(req.body), signature)) {
+    res.status(401).json({ error: 'Invalid signature' });
+    return;
+  }
+
+  handleGitHubEvent(event, req.body).catch((err) => {
+    console.error('GitHub webhook error:', err instanceof Error ? err.message : 'Unknown');
+  });
+
+  res.status(200).json({ ok: true });
+});
+
 // API 404 handler — must come after routes but before SPA fallback
 app.use('/api/*', (_req, res) => {
   res.status(404).json({ error: 'API route not found' });
@@ -98,6 +122,11 @@ let cleanupInterval: ReturnType<typeof setInterval>;
 const server = app.listen(PORT, () => {
   console.log(`ASAP server running on http://localhost:${PORT}`);
 
+  // Start Discord bot (non-blocking — skips gracefully if no token)
+  startBot().catch((err) => {
+    console.error('Discord bot startup error:', err instanceof Error ? err.message : 'Unknown');
+  });
+
   // Clean up expired sessions and 2FA codes every hour
   cleanupInterval = setInterval(async () => {
     try {
@@ -119,6 +148,7 @@ const server = app.listen(PORT, () => {
 function shutdown(signal: string) {
   console.log(`${signal} received, shutting down gracefully`);
   clearInterval(cleanupInterval);
+  stopBot().catch(() => {});
   server.close(async () => {
     await pool.end();
     console.log('Server shut down');
