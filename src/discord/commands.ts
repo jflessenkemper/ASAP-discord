@@ -126,12 +126,15 @@ async function handleGoalSlash(
   const description = interaction.options.getString('description', true);
   await interaction.reply(`🎯 **Goal received:** ${description}\n\nRiley is planning...`);
 
-  // Delegate to the groupchat goal handler
+  // Delegate to the groupchat goal handler (fire and forget — reply already sent)
   handleGoalCommand(
     description,
     interaction.member as GuildMember,
     channels.groupchat
-  );
+  ).catch((err) => {
+    console.error('Goal command error:', err instanceof Error ? err.message : 'Unknown');
+    channels.groupchat.send('⚠️ Riley encountered an error planning this goal. Try again.').catch(() => {});
+  });
 }
 
 async function handleCallSlash(

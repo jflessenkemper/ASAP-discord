@@ -113,21 +113,25 @@ export async function startBot(): Promise<void> {
 
     const channelId = message.channel.id;
 
-    // Check if this is an agent text channel
-    for (const [agentId, channel] of botChannels.agentChannels) {
-      if (channel.id === channelId) {
-        const agent = getAgentByChannelName(agentId);
-        if (agent) {
-          await handleAgentMessage(message, agent);
+    try {
+      // Check if this is an agent text channel
+      for (const [agentId, channel] of botChannels.agentChannels) {
+        if (channel.id === channelId) {
+          const agent = getAgentByChannelName(agentId);
+          if (agent) {
+            await handleAgentMessage(message, agent);
+          }
+          return;
         }
+      }
+
+      // Check if this is the groupchat
+      if (channelId === botChannels.groupchat.id) {
+        await handleGroupchatMessage(message, botChannels.groupchat);
         return;
       }
-    }
-
-    // Check if this is the groupchat
-    if (channelId === botChannels.groupchat.id) {
-      await handleGroupchatMessage(message, botChannels.groupchat);
-      return;
+    } catch (err) {
+      console.error('Message handler error:', err instanceof Error ? err.message : 'Unknown');
     }
   });
 

@@ -11,6 +11,9 @@ import { ConversationMessage } from './claude';
 const MEMORY_DIR = process.env.MEMORY_DIR || path.join(process.cwd(), 'data', 'memory');
 const MAX_MESSAGES = 100;
 
+/** In-memory cache to avoid reading from disk on every message */
+const memoryCache = new Map<string, ConversationMessage[]>();
+
 /** Ensure the memory directory exists */
 function ensureDir(): void {
   if (!fs.existsSync(MEMORY_DIR)) {
@@ -28,13 +31,19 @@ function memoryPath(agentId: string): string {
  * Load conversation history for an agent from disk.
  */
 export function loadMemory(agentId: string): ConversationMessage[] {
+  // Return from cache if available
+  const cached = memoryCache.get(agentId);
+  if (cached) return cached;
+
   try {
     const filePath = memoryPath(agentId);
     if (!fs.existsSync(filePath)) return [];
     const data = fs.readFileSync(filePath, 'utf-8');
     const parsed = JSON.parse(data);
     if (!Array.isArray(parsed)) return [];
-    return parsed as ConversationMessage[];
+    const messages = parsed as ConversationMessage[];
+    memoryCache.set(agentId, messages);
+    return messages;
   } catch (err) {
     console.error(`Failed to load memory for ${agentId}:`, err instanceof Error ? err.message : 'Unknown');
     return [];
@@ -48,10 +57,10 @@ export function loadMemory(agentId: string): ConversationMessage[] {
 export function saveMemory(agentId: string, history: ConversationMessage[]): void {
   try {
     ensureDir();
-    // Keep only the most recent messages
     const trimmed = history.length > MAX_MESSAGES * 2
       ? history.slice(history.length - MAX_MESSAGES * 2)
       : history;
+    memoryCache.set(agentId, trimmed);
     fs.writeFileSync(memoryPath(agentId), JSON.stringify(trimmed, null, 2));
   } catch (err) {
     console.error(`Failed to save memory for ${agentId}:`, err instanceof Error ? err.message : 'Unknown');
@@ -72,6 +81,7 @@ export function appendToMemory(agentId: string, messages: ConversationMessage[])
  */
 export function clearMemory(agentId: string): void {
   try {
+    memoryCache.delete(agentId);
     const filePath = memoryPath(agentId);
     if (fs.existsSync(filePath)) {
       fs.unlinkSync(filePath);

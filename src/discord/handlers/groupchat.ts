@@ -240,9 +240,9 @@ async function handleAgentChain(
         goalStatus = '💻 Ace implementing...';
 
         // Ace may direct sub-agents
-        const aceDirected = parseDirectives(aceResponse);
-        if (aceDirected.length > 0) {
-          await handleSubAgents(aceDirected, aceResponse, groupchat);
+        const aceSubDirectives = parseDirectives(aceResponse);
+        if (aceSubDirectives.length > 0) {
+          await handleSubAgents(aceSubDirectives, aceResponse, groupchat);
         }
       } catch (err) {
         console.error('Ace error:', err instanceof Error ? err.message : 'Unknown');
