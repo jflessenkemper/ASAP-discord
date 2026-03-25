@@ -7,15 +7,11 @@ import {
 } from 'discord.js';
 import { getAgents } from './agents';
 
-const CATEGORY_NAME = 'ASAP Agents';
-const GROUPCHAT_NAME = 'groupchat';
-const GITHUB_NAME = 'github';
-const CALL_LOG_NAME = 'call-log';
-const LIMITS_NAME = 'limits';
-const VOICE_CHANNEL_NAME = 'command';
+const CAT_MAIN = 'ASAP';
+const CAT_AGENTS = 'Agents';
+const CAT_OPS = 'Operations';
 
 export interface BotChannels {
-  category: CategoryChannel;
   agentChannels: Map<string, TextChannel>;
   groupchat: TextChannel;
   github: TextChannel;
@@ -24,157 +20,166 @@ export interface BotChannels {
   voiceChannel: VoiceChannel;
 }
 
+/** Find or create a category by name. */
+async function findOrCreateCategory(guild: Guild, name: string): Promise<CategoryChannel> {
+  let cat = guild.channels.cache.find(
+    (c) => c.type === ChannelType.GuildCategory && c.name === name
+  ) as CategoryChannel | undefined;
+
+  if (!cat) {
+    cat = await guild.channels.create({ name, type: ChannelType.GuildCategory });
+  }
+  return cat;
+}
+
+/** Find a text channel by name anywhere in the guild (ignores category). */
+function findTextChannel(guild: Guild, name: string): TextChannel | undefined {
+  return guild.channels.cache.find(
+    (c) => c.type === ChannelType.GuildText && c.name === name
+  ) as TextChannel | undefined;
+}
+
+/** Delete duplicate text channels with the same name, keeping the oldest one. */
+async function deduplicateChannel(guild: Guild, name: string): Promise<TextChannel | undefined> {
+  const matches = guild.channels.cache.filter(
+    (c) => c.type === ChannelType.GuildText && c.name === name
+  );
+  if (matches.size <= 1) return matches.first() as TextChannel | undefined;
+
+  // Keep the oldest, delete the rest
+  const sorted = [...matches.values()].sort(
+    (a, b) => (a.createdTimestamp ?? 0) - (b.createdTimestamp ?? 0)
+  );
+  const keep = sorted[0] as TextChannel;
+  for (let i = 1; i < sorted.length; i++) {
+    try { await sorted[i].delete('Removing duplicate channel'); } catch { /* ignore */ }
+  }
+  return keep;
+}
+
 /**
- * Set up all required channels in the guild.
- * Creates them if they don't exist, finds them if they do.
+ * Set up all required channels in the guild, organized under categories:
+ *   ASAP        — groupchat, command (voice)
+ *   Agents      — per-agent work log channels
+ *   Operations  — github, call-log, limits
+ *
+ * Cleans up duplicate channels left from previous runs.
  */
 export async function setupChannels(guild: Guild): Promise<BotChannels> {
   const agents = getAgents();
 
-  // Find or create category
-  let category = guild.channels.cache.find(
-    (c) => c.type === ChannelType.GuildCategory && c.name === CATEGORY_NAME
-  ) as CategoryChannel | undefined;
+  // Ensure caches are fresh
+  await guild.channels.fetch();
 
-  if (!category) {
-    category = await guild.channels.create({
-      name: CATEGORY_NAME,
-      type: ChannelType.GuildCategory,
+  // ── Categories ──
+  const catMain = await findOrCreateCategory(guild, CAT_MAIN);
+  const catAgents = await findOrCreateCategory(guild, CAT_AGENTS);
+  const catOps = await findOrCreateCategory(guild, CAT_OPS);
+
+  // ── Helper: ensure a text channel exists (deduplicate, move to correct category) ──
+  async function ensureText(
+    name: string,
+    parent: CategoryChannel,
+    topic: string,
+    welcomeMessage?: string
+  ): Promise<TextChannel> {
+    let channel = await deduplicateChannel(guild, name);
+
+    if (channel) {
+      // Move to correct category if needed
+      if (channel.parentId !== parent.id) {
+        await channel.setParent(parent, { lockPermissions: false });
+      }
+    } else {
+      channel = await guild.channels.create({
+        name,
+        type: ChannelType.GuildText,
+        parent,
+        topic,
+      });
+      if (welcomeMessage) await channel.send(welcomeMessage);
+    }
+    return channel;
+  }
+
+  // ── ASAP (main) ──
+  const groupchat = await ensureText(
+    'groupchat',
+    catMain,
+    '💬 Talk to Riley. She coordinates everything. Use /goal, /call, /status, /agents',
+    `**ASAP Command Center**\n\n` +
+      `📋 **Riley (Executive Assistant)** is your point of contact.\n` +
+      `💻 **Ace (Developer)** implements what Riley plans.\n\n` +
+      `**Slash Commands:**\n` +
+      `\`/goal <description>\` — Give Riley a goal to plan and execute\n` +
+      `\`/call\` — Start a voice call with Riley and Ace\n` +
+      `\`/leave\` — End the voice call\n` +
+      `\`/status\` — Show current progress\n` +
+      `\`/agents\` — List all available agents\n` +
+      `\`/ask <agent> <question>\` — Ask a specific agent directly\n` +
+      `\`/clear\` — Reset conversation context\n\n` +
+      `Or just type naturally — Riley handles everything. You can @mention agents directly too.`
+  );
+
+  // Voice channel under main
+  let voiceChannel = guild.channels.cache.find(
+    (c) => c.type === ChannelType.GuildVoice && c.name === 'command'
+  ) as VoiceChannel | undefined;
+
+  if (voiceChannel) {
+    if (voiceChannel.parentId !== catMain.id) {
+      await voiceChannel.setParent(catMain, { lockPermissions: false });
+    }
+  } else {
+    voiceChannel = await guild.channels.create({
+      name: 'command',
+      type: ChannelType.GuildVoice,
+      parent: catMain,
     });
   }
 
+  // ── Agents ──
   const agentChannels = new Map<string, TextChannel>();
-
-  // Create agent text channels (sub-agents work here)
   for (const [agentId, agent] of agents) {
-    const channelName = agent.channelName;
-    let channel = guild.channels.cache.find(
-      (c) =>
-        c.type === ChannelType.GuildText &&
-        c.name === channelName &&
-        c.parentId === category!.id
-    ) as TextChannel | undefined;
-
-    if (!channel) {
-      channel = await guild.channels.create({
-        name: channelName,
-        type: ChannelType.GuildText,
-        parent: category,
-        topic: `${agent.emoji} ${agent.name} — work log and notes`,
-      });
-
-      await channel.send(
-        `${agent.emoji} **${agent.name}** work log.\nThis channel shows what ${agent.name.split(' ')[0]} is working on.`
-      );
-    }
-
+    const channel = await ensureText(
+      agent.channelName,
+      catAgents,
+      `${agent.emoji} ${agent.name} — work log and notes`,
+      `${agent.emoji} **${agent.name}** work log.\nThis channel shows what ${agent.name.split(' ')[0]} is working on.`
+    );
     agentChannels.set(agentId, channel);
   }
 
-  // Create groupchat — main interaction channel
-  let groupchat = guild.channels.cache.find(
-    (c) =>
-      c.type === ChannelType.GuildText &&
-      c.name === GROUPCHAT_NAME &&
-      c.parentId === category.id
-  ) as TextChannel | undefined;
+  // ── Operations ──
+  const github = await ensureText(
+    'github',
+    catOps,
+    '📦 Live GitHub activity feed — commits, PRs, issues, releases',
+    `📦 **GitHub Activity Feed**\n\nThis channel shows real-time updates from the ASAP repository.\nCommits, pull requests, issues, releases, and more.`
+  );
 
-  if (!groupchat) {
-    groupchat = await guild.channels.create({
-      name: GROUPCHAT_NAME,
-      type: ChannelType.GuildText,
-      parent: category,
-      topic: '💬 Talk to Riley. She coordinates everything. Use /goal, /call, /status, /agents',
-    });
+  const callLog = await ensureText(
+    'call-log',
+    catOps,
+    '📋 Automatic transcripts and summaries of voice calls'
+  );
 
-    await groupchat.send(
-      `**ASAP Command Center**\n\n` +
-        `📋 **Riley (Executive Assistant)** is your point of contact.\n` +
-        `💻 **Ace (Developer)** implements what Riley plans.\n\n` +
-        `**Slash Commands:**\n` +
-        `\`/goal <description>\` — Give Riley a goal to plan and execute\n` +
-        `\`/call\` — Start a voice call with Riley and Ace\n` +
-        `\`/leave\` — End the voice call\n` +
-        `\`/status\` — Show current progress\n` +
-        `\`/agents\` — List all available agents\n` +
-        `\`/ask <agent> <question>\` — Ask a specific agent directly\n` +
-        `\`/clear\` — Reset conversation context\n\n` +
-        `Or just type naturally — Riley handles everything. You can @mention agents directly too.`
-    );
+  const limits = await ensureText(
+    'limits',
+    catOps,
+    '📊 API usage limits, costs, and remaining credits — updated every 5 minutes'
+  );
+
+  // ── Clean up old "ASAP Agents" category if empty ──
+  const oldCat = guild.channels.cache.find(
+    (c) => c.type === ChannelType.GuildCategory && c.name === 'ASAP Agents'
+  );
+  if (oldCat) {
+    const children = guild.channels.cache.filter((c) => c.parentId === oldCat.id);
+    if (children.size === 0) {
+      try { await oldCat.delete('Replaced by new category structure'); } catch { /* ignore */ }
+    }
   }
 
-  // Create github channel — repo activity feed
-  let github = guild.channels.cache.find(
-    (c) =>
-      c.type === ChannelType.GuildText &&
-      c.name === GITHUB_NAME &&
-      c.parentId === category.id
-  ) as TextChannel | undefined;
-
-  if (!github) {
-    github = await guild.channels.create({
-      name: GITHUB_NAME,
-      type: ChannelType.GuildText,
-      parent: category,
-      topic: '📦 Live GitHub activity feed — commits, PRs, issues, releases',
-    });
-
-    await github.send(
-      `📦 **GitHub Activity Feed**\n\n` +
-        `This channel shows real-time updates from the ASAP repository.\n` +
-        `Commits, pull requests, issues, releases, and more.`
-    );
-  }
-
-  // Create call log
-  let callLog = guild.channels.cache.find(
-    (c) =>
-      c.type === ChannelType.GuildText &&
-      c.name === CALL_LOG_NAME &&
-      c.parentId === category.id
-  ) as TextChannel | undefined;
-
-  if (!callLog) {
-    callLog = await guild.channels.create({
-      name: CALL_LOG_NAME,
-      type: ChannelType.GuildText,
-      parent: category,
-      topic: '📋 Automatic transcripts and summaries of voice calls',
-    });
-  }
-
-  // Create limits channel — usage dashboard
-  let limits = guild.channels.cache.find(
-    (c) =>
-      c.type === ChannelType.GuildText &&
-      c.name === LIMITS_NAME &&
-      c.parentId === category.id
-  ) as TextChannel | undefined;
-
-  if (!limits) {
-    limits = await guild.channels.create({
-      name: LIMITS_NAME,
-      type: ChannelType.GuildText,
-      parent: category,
-      topic: '📊 API usage limits, costs, and remaining credits — updated every 5 minutes',
-    });
-  }
-
-  // Create voice channel
-  let voiceChannel = guild.channels.cache.find(
-    (c) =>
-      c.type === ChannelType.GuildVoice &&
-      c.name === VOICE_CHANNEL_NAME &&
-      c.parentId === category.id
-  ) as VoiceChannel | undefined;
-
-  if (!voiceChannel) {
-    voiceChannel = await guild.channels.create({
-      name: VOICE_CHANNEL_NAME,
-      type: ChannelType.GuildVoice,
-      parent: category,
-    });
-  }
-
-  return { category, agentChannels, groupchat, github, callLog, limits, voiceChannel };
+  return { agentChannels, groupchat, github, callLog, limits, voiceChannel };
 }
