@@ -103,7 +103,55 @@ function progressBar(used: number, limit: number, length: number = 20): string {
   return `${emoji} ${bar} ${pct}%`;
 }
 
-// ─── Formatted usage report ─────────────────────────────────────────────────
+// ─── Formatted usage report (embed) ─────────────────────────────────────────
+export function getUsageEmbed(): EmbedBuilder {
+  resetIfNewDay();
+  const totalClaudeTokens = usage.claudeInputTokens + usage.claudeOutputTokens;
+  const cost = estimateDailyCost();
+  const totalRatio = Math.max(
+    totalClaudeTokens / DAILY_LIMITS.claudeTokens,
+    usage.geminiCalls / DAILY_LIMITS.geminiCalls,
+    usage.elevenLabsChars / DAILY_LIMITS.elevenLabsChars
+  );
+  const color = totalRatio >= 0.9 ? 0xed4245 : totalRatio >= 0.7 ? 0xfee75c : 0x57f287;
+
+  return new EmbedBuilder()
+    .setTitle('📊 ASAP Usage Dashboard')
+    .setColor(color)
+    .addFields(
+      {
+        name: '🧠 Claude (Vertex AI)',
+        value:
+          `${progressBar(totalClaudeTokens, DAILY_LIMITS.claudeTokens)}\n` +
+          `${totalClaudeTokens.toLocaleString()} / ${DAILY_LIMITS.claudeTokens.toLocaleString()} tokens\n` +
+          `(${usage.claudeInputTokens.toLocaleString()} in · ${usage.claudeOutputTokens.toLocaleString()} out)\n` +
+          `Est: **$${cost.claude.toFixed(4)}**`,
+      },
+      {
+        name: '🔊 Gemini (TTS + Transcription)',
+        value:
+          `${progressBar(usage.geminiCalls, DAILY_LIMITS.geminiCalls)}\n` +
+          `${usage.geminiCalls} / ${DAILY_LIMITS.geminiCalls} API calls\n` +
+          `Est: **$${cost.gemini.toFixed(4)}**`,
+      },
+      {
+        name: '🗣️ ElevenLabs (TTS)',
+        value:
+          `${progressBar(usage.elevenLabsChars, DAILY_LIMITS.elevenLabsChars)}\n` +
+          `${usage.elevenLabsChars.toLocaleString()} / ${DAILY_LIMITS.elevenLabsChars.toLocaleString()} chars\n` +
+          `Est: **$${cost.elevenLabs.toFixed(4)}**`,
+      },
+      {
+        name: '💰 Total Cost Today',
+        value: `**$${cost.total.toFixed(4)}**`,
+        inline: true,
+      }
+    )
+    .setFooter({ text: 'Resets at midnight UTC · Updates every minute' })
+    .setTimestamp();
+}
+
+/** Plain-text report for /limits command */
 export function getUsageReport(): string {
   resetIfNewDay();
   const totalClaudeTokens = usage.claudeInputTokens + usage.claudeOutputTokens;
@@ -124,9 +172,7 @@ export function getUsageReport(): string {
     `${progressBar(usage.elevenLabsChars, DAILY_LIMITS.elevenLabsChars)}\n` +
     `${usage.elevenLabsChars.toLocaleString()} / ${DAILY_LIMITS.elevenLabsChars.toLocaleString()} characters\n` +
     `Est. cost: **$${cost.elevenLabs.toFixed(4)}**\n\n` +
-    `💰 **Total estimated cost today: $${cost.total.toFixed(4)}**\n` +
-    `─────────────────────────────\n` +
-    `_Daily limits reset at midnight UTC. Bots are blocked when limits are reached._`
+    `💰 **Total estimated cost today: $${cost.total.toFixed(4)}**`
   );
 }
 
@@ -140,8 +186,8 @@ export function setLimitsChannel(channel: TextChannel): void {
 }
 
 /**
- * Start periodic dashboard updates (every 5 minutes).
- * Posts or edits a single message in the #limits channel.
+ * Start periodic dashboard updates (every 1 minute).
+ * Posts or edits a single embed in the #limits channel.
  */
 export async function startDashboardUpdates(): Promise<void> {
   if (!limitsChannel) return;
@@ -149,12 +195,12 @@ export async function startDashboardUpdates(): Promise<void> {
   // Post initial dashboard
   await updateDashboard();
 
-  // Update every 5 minutes
+  // Update every 1 minute
   updateInterval = setInterval(() => {
     updateDashboard().catch((err) =>
       console.error('Dashboard update error:', err instanceof Error ? err.message : 'Unknown')
     );
-  }, 5 * 60 * 1000);
+  }, 60 * 1000);
 }
 
 export function stopDashboardUpdates(): void {
@@ -167,12 +213,12 @@ export function stopDashboardUpdates(): void {
 async function updateDashboard(): Promise<void> {
   if (!limitsChannel) return;
 
-  const report = getUsageReport();
+  const embed = getUsageEmbed();
 
   if (dashboardMessageId) {
     try {
       const msg = await limitsChannel.messages.fetch(dashboardMessageId);
-      await msg.edit(report);
+      await msg.edit({ content: '', embeds: [embed] });
       return;
     } catch {
       // Message was deleted — post a new one
@@ -180,6 +226,6 @@ async function updateDashboard(): Promise<void> {
     }
   }
 
-  const msg = await limitsChannel.send(report);
+  const msg = await limitsChannel.send({ embeds: [embed] });
   dashboardMessageId = msg.id;
 }
