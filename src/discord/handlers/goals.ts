@@ -2,7 +2,7 @@ import { Message, TextChannel } from 'discord.js';
 import { getAgent, AgentId, AgentConfig } from '../agents';
 import { agentRespond, ConversationMessage } from '../claude';
 import { appendToMemory, getMemoryContext } from '../memory';
-import { documentToChannel, setBotChannels } from './documentation';
+import { documentToChannel } from './documentation';
 import { sendAgentMessage } from './textChannel';
 import { getWebhook } from '../services/webhooks';
 

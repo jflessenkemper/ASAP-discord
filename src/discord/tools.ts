@@ -203,7 +203,7 @@ export const REPO_TOOLS = [
   {
     name: 'run_command',
     description:
-      'Run a shell command in the repository root. Use for: npm scripts, TypeScript type-checking, git operations, etc. Commands run in a sandboxed context with a 30s timeout.',
+      'Run a shell command in the repository root. Use for: npm scripts, TypeScript type-checking, git operations, etc. Commands run in a sandboxed context with a 2-minute timeout.',
     input_schema: {
       type: 'object' as const,
       properties: {
@@ -720,7 +720,7 @@ export const REPO_TOOLS = [
   {
     name: 'memory_read',
     description:
-      'Read a persistent memory file. Memory persists across conversations and bot restarts. Use this to recall context, plans, decisions, preferences, and lessons learned. Files are stored in .agent-memory/ in the repo.',
+      'Read a persistent memory file. Memory persists across conversations and bot restarts. Use this to recall context, plans, decisions, preferences, and lessons learned. Files are stored in the PostgreSQL database.',
     input_schema: {
       type: 'object' as const,
       properties: {
@@ -1729,6 +1729,25 @@ async function gcpBuildStatus(limit: number): Promise<string> {
 function fetchUrl(url: string, method?: string, headersStr?: string, body?: string): Promise<string> {
   const MAX_REDIRECTS = 5;
 
+  /** Block SSRF — reject private, loopback, link-local, and metadata IPs */
+  function isBlockedHostname(hostname: string): boolean {
+    // Block cloud metadata endpoints
+    if (hostname === '169.254.169.254' || hostname === 'metadata.google.internal') return true;
+    // Block localhost variants
+    if (hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1' || hostname === '[::1]') return true;
+    // Block private IP ranges (10.x, 172.16-31.x, 192.168.x)
+    const ipMatch = hostname.match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/);
+    if (ipMatch) {
+      const [, a, b] = ipMatch.map(Number);
+      if (a === 10) return true;
+      if (a === 172 && b >= 16 && b <= 31) return true;
+      if (a === 192 && b === 168) return true;
+      if (a === 0) return true;
+      if (a === 169 && b === 254) return true; // link-local
+    }
+    return false;
+  }
+
   function doFetch(targetUrl: string, redirectCount: number): Promise<string> {
     return new Promise((resolve) => {
       if (!targetUrl || (!targetUrl.startsWith('https://') && !targetUrl.startsWith('http://'))) {
@@ -1743,6 +1762,11 @@ function fetchUrl(url: string, method?: string, headersStr?: string, body?: stri
       }
 
       const parsedUrl = new URL(targetUrl);
+
+      if (isBlockedHostname(parsedUrl.hostname)) {
+        resolve('Error: Access to internal/private addresses is not allowed.');
+        return;
+      }
       const lib = parsedUrl.protocol === 'https:' ? https : http;
 
       const options = {

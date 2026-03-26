@@ -1,18 +1,19 @@
-import fs from 'fs';
-import path from 'path';
 import { ConversationMessage } from './claude';
+import pool from '../db/pool';
 
 /**
  * Persistent memory system for Discord agents.
- * Stores conversation history as JSON files on disk so agents
- * retain context across bot restarts.
+ * Stores conversation history in PostgreSQL (via agent_memory table) so data
+ * survives container restarts and Cloud Run redeployments.
+ *
+ * Reads are synchronous from an in-memory cache. Writes are debounced
+ * and flushed to the database asynchronously.
  *
  * Conversation compression: When history exceeds COMPRESS_THRESHOLD messages,
  * older messages are summarized into a condensed block and only recent messages
  * are kept verbatim — similar to how long chat sessions work in Copilot.
  */
 
-const MEMORY_DIR = process.env.MEMORY_DIR || path.join(process.cwd(), 'data', 'memory');
 const MAX_MESSAGES = 1000;
 
 /** Number of raw messages before triggering compression */
@@ -20,77 +21,105 @@ const COMPRESS_THRESHOLD = 60;
 /** Number of recent messages to keep verbatim after compression */
 const KEEP_RECENT = 20;
 
-/** In-memory cache to avoid reading from disk on every message */
+/** In-memory cache — primary read source for fast synchronous access */
 const memoryCache = new Map<string, ConversationMessage[]>();
 
-/** Pending debounced writes — avoids writing to disk on every single message */
+/** Pending debounced DB writes — avoids writing on every message */
 const pendingWrites = new Map<string, ReturnType<typeof setTimeout>>();
 
-/** Ensure the memory directory exists */
-function ensureDir(): void {
-  if (!fs.existsSync(MEMORY_DIR)) {
-    fs.mkdirSync(MEMORY_DIR, { recursive: true });
-  }
+/** Whether initial load from DB has completed */
+let initialized = false;
+
+function safeAgentId(agentId: string): string {
+  return agentId.replace(/[^a-z0-9-]/gi, '');
 }
 
-function memoryPath(agentId: string): string {
-  // Sanitize agentId to prevent path traversal
-  const safe = agentId.replace(/[^a-z0-9-]/gi, '');
-  return path.join(MEMORY_DIR, `${safe}.json`);
+/** DB key for conversation history */
+function convKey(agentId: string): string {
+  return `conv-${safeAgentId(agentId)}`;
+}
+
+/** DB key for compression summary */
+function summaryKey(agentId: string): string {
+  return `summary-${safeAgentId(agentId)}`;
 }
 
 /**
- * Load conversation history for an agent from disk.
+ * Initialize memory by loading all conversation histories from the database.
+ * Call this once at startup before processing messages.
+ */
+export async function initMemory(): Promise<void> {
+  if (initialized) return;
+  try {
+    const { rows } = await pool.query(
+      `SELECT file_name, content FROM agent_memory WHERE file_name LIKE 'conv-%'`
+    );
+    for (const row of rows) {
+      const agentId = row.file_name.replace(/^conv-/, '');
+      try {
+        const parsed = JSON.parse(row.content);
+        if (Array.isArray(parsed)) {
+          memoryCache.set(agentId, parsed as ConversationMessage[]);
+        }
+      } catch {
+        console.warn(`Corrupt memory for ${agentId}, skipping`);
+      }
+    }
+    // Also load summaries
+    const { rows: sumRows } = await pool.query(
+      `SELECT file_name, content FROM agent_memory WHERE file_name LIKE 'summary-%'`
+    );
+    for (const row of sumRows) {
+      const agentId = row.file_name.replace(/^summary-/, '');
+      summaryCache.set(agentId, row.content);
+    }
+    initialized = true;
+    console.log(`Memory initialized: ${rows.length} conversation(s), ${sumRows.length} summary(ies) loaded from DB`);
+  } catch (err) {
+    console.error('Failed to initialize memory from DB:', err instanceof Error ? err.message : 'Unknown');
+    initialized = true; // Continue with empty cache rather than blocking
+  }
+}
+
+/**
+ * Load conversation history for an agent.
+ * Returns from in-memory cache (populated at startup from DB).
  */
 export function loadMemory(agentId: string): ConversationMessage[] {
-  // Return from cache if available
   const cached = memoryCache.get(agentId);
   if (cached) return cached;
-
-  try {
-    const filePath = memoryPath(agentId);
-    if (!fs.existsSync(filePath)) return [];
-    const data = fs.readFileSync(filePath, 'utf-8');
-    const parsed = JSON.parse(data);
-    if (!Array.isArray(parsed)) return [];
-    const messages = parsed as ConversationMessage[];
-    memoryCache.set(agentId, messages);
-    return messages;
-  } catch (err) {
-    console.error(`Failed to load memory for ${agentId}:`, err instanceof Error ? err.message : 'Unknown');
-    return [];
-  }
+  const empty: ConversationMessage[] = [];
+  memoryCache.set(agentId, empty);
+  return empty;
 }
 
 /**
- * Save conversation history for an agent to disk.
- * Automatically trims to MAX_MESSAGES.
+ * Save conversation history for an agent.
+ * Updates cache immediately, debounces DB write.
  */
 export function saveMemory(agentId: string, history: ConversationMessage[]): void {
-  try {
-    ensureDir();
-    const trimmed = history.length > MAX_MESSAGES * 2
-      ? history.slice(history.length - MAX_MESSAGES * 2)
-      : history;
-    memoryCache.set(agentId, trimmed);
+  const trimmed = history.length > MAX_MESSAGES * 2
+    ? history.slice(history.length - MAX_MESSAGES * 2)
+    : history;
+  memoryCache.set(agentId, trimmed);
 
-    // Debounce disk writes — update cache immediately, write to disk after 2s of inactivity
-    const existing = pendingWrites.get(agentId);
-    if (existing) clearTimeout(existing);
-    pendingWrites.set(
-      agentId,
-      setTimeout(() => {
-        try {
-          fs.writeFileSync(memoryPath(agentId), JSON.stringify(trimmed, null, 2));
-        } catch (writeErr) {
-          console.error(`Deferred write failed for ${agentId}:`, writeErr instanceof Error ? writeErr.message : 'Unknown');
-        }
-        pendingWrites.delete(agentId);
-      }, 2000)
-    );
-  } catch (err) {
-    console.error(`Failed to save memory for ${agentId}:`, err instanceof Error ? err.message : 'Unknown');
-  }
+  // Debounce DB writes — update cache immediately, write to DB after 2s of inactivity
+  const existing = pendingWrites.get(agentId);
+  if (existing) clearTimeout(existing);
+  pendingWrites.set(
+    agentId,
+    setTimeout(() => {
+      const key = convKey(agentId);
+      pool.query(
+        `INSERT INTO agent_memory (file_name, content, updated_at) VALUES ($1, $2, NOW())
+         ON CONFLICT (file_name) DO UPDATE SET content = $2, updated_at = NOW()`,
+        [key, JSON.stringify(trimmed)]
+      ).catch((err) => {
+        console.error(`DB write failed for ${agentId}:`, err instanceof Error ? err.message : 'Unknown');
+      });
+      pendingWrites.delete(agentId);
+    }, 2000)
+  );
 }
 
 /**
@@ -106,55 +135,34 @@ export function appendToMemory(agentId: string, messages: ConversationMessage[])
  * Clear memory for a specific agent.
  */
 export function clearMemory(agentId: string): void {
-  try {
-    memoryCache.delete(agentId);
-    summaryCache.delete(agentId);
-    const filePath = memoryPath(agentId);
-    if (fs.existsSync(filePath)) {
-      fs.unlinkSync(filePath);
-    }
-    const sumPath = summaryPath(agentId);
-    if (fs.existsSync(sumPath)) {
-      fs.unlinkSync(sumPath);
-    }
-  } catch (err) {
+  memoryCache.delete(agentId);
+  summaryCache.delete(agentId);
+  const cKey = convKey(agentId);
+  const sKey = summaryKey(agentId);
+  pool.query('DELETE FROM agent_memory WHERE file_name IN ($1, $2)', [cKey, sKey]).catch((err) => {
     console.error(`Failed to clear memory for ${agentId}:`, err instanceof Error ? err.message : 'Unknown');
-  }
+  });
 }
 
 /** In-memory summary cache */
 const summaryCache = new Map<string, string>();
 
-function summaryPath(agentId: string): string {
-  const safe = agentId.replace(/[^a-z0-9-]/gi, '');
-  return path.join(MEMORY_DIR, `${safe}-summary.json`);
-}
-
 /** Load the compressed summary for an agent */
 function loadSummary(agentId: string): string {
-  const cached = summaryCache.get(agentId);
-  if (cached !== undefined) return cached;
-  try {
-    const filePath = summaryPath(agentId);
-    if (!fs.existsSync(filePath)) return '';
-    const data = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
-    const summary = typeof data === 'string' ? data : (data.summary || '');
-    summaryCache.set(agentId, summary);
-    return summary;
-  } catch {
-    return '';
-  }
+  return summaryCache.get(agentId) || '';
 }
 
-/** Save a compressed summary */
+/** Save a compressed summary to cache + DB */
 function saveSummary(agentId: string, summary: string): void {
   summaryCache.set(agentId, summary);
-  try {
-    ensureDir();
-    fs.writeFileSync(summaryPath(agentId), JSON.stringify({ summary, updatedAt: new Date().toISOString() }, null, 2));
-  } catch (err) {
+  const key = summaryKey(agentId);
+  pool.query(
+    `INSERT INTO agent_memory (file_name, content, updated_at) VALUES ($1, $2, NOW())
+     ON CONFLICT (file_name) DO UPDATE SET content = $2, updated_at = NOW()`,
+    [key, summary]
+  ).catch((err) => {
     console.error(`Failed to save summary for ${agentId}:`, err instanceof Error ? err.message : 'Unknown');
-  }
+  });
 }
 
 /** Track which agents have pending compression to avoid duplicate runs */
@@ -171,14 +179,11 @@ export async function compressMemory(agentId: string): Promise<void> {
   if (history.length < COMPRESS_THRESHOLD) return;
 
   compressionInProgress.add(agentId);
-  // Snapshot the length before async work — new messages may arrive during summarization
   const snapshotLen = history.length;
   try {
-    // Split: older messages to compress, recent to keep
     const toCompress = history.slice(0, snapshotLen - KEEP_RECENT);
     const toKeep = history.slice(snapshotLen - KEEP_RECENT);
 
-    // Build the text to summarize
     const existingSummary = loadSummary(agentId);
     const contextToSummarize = toCompress.map(m =>
       `${m.role === 'user' ? 'User' : 'Agent'}: ${m.content.slice(0, 500)}`
@@ -192,10 +197,8 @@ export async function compressMemory(agentId: string): Promise<void> {
     const currentHistory = loadMemory(agentId);
     const newMessagesSinceSnapshot = currentHistory.slice(snapshotLen);
 
-    // Save the new summary and replace history with kept + any new messages
     saveSummary(agentId, newSummary);
     const preserved = [...toKeep, ...newMessagesSinceSnapshot];
-    // Mutate in place so existing references stay valid
     currentHistory.length = 0;
     currentHistory.push(...preserved);
     saveMemory(agentId, currentHistory);
@@ -216,14 +219,12 @@ export async function compressMemory(agentId: string): Promise<void> {
 export function getMemoryContext(agentId: string, maxMessages = 30): ConversationMessage[] {
   const history = loadMemory(agentId);
 
-  // Trigger compression in the background if needed
   if (history.length >= COMPRESS_THRESHOLD) {
     compressMemory(agentId).catch(() => {});
   }
 
   const summary = loadSummary(agentId);
   if (summary) {
-    // Prepend summary as a synthetic context message, then recent history
     const recent = history.length <= maxMessages * 2
       ? history
       : history.slice(history.length - maxMessages * 2);
@@ -234,29 +235,34 @@ export function getMemoryContext(agentId: string, maxMessages = 30): Conversatio
     ];
   }
 
-  // No summary yet — return raw recent messages
   if (history.length <= maxMessages * 2) return history;
   return history.slice(history.length - maxMessages * 2);
 }
 
 /**
- * Flush all pending debounced writes to disk immediately.
+ * Flush all pending debounced writes to the database immediately.
  * Call this on graceful shutdown to avoid losing data.
  */
-export function flushPendingWrites(): void {
+export async function flushPendingWrites(): Promise<void> {
+  const promises: Promise<void>[] = [];
   for (const [agentId, timer] of pendingWrites) {
     clearTimeout(timer);
     const cached = memoryCache.get(agentId);
     if (cached) {
-      try {
-        ensureDir();
-        fs.writeFileSync(memoryPath(agentId), JSON.stringify(cached, null, 2));
-      } catch (err) {
-        console.error(`Flush write failed for ${agentId}:`, err instanceof Error ? err.message : 'Unknown');
-      }
+      const key = convKey(agentId);
+      promises.push(
+        pool.query(
+          `INSERT INTO agent_memory (file_name, content, updated_at) VALUES ($1, $2, NOW())
+           ON CONFLICT (file_name) DO UPDATE SET content = $2, updated_at = NOW()`,
+          [key, JSON.stringify(cached)]
+        ).then(() => {}).catch((err) => {
+          console.error(`Flush write failed for ${agentId}:`, err instanceof Error ? err.message : 'Unknown');
+        })
+      );
     }
   }
   pendingWrites.clear();
+  await Promise.all(promises);
 }
 
 // Safety net: flush memory on process termination signals

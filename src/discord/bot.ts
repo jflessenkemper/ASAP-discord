@@ -15,7 +15,7 @@ import { setBotChannels } from './handlers/documentation';
 import { unregisterCommands } from './commands';
 import { setGitHubChannel } from './handlers/github';
 import { setLimitsChannel, startDashboardUpdates, stopDashboardUpdates } from './usage';
-import { flushPendingWrites } from './memory';
+import { flushPendingWrites, initMemory } from './memory';
 import { setScreenshotsChannel } from './services/screenshots';
 import { setTelephonyChannels, isTelephonyAvailable } from './services/telephony';
 
@@ -73,6 +73,7 @@ export async function startBot(): Promise<void> {
     }
 
     try {
+      await initMemory();
       botChannels = await setupChannels(guild);
       setBotChannels(botChannels);
       setGitHubChannel(botChannels.github);
@@ -158,7 +159,7 @@ export async function stopBot(): Promise<void> {
   if (isCallActive()) {
     await endCall();
   }
-  flushPendingWrites();
+  await flushPendingWrites();
   if (client) {
     client.destroy();
     client = null;

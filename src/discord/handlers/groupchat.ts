@@ -3,7 +3,7 @@ import { getAgents, getAgent, AgentConfig, AgentId } from '../agents';
 import { agentRespond, ConversationMessage } from '../claude';
 import { appendToMemory, getMemoryContext, loadMemory, saveMemory, clearMemory, compressMemory } from '../memory';
 import { documentToChannel } from './documentation';
-import { sendAgentMessage, sendLongMessage, clearHistory } from './textChannel';
+import { sendAgentMessage, clearHistory } from './textChannel';
 import { startCall, endCall, isCallActive } from './callSession';
 import { makeOutboundCall, startConferenceCall, isTelephonyAvailable } from '../services/telephony';
 import { getBotChannels } from '../bot';
@@ -654,7 +654,18 @@ async function postDecisionEmbed(
       const userName = reactUser?.username || 'User';
 
       console.log(`Decision: ${userName} chose option ${choiceIndex + 1}: "${choice}"`);
-      await groupchat.send(`✅ **${userName}** chose: **${choice}**`);
+
+      const riley = getAgent('executive-assistant' as AgentId);
+      if (riley) {
+        try {
+          const wh = await getWebhook(groupchat);
+          await wh.send({ content: `✅ **${userName}** chose: **${choice}**`, username: `${riley.emoji} ${riley.name}`, avatarURL: riley.avatarUrl });
+        } catch {
+          await groupchat.send(`✅ **${userName}** chose: **${choice}**`);
+        }
+      } else {
+        await groupchat.send(`✅ **${userName}** chose: **${choice}**`);
+      }
 
       // Feed the decision back to Riley
       const decisionMessage = `${userName} chose option ${choiceIndex + 1}: ${choice}`;
@@ -663,7 +674,17 @@ async function postDecisionEmbed(
   } catch {
     // Timeout — delete the stale decision embed and notify
     try { await decisionMsg.delete(); } catch { /* already deleted */ }
-    await groupchat.send('⏰ Decision timed out. Please tell Riley what you want to do.');
+    const riley = getAgent('executive-assistant' as AgentId);
+    if (riley) {
+      try {
+        const wh = await getWebhook(groupchat);
+        await wh.send({ content: '⏰ Decision timed out. Please tell Riley what you want to do.', username: `${riley.emoji} ${riley.name}`, avatarURL: riley.avatarUrl });
+      } catch {
+        await groupchat.send('⏰ Decision timed out. Please tell Riley what you want to do.');
+      }
+    } else {
+      await groupchat.send('⏰ Decision timed out. Please tell Riley what you want to do.');
+    }
   }
 }
 
