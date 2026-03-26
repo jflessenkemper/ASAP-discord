@@ -107,19 +107,13 @@ export async function setupChannels(guild: Guild): Promise<BotChannels> {
   const groupchat = await ensureText(
     'groupchat',
     catMain,
-    '💬 Talk to Riley. She coordinates everything. Use /goal, /call, /status, /agents',
+    '💬 Talk to Riley naturally. She coordinates everything.',
     `**ASAP Command Center**\n\n` +
       `📋 **Riley (Executive Assistant)** is your point of contact.\n` +
       `💻 **Ace (Developer)** implements what Riley plans.\n\n` +
-      `**Slash Commands:**\n` +
-      `\`/goal <description>\` — Give Riley a goal to plan and execute\n` +
-      `\`/call\` — Start a voice call with Riley and Ace\n` +
-      `\`/leave\` — End the voice call\n` +
-      `\`/status\` — Show current progress\n` +
-      `\`/agents\` — List all available agents\n` +
-      `\`/ask <agent> <question>\` — Ask a specific agent directly\n` +
-      `\`/clear\` — Reset conversation context\n\n` +
-      `Or just type naturally — Riley handles everything. You can @mention agents directly too.`
+      `Just type naturally — Riley handles everything.\n` +
+      `She can join voice calls, deploy, take screenshots, and coordinate the whole team.\n\n` +
+      `You can also @mention any agent directly (e.g. @ace, @kane, @elena).`
   );
 
   // Voice channel under main

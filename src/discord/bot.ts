@@ -3,7 +3,6 @@ import {
   GatewayIntentBits,
   Events,
   Partials,
-  ChatInputCommandInteraction,
 } from 'discord.js';
 import { setupChannels, BotChannels } from './setup';
 import { getAgentByChannelName } from './agents';
@@ -13,7 +12,7 @@ import { autoReviewPR } from './handlers/review';
 import { handleGroupchatMessage } from './handlers/groupchat';
 import { endCall, isCallActive } from './handlers/callSession';
 import { setBotChannels } from './handlers/documentation';
-import { registerCommands, handleCommand } from './commands';
+import { unregisterCommands } from './commands';
 import { setGitHubChannel } from './handlers/github';
 import { setLimitsChannel, startDashboardUpdates, stopDashboardUpdates } from './usage';
 import { flushPendingWrites } from './memory';
@@ -94,33 +93,14 @@ export async function startBot(): Promise<void> {
       });
       console.log(`Discord channels configured in "${guild.name}"`);
 
-      // Register slash commands
-      await registerCommands(readyClient, guildId);
+      // Remove any old slash commands — everything is natural language now
+      await unregisterCommands(readyClient, guildId);
     } catch (err) {
       console.error('Channel setup error:', err instanceof Error ? err.message : 'Unknown');
       // Fatal — bot cannot function without channels
       console.error('Bot initialization failed — destroying client');
       readyClient.destroy();
       client = null;
-    }
-  });
-
-  // Handle slash commands
-  client.on(Events.InteractionCreate, async (interaction) => {
-    if (!interaction.isChatInputCommand()) return;
-    if (!botChannels) return;
-
-    try {
-      await handleCommand(interaction as ChatInputCommandInteraction, botChannels);
-    } catch (err) {
-      console.error('Interaction handler error:', err instanceof Error ? err.message : 'Unknown');
-      try {
-        if (interaction.replied || interaction.deferred) {
-          await interaction.followUp({ content: '\u26a0\ufe0f Something went wrong.', ephemeral: true });
-        } else {
-          await interaction.reply({ content: '\u26a0\ufe0f Something went wrong.', ephemeral: true });
-        }
-      } catch { /* ignore follow-up errors */ }
     }
   });
 

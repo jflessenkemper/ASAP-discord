@@ -12,17 +12,52 @@ function getClient(): ElevenLabsClient {
   return client;
 }
 
-/** Map agent voice names to ElevenLabs voice IDs.
- *  These use ElevenLabs default voices — update with custom voice IDs as needed. */
+/** Map agent voice names (from agents.ts) → ElevenLabs voice IDs.
+ *  Also supports choosing voices by ElevenLabs name directly.
+ *  Full catalog: https://elevenlabs.io/voice-library */
 const VOICE_ID_MAP: Record<string, string> = {
-  // Riley (Executive Assistant) — warm, professional female
-  Achernar: 'EXAVITQu4vr4xnSDxMaL',  // Sarah
-  // Ace (Developer) — clear, confident male
-  Aoede: 'pNInz6obpgDQGcFmaJgB',       // Adam
+  // ── Agent voice mappings (keyed by Gemini voice name from agents.ts) ──
+  Achernar: 'EXAVITQu4vr4xnSDxMaL',  // Riley → Sarah
+  Aoede: 'pNInz6obpgDQGcFmaJgB',       // Ace → Adam
+
+  // ── ElevenLabs default voices (pick by name) ──
+  sarah: 'EXAVITQu4vr4xnSDxMaL',
+  adam: 'pNInz6obpgDQGcFmaJgB',
+  rachel: '21m00Tcm4TlvDq8ikWAM',
+  domi: 'AZnzlk1XvdvUeBnXmlld',
+  bella: 'EXAVITQu4vr4xnSDxMaL',
+  antoni: 'ErXwobaYiN019PkySvjV',
+  elli: 'MF3mGyEYCl7XYWbV9V6O',
+  josh: 'TxGEqnHWrfWFTfGW9XjX',
+  arnold: 'VR6AewLTigWG4xSOukaG',
+  charlotte: 'XB0fDUnXU5powFXDhCwa',
+  clyde: '2EiwWnXFnvU5JabPnv8n',
+  dave: 'CYw3kZ02Hs0563khs1Fj',
+  emily: 'LcfcDJNUP1GQjkzn1xUU',
+  fin: 'D38z5RcWu1voky8WS1ja',
+  freya: 'jsCqWAovK2LkecY7zXl4',
+  gigi: 'jBpfuIE2acCO8z3wKNLl',
+  glinda: 'z9fAnlkpzviPz146aGWa',
+  grace: 'oWAxZDx7w5VEj9dCyTzz',
+  harry: 'SOYHLrjzK2X1ezoPC6cr',
+  james: 'ZQe5CZNOzWyzPSCn5a3c',
+  jeremy: 'bVMeCyTHy58xNoL34h3p',
+  jessie: 't0jbNlBVZ17f02VDIeMI',
+  joseph: 'Zlb1dXrM653N07WRdFW3',
+  lily: 'pFZP5JQG7iQjIQuC4Bku',
+  matilda: 'XrExE9yKIg1WjnnlVkGX',
+  michael: 'flq6f7yk4E4fJM5XTYuZ',
+  mimi: 'zrHiDhphv9ZnVXBqCLjz',
+  nicole: 'piTKgcLEGmPE4e6mEKli',
+  patrick: 'ODq5zmih8GrVes37Dizd',
+  river: 'SAz9YHcvj6GT2YYXdXww',
+  sam: 'yoZ06aMxZJJ28mfd3POQ',
+  serena: 'pMsXgVXv3BLzUgSXRplE',
+  thomas: 'GBv7mTt0atIp3Br8iCZE',
 };
 
 /** Default voice if agent voice not mapped */
-const DEFAULT_VOICE_ID = 'EXAVITQu4vr4xnSDxMaL';
+const DEFAULT_VOICE_ID = 'EXAVITQu4vr4xnSDxMaL'; // Sarah
 
 /**
  * Generate speech with ElevenLabs — returns complete audio buffer.
@@ -37,7 +72,7 @@ export async function elevenLabsTTS(
   }
 
   const el = getClient();
-  const voiceId = VOICE_ID_MAP[voiceName] || DEFAULT_VOICE_ID;
+  const voiceId = VOICE_ID_MAP[voiceName] || VOICE_ID_MAP[voiceName.toLowerCase()] || DEFAULT_VOICE_ID;
 
   const audio = await el.textToSpeech.convert(voiceId, {
     text,
@@ -76,7 +111,7 @@ export async function* elevenLabsTTSStream(
   }
 
   const el = getClient();
-  const voiceId = VOICE_ID_MAP[voiceName] || DEFAULT_VOICE_ID;
+  const voiceId = VOICE_ID_MAP[voiceName] || VOICE_ID_MAP[voiceName.toLowerCase()] || DEFAULT_VOICE_ID;
 
   const audio = await el.textToSpeech.convert(voiceId, {
     text,
@@ -102,4 +137,11 @@ export async function* elevenLabsTTSStream(
  */
 export function isElevenLabsAvailable(): boolean {
   return !!process.env.ELEVENLABS_API_KEY;
+}
+
+/**
+ * Get list of available ElevenLabs voice names.
+ */
+export function getAvailableVoices(): string[] {
+  return Object.keys(VOICE_ID_MAP).filter((k) => k === k.toLowerCase());
 }

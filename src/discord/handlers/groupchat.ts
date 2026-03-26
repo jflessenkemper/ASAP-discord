@@ -3,7 +3,12 @@ import { getAgents, getAgent, AgentConfig, AgentId } from '../agents';
 import { agentRespond, ConversationMessage } from '../claude';
 import { appendToMemory, getMemoryContext } from '../memory';
 import { documentToChannel } from './documentation';
-import { sendAgentMessage, sendLongMessage } from './textChannel';
+import { sendAgentMessage, sendLongMessage, clearHistory } from './textChannel';
+import { startCall, endCall, isCallActive } from './callSession';
+import { getBotChannels } from '../bot';
+import { getUsageReport } from '../usage';
+import { triggerCloudBuild, listRevisions, getCurrentRevision, rollbackToRevision } from '../../services/cloudrun';
+import { captureAndPostScreenshots } from '../services/screenshots';
 
 // Shared groupchat conversation history
 const groupHistory: ConversationMessage[] = [];
@@ -36,6 +41,7 @@ const NAME_TO_ID: Record<string, string> = {
 /**
  * Handle a message in the groupchat channel.
  * Riley-led flow: everything goes through Riley unless user @mentions a specific agent.
+ * Riley can trigger actions via [ACTION:xxx] tags in her responses.
  */
 export async function handleGroupchatMessage(
   message: Message,
@@ -58,12 +64,13 @@ export async function handleGroupchatMessage(
     await handleDirectedMessage(content, senderName, uniqueMentions, groupchat);
   } else {
     // No @mentions — goes to Riley, she coordinates
-    await handleRileyMessage(content, senderName, groupchat);
+    await handleRileyMessage(content, senderName, message.member || undefined, groupchat);
   }
 }
 
 /**
- * Handle a /goal command — Riley receives the goal and orchestrates.
+ * Handle a goal or request — Riley receives it and orchestrates.
+ * Also used internally when feeding decisions back.
  */
 export async function handleGoalCommand(
   description: string,
@@ -74,11 +81,11 @@ export async function handleGoalCommand(
   activeGoal = description;
   goalStatus = '⏳ Planning...';
 
-  await handleRileyGoal(description, senderName, groupchat);
+  await handleRileyMessage(description, senderName, member, groupchat);
 }
 
 /**
- * Get current status summary for /status command.
+ * Get current status summary.
  */
 export function getStatusSummary(): string | null {
   if (!activeGoal) return null;
@@ -87,10 +94,12 @@ export function getStatusSummary(): string | null {
 
 /**
  * Riley receives the message, responds, and orchestrates Ace + sub-agents.
+ * She can trigger system actions by including [ACTION:xxx] tags in her response.
  */
 async function handleRileyMessage(
   userMessage: string,
   senderName: string,
+  member: GuildMember | undefined,
   groupchat: TextChannel
 ): Promise<void> {
   const riley = getAgent('executive-assistant' as AgentId);
@@ -106,7 +115,12 @@ async function handleRileyMessage(
       await groupchat.send(`🔧 ${riley.emoji} → ${summary}`);
     });
 
-    await sendAgentMessage(groupchat, riley, response);
+    // Strip action tags before displaying to user
+    const displayResponse = response.replace(/\[ACTION:[^\]]+\]/g, '').trim();
+    if (displayResponse) {
+      await sendAgentMessage(groupchat, riley, displayResponse);
+    }
+
     appendToMemory('executive-assistant', [
       { role: 'user', content: contextMessage },
       { role: 'assistant', content: `[Riley]: ${response}` },
@@ -115,9 +129,12 @@ async function handleRileyMessage(
     groupHistory.push({ role: 'user', content: contextMessage });
     groupHistory.push({ role: 'assistant', content: `[Riley]: ${response}` });
 
+    // Execute any actions Riley triggered
+    await executeActions(response, member, groupchat);
+
     // Check if Riley presented a decision (🛑)
-    if (response.includes('🛑') || response.includes('Decision Required')) {
-      await postDecisionEmbed(groupchat, response);
+    if (displayResponse.includes('🛑') || displayResponse.includes('Decision Required')) {
+      await postDecisionEmbed(groupchat, displayResponse);
     }
 
     // Check if Riley directed Ace or other agents
@@ -131,54 +148,113 @@ async function handleRileyMessage(
 }
 
 /**
- * Riley receives a goal from /goal command.
+ * Parse and execute [ACTION:xxx] tags from Riley's response.
  */
-async function handleRileyGoal(
-  goalDescription: string,
-  senderName: string,
+async function executeActions(
+  response: string,
+  member: GuildMember | undefined,
   groupchat: TextChannel
 ): Promise<void> {
-  const riley = getAgent('executive-assistant' as AgentId);
-  if (!riley) return;
+  const actionRe = /\[ACTION:(\w+)(?::([^\]]*))?\]/g;
+  const actions = [...response.matchAll(actionRe)];
 
-  try {
-    await groupchat.sendTyping();
-
-    const rileyMemory = getMemoryContext('executive-assistant');
-    const contextMessage = `[GOAL from ${senderName}]: ${goalDescription}
-
-Create a plan for this goal. Be specific about which agents handle which steps. Then direct Ace to start implementing. If anything is unclear, ask ${senderName} using the Decision Protocol.`;
-
-    const response = await agentRespond(riley, [...rileyMemory, ...groupHistory], contextMessage, async (_toolName, summary) => {
-      await groupchat.send(`🔧 ${riley.emoji} → ${summary}`);
-    });
-
-    goalStatus = '📋 Plan created';
-    await sendAgentMessage(groupchat, riley, response);
-    appendToMemory('executive-assistant', [
-      { role: 'user', content: `[GOAL from ${senderName}]: ${goalDescription}` },
-      { role: 'assistant', content: `[Riley]: ${response}` },
-    ]);
-
-    groupHistory.push({ role: 'user', content: `[GOAL from ${senderName}]: ${goalDescription}` });
-    groupHistory.push({ role: 'assistant', content: `[Riley]: ${response}` });
-
-    // Check for decision request
-    if (response.includes('🛑') || response.includes('Decision Required')) {
-      goalStatus = '🛑 Waiting for your decision';
-      await postDecisionEmbed(groupchat, response);
-      trimHistory();
-      return;
+  for (const [, action, param] of actions) {
+    try {
+      switch (action.toUpperCase()) {
+        case 'JOIN_VC': {
+          const channels = getBotChannels();
+          if (!channels) break;
+          if (isCallActive()) {
+            await groupchat.send('📞 Already in a voice call.');
+            break;
+          }
+          if (member) {
+            await startCall(channels.voiceChannel, groupchat, channels.callLog, member);
+          } else {
+            await groupchat.send('📞 I need you to be in the server to join VC.');
+          }
+          break;
+        }
+        case 'LEAVE_VC': {
+          if (isCallActive()) {
+            await endCall();
+          } else {
+            await groupchat.send('No active voice call to leave.');
+          }
+          break;
+        }
+        case 'DEPLOY': {
+          try {
+            const { buildId, logUrl } = await triggerCloudBuild(param || 'latest');
+            await groupchat.send(
+              `🚀 **Build triggered**\nBuild ID: \`${buildId}\`\n[View logs](${logUrl})`
+            );
+          } catch (err) {
+            await groupchat.send(`❌ Deploy failed: ${err instanceof Error ? err.message : 'Unknown'}`);
+          }
+          break;
+        }
+        case 'SCREENSHOTS': {
+          const appUrl = process.env.FRONTEND_URL || 'https://asap-489910.australia-southeast1.run.app';
+          captureAndPostScreenshots(appUrl, param || 'manual').catch((err) => {
+            groupchat.send(`❌ Screenshot capture failed: ${err instanceof Error ? err.message : 'Unknown'}`).catch(() => {});
+          });
+          await groupchat.send('📸 Capturing screenshots...');
+          break;
+        }
+        case 'STATUS': {
+          const summary = getStatusSummary();
+          await groupchat.send(summary || '📋 No active tasks.');
+          break;
+        }
+        case 'LIMITS': {
+          const report = getUsageReport();
+          await groupchat.send(report);
+          break;
+        }
+        case 'CLEAR': {
+          clearHistory(groupchat.id);
+          groupHistory.splice(0);
+          await groupchat.send('🧹 Conversation context cleared.');
+          break;
+        }
+        case 'ROLLBACK': {
+          if (param) {
+            try {
+              const result = await rollbackToRevision(param);
+              await groupchat.send(result);
+            } catch (err) {
+              await groupchat.send(`❌ Rollback failed: ${err instanceof Error ? err.message : 'Unknown'}`);
+            }
+          } else {
+            try {
+              const current = await getCurrentRevision();
+              const revisions = await listRevisions(5);
+              const list = revisions.map((r) => {
+                const date = new Date(r.createTime).toLocaleString('en-AU', { timeZone: 'Australia/Sydney' });
+                const tag = r.image.split(':').pop()?.slice(0, 12) || '?';
+                const active = r.name === current ? ' ← **active**' : '';
+                return `\`${r.name}\` — ${date} (${tag})${active}`;
+              }).join('\n');
+              await groupchat.send(`📦 **Cloud Run Revisions**\n\n${list}`);
+            } catch (err) {
+              await groupchat.send(`❌ Failed to list revisions: ${err instanceof Error ? err.message : 'Unknown'}`);
+            }
+          }
+          break;
+        }
+        case 'AGENTS': {
+          const agents = getAgents();
+          const list = Array.from(agents.values())
+            .map((a) => `${a.emoji} **${a.name}**`)
+            .join('\n');
+          await groupchat.send(`**ASAP Agent Team**\n\n${list}`);
+          break;
+        }
+      }
+    } catch (err) {
+      console.error(`Action ${action} error:`, err instanceof Error ? err.message : 'Unknown');
     }
-
-    // Riley directs Ace and sub-agents
-    await handleAgentChain(response, groupchat);
-
-    trimHistory();
-  } catch (err) {
-    console.error('Riley goal error:', err instanceof Error ? err.message : 'Unknown');
-    goalStatus = '❌ Error';
-    await groupchat.send('⚠️ Riley encountered an error planning this goal. Try again.');
   }
 }
 
@@ -423,7 +499,7 @@ async function postDecisionEmbed(
 
       // Feed the decision back to Riley
       const decisionMessage = `${userName} chose option ${choiceIndex + 1}: ${choice}`;
-      await handleRileyMessage(decisionMessage, userName, groupchat);
+      await handleRileyMessage(decisionMessage, userName, undefined, groupchat);
     }
   } catch {
     // Timeout — delete the stale decision embed and notify
