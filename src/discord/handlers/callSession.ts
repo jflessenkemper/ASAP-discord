@@ -182,18 +182,22 @@ Keep your spoken response brief — you're in a voice call, not a text chat.`;
         `[${new Date().toLocaleTimeString()}] Riley (EA): ${response}`
       );
 
+      // Run TTS generation, text message, and memory save in parallel
+      const ttsPromise = textToSpeech(response.slice(0, 500), riley.voice).catch((ttsErr) => {
+        console.error('TTS error for Riley:', ttsErr instanceof Error ? ttsErr.message : 'Unknown');
+        return null;
+      });
+
       await session.groupchat.send(`${riley.emoji} **${riley.name}**: ${response.slice(0, 1900)}`);
       appendToMemory('executive-assistant', [
         { role: 'user', content: `[Voice from ${transcription.username}]: ${userText}` },
         { role: 'assistant', content: `[Riley]: ${response}` },
       ]);
 
-      // Speak Riley's response
-      try {
-        const audioBuffer = await textToSpeech(response.slice(0, 500), riley.voice);
-        if (session.active) await speakInVC(audioBuffer);
-      } catch (ttsErr) {
-        console.error('TTS error for Riley:', ttsErr instanceof Error ? ttsErr.message : 'Unknown');
+      // Speak Riley's response (TTS was started in parallel above)
+      const audioBuffer = await ttsPromise;
+      if (audioBuffer && session.active) {
+        await speakInVC(audioBuffer);
       }
 
       // Check if Riley directed Ace
@@ -224,6 +228,12 @@ Keep your spoken response brief — you're in a voice call, not a text chat.`;
               `[${new Date().toLocaleTimeString()}] Ace (Developer): ${aceResponse}`
             );
 
+            // Run TTS generation, text message, and memory save in parallel
+            const aceTtsPromise = textToSpeech(aceResponse.slice(0, 500), ace.voice).catch((ttsErr) => {
+              console.error('TTS error for Ace:', ttsErr instanceof Error ? ttsErr.message : 'Unknown');
+              return null;
+            });
+
             await session.groupchat.send(`${ace.emoji} **Ace**: ${aceResponse.slice(0, 1900)}`);
             appendToMemory('developer', [
               { role: 'user', content: `[Directed by Riley for voice call]: ${userText.slice(0, 500)}` },
@@ -231,12 +241,10 @@ Keep your spoken response brief — you're in a voice call, not a text chat.`;
             ]);
             await documentToChannel('developer', `Responded in voice call: ${aceResponse.slice(0, 300)}`);
 
-            // Ace speaks in VC
-            try {
-              const audioBuffer = await textToSpeech(aceResponse.slice(0, 500), ace.voice);
-              if (session.active) await speakInVC(audioBuffer);
-            } catch (ttsErr) {
-              console.error('TTS error for Ace:', ttsErr instanceof Error ? ttsErr.message : 'Unknown');
+            // Ace speaks in VC (TTS was started in parallel above)
+            const aceAudio = await aceTtsPromise;
+            if (aceAudio && session.active) {
+              await speakInVC(aceAudio);
             }
           } catch (err) {
             console.error('Ace voice response error:', err instanceof Error ? err.message : 'Unknown');

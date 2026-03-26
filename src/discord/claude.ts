@@ -3,7 +3,7 @@ import { AgentConfig } from './agents';
 import { REPO_TOOLS, executeTool } from './tools';
 import { recordClaudeUsage, isClaudeOverLimit } from './usage';
 
-const VERTEX_REGION = process.env.CLAUDE_VERTEX_REGION || 'us-east5';
+const VERTEX_REGION = process.env.CLAUDE_VERTEX_REGION || 'asia-southeast1';
 const CLAUDE_MODEL = 'claude-sonnet-4-20250514';
 
 let client: AnthropicVertex | null = null;
