@@ -94,7 +94,7 @@ export async function captureAndPostScreenshots(
     // Clear old screenshots before posting new ones
     await clearChannel(screenshotsChannel);
 
-    await screenshotsChannel.send(`📸 **Build Screenshots** — ${label}\nCapturing on iPhone 17 Pro Max (${VIEWPORT.width}×${VIEWPORT.height} @${VIEWPORT.deviceScaleFactor}x)...`);
+    await screenshotsChannel.send(`📸 **Build Screenshots** — ${label}\n🔗 ${appUrl}\nCapturing on iPhone 17 Pro Max (${VIEWPORT.width}×${VIEWPORT.height} @${VIEWPORT.deviceScaleFactor}x)...`);
 
     browser = await puppeteer.launch({
       headless: true,
@@ -154,7 +154,7 @@ export async function captureAndPostScreenshots(
       await screenshotsChannel.send({ files: attachments.slice(i, i + 10) });
     }
 
-    await screenshotsChannel.send(`✅ Captured ${attachments.length}/${SCREENS.length} screens`);
+    await screenshotsChannel.send(`✅ Captured ${attachments.length}/${SCREENS.length} screens — ${appUrl}`);
   } catch (err) {
     console.error('Screenshot capture error:', err instanceof Error ? err.message : 'Unknown');
     await screenshotsChannel?.send(`❌ Screenshot capture failed: ${err instanceof Error ? err.message : 'Unknown'}`);

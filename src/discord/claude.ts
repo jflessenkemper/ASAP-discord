@@ -3,9 +3,9 @@ import { AgentConfig } from './agents';
 import { REPO_TOOLS, executeTool, getToolAuditCallback } from './tools';
 import { recordClaudeUsage, isClaudeOverLimit } from './usage';
 
-const VERTEX_REGION = process.env.CLAUDE_VERTEX_REGION || 'asia-southeast1';
-const CLAUDE_OPUS = 'claude-opus-4-20250514';
-const CLAUDE_SONNET = 'claude-sonnet-4-20250514';
+const VERTEX_REGION = process.env.CLAUDE_VERTEX_REGION || 'us-east5';
+const CLAUDE_OPUS = 'claude-opus-4';
+const CLAUDE_SONNET = 'claude-sonnet-4';
 
 /** Riley uses Sonnet (fast, conversational). All other agents use Opus (powerful, tool-heavy). */
 function modelForAgent(agentId: string): string {
