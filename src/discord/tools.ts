@@ -832,7 +832,7 @@ function runCommand(command: string, cwd?: string): string {
   if (!allowed) {
     const reason = 'Command not in allowlist';
     auditCallback?.(trimmed, false, reason);
-    return `Blocked: ${reason}. Allowed commands: npm, npx tsc/jest, git, grep, find, cat, ls, node -e, and other read-only utilities.`;
+    return `Blocked: ${reason}. Allowed commands: npm, npx tsc/jest, git, grep, find, cat, ls, head, tail, wc, and other read-only utilities.`;
   }
 
   auditCallback?.(trimmed, true, allowed.description);
