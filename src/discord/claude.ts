@@ -264,3 +264,70 @@ export async function summarizeCall(
   const textBlock = response.content.find((b) => b.type === 'text');
   return textBlock?.text || 'Could not generate summary.';
 }
+
+/**
+ * Compress conversation history into a condensed summary.
+ * Used by the memory compression system to avoid losing context
+ * when conversations get long — similar to how Copilot/Claude summarize
+ * earlier chat context.
+ *
+ * If an existing summary exists, it's merged with the new messages
+ * to create an updated rolling summary.
+ */
+export async function summarizeConversation(
+  existingSummary: string,
+  newMessages: string,
+  agentId: string
+): Promise<string> {
+  if (isClaudeOverLimit()) {
+    return existingSummary || 'Summary unavailable — token limit reached.';
+  }
+
+  const anthropic = getClient();
+
+  const prompt = existingSummary
+    ? `You are compressing conversation history for an AI agent (${agentId}) to maintain long-term context efficiently.
+
+EXISTING SUMMARY of earlier conversation:
+${existingSummary}
+
+NEW MESSAGES to incorporate:
+${newMessages}
+
+Create an UPDATED summary that merges the existing summary with the new messages. Prioritize:
+1. Key decisions made and their reasoning
+2. Technical context (files changed, bugs found, features implemented)
+3. User preferences and patterns observed
+4. Active tasks / blockers / next steps
+5. Important facts (names, IDs, configurations)
+
+Keep the summary under 1500 words. Use bullet points. Drop redundant or superseded information.`
+    : `You are compressing conversation history for an AI agent (${agentId}) to maintain long-term context efficiently.
+
+MESSAGES to summarize:
+${newMessages}
+
+Create a condensed summary. Prioritize:
+1. Key decisions made and their reasoning
+2. Technical context (files changed, bugs found, features implemented)
+3. User preferences and patterns observed
+4. Active tasks / blockers / next steps
+5. Important facts (names, IDs, configurations)
+
+Keep the summary under 1500 words. Use bullet points. Drop small talk and redundant exchanges.`;
+
+  const response = await withConcurrencyLimit(() =>
+    withRetry(() =>
+      anthropic.messages.create({
+        model: CLAUDE_MODEL,
+        max_tokens: 2048,
+        system: 'You are a conversation compressor. Produce structured, information-dense summaries that preserve all actionable context while discarding noise. Output only the summary — no meta-commentary.',
+        messages: [{ role: 'user', content: prompt }],
+      })
+    )
+  );
+
+  recordClaudeUsage(response.usage?.input_tokens || 0, response.usage?.output_tokens || 0);
+  const textBlock = response.content.find((b) => b.type === 'text');
+  return textBlock?.text || existingSummary || 'Could not generate summary.';
+}

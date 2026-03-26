@@ -1,7 +1,7 @@
 import { Message, TextChannel, GuildMember, EmbedBuilder } from 'discord.js';
 import { getAgents, getAgent, AgentConfig, AgentId } from '../agents';
 import { agentRespond, ConversationMessage } from '../claude';
-import { appendToMemory, getMemoryContext, loadMemory, saveMemory, clearMemory } from '../memory';
+import { appendToMemory, getMemoryContext, loadMemory, saveMemory, clearMemory, compressMemory } from '../memory';
 import { documentToChannel } from './documentation';
 import { sendAgentMessage, sendLongMessage, clearHistory } from './textChannel';
 import { startCall, endCall, isCallActive } from './callSession';
@@ -575,4 +575,11 @@ async function postDecisionEmbed(
 /** Persist groupHistory to disk. Called after every interaction. */
 function persistGroupHistory(): void {
   saveMemory('groupchat', groupHistory);
+  // Trigger compression when history gets long (runs in background)
+  if (groupHistory.length >= 60) {
+    compressMemory('groupchat').then(() => {
+      // Reload the compressed history
+      groupHistory = loadMemory('groupchat');
+    }).catch(() => {});
+  }
 }
