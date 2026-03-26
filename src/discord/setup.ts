@@ -17,6 +17,7 @@ export interface BotChannels {
   github: TextChannel;
   callLog: TextChannel;
   limits: TextChannel;
+  screenshots: TextChannel;
   voiceChannel: VoiceChannel;
 }
 
@@ -170,6 +171,13 @@ export async function setupChannels(guild: Guild): Promise<BotChannels> {
     '📊 API usage limits, costs, and remaining credits — updated every 5 minutes'
   );
 
+  const screenshots = await ensureText(
+    'screenshots',
+    catOps,
+    '📸 Automated screenshots of every app screen after each build (iPhone 17 Pro Max)',
+    `📸 **Build Screenshots**\n\nAutomated screenshots of every screen captured on iPhone 17 Pro Max viewport after each successful build.`
+  );
+
   // ── Clean up old agent channels without emoji prefix ──
   const agentIds = [...agents.keys()]; // e.g. 'qa', 'developer', 'lawyer'
   for (const oldName of agentIds) {
@@ -195,5 +203,5 @@ export async function setupChannels(guild: Guild): Promise<BotChannels> {
     }
   }
 
-  return { agentChannels, groupchat, github, callLog, limits, voiceChannel };
+  return { agentChannels, groupchat, github, callLog, limits, screenshots, voiceChannel };
 }

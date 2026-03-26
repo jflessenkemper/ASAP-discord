@@ -17,6 +17,7 @@ import { registerCommands, handleCommand } from './commands';
 import { setGitHubChannel } from './handlers/github';
 import { setLimitsChannel, startDashboardUpdates, stopDashboardUpdates } from './usage';
 import { flushPendingWrites } from './memory';
+import { setScreenshotsChannel } from './services/screenshots';
 
 let client: Client | null = null;
 let botChannels: BotChannels | null = null;
@@ -76,6 +77,7 @@ export async function startBot(): Promise<void> {
       setBotChannels(botChannels);
       setGitHubChannel(botChannels.github);
       setLimitsChannel(botChannels.limits);
+      setScreenshotsChannel(botChannels.screenshots);
       setDiscordGuild(guild);
       await startDashboardUpdates();
 

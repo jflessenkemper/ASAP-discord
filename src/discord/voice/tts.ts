@@ -1,5 +1,6 @@
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import { recordGeminiUsage, isGeminiOverLimit } from '../usage';
+import { elevenLabsTTS, isElevenLabsAvailable } from './elevenlabs';
 
 const genAI = process.env.GEMINI_API_KEY
   ? new GoogleGenerativeAI(process.env.GEMINI_API_KEY)
@@ -43,13 +44,28 @@ export async function transcribeVoice(audioBuffer: Buffer): Promise<string> {
 }
 
 /**
- * Generate speech audio from text using Gemini TTS.
- * Returns a Buffer of audio data (WAV format suitable for discord playback).
+ * Generate speech audio from text.
+ * Prefers ElevenLabs (much lower latency ~200ms TTFB) over Gemini TTS.
+ * Falls back to Gemini if ElevenLabs is not configured.
+ * Returns a Buffer of audio data suitable for Discord playback.
  */
 export async function textToSpeech(
   text: string,
   voiceName: string = 'Kore'
 ): Promise<Buffer> {
+  // Prefer ElevenLabs for significantly lower latency
+  if (isElevenLabsAvailable()) {
+    return elevenLabsTTS(text, voiceName);
+  }
+
+  // Fallback to Gemini TTS
+  return geminiTTS(text, voiceName);
+}
+
+/**
+ * Gemini TTS fallback — used when ElevenLabs key is not set.
+ */
+async function geminiTTS(text: string, voiceName: string): Promise<Buffer> {
   // Use Gemini 2.5 Flash with audio output for TTS
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) throw new Error('Gemini API key not configured');

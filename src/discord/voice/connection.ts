@@ -12,6 +12,7 @@ import {
 import { VoiceBasedChannel, GuildMember } from 'discord.js';
 import { Readable } from 'stream';
 import { transcribeVoice } from './tts';
+import { isDeepgramAvailable, startLiveTranscription, DeepgramLiveSession } from './deepgram';
 
 let currentConnection: VoiceConnection | null = null;
 let audioPlayer: AudioPlayer | null = null;
@@ -225,5 +226,129 @@ export function listenToAllMembers(
     for (const unsub of unsubscribers) {
       unsub();
     }
+  };
+}
+
+/**
+ * Real-time listener using Deepgram streaming STT.
+ * Instead of buffering silence-delimited chunks and batch-transcribing,
+ * this streams raw audio to Deepgram and gets transcripts back in real-time
+ * with ~200-400ms latency (vs ~1-2s for batch Gemini).
+ */
+export function listenToUserDeepgram(
+  connection: VoiceConnection,
+  member: GuildMember,
+  onTranscription: (transcription: VoiceTranscription) => void
+): () => void {
+  let destroyed = false;
+  let dgSession: DeepgramLiveSession | null = null;
+
+  const receiver = connection.receiver;
+
+  // Start Deepgram session
+  startLiveTranscription(
+    (text) => {
+      if (!destroyed && text.trim()) {
+        onTranscription({
+          userId: member.id,
+          username: member.displayName,
+          text: text.trim(),
+          timestamp: new Date(),
+        });
+      }
+    },
+    (err) => {
+      console.error(`Deepgram error for ${member.displayName}:`, err.message);
+    }
+  ).then((session) => {
+    if (destroyed) {
+      session.close();
+      return;
+    }
+    dgSession = session;
+
+    // Subscribe to user's audio and pipe it to Deepgram
+    function subscribe() {
+      if (destroyed) return;
+
+      const subscription = receiver.subscribe(member.id, {
+        end: { behavior: EndBehaviorType.AfterSilence, duration: 1500 },
+      });
+
+      subscription.on('data', (chunk: Buffer) => {
+        if (!destroyed && dgSession) {
+          dgSession.send(chunk);
+        }
+      });
+
+      subscription.on('end', () => {
+        if (!destroyed) subscribe(); // Re-subscribe for next utterance
+      });
+    }
+
+    subscribe();
+  }).catch((err) => {
+    console.error(`Failed to start Deepgram for ${member.displayName}:`, err instanceof Error ? err.message : 'Unknown');
+  });
+
+  return () => {
+    destroyed = true;
+    dgSession?.close();
+  };
+}
+
+/**
+ * Listen to all members using the best available STT.
+ * Prefers Deepgram (real-time) over Gemini (batch) for lower latency.
+ */
+export function listenToAllMembersSmart(
+  connection: VoiceConnection,
+  voiceChannel: VoiceBasedChannel,
+  onTranscription: (transcription: VoiceTranscription) => void
+): () => void {
+  // Use Deepgram if available for real-time streaming
+  if (isDeepgramAvailable()) {
+    console.log('Using Deepgram real-time STT for voice transcription');
+    return listenToAllMembersDeepgram(connection, voiceChannel, onTranscription);
+  }
+
+  // Fall back to batch Gemini transcription
+  console.log('Using Gemini batch STT for voice transcription (Deepgram not configured)');
+  return listenToAllMembers(connection, voiceChannel, onTranscription);
+}
+
+/**
+ * Deepgram version of listenToAllMembers — real-time streaming STT.
+ */
+function listenToAllMembersDeepgram(
+  connection: VoiceConnection,
+  voiceChannel: VoiceBasedChannel,
+  onTranscription: (transcription: VoiceTranscription) => void
+): () => void {
+  const unsubscribers: Array<() => void> = [];
+  const listeningUserIds = new Set<string>();
+  let destroyed = false;
+
+  for (const [, member] of voiceChannel.members) {
+    if (member.user.bot) continue;
+    listeningUserIds.add(member.id);
+    const unsub = listenToUserDeepgram(connection, member, onTranscription);
+    unsubscribers.push(unsub);
+  }
+
+  const onSpeaking = (userId: string) => {
+    if (destroyed || listeningUserIds.has(userId)) return;
+    const member = voiceChannel.members.get(userId);
+    if (!member || member.user.bot) return;
+    listeningUserIds.add(userId);
+    const unsub = listenToUserDeepgram(connection, member, onTranscription);
+    unsubscribers.push(unsub);
+  };
+  connection.receiver.speaking.on('start', onSpeaking);
+
+  return () => {
+    destroyed = true;
+    connection.receiver.speaking.off('start', onSpeaking);
+    for (const unsub of unsubscribers) unsub();
   };
 }

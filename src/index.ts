@@ -18,6 +18,7 @@ import businessRoutes from './routes/business';
 import pool from './db/pool';
 import { startBot, stopBot } from './discord/bot';
 import { verifySignature, handleGitHubEvent } from './discord/handlers/github';
+import { captureAndPostScreenshots } from './discord/services/screenshots';
 
 const app = express();
 const PORT = parseInt(process.env.PORT || '3001', 10);
@@ -96,6 +97,24 @@ app.post('/api/webhooks/github', express.json({ limit: '1mb' }), (req, res) => {
   });
 
   res.status(200).json({ ok: true });
+});
+
+// Build-complete webhook — Cloud Build calls this after successful deploy to trigger screenshots
+app.post('/api/webhooks/build-complete', express.json({ limit: '10kb' }), (req, res) => {
+  const secret = process.env.BUILD_WEBHOOK_SECRET;
+  if (secret && req.headers['x-webhook-secret'] !== secret) {
+    res.status(401).json({ error: 'Invalid secret' });
+    return;
+  }
+
+  const appUrl = process.env.FRONTEND_URL || `https://asap-${process.env.GCS_PROJECT_ID || 'asap-489910'}.${process.env.CLOUD_RUN_REGION || 'australia-southeast1'}.run.app`;
+  const label = req.body?.commitSha?.slice(0, 7) || 'latest';
+
+  captureAndPostScreenshots(appUrl, label).catch((err) => {
+    console.error('Screenshot capture error:', err instanceof Error ? err.message : 'Unknown');
+  });
+
+  res.status(200).json({ ok: true, message: 'Screenshot capture triggered' });
 });
 
 // API 404 handler — must come after routes but before SPA fallback

@@ -1,5 +1,6 @@
 import { TextChannel } from 'discord.js';
 import crypto from 'crypto';
+import { captureAndPostScreenshots } from '../services/screenshots';
 
 let githubChannel: TextChannel | null = null;
 
@@ -36,6 +37,14 @@ export async function handleGitHubEvent(
     await githubChannel.send(message.slice(0, 2000));
   } catch (err) {
     console.error('GitHub webhook post error:', err instanceof Error ? err.message : 'Unknown');
+  }
+
+  // Trigger screenshots after successful deployment
+  if (event === 'deployment_status' && payload.deployment_status?.state === 'success') {
+    const appUrl = process.env.FRONTEND_URL || 'https://asap-489910.australia-southeast1.run.app';
+    captureAndPostScreenshots(appUrl, 'deploy').catch((err) => {
+      console.error('Post-deploy screenshot error:', err instanceof Error ? err.message : 'Unknown');
+    });
   }
 }
 

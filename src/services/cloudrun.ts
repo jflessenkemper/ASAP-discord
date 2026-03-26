@@ -92,3 +92,38 @@ export async function getCurrentRevision(): Promise<string> {
   const active = traffic.find((t: any) => t.percent === 100);
   return active?.revision || 'unknown';
 }
+
+/**
+ * Trigger a Cloud Build to build and deploy the latest code.
+ * Uses the Cloud Build API to submit the build with our cloudbuild.yaml config.
+ */
+export async function triggerCloudBuild(commitSha: string): Promise<{ buildId: string; logUrl: string }> {
+  const client = await getAuth().getClient();
+  const REPO_NAME = process.env.CLOUD_BUILD_REPO || 'asap';
+
+  const buildConfig = {
+    source: {
+      repoSource: {
+        projectId: PROJECT_ID,
+        repoName: REPO_NAME,
+        branchName: 'main',
+      },
+    },
+    substitutions: {
+      COMMIT_SHA: commitSha,
+    },
+  };
+
+  const res = await client.request({
+    url: `https://cloudbuild.googleapis.com/v1/projects/${PROJECT_ID}/builds`,
+    method: 'POST',
+    body: JSON.stringify(buildConfig),
+    headers: { 'Content-Type': 'application/json' },
+  });
+
+  const data = res.data as any;
+  const buildId = data.metadata?.build?.id || data.name?.split('/').pop() || 'unknown';
+  const logUrl = data.metadata?.build?.logUrl || `https://console.cloud.google.com/cloud-build/builds/${buildId}?project=${PROJECT_ID}`;
+
+  return { buildId, logUrl };
+}

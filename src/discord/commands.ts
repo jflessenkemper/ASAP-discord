@@ -14,7 +14,8 @@ import { startCall, endCall, isCallActive } from './handlers/callSession';
 import { clearHistory } from './handlers/textChannel';
 import { handleGoalCommand, getStatusSummary } from './handlers/groupchat';
 import { getUsageReport } from './usage';
-import { listRevisions, rollbackToRevision, getCurrentRevision } from '../services/cloudrun';
+import { listRevisions, rollbackToRevision, getCurrentRevision, triggerCloudBuild } from '../services/cloudrun';
+import { captureAndPostScreenshots } from './services/screenshots';
 
 const COMMANDS = [
   new SlashCommandBuilder()
@@ -59,6 +60,12 @@ const COMMANDS = [
     .addStringOption((opt) =>
       opt.setName('revision').setDescription('Revision name (leave empty to see list)')
     ),
+  new SlashCommandBuilder()
+    .setName('deploy')
+    .setDescription('Trigger a Cloud Build to deploy the latest code'),
+  new SlashCommandBuilder()
+    .setName('screenshots')
+    .setDescription('Capture screenshots of every app screen now'),
 ];
 
 /**
@@ -113,6 +120,12 @@ export async function handleCommand(
       break;
     case 'rollback':
       await handleRollbackSlash(interaction);
+      break;
+    case 'deploy':
+      await handleDeploySlash(interaction);
+      break;
+    case 'screenshots':
+      await handleScreenshotsSlash(interaction);
       break;
     default:
       await interaction.reply({ content: 'Unknown command.', ephemeral: true });
@@ -273,5 +286,35 @@ async function handleRollbackSlash(
     await interaction.editReply(result);
   } catch (err) {
     await interaction.editReply(`❌ Rollback failed: ${err instanceof Error ? err.message : 'Unknown'}`);
+  }
+}
+
+async function handleDeploySlash(
+  interaction: ChatInputCommandInteraction
+): Promise<void> {
+  await interaction.deferReply();
+  try {
+    const { buildId, logUrl } = await triggerCloudBuild('latest');
+    await interaction.editReply(
+      `🚀 **Build triggered**\n` +
+      `Build ID: \`${buildId}\`\n` +
+      `[View logs](${logUrl})\n\n` +
+      `Screenshots will be captured after the deploy completes.`
+    );
+  } catch (err) {
+    await interaction.editReply(`❌ Deploy failed: ${err instanceof Error ? err.message : 'Unknown'}`);
+  }
+}
+
+async function handleScreenshotsSlash(
+  interaction: ChatInputCommandInteraction
+): Promise<void> {
+  await interaction.deferReply();
+  const appUrl = process.env.FRONTEND_URL || 'https://asap-489910.australia-southeast1.run.app';
+  try {
+    await captureAndPostScreenshots(appUrl, 'manual');
+    await interaction.editReply('📸 Screenshots captured and posted to #screenshots');
+  } catch (err) {
+    await interaction.editReply(`❌ Screenshot capture failed: ${err instanceof Error ? err.message : 'Unknown'}`);
   }
 }
