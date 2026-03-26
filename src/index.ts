@@ -19,6 +19,7 @@ import pool from './db/pool';
 import { startBot, stopBot } from './discord/bot';
 import { verifySignature, handleGitHubEvent } from './discord/handlers/github';
 import { captureAndPostScreenshots } from './discord/services/screenshots';
+import { getBotChannels } from './discord/bot';
 
 const app = express();
 const PORT = parseInt(process.env.PORT || '3001', 10);
@@ -113,6 +114,11 @@ app.post('/api/webhooks/build-complete', express.json({ limit: '10kb' }), (req, 
   captureAndPostScreenshots(appUrl, label).catch((err) => {
     console.error('Screenshot capture error:', err instanceof Error ? err.message : 'Unknown');
   });
+
+  const channels = getBotChannels();
+  if (channels?.url) {
+    channels.url.send(`✅ **Build deployed** — app live at ${appUrl}`).catch(() => {});
+  }
 
   res.status(200).json({ ok: true, message: 'Screenshot capture triggered' });
 });

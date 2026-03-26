@@ -206,6 +206,15 @@ async function executeActions(
             await groupchat.send(
               `🚀 **Build triggered**\nBuild ID: \`${buildId}\`\n[View logs](${logUrl})`
             );
+            const channels = getBotChannels();
+            if (channels?.url) {
+              const appUrl = process.env.FRONTEND_URL || 'https://asap-489910.australia-southeast1.run.app';
+              await channels.url.send(
+                `🚀 **Build triggered** — ${new Date().toLocaleString('en-AU', { timeZone: 'Australia/Sydney' })}\n` +
+                `🔨 Build: \`${buildId}\` — [View logs](${logUrl})\n` +
+                `🌐 App: ${appUrl}`
+              );
+            }
           } catch (err) {
             await groupchat.send(`❌ Deploy failed: ${err instanceof Error ? err.message : 'Unknown'}`);
           }

@@ -18,6 +18,7 @@ export interface BotChannels {
   callLog: TextChannel;
   limits: TextChannel;
   screenshots: TextChannel;
+  url: TextChannel;
   voiceChannel: VoiceChannel;
 }
 
@@ -172,6 +173,17 @@ export async function setupChannels(guild: Guild): Promise<BotChannels> {
     `📸 **Build Screenshots**\n\nAutomated screenshots of every screen captured on iPhone 17 Pro Max viewport after each successful build.`
   );
 
+  const appUrl = process.env.FRONTEND_URL || 'https://asap-489910.australia-southeast1.run.app';
+  const url = await ensureText(
+    'url',
+    catOps,
+    '🔗 Live app URL and build links — updated on every deploy',
+    `🔗 **ASAP URLs**\n\n` +
+      `🌐 **App**: ${appUrl}\n` +
+      `📦 **Cloud Build**: https://console.cloud.google.com/cloud-build/builds?project=asap-489910\n` +
+      `☁️ **Cloud Run**: https://console.cloud.google.com/run/detail/australia-southeast1/asap?project=asap-489910`
+  );
+
   // ── Clean up old agent channels without emoji prefix ──
   const agentIds = [...agents.keys()]; // e.g. 'qa', 'developer', 'lawyer'
   for (const oldName of agentIds) {
@@ -197,5 +209,5 @@ export async function setupChannels(guild: Guild): Promise<BotChannels> {
     }
   }
 
-  return { agentChannels, groupchat, github, callLog, limits, screenshots, voiceChannel };
+  return { agentChannels, groupchat, github, callLog, limits, screenshots, url, voiceChannel };
 }
