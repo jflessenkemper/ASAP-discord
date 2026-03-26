@@ -13,7 +13,7 @@ import { Server as HttpServer } from 'http';
 import { TextChannel } from 'discord.js';
 import { startLiveTranscription, DeepgramLiveSession, isDeepgramAvailable } from '../voice/deepgram';
 import { elevenLabsTTS } from '../voice/elevenlabs';
-import { agentRespond, ConversationMessage, summarizeCall } from '../claude';
+import { agentRespond, ConversationMessage, summarizeCall, CLAUDE_PHONE_MODEL } from '../claude';
 import { getAgent, AgentId } from '../agents';
 import { getMemoryContext, appendToMemory } from '../memory';
 
@@ -46,13 +46,54 @@ export function isTelephonyAvailable(): boolean {
   return !!(TWILIO_ACCOUNT_SID && TWILIO_AUTH_TOKEN && TWILIO_PHONE_NUMBER);
 }
 
-// ── Known contacts ──
-const KNOWN_CONTACTS: Record<string, string> = {
-  '+61436012231': 'Jordan',
-};
+// ── Known contacts (persisted to disk) ──
+import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
+import { join } from 'path';
+
+const CONTACTS_FILE = join(process.cwd(), 'data', 'phone-contacts.json');
+
+function loadContacts(): Record<string, string> {
+  try {
+    if (existsSync(CONTACTS_FILE)) {
+      return JSON.parse(readFileSync(CONTACTS_FILE, 'utf-8'));
+    }
+  } catch {}
+  return { '+61436012231': 'Jordan' };
+}
+
+function saveContacts(contacts: Record<string, string>): void {
+  try {
+    const dir = join(process.cwd(), 'data');
+    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+    writeFileSync(CONTACTS_FILE, JSON.stringify(contacts, null, 2));
+  } catch (err) {
+    console.error('Failed to save contacts:', err instanceof Error ? err.message : 'Unknown');
+  }
+}
+
+let knownContacts = loadContacts();
 
 function identifyCaller(number: string): string | null {
-  return KNOWN_CONTACTS[number] || null;
+  return knownContacts[number] || null;
+}
+
+/**
+ * Learn a new contact — called when Riley discovers someone's name on a call.
+ */
+export function learnContact(number: string, name: string): void {
+  let normalized = number.replace(/\\s+/g, '');
+  if (normalized.startsWith('0')) normalized = '+61' + normalized.slice(1);
+  else if (!normalized.startsWith('+')) normalized = '+61' + normalized;
+  knownContacts[normalized] = name;
+  saveContacts(knownContacts);
+  logToDiscord(`📇 **Learned contact**: ${name} → ${normalized}`);
+}
+
+/**
+ * Get all known contacts for display.
+ */
+export function getKnownContacts(): Record<string, string> {
+  return { ...knownContacts };
 }
 
 // ── Active phone call sessions ──
@@ -291,7 +332,7 @@ async function handlePhoneInput(session: PhoneSession, text: string, language?: 
       ? `You are on a phone call with ${session.callerName} (${session.callerNumber}). ${session.callerName} is the owner of ASAP — your boss.`
       : `You are on a phone call with ${session.callerNumber}.`;
     const confContext = session.conferenceName
-      ? `\nThis is a GROUP call (conference: ${session.conferenceName}). There may be multiple people on the line. Be natural and address people by name when you can.`
+      ? `\nThis is a GROUP call (conference: ${session.conferenceName}). There may be multiple people on the line. Be natural and address people by name when you can.\nIf you don't know someone on the call, politely ask their name early in the conversation. Once you learn it, mention it naturally so it gets recorded in the transcript.`
       : '';
 
     const context = `[Phone call from ${callerLabel}]: ${text}
@@ -304,7 +345,9 @@ Do NOT use markdown formatting — this is spoken audio.${langHint}`;
     const response = await agentRespond(
       riley,
       [...rileyMemory, ...session.conversationHistory],
-      context
+      context,
+      undefined,
+      { modelOverride: CLAUDE_PHONE_MODEL, maxTokens: 1024 }
     );
 
     session.conversationHistory.push(
@@ -324,6 +367,16 @@ Do NOT use markdown formatting — this is spoken audio.${langHint}`;
       { role: 'user', content: `[Phone from ${session.callerNumber}]: ${text}` },
       { role: 'assistant', content: `[Riley]: ${response}` },
     ]);
+
+    // Try to learn names from conversation (e.g. "my name is Sarah", "I'm Sarah", "this is Sarah")
+    const nameMatch = text.match(/(?:my name(?:'s| is)|i'm|i am|this is|call me)\s+([A-Z][a-z]+)/i);
+    if (nameMatch && session.callerNumber !== 'unknown' && session.callerNumber !== 'conference') {
+      const discoveredName = nameMatch[1];
+      if (!identifyCaller(session.callerNumber)) {
+        learnContact(session.callerNumber, discoveredName);
+        session.callerName = discoveredName;
+      }
+    }
 
     await speakToPhone(session, response);
   } catch (err) {

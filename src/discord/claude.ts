@@ -5,6 +5,7 @@ import { recordClaudeUsage, isClaudeOverLimit } from './usage';
 
 const VERTEX_REGION = process.env.CLAUDE_VERTEX_REGION || 'asia-southeast1';
 const CLAUDE_MODEL = 'claude-opus-4-20250514';
+export const CLAUDE_PHONE_MODEL = 'claude-sonnet-4-20250514';
 
 let client: AnthropicVertex | null = null;
 
@@ -73,7 +74,8 @@ export async function agentRespond(
   agent: AgentConfig,
   conversationHistory: ConversationMessage[],
   userMessage: string,
-  onToolUse?: (toolName: string, summary: string) => Promise<void>
+  onToolUse?: (toolName: string, summary: string) => Promise<void>,
+  options?: { modelOverride?: string; maxTokens?: number }
 ): Promise<string> {
   const anthropic = getClient();
 
@@ -118,8 +120,8 @@ You have access to tools that let you read, write, search, and edit files in the
     const response = await withConcurrencyLimit(() =>
       withRetry(() =>
         anthropic.messages.create({
-          model: CLAUDE_MODEL,
-          max_tokens: 16384,
+          model: options?.modelOverride || CLAUDE_MODEL,
+          max_tokens: options?.maxTokens || 16384,
           system: systemPrompt,
           tools: REPO_TOOLS as any,
           messages: currentMessages,
