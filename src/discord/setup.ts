@@ -74,6 +74,28 @@ export async function setupChannels(guild: Guild): Promise<BotChannels> {
   // Ensure caches are fresh
   await guild.channels.fetch();
 
+  // ── One-time channel reset (set RESET_CHANNELS=true env var to trigger) ──
+  if (process.env.RESET_CHANNELS === 'true') {
+    console.log('🔄 RESET_CHANNELS=true — deleting all managed channels for fresh recreation...');
+    const managedCategories = [CAT_MAIN, CAT_AGENTS, CAT_OPS];
+    for (const catName of managedCategories) {
+      const cat = guild.channels.cache.find(
+        (c) => c.type === ChannelType.GuildCategory && c.name === catName
+      ) as CategoryChannel | undefined;
+      if (cat) {
+        // Delete all children first
+        for (const child of cat.children.cache.values()) {
+          try { await child.delete('Channel reset'); } catch { /* ignore */ }
+        }
+        // Delete the category itself
+        try { await cat.delete('Channel reset'); } catch { /* ignore */ }
+      }
+    }
+    // Refresh cache after deletions
+    await guild.channels.fetch();
+    console.log('✅ Channel reset complete — recreating...');
+  }
+
   // ── Categories ──
   const catMain = await findOrCreateCategory(guild, CAT_MAIN);
   const catAgents = await findOrCreateCategory(guild, CAT_AGENTS);
