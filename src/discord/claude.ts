@@ -2,6 +2,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import { AgentConfig } from './agents';
 import { REPO_TOOLS, executeTool, getToolAuditCallback } from './tools';
 import { recordClaudeUsage, isClaudeOverLimit } from './usage';
+import { logAgentEvent } from './activityLog';
 
 const CLAUDE_OPUS = 'claude-opus-4-20250514';
 const CLAUDE_SONNET = 'claude-sonnet-4-20250514';
@@ -40,9 +41,27 @@ const MAX_CONCURRENT = 8;
 let activeClaude = 0;
 const claudeQueue: Array<() => void> = [];
 
+/**
+ * Global rate-limit gate — when ANY request gets 429'd, ALL requests
+ * pause until the retry-after window passes. This prevents a cascade
+ * of failed requests that burn through retries for nothing.
+ */
+let rateLimitedUntil = 0;
+
+async function waitForRateLimit(): Promise<void> {
+  const now = Date.now();
+  if (rateLimitedUntil > now) {
+    const waitMs = rateLimitedUntil - now;
+    console.warn(`Rate-limited: pausing all Claude requests for ${Math.ceil(waitMs / 1000)}s`);
+    await new Promise((r) => setTimeout(r, waitMs));
+  }
+}
+
 async function withConcurrencyLimit<T>(fn: () => Promise<T>): Promise<T> {
+  await waitForRateLimit();
   while (activeClaude >= MAX_CONCURRENT) {
     await new Promise<void>((resolve) => claudeQueue.push(resolve));
+    await waitForRateLimit();
   }
   activeClaude++;
   try {
@@ -59,11 +78,23 @@ async function withRetry<T>(fn: () => Promise<T>, retries = 2, delayMs = 1000): 
       return await fn();
     } catch (err: any) {
       if (i === retries) throw err;
-      // Only retry on transient errors (5xx, network)
       const status = err?.status || err?.statusCode;
+      // Only retry on transient errors (5xx, network, 429 rate limit)
       if (status && status < 500 && status !== 429) throw err;
-      const delay = delayMs * Math.pow(2, i);
-      console.warn(`Claude retry ${i + 1}/${retries} after ${delay}ms: ${err?.message || 'Unknown'}`);
+
+      let delay: number;
+      if (status === 429) {
+        // Extract retry-after from error headers (Anthropic SDK exposes this)
+        const retryAfter = err?.headers?.['retry-after'];
+        delay = retryAfter ? Math.ceil(Number(retryAfter) * 1000) : 60_000;
+        // Set global gate so all concurrent requests pause too
+        rateLimitedUntil = Math.max(rateLimitedUntil, Date.now() + delay);
+        console.warn(`429 rate limited — global pause for ${Math.ceil(delay / 1000)}s (retry ${i + 1}/${retries})`);
+        logAgentEvent('system', 'rate_limit', `429 — pausing ${Math.ceil(delay / 1000)}s`);
+      } else {
+        delay = delayMs * Math.pow(2, i);
+        console.warn(`Claude retry ${i + 1}/${retries} after ${delay}ms: ${err?.message || 'Unknown'}`);
+      }
       await new Promise((r) => setTimeout(r, delay));
     }
   }
@@ -90,10 +121,12 @@ export async function agentRespond(
 
 IMPORTANT CONTEXT: You are responding in a Discord channel. Your name is "${agent.name}".
 ${agent.id === 'executive-assistant' ? `
-AGENT COORDINATION: You coordinate agents by @mentioning them in your responses. The system parses your messages and routes to the mentioned agents automatically.
+AGENT COORDINATION: You coordinate agents by @mentioning them in your response text. The system parses your messages and routes to the mentioned agents automatically.
 Available @mentions: @ace (developer), @max (QA), @sophie (UX), @kane (security), @raj (API), @elena (DBA), @kai (performance), @jude (DevOps), @liv (copywriter), @harper (lawyer), @mia (iOS), @leo (Android).
 Example: "@ace implement the new endpoint" will automatically direct Ace to work on it.
 You can mention multiple agents and they run in pipeline order. You have FULL authority over all agents.
+
+CRITICAL: Do NOT use send_channel_message to contact agents. That wastes tool calls and agents will NOT respond to channel messages. ONLY use @mentions in your response text — the system handles routing automatically.
 ` : ''}
 
 CONCISENESS RULES (MANDATORY):
@@ -133,11 +166,15 @@ KEY TOOLS:
   // Tool-use loop
   let currentMessages: typeof messages = [...messages];
   const loopStart = Date.now();
+  let totalToolCalls = 0;
+  logAgentEvent(agent.id, 'invoke', `model=${options?.modelOverride || modelForAgent(agent.id)}, context=${messages.length} msgs, prompt="${userMessage.slice(0, 200)}"`);
   for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
     if (isClaudeOverLimit()) {
+      logAgentEvent(agent.id, 'error', 'Daily token limit reached');
       return '⚠️ Daily Claude token limit reached. Try again tomorrow or adjust DAILY_LIMIT_CLAUDE_TOKENS.';
     }
     if (Date.now() - loopStart > TOOL_LOOP_TIMEOUT) {
+      logAgentEvent(agent.id, 'error', `Tool loop timeout after ${totalToolCalls} tool calls`, { durationMs: Date.now() - loopStart });
       return 'Tool loop timed out after 3 minutes. Check the repository for any partial changes.';
     }
 
@@ -201,8 +238,11 @@ KEY TOOLS:
       }> = [];
 
       const processBlock = async (block: any) => {
+        const toolStart = Date.now();
+        totalToolCalls++;
         const result = await executeTool(block.name, block.input as Record<string, string>);
         const summary = formatToolSummary(block.name, block.input as Record<string, string>);
+        logAgentEvent(agent.id, 'tool', summary, { durationMs: Date.now() - toolStart });
         if (onToolUse) await onToolUse(block.name, summary);
         const toolAudit = getToolAuditCallback();
         if (toolAudit) toolAudit(agent.name, block.name, summary);
@@ -238,9 +278,16 @@ KEY TOOLS:
     // Model finished with text — extract and return it
     recordClaudeUsage(response.usage?.input_tokens || 0, response.usage?.output_tokens || 0);
     const textBlock = response.content.find((b) => b.type === 'text');
-    return textBlock?.text || 'Done.';
+    const finalText = textBlock?.text || 'Done.';
+    logAgentEvent(agent.id, 'response', `${totalToolCalls} tools, response="${finalText.slice(0, 300)}"`, {
+      durationMs: Date.now() - loopStart,
+      tokensIn: response.usage?.input_tokens,
+      tokensOut: response.usage?.output_tokens,
+    });
+    return finalText;
   }
 
+  logAgentEvent(agent.id, 'error', `Max tool iterations (${MAX_TOOL_ROUNDS}) after ${totalToolCalls} tool calls`, { durationMs: Date.now() - loopStart });
   return 'Reached maximum tool iterations. Here is what I accomplished so far — please check the repository for changes.';
 }
 

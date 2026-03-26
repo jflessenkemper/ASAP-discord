@@ -66,6 +66,68 @@ app.get('/api/health', (_req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
+// Agent activity log — read recent agent events for debugging
+// Protected by a simple secret token to prevent public access
+app.get('/api/agent-log', async (req, res) => {
+  const secret = process.env.AGENT_LOG_SECRET || 'asap-debug';
+  if (req.query.key !== secret) {
+    res.status(401).json({ error: 'Invalid key. Use ?key=YOUR_SECRET' });
+    return;
+  }
+  try {
+    const agent = typeof req.query.agent === 'string' ? req.query.agent : null;
+    const limit = Math.min(parseInt(String(req.query.limit || '100'), 10) || 100, 500);
+    const event = typeof req.query.event === 'string' ? req.query.event : null;
+
+    let query = 'SELECT id, ts, agent_id, event, detail, duration_ms, tokens_in, tokens_out FROM agent_activity_log';
+    const params: any[] = [];
+    const conditions: string[] = [];
+
+    if (agent) {
+      params.push(agent);
+      conditions.push(`agent_id = $${params.length}`);
+    }
+    if (event) {
+      params.push(event);
+      conditions.push(`event = $${params.length}`);
+    }
+
+    if (conditions.length > 0) query += ' WHERE ' + conditions.join(' AND ');
+    query += ' ORDER BY ts DESC';
+    params.push(limit);
+    query += ` LIMIT $${params.length}`;
+
+    const { rows } = await pool.query(query, params);
+    res.json({ count: rows.length, events: rows });
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : 'Unknown' });
+  }
+});
+
+// Agent activity log — plain text view for quick terminal reading
+app.get('/api/agent-log/text', async (req, res) => {
+  const secret = process.env.AGENT_LOG_SECRET || 'asap-debug';
+  if (req.query.key !== secret) {
+    res.status(401).type('text/plain').send('Unauthorized');
+    return;
+  }
+  try {
+    const limit = Math.min(parseInt(String(req.query.limit || '50'), 10) || 50, 200);
+    const { rows } = await pool.query(
+      `SELECT ts, agent_id, event, detail, duration_ms FROM agent_activity_log ORDER BY ts DESC LIMIT $1`,
+      [limit]
+    );
+    const lines = rows.reverse().map((r: any) => {
+      const time = new Date(r.ts).toLocaleTimeString('en-AU', { hour12: false });
+      const dur = r.duration_ms ? ` (${r.duration_ms}ms)` : '';
+      return `[${time}] ${r.agent_id.padEnd(20)} ${r.event.padEnd(12)} ${r.detail || ''}${dur}`;
+    });
+    res.type('text/plain').send(lines.join('\n'));
+  } catch (err) {
+    res.status(500).type('text/plain').send(err instanceof Error ? err.message : 'Unknown error');
+  }
+});
+
 // Routes
 app.use('/api/auth', authRoutes);
 app.use('/api/jobs', jobRoutes);

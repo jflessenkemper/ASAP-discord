@@ -240,16 +240,14 @@ export async function setupChannels(guild: Guild): Promise<BotChannels> {
     }
   }
 
-  // ── Pre-create webhooks for all text channels ──
+  // ── Pre-create webhooks for all text channels (parallel) ──
   const allTextChannels = [groupchat, github, callLog, limits, screenshots, url, terminal, ...agentChannels.values()];
   console.log('🔗 Pre-creating webhooks for all channels...');
-  for (const channel of allTextChannels) {
-    try {
-      await getWebhook(channel);
-    } catch (err) {
-      console.warn(`  ⚠️ Webhook failed for #${channel.name}: ${err instanceof Error ? err.message : 'Unknown'}`);
-    }
-  }
+  const webhookResults = await Promise.allSettled(
+    allTextChannels.map((channel) => getWebhook(channel))
+  );
+  const failed = webhookResults.filter((r) => r.status === 'rejected').length;
+  if (failed > 0) console.warn(`  ⚠️ ${failed}/${allTextChannels.length} webhook(s) failed`);
   console.log('✅ Webhooks ready');
 
   return { agentChannels, groupchat, github, callLog, limits, screenshots, url, terminal, voiceChannel };
