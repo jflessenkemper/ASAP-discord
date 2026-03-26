@@ -91,8 +91,10 @@ The user has made their choice. Acknowledge it briefly, then continue executing 
       await executeAceStep(ace, riley, rileyResponse, senderName, goalsChannel);
 
     } catch (err) {
-      console.error('Goals decision handler error:', err instanceof Error ? err.message : 'Unknown');
-      await goalsChannel.send('⚠️ Something went wrong processing your decision. Please try again.');
+      const errMsg = err instanceof Error ? err.message : String(err);
+      console.error('Goals decision handler error:', errMsg);
+      const short = errMsg.length > 200 ? errMsg.slice(0, 200) + '…' : errMsg;
+      await goalsChannel.send(`⚠️ Error processing your decision:\n\`\`\`${short}\`\`\``);
     }
     return;
   }
@@ -170,8 +172,10 @@ Review this for Australian business law compliance. Focus on: privacy (APPs), co
 
     trimHistory();
   } catch (err) {
-    console.error('Goals handler error:', err instanceof Error ? err.message : 'Unknown');
-    await goalsChannel.send('⚠️ Something went wrong processing this goal. Please try again.');
+    const errMsg = err instanceof Error ? err.message : String(err);
+    console.error('Goals handler error:', errMsg);
+    const short = errMsg.length > 200 ? errMsg.slice(0, 200) + '…' : errMsg;
+    await goalsChannel.send(`⚠️ Error processing this goal:\n\`\`\`${short}\`\`\``);
   }
 }
 
