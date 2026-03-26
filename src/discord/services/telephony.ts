@@ -13,7 +13,7 @@ import { Server as HttpServer } from 'http';
 import { TextChannel } from 'discord.js';
 import { startLiveTranscription, DeepgramLiveSession, isDeepgramAvailable } from '../voice/deepgram';
 import { elevenLabsTTS } from '../voice/elevenlabs';
-import { agentRespond, ConversationMessage, summarizeCall, CLAUDE_PHONE_MODEL } from '../claude';
+import { agentRespond, ConversationMessage, summarizeCall } from '../claude';
 import { getAgent, AgentId } from '../agents';
 import { getMemoryContext, appendToMemory } from '../memory';
 
@@ -347,7 +347,7 @@ Do NOT use markdown formatting — this is spoken audio.${langHint}`;
       [...rileyMemory, ...session.conversationHistory],
       context,
       undefined,
-      { modelOverride: CLAUDE_PHONE_MODEL, maxTokens: 1024 }
+      { maxTokens: 1024 }
     );
 
     session.conversationHistory.push(

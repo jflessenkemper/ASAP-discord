@@ -4,8 +4,13 @@ import { REPO_TOOLS, executeTool, getToolAuditCallback } from './tools';
 import { recordClaudeUsage, isClaudeOverLimit } from './usage';
 
 const VERTEX_REGION = process.env.CLAUDE_VERTEX_REGION || 'asia-southeast1';
-const CLAUDE_MODEL = 'claude-opus-4-20250514';
-export const CLAUDE_PHONE_MODEL = 'claude-sonnet-4-20250514';
+const CLAUDE_OPUS = 'claude-opus-4-20250514';
+const CLAUDE_SONNET = 'claude-sonnet-4-20250514';
+
+/** Riley uses Sonnet (fast, conversational). All other agents use Opus (powerful, tool-heavy). */
+function modelForAgent(agentId: string): string {
+  return agentId === 'executive-assistant' ? CLAUDE_SONNET : CLAUDE_OPUS;
+}
 
 let client: AnthropicVertex | null = null;
 
@@ -120,7 +125,7 @@ You have access to tools that let you read, write, search, and edit files in the
     const response = await withConcurrencyLimit(() =>
       withRetry(() =>
         anthropic.messages.create({
-          model: options?.modelOverride || CLAUDE_MODEL,
+          model: options?.modelOverride || modelForAgent(agent.id),
           max_tokens: options?.maxTokens || 16384,
           system: systemPrompt,
           tools: REPO_TOOLS as any,
@@ -274,7 +279,7 @@ export async function summarizeCall(
   const anthropic = getClient();
 
   const response = await anthropic.messages.create({
-    model: CLAUDE_MODEL,
+    model: CLAUDE_SONNET,
     max_tokens: 1024,
     system: 'You are a concise meeting summarizer. Produce a clear summary with key points, decisions, and action items. Format for Discord markdown. Keep under 1900 characters.',
     messages: [
@@ -345,7 +350,7 @@ Keep the summary under 1500 words. Use bullet points. Drop small talk and redund
   const response = await withConcurrencyLimit(() =>
     withRetry(() =>
       anthropic.messages.create({
-        model: CLAUDE_MODEL,
+        model: CLAUDE_SONNET,
         max_tokens: 2048,
         system: 'You are a conversation compressor. Produce structured, information-dense summaries that preserve all actionable context while discarding noise. Output only the summary — no meta-commentary.',
         messages: [{ role: 'user', content: prompt }],
