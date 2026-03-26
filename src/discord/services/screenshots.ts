@@ -4,6 +4,18 @@ import { TextChannel, AttachmentBuilder, Collection, Message } from 'discord.js'
 /** iPhone 17 Pro Max approximate viewport (6.9" display, 3x retina → logical pixels) */
 const VIEWPORT = { width: 440, height: 956, deviceScaleFactor: 3 };
 const NAV_TIMEOUT = 15_000;
+/** Overall timeout for the entire capture operation (90 seconds) */
+const CAPTURE_TIMEOUT = 90_000;
+
+/** Allowed URL patterns for screenshot targets */
+const ALLOWED_URL_PATTERNS = [
+  /^https:\/\/asap-489910[\w.-]*\.run\.app/,
+  /^https?:\/\/localhost(:\d+)?/,
+  /^https?:\/\/127\.0\.0\.1(:\d+)?/,
+];
+
+/** Concurrency guard — only one capture at a time */
+let captureInProgress = false;
 
 /** All screens/states to capture */
 const SCREENS: Array<{ name: string; action?: (page: Page) => Promise<void>; waitFor?: string }> = [
@@ -32,17 +44,6 @@ const SCREENS: Array<{ name: string; action?: (page: Page) => Promise<void>; wai
       }
     },
   },
-  {
-    name: '04-darkmorphism-showcase',
-    // Need to go back to hero first, then do the secret combo
-    action: async (page) => {
-      // Reload to get back to hero
-      await page.goto(page.url(), { waitUntil: 'networkidle2', timeout: NAV_TIMEOUT });
-      await new Promise((r) => setTimeout(r, 2000));
-      // The top panel is triggered by a click sequence — hard to automate the exact combo
-      // Just screenshot whatever is visible
-    },
-  },
 ];
 
 let screenshotsChannel: TextChannel | null = null;
@@ -56,24 +57,24 @@ export function setScreenshotsChannel(channel: TextChannel): void {
  */
 async function clearChannel(channel: TextChannel): Promise<void> {
   try {
-    let fetched: Collection<string, Message>;
-    let iterations = 0;
-    do {
-      fetched = await channel.messages.fetch({ limit: 100 });
-      if (fetched.size > 0) {
-        const before = fetched.size;
-        await channel.bulkDelete(fetched, true).catch(async () => {
-          // bulkDelete fails for messages > 14 days old — delete individually
-          for (const msg of fetched.values()) {
-            await msg.delete().catch(() => {});
-          }
-        });
-        // Safety: break if we couldn't reduce the message count
-        const after = (await channel.messages.fetch({ limit: 1 })).size;
-        if (after >= before) break;
+    for (let iterations = 0; iterations < 20; iterations++) {
+      const fetched = await channel.messages.fetch({ limit: 100 });
+      if (fetched.size === 0) break;
+
+      // Try bulk delete first (only works for messages < 14 days old)
+      try {
+        await channel.bulkDelete(fetched, true);
+      } catch {
+        // bulkDelete failed — delete individually (sequentially for rate limits)
+        for (const msg of fetched.values()) {
+          await msg.delete().catch(() => {});
+        }
       }
-      iterations++;
-    } while (fetched.size >= 2 && iterations < 20);
+
+      // Verify progress — if nothing was deleted, stop
+      const remaining = await channel.messages.fetch({ limit: 100 });
+      if (remaining.size >= fetched.size) break;
+    }
   } catch (err) {
     console.warn('Could not clear screenshots channel:', err instanceof Error ? err.message : 'Unknown');
   }
@@ -82,7 +83,22 @@ async function clearChannel(channel: TextChannel): Promise<void> {
 /**
  * Capture screenshots of every screen in the app and post them to Discord.
  * Runs headless Chromium sized to iPhone 17 Pro Max.
+ * URL must match the allowlist. Only one capture runs at a time.
  */
+
+/** Validate that a URL is allowed for screenshotting */
+function isAllowedUrl(url: string): boolean {
+  return ALLOWED_URL_PATTERNS.some((pattern) => pattern.test(url));
+}
+
+/** Sanitize label to prevent Discord mention injection */
+function sanitizeLabel(label: string): string {
+  return label
+    .replace(/@(everyone|here)/gi, '[at-$1]')
+    .replace(/<@[!&]?\d+>/g, '[mention]')
+    .slice(0, 100);
+}
+
 export async function captureAndPostScreenshots(
   appUrl: string,
   buildLabel?: string
@@ -92,10 +108,27 @@ export async function captureAndPostScreenshots(
     return;
   }
 
+  if (!isAllowedUrl(appUrl)) {
+    await screenshotsChannel.send(`❌ Screenshot refused — URL not in allowlist: ${appUrl.slice(0, 100)}`);
+    return;
+  }
+
+  if (captureInProgress) {
+    await screenshotsChannel.send('⏳ Screenshot capture already in progress — skipping.');
+    return;
+  }
+
+  captureInProgress = true;
   let browser: Browser | null = null;
 
+  // Overall timeout to prevent hanging forever
+  const timeout = setTimeout(() => {
+    if (browser) browser.close().catch(() => {});
+    browser = null;
+  }, CAPTURE_TIMEOUT);
+
   try {
-    const label = buildLabel || new Date().toISOString().slice(0, 19).replace('T', ' ');
+    const label = sanitizeLabel(buildLabel || new Date().toISOString().slice(0, 19).replace('T', ' '));
 
     // Clear old screenshots before posting new ones
     await clearChannel(screenshotsChannel);
@@ -104,13 +137,12 @@ export async function captureAndPostScreenshots(
 
     browser = await puppeteer.launch({
       headless: true,
+      executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
       args: [
         '--no-sandbox',
         '--disable-setuid-sandbox',
         '--disable-dev-shm-usage',
         '--disable-gpu',
-        '--disable-web-security',
-        '--single-process',
       ],
     });
 
@@ -165,6 +197,8 @@ export async function captureAndPostScreenshots(
     console.error('Screenshot capture error:', err instanceof Error ? err.message : 'Unknown');
     await screenshotsChannel?.send(`❌ Screenshot capture failed: ${err instanceof Error ? err.message : 'Unknown'}`);
   } finally {
+    clearTimeout(timeout);
+    captureInProgress = false;
     if (browser) {
       await browser.close().catch(() => {});
     }

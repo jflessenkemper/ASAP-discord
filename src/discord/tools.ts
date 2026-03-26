@@ -634,7 +634,8 @@ export async function executeTool(
         return batchEdit(input.edits as any);
       case 'capture_screenshots': {
         const url = input.url || process.env.FRONTEND_URL || 'https://asap-489910.australia-southeast1.run.app';
-        await captureAndPostScreenshots(url, input.label || 'tool-invoked');
+        const label = (input.label || 'tool-invoked').slice(0, 100);
+        await captureAndPostScreenshots(url, label);
         return `Screenshots captured and posted to #screenshots channel. URL: ${url}`;
       }
       default:
