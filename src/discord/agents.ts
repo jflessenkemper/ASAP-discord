@@ -10,6 +10,8 @@ export interface AgentConfig {
   color: number;
   /** Gemini TTS voice name */
   voice: string;
+  /** Avatar URL for webhook identity */
+  avatarUrl: string;
   /** System prompt loaded from .agent.md file */
   systemPrompt: string;
 }
@@ -60,6 +62,27 @@ const COLOR_MAP: Record<string, number> = {
   lawyer:               0x607D8B, // Blue Grey (Harper)
   'ios-engineer':       0xA3AAAE, // Silver (Mia)
   'android-engineer':   0x2ECC71, // Emerald (Leo)
+};
+
+/**
+ * Agent avatar URLs — AI-generated profile pictures hosted on Discord CDN.
+ * Using placeholder emoji-based avatars via UI Avatars API.
+ * Replace with custom images later by uploading to Discord/CDN.
+ */
+const AVATAR_MAP: Record<string, string> = {
+  qa:                   'https://ui-avatars.com/api/?name=Max&background=ED4245&color=fff&size=256&bold=true',
+  'ux-reviewer':        'https://ui-avatars.com/api/?name=Sophie&background=EB459E&color=fff&size=256&bold=true',
+  'security-auditor':   'https://ui-avatars.com/api/?name=Kane&background=FEE75C&color=000&size=256&bold=true',
+  'api-reviewer':       'https://ui-avatars.com/api/?name=Raj&background=3498DB&color=fff&size=256&bold=true',
+  dba:                  'https://ui-avatars.com/api/?name=Elena&background=E67E22&color=fff&size=256&bold=true',
+  performance:          'https://ui-avatars.com/api/?name=Kai&background=1ABC9C&color=fff&size=256&bold=true',
+  devops:               'https://ui-avatars.com/api/?name=Jude&background=9B59B6&color=fff&size=256&bold=true',
+  copywriter:           'https://ui-avatars.com/api/?name=Liv&background=E91E63&color=fff&size=256&bold=true',
+  developer:            'https://ui-avatars.com/api/?name=Ace&background=57F287&color=000&size=256&bold=true',
+  lawyer:               'https://ui-avatars.com/api/?name=Harper&background=607D8B&color=fff&size=256&bold=true',
+  'executive-assistant': 'https://ui-avatars.com/api/?name=Riley&background=5865F2&color=fff&size=256&bold=true',
+  'ios-engineer':       'https://ui-avatars.com/api/?name=Mia&background=A3AAAE&color=000&size=256&bold=true',
+  'android-engineer':   'https://ui-avatars.com/api/?name=Leo&background=2ECC71&color=000&size=256&bold=true',
 };
 
 const DISPLAY_NAME: Record<string, string> = {
@@ -137,6 +160,7 @@ export function getAgents(): Map<AgentId, AgentConfig> {
       emoji,
       color: COLOR_MAP[id] || 0x99AAB5,
       voice: VOICE_MAP[id] || 'Kore',
+      avatarUrl: AVATAR_MAP[id] || `https://ui-avatars.com/api/?name=${encodeURIComponent(id)}&background=99AAB5&color=fff&size=256`,
       systemPrompt,
     });
   }

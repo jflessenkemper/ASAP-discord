@@ -8,6 +8,21 @@ import { startCall, endCall, isCallActive } from './callSession';
 import { makeOutboundCall, startConferenceCall, isTelephonyAvailable } from '../services/telephony';
 import { getBotChannels } from '../bot';
 import { getUsageReport } from '../usage';
+import { getWebhook } from '../services/webhooks';
+
+/** Send a tool-use notification as the agent (via webhook). */
+async function sendToolNotification(channel: TextChannel, agent: AgentConfig, summary: string): Promise<void> {
+  try {
+    const webhook = await getWebhook(channel);
+    await webhook.send({
+      content: `🔧 ${summary}`,
+      username: `${agent.emoji} ${agent.name}`,
+      avatarURL: agent.avatarUrl,
+    });
+  } catch {
+    await channel.send(`🔧 ${agent.emoji} → ${summary}`);
+  }
+}
 import { triggerCloudBuild, listRevisions, getCurrentRevision, rollbackToRevision } from '../../services/cloudrun';
 import { captureAndPostScreenshots } from '../services/screenshots';
 
@@ -148,7 +163,7 @@ async function handleRileyMessage(
     const contextMessage = `[${senderName}]: ${userMessage}`;
 
     const response = await agentRespond(riley, [...rileyMemory, ...groupHistory], contextMessage, async (_toolName, summary) => {
-      await groupchat.send(`🔧 ${riley.emoji} → ${summary}`);
+      await sendToolNotification(groupchat, riley, summary);
     });
 
     // Strip action tags before displaying to user
@@ -401,7 +416,7 @@ async function handleAgentChain(
         const aceContext = `[Riley directed you]: ${rileyResponse}\n\nImplement what Riley asked. Use repo tools. If you need a sub-agent's help, @mention them (e.g., @kane for security review, @elena for DB schema). Report back concisely when done.`;
 
         const aceResponse = await agentRespond(ace, [...aceMemory, ...groupHistory], aceContext, async (_toolName, summary) => {
-          await groupchat.send(`🔧 ${ace.emoji} → ${summary}`);
+          await sendToolNotification(groupchat, ace, summary);
         });
 
         await sendAgentMessage(groupchat, ace, aceResponse);
@@ -506,7 +521,7 @@ async function handleDirectedMessage(
 
       const agentMemory = getMemoryContext(agentId);
       const response = await agentRespond(agent, [...agentMemory, ...groupHistory], contextMessage, async (_toolName, summary) => {
-        await groupchat.send(`🔧 ${agent.emoji} → ${summary}`);
+        await sendToolNotification(groupchat, agent, summary);
       });
 
       await sendAgentMessage(groupchat, agent, response);

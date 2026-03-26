@@ -2,6 +2,7 @@ import { Message, TextChannel, EmbedBuilder } from 'discord.js';
 import { AgentConfig } from '../agents';
 import { agentRespond, ConversationMessage } from '../claude';
 import { appendToMemory, getMemoryContext } from '../memory';
+import { getWebhook } from '../services/webhooks';
 
 // Per-channel conversation history (in-memory, keyed by channelId)
 const conversationHistories = new Map<string, ConversationMessage[]>();
@@ -84,31 +85,43 @@ export function clearHistory(channelId: string): void {
 }
 
 /**
- * Send an agent response as a colored embed with the agent's name and emoji.
+ * Send an agent response via webhook so each agent appears with their own
+ * name and avatar — like separate users in Discord.
+ * Falls back to colored embeds if webhook creation fails.
  */
 export async function sendAgentMessage(
   channel: TextChannel,
   agent: AgentConfig,
   response: string
 ): Promise<void> {
-  // Discord embed description limit is 4096 chars
-  const chunks = splitMessage(response, 4000);
-  const embeds: EmbedBuilder[] = [];
+  const chunks = splitMessage(response, 1900);
 
-  for (let i = 0; i < chunks.length; i++) {
-    const embed = new EmbedBuilder()
-      .setColor(agent.color)
-      .setDescription(chunks[i]);
-
-    if (i === 0) {
-      embed.setAuthor({ name: `${agent.emoji} ${agent.name}` });
+  try {
+    const webhook = await getWebhook(channel);
+    for (const chunk of chunks) {
+      await webhook.send({
+        content: chunk,
+        username: `${agent.emoji} ${agent.name}`,
+        avatarURL: agent.avatarUrl,
+      });
     }
-    embeds.push(embed);
-  }
-
-  // Discord allows up to 10 embeds per message — batch them
-  for (let i = 0; i < embeds.length; i += 10) {
-    await channel.send({ embeds: embeds.slice(i, i + 10) });
+  } catch (err) {
+    // Fallback to embeds if webhook fails (permissions, etc.)
+    console.warn(`Webhook send failed for ${agent.name}, falling back to embeds:`, err instanceof Error ? err.message : 'Unknown');
+    const embedChunks = splitMessage(response, 4000);
+    const embeds: EmbedBuilder[] = [];
+    for (let i = 0; i < embedChunks.length; i++) {
+      const embed = new EmbedBuilder()
+        .setColor(agent.color)
+        .setDescription(embedChunks[i]);
+      if (i === 0) {
+        embed.setAuthor({ name: `${agent.emoji} ${agent.name}` });
+      }
+      embeds.push(embed);
+    }
+    for (let i = 0; i < embeds.length; i += 10) {
+      await channel.send({ embeds: embeds.slice(i, i + 10) });
+    }
   }
 }
 
