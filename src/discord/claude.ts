@@ -227,6 +227,8 @@ function formatToolSummary(toolName: string, input: Record<string, string>): str
       return `Deleting category ${input.category_name}`;
     case 'move_channel':
       return `Moving #${input.channel_name} to ${input.category}`;
+    case 'read_logs':
+      return `Reading Cloud Run logs${input.severity ? ` (${input.severity}+)` : ''}`;
     default:
       return `Using ${toolName}`;
   }

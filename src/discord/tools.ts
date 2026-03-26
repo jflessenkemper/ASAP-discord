@@ -468,6 +468,30 @@ export const REPO_TOOLS = [
       required: ['channel_name', 'category'],
     },
   },
+  // ── Observability tools ──
+  {
+    name: 'read_logs',
+    description:
+      'Read recent Cloud Run runtime logs (stdout/stderr). Use this to diagnose production errors, crashes, or unexpected behaviour after deployments. Returns the most recent log entries.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        severity: {
+          type: 'string',
+          description: 'Minimum log severity: DEFAULT, INFO, WARNING, ERROR. Default: WARNING',
+        },
+        limit: {
+          type: 'number',
+          description: 'Max number of log entries to return (default: 30, max: 100)',
+        },
+        query: {
+          type: 'string',
+          description: 'Optional text filter — only return logs containing this string',
+        },
+      },
+      required: [],
+    },
+  },
 ] as const;
 
 // ────────────────────────────────────────────
@@ -521,6 +545,8 @@ export async function executeTool(
         return await discordDeleteCategory(input.category_name);
       case 'move_channel':
         return await discordMoveChannel(input.channel_name, input.category);
+      case 'read_logs':
+        return await readRuntimeLogs(input.severity, parseInt(input.limit, 10) || 30, input.query);
       default:
         return `Unknown tool: ${toolName}`;
     }
@@ -995,4 +1021,54 @@ async function discordMoveChannel(channelName: string, categoryName: string): Pr
 
   await channel.setParent(category, { lockPermissions: false });
   return `Moved #${channelName} to ${categoryName}`;
+}
+
+// ────────────────────────────────────────────
+// Cloud Run runtime logs
+// ────────────────────────────────────────────
+
+async function readRuntimeLogs(severity?: string, limit = 30, query?: string): Promise<string> {
+  const { GoogleAuth } = await import('google-auth-library');
+  const projectId = process.env.GCS_PROJECT_ID || 'asap-489910';
+  const serviceName = process.env.CLOUD_RUN_SERVICE || 'asap';
+  const region = process.env.CLOUD_RUN_REGION || 'australia-southeast1';
+
+  const auth = new GoogleAuth({ scopes: 'https://www.googleapis.com/auth/logging.read' });
+  const client = await auth.getClient();
+
+  const safeSeverity = ['DEFAULT', 'INFO', 'WARNING', 'ERROR'].includes((severity || '').toUpperCase())
+    ? (severity || 'WARNING').toUpperCase()
+    : 'WARNING';
+  const safeLimit = Math.min(Math.max(limit, 1), 100);
+
+  let filter = `resource.type="cloud_run_revision" AND resource.labels.service_name="${serviceName}" AND resource.labels.location="${region}" AND severity>="${safeSeverity}"`;
+  if (query) {
+    // Sanitize query to prevent filter injection
+    const safeQuery = query.replace(/["\\\n]/g, '');
+    filter += ` AND textPayload=~"${safeQuery}"`;
+  }
+
+  const res = await client.request({
+    url: `https://logging.googleapis.com/v2/entries:list`,
+    method: 'POST',
+    data: {
+      resourceNames: [`projects/${projectId}`],
+      filter,
+      orderBy: 'timestamp desc',
+      pageSize: safeLimit,
+    },
+    headers: { 'Content-Type': 'application/json' },
+  });
+
+  const entries = (res.data as any).entries || [];
+  if (entries.length === 0) return `No log entries found (severity >= ${safeSeverity}).`;
+
+  const lines = entries.map((e: any) => {
+    const ts = e.timestamp ? new Date(e.timestamp).toLocaleString('en-AU', { timeZone: 'Australia/Sydney' }) : '?';
+    const sev = (e.severity || 'DEFAULT').padEnd(7);
+    const text = e.textPayload || e.jsonPayload?.message || JSON.stringify(e.jsonPayload || {}).slice(0, 200);
+    return `[${ts}] ${sev} ${text}`;
+  });
+
+  return lines.join('\n');
 }

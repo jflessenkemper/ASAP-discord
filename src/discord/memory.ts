@@ -9,7 +9,7 @@ import { ConversationMessage } from './claude';
  */
 
 const MEMORY_DIR = process.env.MEMORY_DIR || path.join(process.cwd(), 'data', 'memory');
-const MAX_MESSAGES = 100;
+const MAX_MESSAGES = 1000;
 
 /** In-memory cache to avoid reading from disk on every message */
 const memoryCache = new Map<string, ConversationMessage[]>();
@@ -112,7 +112,7 @@ export function clearMemory(agentId: string): void {
  * Get a condensed summary of an agent's recent memory for context injection.
  * Returns the last N messages formatted as context.
  */
-export function getMemoryContext(agentId: string, maxMessages = 20): ConversationMessage[] {
+export function getMemoryContext(agentId: string, maxMessages = 50): ConversationMessage[] {
   const history = loadMemory(agentId);
   if (history.length <= maxMessages * 2) return history;
   return history.slice(history.length - maxMessages * 2);

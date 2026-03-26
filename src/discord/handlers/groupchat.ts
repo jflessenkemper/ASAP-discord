@@ -1,7 +1,7 @@
 import { Message, TextChannel, GuildMember, EmbedBuilder } from 'discord.js';
 import { getAgents, getAgent, AgentConfig, AgentId } from '../agents';
 import { agentRespond, ConversationMessage } from '../claude';
-import { appendToMemory, getMemoryContext } from '../memory';
+import { appendToMemory, getMemoryContext, loadMemory, saveMemory, clearMemory } from '../memory';
 import { documentToChannel } from './documentation';
 import { sendAgentMessage, sendLongMessage, clearHistory } from './textChannel';
 import { startCall, endCall, isCallActive } from './callSession';
@@ -10,9 +10,27 @@ import { getUsageReport } from '../usage';
 import { triggerCloudBuild, listRevisions, getCurrentRevision, rollbackToRevision } from '../../services/cloudrun';
 import { captureAndPostScreenshots } from '../services/screenshots';
 
-// Shared groupchat conversation history
-const groupHistory: ConversationMessage[] = [];
-const MAX_HISTORY = 40;
+// Shared groupchat conversation history — persisted to disk via memory system
+let groupHistory: ConversationMessage[] = loadMemory('groupchat');
+
+/**
+ * Pipeline order for agent consultation.
+ * Earlier agents inform later ones — e.g. designer before QA, security before deploy.
+ */
+const AGENT_PIPELINE_ORDER: string[] = [
+  'ux-reviewer',       // Sophie — design/UX decisions first
+  'dba',               // Elena — schema/data design
+  'api-reviewer',      // Raj — API design
+  'developer',         // Ace — implementation
+  'security-auditor',  // Kane — security review
+  'lawyer',            // Harper — compliance
+  'qa',                // Max — testing
+  'performance',       // Kai — performance check
+  'copywriter',        // Liv — user-facing text
+  'devops',            // Jude — deployment/infra
+  'ios-engineer',      // Mia
+  'android-engineer',  // Leo
+];
 
 // Serial message queue to prevent race conditions on groupHistory
 let messageQueue: Promise<void> = Promise.resolve();
@@ -145,6 +163,7 @@ async function handleRileyMessage(
 
     groupHistory.push({ role: 'user', content: contextMessage });
     groupHistory.push({ role: 'assistant', content: `[Riley]: ${response}` });
+    persistGroupHistory();
 
     // Execute any actions Riley triggered
     await executeActions(response, member, groupchat);
@@ -156,8 +175,6 @@ async function handleRileyMessage(
 
     // Check if Riley directed Ace or other agents
     await handleAgentChain(response, groupchat);
-
-    trimHistory();
   } catch (err) {
     console.error('Riley error:', err instanceof Error ? err.message : 'Unknown');
     await groupchat.send('⚠️ Riley encountered an error. Try again.');
@@ -228,6 +245,19 @@ async function executeActions(
           await groupchat.send('📸 Capturing screenshots...');
           break;
         }
+        case 'URLS': {
+          const appUrl = process.env.FRONTEND_URL || 'https://asap-489910.australia-southeast1.run.app';
+          const projectId = process.env.GCS_PROJECT_ID || 'asap-489910';
+          const region = process.env.CLOUD_RUN_REGION || 'australia-southeast1';
+          await groupchat.send(
+            `🔗 **ASAP Links**\n\n` +
+            `🌐 **App**: ${appUrl}\n` +
+            `📦 **Cloud Build**: https://console.cloud.google.com/cloud-build/builds?project=${projectId}\n` +
+            `☁️ **Cloud Run**: https://console.cloud.google.com/run/detail/${region}/asap?project=${projectId}\n` +
+            `📊 **Logs**: https://console.cloud.google.com/logs/query?project=${projectId}`
+          );
+          break;
+        }
         case 'STATUS': {
           const summary = getStatusSummary();
           await groupchat.send(summary || '📋 No active tasks.');
@@ -241,6 +271,7 @@ async function executeActions(
         case 'CLEAR': {
           clearHistory(groupchat.id);
           groupHistory.splice(0);
+          clearMemory('groupchat');
           await groupchat.send('🧹 Conversation context cleared.');
           break;
         }
@@ -362,7 +393,8 @@ async function handleAgentChain(
 }
 
 /**
- * Sub-agents work in parallel, then report back to groupchat in order.
+ * Sub-agents run sequentially in pipeline order so earlier agents' output
+ * informs later agents (e.g. designer before QA, security before deploy).
  */
 async function handleSubAgents(
   agentIds: string[],
@@ -376,23 +408,28 @@ async function handleSubAgents(
 
   if (validAgents.length === 0) return;
 
-  // Fire all sub-agent requests in parallel
-  const results = await Promise.allSettled(
-    validAgents.map(async ({ id, agent }) => {
+  // Sort agents by pipeline order — earlier phases first
+  validAgents.sort((a, b) => {
+    const aIdx = AGENT_PIPELINE_ORDER.indexOf(a.id);
+    const bIdx = AGENT_PIPELINE_ORDER.indexOf(b.id);
+    return (aIdx === -1 ? 999 : aIdx) - (bIdx === -1 ? 999 : bIdx);
+  });
+
+  // Accumulate earlier agents' findings so later agents can build on them
+  const priorFindings: string[] = [];
+
+  for (const { id, agent } of validAgents) {
+    try {
+      await groupchat.sendTyping();
       await documentToChannel(id, `📥 Received task from groupchat. Working...`);
       const agentMemory = getMemoryContext(id);
-      const agentContext = `[Directive from groupchat]: ${directiveContext}\n\nDo your job. Be concise in your response — max 200 words. Report what you found or did.`;
+      const priorContext = priorFindings.length > 0
+        ? `\n\n**Prior agent findings (use these to inform your work):**\n${priorFindings.join('\n')}` : '';
+      const agentContext = `[Directive from groupchat]: ${directiveContext}${priorContext}\n\nDo your job. Be concise in your response — max 200 words. Report what you found or did.`;
       const agentResponse = await agentRespond(agent, [...agentMemory, ...groupHistory], agentContext, async (_toolName, summary) => {
         await documentToChannel(id, `🔧 ${summary}`);
       });
-      return { id, agent, agentResponse };
-    })
-  );
 
-  // Post results sequentially to keep groupchat orderly
-  for (const result of results) {
-    if (result.status === 'fulfilled') {
-      const { id, agent, agentResponse } = result.value;
       await sendAgentMessage(groupchat, agent, agentResponse);
       appendToMemory(id, [
         { role: 'user', content: `[Groupchat directive]: ${directiveContext.slice(0, 500)}` },
@@ -400,12 +437,13 @@ async function handleSubAgents(
       ]);
       await documentToChannel(id, `✅ ${agentResponse.slice(0, 300)}`);
       groupHistory.push({ role: 'assistant', content: `[${agent.name.split(' ')[0]}]: ${agentResponse}` });
-    } else {
-      const { id, agent } = validAgents[results.indexOf(result)];
-      console.error(`${agent.name} error:`, result.reason instanceof Error ? result.reason.message : 'Unknown');
+      priorFindings.push(`[${agent.name.split(' ')[0]}]: ${agentResponse.slice(0, 500)}`);
+    } catch (err) {
+      console.error(`${agent.name} error:`, err instanceof Error ? err.message : 'Unknown');
       await groupchat.send(`⚠️ ${agent.emoji} ${agent.name.split(' ')[0]} had an error.`);
     }
   }
+  persistGroupHistory();
 }
 
 /**
@@ -444,7 +482,7 @@ async function handleDirectedMessage(
   }
 
   groupHistory.push({ role: 'user', content: contextMessage });
-  trimHistory();
+  persistGroupHistory();
 }
 
 /**
@@ -534,8 +572,7 @@ async function postDecisionEmbed(
   }
 }
 
-function trimHistory(): void {
-  if (groupHistory.length > MAX_HISTORY * 2) {
-    groupHistory.splice(0, groupHistory.length - MAX_HISTORY * 2);
-  }
+/** Persist groupHistory to disk. Called after every interaction. */
+function persistGroupHistory(): void {
+  saveMemory('groupchat', groupHistory);
 }
