@@ -1,6 +1,6 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { AgentConfig } from './agents';
-import { REPO_TOOLS, executeTool, getToolAuditCallback } from './tools';
+import { REPO_TOOLS, REVIEW_TOOLS, executeTool, getToolAuditCallback } from './tools';
 import { recordClaudeUsage, isClaudeOverLimit } from './usage';
 import { logAgentEvent } from './activityLog';
 
@@ -14,6 +14,16 @@ const CLAUDE_SONNET = 'claude-sonnet-4-20250514';
 const OPUS_AGENTS = new Set(['developer']); // Only Ace needs Opus for deep code work
 function modelForAgent(agentId: string): string {
   return OPUS_AGENTS.has(agentId) ? CLAUDE_OPUS : CLAUDE_SONNET;
+}
+
+/**
+ * Agents that need full tool access (write files, deploy, manage Discord, etc.).
+ * All other agents get the lightweight REVIEW_TOOLS subset (~10 tools vs 40),
+ * saving ~4,000–6,000 input tokens per request.
+ */
+const FULL_TOOL_AGENTS = new Set(['developer', 'devops', 'executive-assistant']);
+function toolsForAgent(agentId: string) {
+  return FULL_TOOL_AGENTS.has(agentId) ? REPO_TOOLS : REVIEW_TOOLS;
 }
 
 let client: Anthropic | null = null;
@@ -36,8 +46,8 @@ export interface ConversationMessage {
 const MAX_TOOL_ROUNDS = 25;
 /** Max total time for a tool loop (ms) */
 const TOOL_LOOP_TIMEOUT = 180_000;
-/** Max concurrent Claude requests — supports parallel agent tiers */
-const MAX_CONCURRENT = 8;
+/** Max concurrent Claude requests — kept low to stay within 30k input tokens/min rate limit */
+const MAX_CONCURRENT = 3;
 let activeClaude = 0;
 const claudeQueue: Array<() => void> = [];
 
@@ -68,11 +78,14 @@ async function withConcurrencyLimit<T>(fn: () => Promise<T>): Promise<T> {
     return await fn();
   } finally {
     activeClaude--;
-    claudeQueue.shift()?.();
+    // Stagger releases: 3-second delay before the next queued request starts.
+    // This prevents token-burst spikes that trigger 429s on the 30k/min limit.
+    const next = claudeQueue.shift();
+    if (next) setTimeout(next, 3000);
   }
 }
 
-async function withRetry<T>(fn: () => Promise<T>, retries = 2, delayMs = 1000): Promise<T> {
+async function withRetry<T>(fn: () => Promise<T>, retries = 3, delayMs = 2000): Promise<T> {
   for (let i = 0; i <= retries; i++) {
     try {
       return await fn();
@@ -178,13 +191,15 @@ KEY TOOLS:
       return 'Tool loop timed out after 3 minutes. Check the repository for any partial changes.';
     }
 
+    const agentTools = toolsForAgent(agent.id);
+
     const response = await withConcurrencyLimit(() =>
       withRetry(() =>
         anthropic.messages.create({
           model: options?.modelOverride || modelForAgent(agent.id),
           max_tokens: options?.maxTokens || 16384,
           system: systemPrompt,
-          tools: REPO_TOOLS as any,
+          tools: agentTools as any,
           messages: currentMessages,
         })
       )

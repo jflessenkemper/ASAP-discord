@@ -817,6 +817,18 @@ export const REPO_TOOLS = [
   },
 ] as const;
 
+/**
+ * Lightweight tool subset for review/advisory agents (QA, security, UX, etc.).
+ * These agents only need read-only access — cutting tool count from 40 to ~10
+ * saves ~4,000–6,000 input tokens per request (critical for rate-limit compliance).
+ */
+const REVIEW_TOOL_NAMES = new Set([
+  'read_file', 'search_files', 'list_directory', 'fetch_url',
+  'db_query', 'db_schema', 'memory_read', 'memory_list',
+  'run_tests', 'typecheck',
+]);
+export const REVIEW_TOOLS = REPO_TOOLS.filter((t) => REVIEW_TOOL_NAMES.has(t.name));
+
 // ────────────────────────────────────────────
 // Tool execution
 // ────────────────────────────────────────────
