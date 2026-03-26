@@ -46,6 +46,15 @@ export function isTelephonyAvailable(): boolean {
   return !!(TWILIO_ACCOUNT_SID && TWILIO_AUTH_TOKEN && TWILIO_PHONE_NUMBER);
 }
 
+// ── Known contacts ──
+const KNOWN_CONTACTS: Record<string, string> = {
+  '+61436012231': 'Jordan',
+};
+
+function identifyCaller(number: string): string | null {
+  return KNOWN_CONTACTS[number] || null;
+}
+
 // ── Active phone call sessions ──
 interface PhoneSession {
   callSid: string;
@@ -53,6 +62,7 @@ interface PhoneSession {
   ws: WebSocket | null;
   direction: 'inbound' | 'outbound';
   callerNumber: string;
+  callerName: string | null;
   startTime: Date;
   transcript: string[];
   conversationHistory: ConversationMessage[];
@@ -60,22 +70,41 @@ interface PhoneSession {
   audioBuffer: Buffer[];
   processing: boolean;
   active: boolean;
+  conferenceName: string | null;
 }
 
 const activeSessions = new Map<string, PhoneSession>();
 
 // ── TwiML for inbound calls ──
 /**
- * Returns TwiML XML that greets the caller and connects to WebSocket media stream.
+ * Returns TwiML XML that connects the caller straight to the WebSocket media stream.
+ * No hold message — Riley greets via ElevenLabs TTS once the stream connects.
  */
-export function getInboundTwiML(): string {
+export function getInboundTwiML(callerNumber?: string): string {
   const wsUrl = SERVER_URL.replace(/^https?/, 'wss') + '/api/webhooks/twilio/stream';
+  // Pass caller number as a custom parameter so the WS handler can identify them
+  const paramTag = callerNumber
+    ? `\n      <Parameter name="callerNumber" value="${callerNumber}" />`
+    : '';
   return `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Say voice="Polly.Olivia-Neural">Please hold while I connect you to Riley, your executive assistant.</Say>
   <Connect>
-    <Stream url="${wsUrl}" />
+    <Stream url="${wsUrl}">${paramTag}
+    </Stream>
   </Connect>
+</Response>`;
+}
+
+/**
+ * Returns TwiML to put a caller into a Twilio Conference room.
+ */
+export function getConferenceTwiML(conferenceName: string): string {
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Dial>
+    <Conference startConferenceOnEnter="true" endConferenceOnExit="false"
+      beep="false">${conferenceName}</Conference>
+  </Dial>
 </Response>`;
 }
 
@@ -118,12 +147,17 @@ export function attachTelephonyWebSocket(server: HttpServer): void {
               await startSessionSTT(session);
             } else {
               // Inbound call — create session
+              // Extract caller number from custom parameters
+              const callerNumber = msg.start.customParameters?.callerNumber || 'unknown';
+              const callerName = identifyCaller(callerNumber);
+              const confName = msg.start.customParameters?.conferenceName || null;
               const newSession: PhoneSession = {
                 callSid,
                 streamSid,
                 ws,
                 direction: 'inbound',
-                callerNumber: 'unknown',
+                callerNumber,
+                callerName,
                 startTime: new Date(),
                 transcript: [],
                 conversationHistory: [],
@@ -131,15 +165,20 @@ export function attachTelephonyWebSocket(server: HttpServer): void {
                 audioBuffer: [],
                 processing: false,
                 active: true,
+                conferenceName: confName,
               };
               activeSessions.set(callSid, newSession);
               await startSessionSTT(newSession);
 
-              logToDiscord(`📞 **Inbound phone call** started`);
-              newSession.transcript.push(`[${new Date().toLocaleTimeString()}] Inbound call started`);
+              const who = callerName || callerNumber;
+              logToDiscord(`📞 **Inbound phone call** from ${who}`);
+              newSession.transcript.push(`[${new Date().toLocaleTimeString()}] Inbound call from ${who}`);
 
-              // Greet via TTS
-              await speakToPhone(newSession, 'Hello! This is Riley, your executive assistant. How can I help you?');
+              // Personalized greeting via ElevenLabs TTS (no robotic hold message)
+              const greeting = callerName
+                ? `Hey ${callerName}! It's Riley. What's up?`
+                : `Hey! It's Riley. How can I help you?`;
+              await speakToPhone(newSession, greeting);
             }
             break;
           }
@@ -247,9 +286,17 @@ async function handlePhoneInput(session: PhoneSession, text: string, language?: 
       ? `\nIMPORTANT: The caller is speaking ${language === 'zh' ? 'Mandarin Chinese' : language}. Respond in the SAME language.`
       : '';
 
-    const context = `[Phone call from ${session.callerNumber}]: ${text}
+    const callerLabel = session.callerName || session.callerNumber;
+    const callerContext = session.callerName
+      ? `You are on a phone call with ${session.callerName} (${session.callerNumber}). ${session.callerName} is the owner of ASAP — your boss.`
+      : `You are on a phone call with ${session.callerNumber}.`;
+    const confContext = session.conferenceName
+      ? `\nThis is a GROUP call (conference: ${session.conferenceName}). There may be multiple people on the line. Be natural and address people by name when you can.`
+      : '';
 
-You are on a phone call (not Discord). The caller dialed your number to speak with you.
+    const context = `[Phone call from ${callerLabel}]: ${text}
+
+${callerContext}${confContext}
 Keep responses brief and conversational — you're on a phone call.
 If you need to take any actions (code changes, etc.), tell the caller you'll handle it and then use your tools.
 Do NOT use markdown formatting — this is spoken audio.${langHint}`;
@@ -354,12 +401,14 @@ export async function makeOutboundCall(toNumber: string, greeting?: string): Pro
   });
 
   // Pre-create session for this outbound call
+  const callerName = identifyCaller(normalized);
   const session: PhoneSession = {
     callSid: call.sid,
     streamSid: null,
     ws: null,
     direction: 'outbound',
     callerNumber: normalized,
+    callerName,
     startTime: new Date(),
     transcript: [],
     conversationHistory: [],
@@ -367,6 +416,7 @@ export async function makeOutboundCall(toNumber: string, greeting?: string): Pro
     audioBuffer: [],
     processing: false,
     active: true,
+    conferenceName: null,
   };
   activeSessions.set(call.sid, session);
 
@@ -541,6 +591,111 @@ async function mp3ToMulaw(mp3: Buffer): Promise<Buffer> {
     try { unlinkSync(tmpIn); } catch {}
     try { unlinkSync(tmpOut); } catch {}
   }
+}
+
+// ── Conference / group call support ──
+
+/**
+ * Start a conference call. Riley joins as an AI participant.
+ * All listed numbers are called and joined to the same conference.
+ */
+export async function startConferenceCall(
+  numbers: string[],
+  conferenceName?: string
+): Promise<string> {
+  const client = getTwilioClient();
+  if (!TWILIO_PHONE_NUMBER) throw new Error('TWILIO_PHONE_NUMBER not configured');
+
+  const confName = conferenceName || `asap-conf-${Date.now()}`;
+
+  // Call each participant and put them in the conference
+  for (const raw of numbers) {
+    let normalized = raw.replace(/\s+/g, '');
+    if (normalized.startsWith('0')) normalized = '+61' + normalized.slice(1);
+    else if (!normalized.startsWith('+')) normalized = '+61' + normalized;
+
+    const twiml = getConferenceTwiML(confName);
+
+    await client.calls.create({
+      to: normalized,
+      from: TWILIO_PHONE_NUMBER,
+      twiml,
+    });
+  }
+
+  // Connect Riley to the conference via a media stream so she can listen + speak
+  const wsUrl = SERVER_URL.replace(/^https?/, 'wss') + '/api/webhooks/twilio/stream';
+  const rileyTwiml = `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Connect>
+    <Stream url="${wsUrl}">
+      <Parameter name="conferenceName" value="${confName}" />
+    </Stream>
+  </Connect>
+  <Dial>
+    <Conference startConferenceOnEnter="true" endConferenceOnExit="false"
+      beep="false">${confName}</Conference>
+  </Dial>
+</Response>`;
+
+  const rileyCall = await client.calls.create({
+    to: TWILIO_PHONE_NUMBER,
+    from: TWILIO_PHONE_NUMBER,
+    twiml: rileyTwiml,
+  });
+
+  // Pre-create a session marked as conference
+  const session: PhoneSession = {
+    callSid: rileyCall.sid,
+    streamSid: null,
+    ws: null,
+    direction: 'outbound',
+    callerNumber: 'conference',
+    callerName: null,
+    startTime: new Date(),
+    transcript: [],
+    conversationHistory: [],
+    deepgramSession: null,
+    audioBuffer: [],
+    processing: false,
+    active: true,
+    conferenceName: confName,
+  };
+  activeSessions.set(rileyCall.sid, session);
+
+  const nameList = numbers.map(n => {
+    let norm = n.replace(/\s+/g, '');
+    if (norm.startsWith('0')) norm = '+61' + norm.slice(1);
+    else if (!norm.startsWith('+')) norm = '+61' + norm;
+    return identifyCaller(norm) || n;
+  }).join(', ');
+  logToDiscord(`📞 **Conference call started** — ${confName}\nParticipants: ${nameList} + Riley`);
+  session.transcript.push(`[${new Date().toLocaleTimeString()}] Conference started: ${nameList} + Riley`);
+
+  return confName;
+}
+
+/**
+ * Add a participant to an existing conference.
+ */
+export async function addToConference(conferenceName: string, phoneNumber: string): Promise<void> {
+  const client = getTwilioClient();
+  if (!TWILIO_PHONE_NUMBER) throw new Error('TWILIO_PHONE_NUMBER not configured');
+
+  let normalized = phoneNumber.replace(/\s+/g, '');
+  if (normalized.startsWith('0')) normalized = '+61' + normalized.slice(1);
+  else if (!normalized.startsWith('+')) normalized = '+61' + normalized;
+
+  const twiml = getConferenceTwiML(conferenceName);
+
+  await client.calls.create({
+    to: normalized,
+    from: TWILIO_PHONE_NUMBER,
+    twiml,
+  });
+
+  const name = identifyCaller(normalized) || normalized;
+  logToDiscord(`📞 **Added ${name}** to conference ${conferenceName}`);
 }
 
 // ── Discord logging helper ──

@@ -764,6 +764,9 @@ const ALLOWED_COMMANDS: Array<{ prefix: string; description: string }> = [
   { prefix: 'which ',  description: 'Locate commands' },
   { prefix: 'node -e', description: 'Run inline JS' },
   { prefix: 'node --eval', description: 'Run inline JS' },
+  // GCP operations
+  { prefix: 'gcloud secrets', description: 'Manage GCP secrets' },
+  { prefix: 'gcloud run',     description: 'Cloud Run operations' },
 ];
 
 /** Patterns that are NEVER allowed, even if they match an allowed prefix. */

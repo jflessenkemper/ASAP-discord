@@ -125,8 +125,9 @@ app.post('/api/webhooks/build-complete', express.json({ limit: '10kb' }), (req, 
 });
 
 // Twilio voice webhook — returns TwiML to connect the call to our WebSocket stream
-app.post('/api/webhooks/twilio/voice', (_req, res) => {
-  res.type('text/xml').send(getInboundTwiML());
+app.post('/api/webhooks/twilio/voice', (req, res) => {
+  const callerNumber = req.body?.From || req.query?.From;
+  res.type('text/xml').send(getInboundTwiML(callerNumber));
 });
 
 // Twilio call status callback

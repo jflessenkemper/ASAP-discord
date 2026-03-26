@@ -5,7 +5,7 @@ import { appendToMemory, getMemoryContext, loadMemory, saveMemory, clearMemory, 
 import { documentToChannel } from './documentation';
 import { sendAgentMessage, sendLongMessage, clearHistory } from './textChannel';
 import { startCall, endCall, isCallActive } from './callSession';
-import { makeOutboundCall, isTelephonyAvailable } from '../services/telephony';
+import { makeOutboundCall, startConferenceCall, isTelephonyAvailable } from '../services/telephony';
 import { getBotChannels } from '../bot';
 import { getUsageReport } from '../usage';
 import { triggerCloudBuild, listRevisions, getCurrentRevision, rollbackToRevision } from '../../services/cloudrun';
@@ -316,10 +316,25 @@ async function executeActions(
           }
           const phoneNumber = param || '0436012231';
           try {
-            await makeOutboundCall(phoneNumber, "Hi Jordan, it's Riley. You asked me to call you — what do you need?");
+            await makeOutboundCall(phoneNumber, "Hey Jordan, it's Riley! You asked me to give you a call.");
             await groupchat.send(`📞 Calling ${phoneNumber}...`);
           } catch (err) {
             await groupchat.send(`❌ Call failed: ${err instanceof Error ? err.message : 'Unknown'}`);
+          }
+          break;
+        }
+        case 'CONFERENCE': {
+          if (!isTelephonyAvailable()) {
+            await groupchat.send('📞 Phone system not configured (missing Twilio credentials).');
+            break;
+          }
+          // param format: "0436012231,0412345678" (comma-separated numbers)
+          const numbers = param ? param.split(',').map(n => n.trim()) : ['0436012231'];
+          try {
+            const confName = await startConferenceCall(numbers);
+            await groupchat.send(`📞 **Conference call started** — ${confName}\nCalling: ${numbers.join(', ')} + Riley`);
+          } catch (err) {
+            await groupchat.send(`❌ Conference failed: ${err instanceof Error ? err.message : 'Unknown'}`);
           }
           break;
         }
