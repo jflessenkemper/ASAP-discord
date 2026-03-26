@@ -171,15 +171,16 @@ RULES: Max 200 words (code exempt). Bullets not paragraphs. No preamble. Action 
     }
 
     const response = await withConcurrencyLimit(() =>
-      withRetry(() =>
-        anthropic.messages.create({
+      withRetry(async () => {
+        const stream = anthropic.messages.stream({
           model: options?.modelOverride || modelForAgent(agent.id),
           max_tokens: options?.maxTokens || 16384,
           system: systemPrompt,
           tools: agentTools as any,
           messages: currentMessages,
-        })
-      )
+        });
+        return stream.finalMessage();
+      })
     );
 
     // If the model wants to use tools, execute them and continue
