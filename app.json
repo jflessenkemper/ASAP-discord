@@ -1,12 +1,5 @@
 {
   "plugins": [
     "expo-web-browser"
-  ],
-  "extra": {
-    "eas": {
-      "projectId": "87d29828-8d08-49d5-8cf5-7b9279e038cc"
-    }
-  },
-  "owner": "jflessenkemper",
-  "slug": "asap"
+  ]
 }

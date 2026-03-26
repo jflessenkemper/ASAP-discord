@@ -107,6 +107,8 @@ export interface VoiceTranscription {
   username: string;
   text: string;
   timestamp: Date;
+  /** Detected language code from Deepgram (e.g. 'en', 'zh') */
+  language?: string;
 }
 
 /** Max consecutive resubscribes before giving up (prevents infinite loop on broken streams) */
@@ -258,13 +260,14 @@ export function listenToUserDeepgram(
   }, 10_000);
 
   startLiveTranscription(
-    (text) => {
+    (text, detectedLanguage) => {
       if (!destroyed && text.trim()) {
         onTranscription({
           userId: member.id,
           username: member.displayName,
           text: text.trim(),
           timestamp: new Date(),
+          language: detectedLanguage,
         });
       }
     },

@@ -29,14 +29,14 @@ export interface DeepgramLiveSession {
  * @returns Session object with send() and close() methods
  */
 export async function startLiveTranscription(
-  onTranscript: (text: string) => void,
+  onTranscript: (text: string, detectedLanguage?: string) => void,
   onError?: (err: Error) => void
 ): Promise<DeepgramLiveSession> {
   const client = getClient();
 
   const connection: LiveClient = client.listen.live({
     model: 'nova-3',
-    language: 'en-AU',
+    language: 'multi',            // Auto-detect language (English, Mandarin, etc.)
     smart_format: true,
     punctuate: true,
     interim_results: false,       // Only final results — no flicker
@@ -49,9 +49,10 @@ export async function startLiveTranscription(
 
   connection.on(LiveTranscriptionEvents.Transcript, (data: any) => {
     const transcript = data?.channel?.alternatives?.[0]?.transcript;
+    const detectedLang = data?.channel?.alternatives?.[0]?.languages?.[0] || data?.metadata?.language;
     if (transcript && data.is_final) {
       recordGeminiUsage(); // Reuse gemini counter for simplicity
-      onTranscript(transcript);
+      onTranscript(transcript, detectedLang);
     }
   });
 

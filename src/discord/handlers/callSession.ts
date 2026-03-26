@@ -207,8 +207,10 @@ async function handleVoiceInput(transcription: VoiceTranscription): Promise<void
   const userText = transcription.text;
 
   // Log to transcript
+  const langTag = transcription.language && transcription.language !== 'en'
+    ? ` [${transcription.language}]` : '';
   session.transcript.push(
-    `[${transcription.timestamp.toLocaleTimeString()}] ${transcription.username}: ${userText}`
+    `[${transcription.timestamp.toLocaleTimeString()}] ${transcription.username}${langTag}: ${userText}`
   );
 
   // Post the transcription to call log
@@ -220,6 +222,9 @@ async function handleVoiceInput(transcription: VoiceTranscription): Promise<void
     // Riley (EA) processes the input first and decides who should respond
     try {
       const rileyMemory = getMemoryContext('executive-assistant');
+      const langHint = transcription.language && transcription.language !== 'en'
+        ? `\n\nIMPORTANT: The speaker is using ${transcription.language === 'zh' ? 'Mandarin Chinese' : transcription.language}. Respond in the SAME language they spoke in. The TTS system supports multilingual output.`
+        : '';
       const rileyContext = `[Voice from ${transcription.username}]: ${userText}
 
 You are in a voice call. ${transcription.username} just spoke. Your job:
@@ -231,7 +236,7 @@ You are in a voice call. ${transcription.username} just spoke. Your job:
 
 IMPORTANT: In your response, if you want Ace to implement something, say "@ace". For other agents, @mention them — they'll respond in text only (e.g., "@kane for security review"). Only you and Ace speak in voice. Other agents work via text.
 
-Keep your spoken response brief — you're in a voice call, not a text chat.`;
+Keep your spoken response brief — you're in a voice call, not a text chat.${langHint}`;
 
       const response = await agentRespond(
         riley,

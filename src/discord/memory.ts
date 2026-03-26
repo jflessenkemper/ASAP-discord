@@ -112,7 +112,7 @@ export function clearMemory(agentId: string): void {
  * Get a condensed summary of an agent's recent memory for context injection.
  * Returns the last N messages formatted as context.
  */
-export function getMemoryContext(agentId: string, maxMessages = 50): ConversationMessage[] {
+export function getMemoryContext(agentId: string, maxMessages = 30): ConversationMessage[] {
   const history = loadMemory(agentId);
   if (history.length <= maxMessages * 2) return history;
   return history.slice(history.length - maxMessages * 2);
