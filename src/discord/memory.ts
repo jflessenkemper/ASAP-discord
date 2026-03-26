@@ -14,6 +14,9 @@ const MAX_MESSAGES = 100;
 /** In-memory cache to avoid reading from disk on every message */
 const memoryCache = new Map<string, ConversationMessage[]>();
 
+/** Pending debounced writes — avoids writing to disk on every single message */
+const pendingWrites = new Map<string, ReturnType<typeof setTimeout>>();
+
 /** Ensure the memory directory exists */
 function ensureDir(): void {
   if (!fs.existsSync(MEMORY_DIR)) {
@@ -61,7 +64,21 @@ export function saveMemory(agentId: string, history: ConversationMessage[]): voi
       ? history.slice(history.length - MAX_MESSAGES * 2)
       : history;
     memoryCache.set(agentId, trimmed);
-    fs.writeFileSync(memoryPath(agentId), JSON.stringify(trimmed, null, 2));
+
+    // Debounce disk writes — update cache immediately, write to disk after 2s of inactivity
+    const existing = pendingWrites.get(agentId);
+    if (existing) clearTimeout(existing);
+    pendingWrites.set(
+      agentId,
+      setTimeout(() => {
+        try {
+          fs.writeFileSync(memoryPath(agentId), JSON.stringify(trimmed, null, 2));
+        } catch (writeErr) {
+          console.error(`Deferred write failed for ${agentId}:`, writeErr instanceof Error ? writeErr.message : 'Unknown');
+        }
+        pendingWrites.delete(agentId);
+      }, 2000)
+    );
   } catch (err) {
     console.error(`Failed to save memory for ${agentId}:`, err instanceof Error ? err.message : 'Unknown');
   }

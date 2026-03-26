@@ -8,9 +8,21 @@ const genAI = process.env.GEMINI_API_KEY
 /**
  * Transcribe audio from a Discord voice stream using Gemini.
  * Accepts raw PCM/opus audio buffer from discord.js voice receiver.
+ * Pre-filters silence to avoid wasting Gemini API calls.
  */
 export async function transcribeVoice(audioBuffer: Buffer): Promise<string> {
   if (!genAI) throw new Error('Gemini API key not configured');
+
+  // Client-side silence detection — skip silent audio before calling Gemini
+  let nonSilentSamples = 0;
+  const totalSamples = Math.floor(audioBuffer.length / 2);
+  for (let i = 0; i < audioBuffer.length - 1; i += 2) {
+    if (Math.abs(audioBuffer.readInt16LE(i)) > 500) nonSilentSamples++;
+  }
+  if (totalSamples > 0 && nonSilentSamples / totalSamples < 0.01) {
+    return ''; // Less than 1% non-silent — skip Gemini call
+  }
+
   if (isGeminiOverLimit()) throw new Error('Daily Gemini API call limit reached');
 
   const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' });

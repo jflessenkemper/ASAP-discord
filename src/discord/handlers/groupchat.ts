@@ -258,41 +258,47 @@ async function handleAgentChain(
 }
 
 /**
- * Sub-agents work in their own channels, then report back to groupchat.
+ * Sub-agents work in parallel, then report back to groupchat in order.
  */
 async function handleSubAgents(
   agentIds: string[],
   directiveContext: string,
   groupchat: TextChannel
 ): Promise<void> {
-  for (const agentId of agentIds) {
-    if (agentId === 'executive-assistant') continue;
+  const validAgents = agentIds
+    .filter((id) => id !== 'executive-assistant')
+    .map((id) => ({ id, agent: getAgent(id as AgentId) }))
+    .filter((a): a is { id: string; agent: AgentConfig } => a.agent !== null && a.agent !== undefined);
 
-    const agent = getAgent(agentId as AgentId);
-    if (!agent) continue;
+  if (validAgents.length === 0) return;
 
-    try {
-      // Post in the sub-agent's own channel that they're working
-      await documentToChannel(agentId, `📥 Received task from groupchat. Working...`);
-
-      const agentMemory = getMemoryContext(agentId);
+  // Fire all sub-agent requests in parallel
+  const results = await Promise.allSettled(
+    validAgents.map(async ({ id, agent }) => {
+      await documentToChannel(id, `📥 Received task from groupchat. Working...`);
+      const agentMemory = getMemoryContext(id);
       const agentContext = `[Directive from groupchat]: ${directiveContext}\n\nDo your job. Be concise in your response — max 200 words. Report what you found or did.`;
-
       const agentResponse = await agentRespond(agent, [...agentMemory, ...groupHistory], agentContext, async (_toolName, summary) => {
-        await documentToChannel(agentId, `🔧 ${summary}`);
+        await documentToChannel(id, `🔧 ${summary}`);
       });
+      return { id, agent, agentResponse };
+    })
+  );
 
-      // Report back in groupchat
+  // Post results sequentially to keep groupchat orderly
+  for (const result of results) {
+    if (result.status === 'fulfilled') {
+      const { id, agent, agentResponse } = result.value;
       await sendAgentMessage(groupchat, agent, agentResponse);
-      appendToMemory(agentId, [
+      appendToMemory(id, [
         { role: 'user', content: `[Groupchat directive]: ${directiveContext.slice(0, 500)}` },
         { role: 'assistant', content: `[${agent.name}]: ${agentResponse}` },
       ]);
-      await documentToChannel(agentId, `✅ ${agentResponse.slice(0, 300)}`);
-
+      await documentToChannel(id, `✅ ${agentResponse.slice(0, 300)}`);
       groupHistory.push({ role: 'assistant', content: `[${agent.name.split(' ')[0]}]: ${agentResponse}` });
-    } catch (err) {
-      console.error(`${agent.name} error:`, err instanceof Error ? err.message : 'Unknown');
+    } else {
+      const { id, agent } = validAgents[results.indexOf(result)];
+      console.error(`${agent.name} error:`, result.reason instanceof Error ? result.reason.message : 'Unknown');
       await groupchat.send(`⚠️ ${agent.emoji} ${agent.name.split(' ')[0]} had an error.`);
     }
   }

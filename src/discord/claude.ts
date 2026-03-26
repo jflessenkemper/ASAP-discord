@@ -25,6 +25,42 @@ export interface ConversationMessage {
 
 /** Max tool-use iterations before forcing a text response */
 const MAX_TOOL_ROUNDS = 15;
+/** Max total time for a tool loop (ms) */
+const TOOL_LOOP_TIMEOUT = 90_000;
+/** Max concurrent Claude requests to avoid rate limits */
+const MAX_CONCURRENT = 4;
+let activeClaude = 0;
+const claudeQueue: Array<() => void> = [];
+
+async function withConcurrencyLimit<T>(fn: () => Promise<T>): Promise<T> {
+  while (activeClaude >= MAX_CONCURRENT) {
+    await new Promise<void>((resolve) => claudeQueue.push(resolve));
+  }
+  activeClaude++;
+  try {
+    return await fn();
+  } finally {
+    activeClaude--;
+    claudeQueue.shift()?.();
+  }
+}
+
+async function withRetry<T>(fn: () => Promise<T>, retries = 2, delayMs = 1000): Promise<T> {
+  for (let i = 0; i <= retries; i++) {
+    try {
+      return await fn();
+    } catch (err: any) {
+      if (i === retries) throw err;
+      // Only retry on transient errors (5xx, network)
+      const status = err?.status || err?.statusCode;
+      if (status && status < 500 && status !== 429) throw err;
+      const delay = delayMs * Math.pow(2, i);
+      console.warn(`Claude retry ${i + 1}/${retries} after ${delay}ms: ${err?.message || 'Unknown'}`);
+      await new Promise((r) => setTimeout(r, delay));
+    }
+  }
+  throw new Error('Unreachable');
+}
 
 /**
  * Send a message to Claude as a specific agent and get a response.
@@ -70,18 +106,26 @@ You have access to tools that let you read, write, search, and edit files in the
 
   // Tool-use loop
   let currentMessages: typeof messages = [...messages];
+  const loopStart = Date.now();
   for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
     if (isClaudeOverLimit()) {
       return '⚠️ Daily Claude token limit reached. Try again tomorrow or adjust DAILY_LIMIT_CLAUDE_TOKENS.';
     }
+    if (Date.now() - loopStart > TOOL_LOOP_TIMEOUT) {
+      return 'Tool loop timed out after 90 seconds. Check the repository for any partial changes.';
+    }
 
-    const response = await anthropic.messages.create({
-      model: CLAUDE_MODEL,
-      max_tokens: 4096,
-      system: systemPrompt,
-      tools: REPO_TOOLS as any,
-      messages: currentMessages,
-    });
+    const response = await withConcurrencyLimit(() =>
+      withRetry(() =>
+        anthropic.messages.create({
+          model: CLAUDE_MODEL,
+          max_tokens: 4096,
+          system: systemPrompt,
+          tools: REPO_TOOLS as any,
+          messages: currentMessages,
+        })
+      )
+    );
 
     // If the model wants to use tools, execute them and continue
     if (response.stop_reason === 'tool_use') {

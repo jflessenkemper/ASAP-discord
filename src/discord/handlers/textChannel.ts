@@ -76,18 +76,22 @@ export async function sendAgentMessage(
 ): Promise<void> {
   // Discord embed description limit is 4096 chars
   const chunks = splitMessage(response, 4000);
+  const embeds: EmbedBuilder[] = [];
 
   for (let i = 0; i < chunks.length; i++) {
     const embed = new EmbedBuilder()
       .setColor(agent.color)
       .setDescription(chunks[i]);
 
-    // Only show author header on the first chunk
     if (i === 0) {
       embed.setAuthor({ name: `${agent.emoji} ${agent.name}` });
     }
+    embeds.push(embed);
+  }
 
-    await channel.send({ embeds: [embed] });
+  // Discord allows up to 10 embeds per message — batch them
+  for (let i = 0; i < embeds.length; i += 10) {
+    await channel.send({ embeds: embeds.slice(i, i + 10) });
   }
 }
 
