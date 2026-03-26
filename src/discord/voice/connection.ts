@@ -8,9 +8,11 @@ import {
   AudioPlayerStatus,
   AudioPlayer,
   EndBehaviorType,
+  StreamType,
 } from '@discordjs/voice';
 import { VoiceBasedChannel, GuildMember } from 'discord.js';
-import { Readable } from 'stream';
+import { Readable, Transform } from 'stream';
+import prism from 'prism-media';
 import { transcribeVoice } from './tts';
 import { isDeepgramAvailable, startLiveTranscription, DeepgramLiveSession } from './deepgram';
 
@@ -66,7 +68,9 @@ export async function speakInVC(audioBuffer: Buffer): Promise<void> {
   }
 
   const stream = Readable.from(audioBuffer);
-  const resource = createAudioResource(stream);
+  // ElevenLabs returns MP3, Gemini may return WAV/PCM — use Arbitrary so
+  // prism-media/FFmpeg auto-detects and transcodes to Opus for Discord.
+  const resource = createAudioResource(stream, { inputType: StreamType.Arbitrary });
 
   return new Promise<void>((resolve, reject) => {
     const player = audioPlayer;
@@ -122,6 +126,16 @@ const MAX_RESUBSCRIBES = 500;
 const MAX_AUDIO_BUFFER = 5 * 1024 * 1024;
 
 /**
+ * Create a prism-media Opus decoder that converts Opus frames from the Discord
+ * voice receiver into signed 16-bit LE PCM (48 kHz, stereo).
+ * The receiver outputs raw Opus frames in objectMode — the decoder consumes
+ * them and emits a continuous PCM stream that STT services expect.
+ */
+function createOpusDecoder(): Transform {
+  return new prism.opus.Decoder({ rate: 48000, channels: 2, frameSize: 960 });
+}
+
+/**
  * Start listening to a user's voice in the current connection.
  * Uses a non-recursive approach: re-subscribes via the receiver instead of
  * recursion to avoid stacking subscriptions and memory leaks.
@@ -147,23 +161,27 @@ export function listenToUser(
       end: { behavior: EndBehaviorType.AfterSilence, duration: 1500 },
     });
 
+    // Decode Opus frames → PCM (s16le, 48kHz, stereo) before collecting
+    const decoder = createOpusDecoder();
+    subscription.pipe(decoder);
+
     const chunks: Buffer[] = [];
     let totalSize = 0;
 
-    subscription.on('data', (chunk: Buffer) => {
+    decoder.on('data', (chunk: Buffer) => {
       totalSize += chunk.length;
       if (totalSize <= MAX_AUDIO_BUFFER) {
         chunks.push(chunk);
       }
     });
 
-    subscription.on('end', async () => {
+    decoder.on('end', async () => {
       if (destroyed) return;
 
       if (chunks.length > 0 && totalSize <= MAX_AUDIO_BUFFER) {
         const audioBuffer = Buffer.concat(chunks);
-        // Need at least ~0.5s of audio (rough threshold)
-        if (audioBuffer.length >= 8000) {
+        // Need at least ~0.5s of PCM audio at 48kHz stereo (192 KB/s)
+        if (audioBuffer.length >= 48000) {
           try {
             const text = await transcribeVoice(audioBuffer);
             if (text && !destroyed) {
@@ -185,6 +203,9 @@ export function listenToUser(
       // Re-subscribe for next utterance (non-recursive — just calls subscribe again)
       subscribe();
     });
+
+    // If the Opus subscription ends, make sure the decoder also ends
+    subscription.on('end', () => { decoder.end(); });
   }
 
   subscribe();
@@ -302,15 +323,22 @@ export function listenToUserDeepgram(
         end: { behavior: EndBehaviorType.AfterSilence, duration: 1500 },
       });
 
-      subscription.on('data', (chunk: Buffer) => {
+      // Decode Opus frames → PCM before sending to Deepgram (expects linear16)
+      const decoder = createOpusDecoder();
+      subscription.pipe(decoder);
+
+      decoder.on('data', (chunk: Buffer) => {
         if (!destroyed && dgSession) {
           dgSession.send(chunk);
         }
       });
 
-      subscription.on('end', () => {
+      decoder.on('end', () => {
         if (!destroyed) subscribe(); // Re-subscribe for next utterance
       });
+
+      // When Opus subscription ends, also end the decoder
+      subscription.on('end', () => { decoder.end(); });
     }
 
     subscribe();

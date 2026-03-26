@@ -130,45 +130,23 @@ export async function agentRespond(
 ): Promise<string> {
   const anthropic = getClient();
 
+  const isFullToolAgent = FULL_TOOL_AGENTS.has(agent.id);
+
+  // Build system prompt — compact version for review agents to save ~1,500 tokens
+  const rileyCoordination = agent.id === 'executive-assistant' ? `
+AGENT COORDINATION: Coordinate agents via @mentions in your response text. The system parses and routes automatically.
+@ace @max @sophie @kane @raj @elena @kai @jude @liv @harper @mia @leo
+CRITICAL: Do NOT use send_channel_message — ONLY @mentions work for agent coordination.
+` : '';
+
+  const toolsSection = isFullToolAgent ? `
+You have repo tools: read/write/edit/search files, run_command (shell), fetch_url, memory_read/write, db_query/db_schema, GitHub ops, GCP ops, Discord channel ops, run_tests, typecheck, capture_screenshots.` : `
+You have read-only tools: read_file, search_files, list_directory, fetch_url, db_query, db_schema, memory_read, memory_list, run_tests, typecheck.`;
+
   const systemPrompt = `${agent.systemPrompt}
 
-IMPORTANT CONTEXT: You are responding in a Discord channel. Your name is "${agent.name}".
-${agent.id === 'executive-assistant' ? `
-AGENT COORDINATION: You coordinate agents by @mentioning them in your response text. The system parses your messages and routes to the mentioned agents automatically.
-Available @mentions: @ace (developer), @max (QA), @sophie (UX), @kane (security), @raj (API), @elena (DBA), @kai (performance), @jude (DevOps), @liv (copywriter), @harper (lawyer), @mia (iOS), @leo (Android).
-Example: "@ace implement the new endpoint" will automatically direct Ace to work on it.
-You can mention multiple agents and they run in pipeline order. You have FULL authority over all agents.
-
-CRITICAL: Do NOT use send_channel_message to contact agents. That wastes tool calls and agents will NOT respond to channel messages. ONLY use @mentions in your response text — the system handles routing automatically.
-` : ''}
-
-CONCISENESS RULES (MANDATORY):
-- Max 200 words per response unless you're writing/editing code
-- Use bullet points, not paragraphs
-- No preamble, no fluff, no restating the question
-- Action first, explanation only if needed
-- Code blocks are exempt from the word limit
-- Do not use headings larger than ### in Discord
-- If you need to provide longer content, break it into sections and ask before continuing
-
-DECISION PROTOCOL: When you need the user's input, use this format:
-🛑 **Decision Required**
-1️⃣ Option one
-2️⃣ Option two
-3️⃣ Option three
-
-You have access to tools that let you read, write, search, and edit files in the ASAP repository, as well as run shell commands, fetch any URL, query the PostgreSQL database directly, and persist memories across conversations. Use them when the user asks you to inspect code, implement changes, fix bugs, research, or perform any operation. When you make file changes, always read the file first to understand context, then make precise edits.
-
-KEY TOOLS:
-- **File ops**: read_file, write_file, edit_file, batch_edit, search_files, list_directory (2MB limit)
-- **Shell**: run_command — nearly any command: gcloud, git, npm, docker, node, curl, wget, sed, awk, jq, etc. (2-minute timeout)
-- **Web**: fetch_url — fetch any URL (docs, APIs, npm, Stack Overflow)
-- **Memory**: memory_read, memory_write, memory_append, memory_list — persistent notes across conversations
-- **Database**: db_query, db_schema — direct PostgreSQL access
-- **GitHub**: git_create_branch, create_pull_request, merge_pull_request, add_pr_comment, list_pull_requests, github_search
-- **GCP**: gcp_deploy, gcp_set_env, gcp_get_env, gcp_list_revisions, gcp_rollback, gcp_secret_set, gcp_secret_list, gcp_build_status
-- **Discord**: list_channels, create_channel, delete_channel, rename_channel, set_channel_topic, send_channel_message, move_channel, delete_category
-- **Ops**: read_logs, typecheck, run_tests, capture_screenshots`;
+You are "${agent.name}" responding in Discord.${rileyCoordination}
+RULES: Max 200 words (code exempt). Bullets not paragraphs. No preamble. Action first. Max ### headings.${toolsSection}`;
 
   // Build messages — convert simple string history to proper format
   const messages: Array<{ role: 'user' | 'assistant'; content: string }> = [
@@ -180,6 +158,7 @@ KEY TOOLS:
   let currentMessages: typeof messages = [...messages];
   const loopStart = Date.now();
   let totalToolCalls = 0;
+  const agentTools = toolsForAgent(agent.id);
   logAgentEvent(agent.id, 'invoke', `model=${options?.modelOverride || modelForAgent(agent.id)}, context=${messages.length} msgs, prompt="${userMessage.slice(0, 200)}"`);
   for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
     if (isClaudeOverLimit()) {
@@ -190,8 +169,6 @@ KEY TOOLS:
       logAgentEvent(agent.id, 'error', `Tool loop timeout after ${totalToolCalls} tool calls`, { durationMs: Date.now() - loopStart });
       return 'Tool loop timed out after 3 minutes. Check the repository for any partial changes.';
     }
-
-    const agentTools = toolsForAgent(agent.id);
 
     const response = await withConcurrencyLimit(() =>
       withRetry(() =>
