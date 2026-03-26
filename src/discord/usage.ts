@@ -213,7 +213,21 @@ export function stopDashboardUpdates(): void {
 async function updateDashboard(): Promise<void> {
   if (!limitsChannel) return;
 
-  // Clear all messages in the channel
+  const embed = getUsageEmbed();
+
+  // Try to edit existing message first — avoids delete+recreate spam
+  if (dashboardMessageId) {
+    try {
+      const existing = await limitsChannel.messages.fetch(dashboardMessageId);
+      await existing.edit({ embeds: [embed] });
+      return;
+    } catch {
+      // Message was deleted or can't be fetched — fall through to create new one
+      dashboardMessageId = null;
+    }
+  }
+
+  // Clear old messages and post fresh
   try {
     const messages = await limitsChannel.messages.fetch({ limit: 50 });
     if (messages.size > 0) {
@@ -226,8 +240,6 @@ async function updateDashboard(): Promise<void> {
     // Ignore cleanup errors
   }
 
-  // Post fresh embed
-  const embed = getUsageEmbed();
   const msg = await limitsChannel.send({ embeds: [embed] });
   dashboardMessageId = msg.id;
 }

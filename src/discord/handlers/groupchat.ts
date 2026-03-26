@@ -186,19 +186,21 @@ Create a plan for this goal. Be specific about which agents handle which steps. 
  * Parse Riley/Ace's response for @agent directives using strict word-boundary regex.
  * Only matches explicit @name patterns to avoid false positives.
  */
-function parseDirectives(text: string): string[] {
-  const directiveRe = /@(ace|max|sophie|kane|raj|elena|kai|jude|liv|harper|mia|leo)\b/gi;
-  const nameToId: Record<string, string> = {
-    ace: 'developer', max: 'qa', sophie: 'ux-reviewer',
-    kane: 'security-auditor', raj: 'api-reviewer', elena: 'dba',
-    kai: 'performance', jude: 'devops', liv: 'copywriter', harper: 'lawyer',
-    mia: 'ios-engineer', leo: 'android-engineer',
-  };
+const DIRECTIVE_RE = /@(ace|max|sophie|kane|raj|elena|kai|jude|liv|harper|mia|leo)\b/gi;
+const DIRECTIVE_NAME_TO_ID: Record<string, string> = {
+  ace: 'developer', max: 'qa', sophie: 'ux-reviewer',
+  kane: 'security-auditor', raj: 'api-reviewer', elena: 'dba',
+  kai: 'performance', jude: 'devops', liv: 'copywriter', harper: 'lawyer',
+  mia: 'ios-engineer', leo: 'android-engineer',
+};
 
+function parseDirectives(text: string): string[] {
   const found = new Set<string>();
-  for (const match of text.matchAll(directiveRe)) {
+  // Reset lastIndex since the regex has the global flag
+  DIRECTIVE_RE.lastIndex = 0;
+  for (const match of text.matchAll(DIRECTIVE_RE)) {
     const name = match[1].toLowerCase();
-    if (nameToId[name]) found.add(nameToId[name]);
+    if (DIRECTIVE_NAME_TO_ID[name]) found.add(DIRECTIVE_NAME_TO_ID[name]);
   }
   return [...found];
 }
@@ -416,6 +418,7 @@ async function postDecisionEmbed(
       const reactUser = users.find((u) => !u.bot);
       const userName = reactUser?.username || 'User';
 
+      console.log(`Decision: ${userName} chose option ${choiceIndex + 1}: "${choice}"`);
       await groupchat.send(`✅ **${userName}** chose: **${choice}**`);
 
       // Feed the decision back to Riley
@@ -423,6 +426,8 @@ async function postDecisionEmbed(
       await handleRileyMessage(decisionMessage, userName, groupchat);
     }
   } catch {
+    // Timeout — delete the stale decision embed and notify
+    try { await decisionMsg.delete(); } catch { /* already deleted */ }
     await groupchat.send('⏰ Decision timed out. Please tell Riley what you want to do.');
   }
 }

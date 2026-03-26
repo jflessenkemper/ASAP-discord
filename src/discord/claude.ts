@@ -160,7 +160,9 @@ You have access to tools that let you read, write, search, and edit files in the
           toolResults.push({
             type: 'tool_result',
             tool_use_id: block.id,
-            content: result.slice(0, 8000), // Limit tool output size
+            content: result.length > 8000
+              ? result.slice(0, 8000) + '\n\n[Output truncated — original was ' + result.length + ' chars]'
+              : result,
           });
         }
       }

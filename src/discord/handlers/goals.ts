@@ -3,6 +3,7 @@ import { getAgent, AgentId } from '../agents';
 import { agentRespond, ConversationMessage } from '../claude';
 import { appendToMemory, getMemoryContext } from '../memory';
 import { documentToChannel, setBotChannels } from './documentation';
+import { sendLongMessage } from './textChannel';
 
 // Goals channel conversation history — persistent across messages
 const goalsHistory: ConversationMessage[] = [];
@@ -194,25 +195,4 @@ function trimHistory(): void {
   if (goalsHistory.length > MAX_HISTORY * 2) {
     goalsHistory.splice(0, goalsHistory.length - MAX_HISTORY * 2);
   }
-}
-
-async function sendLongMessage(channel: TextChannel, content: string): Promise<void> {
-  if (content.length <= 2000) {
-    await channel.send(content);
-    return;
-  }
-
-  const lines = content.split('\n');
-  let chunk = '';
-
-  for (const line of lines) {
-    if (chunk.length + line.length + 1 > 1990) {
-      if (chunk) await channel.send(chunk);
-      chunk = line;
-    } else {
-      chunk += (chunk ? '\n' : '') + line;
-    }
-  }
-
-  if (chunk) await channel.send(chunk);
 }

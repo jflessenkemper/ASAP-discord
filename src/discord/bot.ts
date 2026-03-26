@@ -16,6 +16,7 @@ import { setBotChannels } from './handlers/documentation';
 import { registerCommands, handleCommand } from './commands';
 import { setGitHubChannel } from './handlers/github';
 import { setLimitsChannel, startDashboardUpdates, stopDashboardUpdates } from './usage';
+import { flushPendingWrites } from './memory';
 
 let client: Client | null = null;
 let botChannels: BotChannels | null = null;
@@ -95,6 +96,10 @@ export async function startBot(): Promise<void> {
       await registerCommands(readyClient, guildId);
     } catch (err) {
       console.error('Channel setup error:', err instanceof Error ? err.message : 'Unknown');
+      // Fatal — bot cannot function without channels
+      console.error('Bot initialization failed — destroying client');
+      readyClient.destroy();
+      client = null;
     }
   });
 
@@ -103,7 +108,18 @@ export async function startBot(): Promise<void> {
     if (!interaction.isChatInputCommand()) return;
     if (!botChannels) return;
 
-    await handleCommand(interaction as ChatInputCommandInteraction, botChannels);
+    try {
+      await handleCommand(interaction as ChatInputCommandInteraction, botChannels);
+    } catch (err) {
+      console.error('Interaction handler error:', err instanceof Error ? err.message : 'Unknown');
+      try {
+        if (interaction.replied || interaction.deferred) {
+          await interaction.followUp({ content: '\u26a0\ufe0f Something went wrong.', ephemeral: true });
+        } else {
+          await interaction.reply({ content: '\u26a0\ufe0f Something went wrong.', ephemeral: true });
+        }
+      } catch { /* ignore follow-up errors */ }
+    }
   });
 
   client.on(Events.MessageCreate, async (message) => {
@@ -147,6 +163,7 @@ export async function startBot(): Promise<void> {
  */
 export async function stopBot(): Promise<void> {
   stopDashboardUpdates();
+  flushPendingWrites();
   if (isCallActive()) {
     await endCall();
   }

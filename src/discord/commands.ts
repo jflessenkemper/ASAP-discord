@@ -218,7 +218,10 @@ async function handleAskSlash(
     `Ask ${agent.name}: ${question}`,
     member,
     channels.groupchat
-  );
+  ).catch((err) => {
+    console.error('Ask command error:', err instanceof Error ? err.message : 'Unknown');
+    channels.groupchat.send('⚠️ Riley encountered an error routing this question. Try again.').catch(() => {});
+  });
 }
 
 async function handleClearSlash(

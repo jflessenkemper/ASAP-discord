@@ -66,7 +66,14 @@ const CMD_TIMEOUT = 30_000;
 // Path safety
 // ────────────────────────────────────────────
 
+/** Cache validated paths to avoid re-resolving. LRU-like with size cap. */
+const safePathCache = new Map<string, string>();
+const SAFE_PATH_CACHE_MAX = 500;
+
 function safePath(relative: string): string {
+  const cached = safePathCache.get(relative);
+  if (cached) return cached;
+
   // Normalize and resolve to absolute
   const resolved = path.resolve(REPO_ROOT, relative);
 
@@ -82,6 +89,13 @@ function safePath(relative: string): string {
       throw new Error(`Access denied: ${relative}`);
     }
   }
+
+  // Cache result (evict oldest if full)
+  if (safePathCache.size >= SAFE_PATH_CACHE_MAX) {
+    const firstKey = safePathCache.keys().next().value;
+    if (firstKey !== undefined) safePathCache.delete(firstKey);
+  }
+  safePathCache.set(relative, resolved);
 
   return resolved;
 }
@@ -568,9 +582,15 @@ function searchFiles(pattern: string, include?: string): string {
     );
     const lines = result.trim();
     if (!lines) return `No matches found for pattern: ${pattern}`;
-    // Trim to reasonable size
-    const trimmed = lines.split('\n').slice(0, 50).join('\n');
-    return trimmed;
+    // Deduplicate lines (same file+line can match multiple patterns)
+    const seen = new Set<string>();
+    const deduped = lines.split('\n').filter((line) => {
+      const key = line.split(':').slice(0, 2).join(':');
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    }).slice(0, 50);
+    return deduped.join('\n');
   } catch {
     return `Search failed for pattern: ${pattern}`;
   }
@@ -649,6 +669,8 @@ const HARD_BLOCKED = [
   /;\s*(rm|mkfs|dd|curl|wget|nc|ncat|python|perl|ruby)\b/,  // chained dangerous commands
   /\|\s*(ba)?sh/,                   // piping to shell
   /&&\s*(rm|mkfs|dd|curl|wget)\b/,
+  /\$\{/,                           // variable expansion (prevents ${IFS} tricks)
+  /\\x[0-9a-f]{2}/i,               // hex escapes
 ];
 
 /** Command audit log callback — set externally to post to Discord */
@@ -803,7 +825,11 @@ function runTests(pattern?: string): string {
       env: { ...process.env, NODE_ENV: 'test', CI: 'true' },
       shell: '/bin/sh',
     });
-    return result.trim().slice(-4000) || 'All tests passed (no output)';
+    // Cap output to last 4000 chars to avoid flooding Claude context
+    const output = result.trim();
+    return output.length > 4000
+      ? '... (output trimmed)\n' + output.slice(-4000)
+      : output || 'All tests passed (no output)';
   } catch (err: unknown) {
     const execErr = err as { stdout?: string; stderr?: string; message?: string };
     const output = (execErr.stdout || '') + '\n' + (execErr.stderr || '');

@@ -124,8 +124,12 @@ export function getAgents(): Map<AgentId, AgentConfig> {
   if (agentCache) return agentCache;
 
   agentCache = new Map();
+  let loadErrors = 0;
   for (const id of AGENT_IDS) {
     const emoji = EMOJI_MAP[id] || '🤖';
+    const systemPrompt = loadSystemPrompt(id);
+    // Track agents that fell back to default prompt
+    if (systemPrompt.startsWith('You are the ')) loadErrors++;
     agentCache.set(id, {
       id,
       name: DISPLAY_NAME[id] || id,
@@ -133,8 +137,11 @@ export function getAgents(): Map<AgentId, AgentConfig> {
       emoji,
       color: COLOR_MAP[id] || 0x99AAB5,
       voice: VOICE_MAP[id] || 'Kore',
-      systemPrompt: loadSystemPrompt(id),
+      systemPrompt,
     });
+  }
+  if (loadErrors > 0) {
+    console.warn(`⚠️ ${loadErrors}/${AGENT_IDS.length} agent prompts could not be loaded from .agent.md files`);
   }
   return agentCache;
 }

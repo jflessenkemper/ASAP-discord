@@ -117,3 +117,23 @@ export function getMemoryContext(agentId: string, maxMessages = 20): Conversatio
   if (history.length <= maxMessages * 2) return history;
   return history.slice(history.length - maxMessages * 2);
 }
+
+/**
+ * Flush all pending debounced writes to disk immediately.
+ * Call this on graceful shutdown to avoid losing data.
+ */
+export function flushPendingWrites(): void {
+  for (const [agentId, timer] of pendingWrites) {
+    clearTimeout(timer);
+    const cached = memoryCache.get(agentId);
+    if (cached) {
+      try {
+        ensureDir();
+        fs.writeFileSync(memoryPath(agentId), JSON.stringify(cached, null, 2));
+      } catch (err) {
+        console.error(`Flush write failed for ${agentId}:`, err instanceof Error ? err.message : 'Unknown');
+      }
+    }
+  }
+  pendingWrites.clear();
+}

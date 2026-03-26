@@ -64,6 +64,7 @@ export function getRequiredReviewers(changedFiles: string[]): Map<string, string
 /**
  * Auto-consult agents on a pull request.
  * Posts their review as a PR comment and to the groupchat.
+ * Reviewers are called in parallel for speed.
  */
 export async function autoReviewPR(
   prNumber: number,
@@ -75,9 +76,12 @@ export async function autoReviewPR(
   const reviewers = getRequiredReviewers(changedFiles);
   if (reviewers.size === 0) return;
 
-  for (const [agentId, reasons] of reviewers) {
+  const prUrl = `https://github.com/${process.env.GITHUB_REPO || 'jflessenkemper/ASAP'}/pull/${prNumber}`;
+
+  // Fire all reviewer calls in parallel
+  const reviewTasks = [...reviewers].map(async ([agentId, reasons]) => {
     const agent = getAgent(agentId as AgentId);
-    if (!agent) continue;
+    if (!agent) return;
 
     const reasonList = reasons.map((r) => `- ${r}`).join('\n');
     const reviewPrompt = `[AUTO-REVIEW] PR #${prNumber}: "${prTitle}"
@@ -112,8 +116,8 @@ Keep your review under 300 words.`;
         // GITHUB_TOKEN might not be set — that's fine, still post to Discord
       }
 
-      // Post to groupchat
-      await groupchat.send(`${agent.emoji} **${agent.name.split(' ')[0]}** reviewed PR #${prNumber}:\n${response.slice(0, 1800)}`);
+      // Post to groupchat with PR link
+      await groupchat.send(`${agent.emoji} **${agent.name.split(' ')[0]}** reviewed [PR #${prNumber}](${prUrl}):\n${response.slice(0, 1800)}`);
 
       await documentToChannel(agentId, `✅ Review posted for PR #${prNumber}`);
       appendToMemory(agentId, [
@@ -124,5 +128,7 @@ Keep your review under 300 words.`;
       console.error(`Auto-review error (${agentId}):`, err instanceof Error ? err.message : 'Unknown');
       await groupchat.send(`⚠️ ${agent.emoji} ${agent.name.split(' ')[0]} could not review PR #${prNumber}`);
     }
-  }
+  });
+
+  await Promise.allSettled(reviewTasks);
 }

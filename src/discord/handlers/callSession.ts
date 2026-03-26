@@ -10,6 +10,11 @@ import { documentToChannel } from './documentation';
 /** Only Riley (EA) and Ace (Developer) speak in voice calls */
 const VOICE_SPEAKERS = new Set(['executive-assistant', 'developer']);
 
+/** Heartbeat interval to detect stale connections (every 2 minutes) */
+const HEARTBEAT_INTERVAL = 2 * 60 * 1000;
+/** Max conversation history in a call */
+const MAX_CALL_HISTORY = 40;
+
 export interface CallSession {
   active: boolean;
   startTime: Date;
@@ -20,6 +25,7 @@ export interface CallSession {
   groupchat: TextChannel;
   callLog: TextChannel;
   processingQueue: Promise<void>;
+  heartbeatTimer: ReturnType<typeof setInterval> | null;
 }
 
 let activeSession: CallSession | null = null;
@@ -50,7 +56,18 @@ export async function startCall(
     groupchat,
     callLog,
     processingQueue: Promise.resolve(),
+    heartbeatTimer: null,
   };
+
+  // Heartbeat — detect disconnected voice channel
+  activeSession.heartbeatTimer = setInterval(async () => {
+    if (!activeSession?.active) return;
+    const conn = (await import('../voice/connection')).getConnection();
+    if (!conn || conn.state.status === 'destroyed' || conn.state.status === 'disconnected') {
+      console.warn('Voice connection lost — ending call');
+      await endCall();
+    }
+  }, HEARTBEAT_INTERVAL);
 
   // Log call start
   const riley = getAgent('executive-assistant' as AgentId);
@@ -86,6 +103,12 @@ export async function endCall(): Promise<void> {
 
   const session = activeSession;
   session.active = false;
+
+  // Stop heartbeat
+  if (session.heartbeatTimer) {
+    clearInterval(session.heartbeatTimer);
+    session.heartbeatTimer = null;
+  }
 
   // Stop all listeners
   for (const unsub of session.unsubscribers) {
@@ -185,6 +208,7 @@ Keep your spoken response brief — you're in a voice call, not a text chat.`;
       // Run TTS generation, text message, and memory save in parallel
       const ttsPromise = textToSpeech(response.slice(0, 500), riley.voice).catch((ttsErr) => {
         console.error('TTS error for Riley:', ttsErr instanceof Error ? ttsErr.message : 'Unknown');
+        session.groupchat.send('⚠️ Voice playback unavailable — Riley\'s response is in text above.').catch(() => {});
         return null;
       });
 
@@ -220,8 +244,8 @@ Keep your spoken response brief — you're in a voice call, not a text chat.`;
               content: `[Ace]: ${aceResponse}`,
             });
 
-            if (session.conversationHistory.length > 40) {
-              session.conversationHistory.splice(0, session.conversationHistory.length - 40);
+            if (session.conversationHistory.length > MAX_CALL_HISTORY) {
+              session.conversationHistory.splice(0, session.conversationHistory.length - MAX_CALL_HISTORY);
             }
 
             session.transcript.push(
@@ -231,6 +255,7 @@ Keep your spoken response brief — you're in a voice call, not a text chat.`;
             // Run TTS generation, text message, and memory save in parallel
             const aceTtsPromise = textToSpeech(aceResponse.slice(0, 500), ace.voice).catch((ttsErr) => {
               console.error('TTS error for Ace:', ttsErr instanceof Error ? ttsErr.message : 'Unknown');
+              session.groupchat.send('⚠️ Voice playback unavailable — Ace\'s response is in text above.').catch(() => {});
               return null;
             });
 
