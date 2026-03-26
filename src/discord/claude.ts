@@ -161,7 +161,25 @@ KEY TOOLS:
 
       // Execute tool calls in parallel (read-only tools) or sequentially (write tools)
       const toolBlocks = response.content.filter((b) => b.type === 'tool_use');
-      const WRITE_TOOLS = new Set(['write_file', 'edit_file', 'batch_edit', 'run_command', 'git_create_branch', 'create_pull_request', 'merge_pull_request']);
+      const WRITE_TOOLS = new Set([
+        // File ops
+        'write_file', 'edit_file', 'batch_edit',
+        // Shell
+        'run_command',
+        // Git/GitHub
+        'git_create_branch', 'create_pull_request', 'merge_pull_request', 'add_pr_comment',
+        // Discord management
+        'delete_channel', 'create_channel', 'rename_channel', 'set_channel_topic',
+        'send_channel_message', 'delete_category', 'move_channel',
+        // GCP
+        'gcp_deploy', 'gcp_set_env', 'gcp_rollback', 'gcp_secret_set',
+        // Memory
+        'memory_write', 'memory_append',
+        // Database (may contain INSERT/UPDATE/DELETE)
+        'db_query',
+        // Screenshots
+        'capture_screenshots',
+      ]);
 
       // Separate into read-only (parallelizable) and write (sequential) batches
       const readBatch: typeof toolBlocks = [];

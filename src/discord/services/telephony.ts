@@ -46,29 +46,42 @@ export function isTelephonyAvailable(): boolean {
   return !!(TWILIO_ACCOUNT_SID && TWILIO_AUTH_TOKEN && TWILIO_PHONE_NUMBER);
 }
 
-// ── Known contacts (persisted to disk) ──
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
-import { join } from 'path';
+// ── Known contacts (persisted to database) ──
+import pool from '../../db/pool';
 
-const CONTACTS_FILE = join(process.cwd(), 'data', 'phone-contacts.json');
+const CONTACTS_DB_KEY = 'phone-contacts';
 
 function loadContacts(): Record<string, string> {
-  try {
-    if (existsSync(CONTACTS_FILE)) {
-      return JSON.parse(readFileSync(CONTACTS_FILE, 'utf-8'));
-    }
-  } catch {}
+  // Synchronous fallback — DB load happens in initContacts()
   return { '+61436012231': 'Jordan' };
 }
 
-function saveContacts(contacts: Record<string, string>): void {
+/** Load contacts from DB at startup. Call after DB pool is ready. */
+export async function initContacts(): Promise<void> {
   try {
-    const dir = join(process.cwd(), 'data');
-    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-    writeFileSync(CONTACTS_FILE, JSON.stringify(contacts, null, 2));
+    const { rows } = await pool.query(
+      'SELECT content FROM agent_memory WHERE file_name = $1', [CONTACTS_DB_KEY]
+    );
+    if (rows.length > 0) {
+      const parsed = JSON.parse(rows[0].content);
+      if (typeof parsed === 'object' && parsed !== null) {
+        Object.assign(knownContacts, parsed);
+      }
+    }
+    console.log(`Phone contacts loaded: ${Object.keys(knownContacts).length} contact(s)`);
   } catch (err) {
-    console.error('Failed to save contacts:', err instanceof Error ? err.message : 'Unknown');
+    console.error('Failed to load contacts from DB:', err instanceof Error ? err.message : 'Unknown');
   }
+}
+
+function saveContacts(contacts: Record<string, string>): void {
+  pool.query(
+    `INSERT INTO agent_memory (file_name, content, updated_at) VALUES ($1, $2, NOW())
+     ON CONFLICT (file_name) DO UPDATE SET content = $2, updated_at = NOW()`,
+    [CONTACTS_DB_KEY, JSON.stringify(contacts)]
+  ).catch((err) => {
+    console.error('Failed to save contacts:', err instanceof Error ? err.message : 'Unknown');
+  });
 }
 
 let knownContacts = loadContacts();

@@ -691,13 +691,10 @@ async function postDecisionEmbed(
 /** Persist groupHistory to disk. Called after every interaction. */
 function persistGroupHistory(): void {
   saveMemory('groupchat', groupHistory);
-  // Trigger compression when history gets long (runs in background)
+  // Trigger compression when history gets long (runs in background).
+  // compressMemory mutates the cached array in-place, and groupHistory
+  // IS that cached array, so no post-compression sync is needed.
   if (groupHistory.length >= 60) {
-    compressMemory('groupchat').then(() => {
-      // Reload the compressed history into the same array reference
-      const compressed = loadMemory('groupchat');
-      groupHistory.length = 0;
-      groupHistory.push(...compressed);
-    }).catch(() => {});
+    compressMemory('groupchat').catch(() => {});
   }
 }

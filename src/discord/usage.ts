@@ -75,7 +75,7 @@ export function isElevenLabsOverLimit(): boolean {
 }
 
 // ─── Cost estimates ─────────────────────────────────────────────────────────
-// Claude Opus 4 pricing via Vertex AI (per 1M tokens)
+// Claude Opus 4 pricing via Anthropic API (per 1M tokens)
 const CLAUDE_INPUT_COST_PER_M = 15.0;
 const CLAUDE_OUTPUT_COST_PER_M = 75.0;
 // Gemini 2.0 Flash — very cheap, approximate
@@ -120,7 +120,7 @@ export function getUsageEmbed(): EmbedBuilder {
     .setColor(color)
     .addFields(
       {
-        name: '🧠 Claude (Vertex AI)',
+        name: '🧠 Claude (Anthropic)',
         value:
           `${progressBar(totalClaudeTokens, DAILY_LIMITS.claudeTokens)}\n` +
           `${totalClaudeTokens.toLocaleString()} / ${DAILY_LIMITS.claudeTokens.toLocaleString()} tokens\n` +
@@ -159,7 +159,7 @@ export function getUsageReport(): string {
 
   return (
     `📊 **ASAP Usage Dashboard** — ${usage.lastReset}\n\n` +
-    `**Claude (Vertex AI)**\n` +
+    `**Claude (Anthropic)**\n` +
     `${progressBar(totalClaudeTokens, DAILY_LIMITS.claudeTokens)}\n` +
     `${totalClaudeTokens.toLocaleString()} / ${DAILY_LIMITS.claudeTokens.toLocaleString()} tokens` +
     ` (${usage.claudeInputTokens.toLocaleString()} in · ${usage.claudeOutputTokens.toLocaleString()} out)\n` +

@@ -106,10 +106,11 @@ export function loadMemory(agentId: string): ConversationMessage[] {
  * Updates cache immediately, debounces DB write.
  */
 export function saveMemory(agentId: string, history: ConversationMessage[]): void {
-  const trimmed = history.length > MAX_MESSAGES * 2
-    ? history.slice(history.length - MAX_MESSAGES * 2)
-    : history;
-  memoryCache.set(agentId, trimmed);
+  // Trim in-place to preserve existing references (e.g. groupHistory)
+  if (history.length > MAX_MESSAGES * 2) {
+    history.splice(0, history.length - MAX_MESSAGES * 2);
+  }
+  memoryCache.set(agentId, history);
 
   // Debounce DB writes — update cache immediately, write to DB after 2s of inactivity
   const existing = pendingWrites.get(agentId);
@@ -121,7 +122,7 @@ export function saveMemory(agentId: string, history: ConversationMessage[]): voi
       pool.query(
         `INSERT INTO agent_memory (file_name, content, updated_at) VALUES ($1, $2, NOW())
          ON CONFLICT (file_name) DO UPDATE SET content = $2, updated_at = NOW()`,
-        [key, JSON.stringify(trimmed)]
+        [key, JSON.stringify(history)]
       ).catch((err) => {
         console.error(`DB write failed for ${agentId}:`, err instanceof Error ? err.message : 'Unknown');
       });

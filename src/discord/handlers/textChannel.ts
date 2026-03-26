@@ -156,7 +156,12 @@ export async function sendLongMessage(channel: TextChannel, content: string): Pr
   let chunk = '';
 
   for (const line of lines) {
-    if (chunk.length + line.length + 1 > 1990) {
+    if (line.length > 1990) {
+      if (chunk) { await channel.send(chunk); chunk = ''; }
+      for (let i = 0; i < line.length; i += 1990) {
+        await channel.send(line.slice(i, i + 1990));
+      }
+    } else if (chunk.length + line.length + 1 > 1990) {
       if (chunk) await channel.send(chunk);
       chunk = line;
     } else {
@@ -175,7 +180,14 @@ function splitMessage(text: string, maxLen: number): string[] {
   let chunk = '';
 
   for (const line of lines) {
-    if (chunk.length + line.length + 1 > maxLen) {
+    if (line.length > maxLen) {
+      // Flush current chunk first
+      if (chunk) { chunks.push(chunk); chunk = ''; }
+      // Sub-split oversized line at maxLen boundaries
+      for (let i = 0; i < line.length; i += maxLen) {
+        chunks.push(line.slice(i, i + maxLen));
+      }
+    } else if (chunk.length + line.length + 1 > maxLen) {
       if (chunk) chunks.push(chunk);
       chunk = line;
     } else {

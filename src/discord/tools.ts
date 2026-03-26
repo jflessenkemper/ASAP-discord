@@ -15,11 +15,11 @@ import {
   mergePullRequest,
   addPRComment,
   listPullRequests,
-  deleteBranch,
   searchGitHub,
 } from '../services/github';
 import { getRequiredReviewers } from './handlers/review';
 import { captureAndPostScreenshots } from './services/screenshots';
+import { getWebhook } from './services/webhooks';
 
 // ────────────────────────────────────────────
 // Discord guild reference — set from bot.ts
@@ -995,7 +995,7 @@ function searchFiles(pattern: string, include?: string): string {
   try {
     const result = execFileSync(
       'grep',
-      ['-rn', '-i', '-E', pattern, ...includeArgs, '--max-count=50', '.'],
+      ['-rn', '-i', '-E', pattern, ...includeArgs, '--exclude-dir=node_modules', '--exclude-dir=.git', '--exclude-dir=dist', '--max-count=50', '.'],
       { cwd: REPO_ROOT, timeout: 10_000, maxBuffer: 512 * 1024, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] }
     );
     const lines = result.trim();
@@ -1419,7 +1419,7 @@ async function discordSetTopic(channelName: string, topic: string): Promise<stri
   return `Updated topic for #${channelName}`;
 }
 
-async function discordSendMessage(channelName: string, message: string): Promise<string> {
+async function discordSendMessage(channelName: string, message: string, agentName?: string): Promise<string> {
   const guild = requireGuild();
 
   const channel = guild.channels.cache.find(
@@ -1429,8 +1429,19 @@ async function discordSendMessage(channelName: string, message: string): Promise
 
   // Respect Discord's 2000 char limit
   const chunks = message.match(/.{1,2000}/gs) || [message];
-  for (const chunk of chunks) {
-    await channel.send(chunk);
+  try {
+    const wh = await getWebhook(channel);
+    for (const chunk of chunks) {
+      await wh.send({
+        content: chunk,
+        username: agentName || 'ASAP Agent',
+      });
+    }
+  } catch {
+    // Fallback to bot identity if webhook fails
+    for (const chunk of chunks) {
+      await channel.send(chunk);
+    }
   }
   return `Sent message to #${channelName} (${message.length} chars)`;
 }
@@ -1620,9 +1631,19 @@ async function gcpSetEnv(variables: string): Promise<string> {
   if (!safeVars) return 'Invalid format. Use KEY=VALUE pairs separated by commas.';
 
   try {
-    gcpExec(
-      `gcloud run services update ${GCP_SERVICE} --project=${GCP_PROJECT} --region=${GCP_REGION} --update-env-vars="${safeVars}"`
-    );
+    // Use execFileSync to avoid shell injection via env var values
+    const result = execFileSync('gcloud', [
+      'run', 'services', 'update', GCP_SERVICE,
+      `--project=${GCP_PROJECT}`,
+      `--region=${GCP_REGION}`,
+      `--update-env-vars=${safeVars}`,
+    ], {
+      cwd: REPO_ROOT,
+      timeout: GCP_TIMEOUT,
+      maxBuffer: 1024 * 1024,
+      encoding: 'utf-8',
+      env: { ...process.env },
+    }).trim();
     return `✅ Environment variables updated: ${safeVars.replace(/=.*/g, '=***').split(',').join(', ')}`;
   } catch (err) {
     return `❌ Failed to update env vars: ${err instanceof Error ? err.message : 'Unknown'}`;
@@ -1827,7 +1848,7 @@ function fetchUrl(url: string, method?: string, headersStr?: string, body?: stri
         resolve('Fetch error: Request timed out (30s)');
       });
 
-      if (body && httpMethod === 'POST') {
+      if (body && (httpMethod === 'POST' || httpMethod === 'PUT' || httpMethod === 'PATCH')) {
         req.write(body);
       }
 

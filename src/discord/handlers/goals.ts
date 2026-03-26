@@ -1,13 +1,13 @@
 import { Message, TextChannel } from 'discord.js';
 import { getAgent, AgentId, AgentConfig } from '../agents';
 import { agentRespond, ConversationMessage } from '../claude';
-import { appendToMemory, getMemoryContext } from '../memory';
+import { appendToMemory, getMemoryContext, loadMemory, saveMemory, compressMemory } from '../memory';
 import { documentToChannel } from './documentation';
 import { sendAgentMessage } from './textChannel';
 import { getWebhook } from '../services/webhooks';
 
-// Goals channel conversation history — persistent across messages
-const goalsHistory: ConversationMessage[] = [];
+// Goals channel conversation history — persistent across restarts via DB
+const goalsHistory: ConversationMessage[] = loadMemory('goals');
 const MAX_HISTORY = 40;
 
 // Tracks whether we're waiting for a decision from the user.
@@ -99,11 +99,13 @@ The user has made their choice. Acknowledge it briefly, then continue executing 
       // Check if Riley's response contains a decision request
       if (rileyResponse.includes('🛑') || rileyResponse.includes('Decision Required')) {
         pendingDecision = true;
+        trimHistory();
         return;
       }
 
       // Now direct Ace to implement based on Riley's plan
       await executeAceStep(ace, riley, rileyResponse, senderName, goalsChannel);
+      trimHistory();
 
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err);
@@ -240,5 +242,9 @@ Riley has created this plan based on a goal from ${senderName}. Implement the st
 function trimHistory(): void {
   if (goalsHistory.length > MAX_HISTORY * 2) {
     goalsHistory.splice(0, goalsHistory.length - MAX_HISTORY * 2);
+  }
+  saveMemory('goals', goalsHistory);
+  if (goalsHistory.length >= 60) {
+    compressMemory('goals').catch(() => {});
   }
 }

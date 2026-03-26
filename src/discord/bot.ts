@@ -17,7 +17,7 @@ import { setGitHubChannel } from './handlers/github';
 import { setLimitsChannel, startDashboardUpdates, stopDashboardUpdates } from './usage';
 import { flushPendingWrites, initMemory } from './memory';
 import { setScreenshotsChannel } from './services/screenshots';
-import { setTelephonyChannels, isTelephonyAvailable } from './services/telephony';
+import { setTelephonyChannels, isTelephonyAvailable, initContacts } from './services/telephony';
 
 let client: Client | null = null;
 let botChannels: BotChannels | null = null;
@@ -82,6 +82,7 @@ export async function startBot(): Promise<void> {
       setDiscordGuild(guild);
       if (isTelephonyAvailable()) {
         setTelephonyChannels(botChannels.callLog, botChannels.groupchat);
+        await initContacts();
       }
       await startDashboardUpdates();
 
