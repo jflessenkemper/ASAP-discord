@@ -59,7 +59,15 @@ export async function initMemory(): Promise<void> {
       try {
         const parsed = JSON.parse(row.content);
         if (Array.isArray(parsed)) {
-          memoryCache.set(agentId, parsed as ConversationMessage[]);
+          // If an array already exists in cache (e.g. from module-level loadMemory),
+          // mutate it in-place so existing references (like groupHistory) stay valid
+          const existing = memoryCache.get(agentId);
+          if (existing) {
+            existing.length = 0;
+            existing.push(...(parsed as ConversationMessage[]));
+          } else {
+            memoryCache.set(agentId, parsed as ConversationMessage[]);
+          }
         }
       } catch {
         console.warn(`Corrupt memory for ${agentId}, skipping`);
