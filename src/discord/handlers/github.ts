@@ -39,11 +39,20 @@ export async function handleGitHubEvent(
     console.error('GitHub webhook post error:', err instanceof Error ? err.message : 'Unknown');
   }
 
-  // Trigger screenshots after successful deployment
-  if (event === 'deployment_status' && payload.deployment_status?.state === 'success') {
+  // Trigger screenshots after:
+  // 1. Successful workflow_run completion (Quality & OTA passed → app updated)
+  // 2. Successful deployment_status (GitHub Deployments API)
+  const shouldScreenshot =
+    (event === 'workflow_run' && payload.action === 'completed' && payload.workflow_run?.conclusion === 'success') ||
+    (event === 'deployment_status' && payload.deployment_status?.state === 'success');
+
+  if (shouldScreenshot) {
     const appUrl = process.env.FRONTEND_URL || 'https://asap-489910.australia-southeast1.run.app';
-    captureAndPostScreenshots(appUrl, 'deploy').catch((err) => {
-      console.error('Post-deploy screenshot error:', err instanceof Error ? err.message : 'Unknown');
+    const label = event === 'workflow_run'
+      ? payload.workflow_run?.head_sha?.slice(0, 7) || 'latest'
+      : 'deploy';
+    captureAndPostScreenshots(appUrl, label).catch((err) => {
+      console.error('Post-build screenshot error:', err instanceof Error ? err.message : 'Unknown');
     });
   }
 }

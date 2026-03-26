@@ -24,9 +24,9 @@ export interface ConversationMessage {
 }
 
 /** Max tool-use iterations before forcing a text response */
-const MAX_TOOL_ROUNDS = 15;
+const MAX_TOOL_ROUNDS = 25;
 /** Max total time for a tool loop (ms) */
-const TOOL_LOOP_TIMEOUT = 90_000;
+const TOOL_LOOP_TIMEOUT = 180_000;
 /** Max concurrent Claude requests to avoid rate limits */
 const MAX_CONCURRENT = 4;
 let activeClaude = 0;
@@ -112,14 +112,14 @@ You have access to tools that let you read, write, search, and edit files in the
       return '⚠️ Daily Claude token limit reached. Try again tomorrow or adjust DAILY_LIMIT_CLAUDE_TOKENS.';
     }
     if (Date.now() - loopStart > TOOL_LOOP_TIMEOUT) {
-      return 'Tool loop timed out after 90 seconds. Check the repository for any partial changes.';
+      return 'Tool loop timed out after 3 minutes. Check the repository for any partial changes.';
     }
 
     const response = await withConcurrencyLimit(() =>
       withRetry(() =>
         anthropic.messages.create({
           model: CLAUDE_MODEL,
-          max_tokens: 4096,
+          max_tokens: 16384,
           system: systemPrompt,
           tools: REPO_TOOLS as any,
           messages: currentMessages,
@@ -137,41 +137,49 @@ You have access to tools that let you read, write, search, and edit files in the
         content: response.content as any,
       } as any);
 
-      // Execute each tool call and build tool_result messages
+      // Execute tool calls in parallel (read-only tools) or sequentially (write tools)
+      const toolBlocks = response.content.filter((b) => b.type === 'tool_use');
+      const WRITE_TOOLS = new Set(['write_file', 'edit_file', 'batch_edit', 'run_command', 'git_create_branch', 'create_pull_request', 'merge_pull_request']);
+
+      // Separate into read-only (parallelizable) and write (sequential) batches
+      const readBatch: typeof toolBlocks = [];
+      const writeBatch: typeof toolBlocks = [];
+      for (const block of toolBlocks) {
+        if (block.type === 'tool_use') {
+          (WRITE_TOOLS.has(block.name) ? writeBatch : readBatch).push(block);
+        }
+      }
+
       const toolResults: Array<{
         type: 'tool_result';
         tool_use_id: string;
         content: string;
       }> = [];
 
-      for (const block of response.content) {
-        if (block.type === 'tool_use') {
-          const result = await executeTool(
-            block.name,
-            block.input as Record<string, string>
-          );
+      const processBlock = async (block: any) => {
+        const result = await executeTool(block.name, block.input as Record<string, string>);
+        const summary = formatToolSummary(block.name, block.input as Record<string, string>);
+        if (onToolUse) await onToolUse(block.name, summary);
+        const toolAudit = getToolAuditCallback();
+        if (toolAudit) toolAudit(agent.name, block.name, summary);
+        return {
+          type: 'tool_result' as const,
+          tool_use_id: block.id,
+          content: result.length > 8000
+            ? result.slice(0, 8000) + '\n\n[Output truncated — original was ' + result.length + ' chars]'
+            : result,
+        };
+      };
 
-          const summary = formatToolSummary(block.name, block.input as Record<string, string>);
+      // Run read-only tools in parallel
+      if (readBatch.length > 0) {
+        const readResults = await Promise.all(readBatch.map(processBlock));
+        toolResults.push(...readResults);
+      }
 
-          // Notify the channel about the tool use
-          if (onToolUse) {
-            await onToolUse(block.name, summary);
-          }
-
-          // Post to #terminal channel
-          const toolAudit = getToolAuditCallback();
-          if (toolAudit) {
-            toolAudit(agent.name, block.name, summary);
-          }
-
-          toolResults.push({
-            type: 'tool_result',
-            tool_use_id: block.id,
-            content: result.length > 8000
-              ? result.slice(0, 8000) + '\n\n[Output truncated — original was ' + result.length + ' chars]'
-              : result,
-          });
-        }
+      // Run write tools sequentially (order matters)
+      for (const block of writeBatch) {
+        toolResults.push(await processBlock(block));
       }
 
       // Add tool results as a user message
@@ -240,6 +248,11 @@ function formatToolSummary(toolName: string, input: Record<string, string>): str
       return `Searching GitHub for \`${input.query}\`${input.type ? ` (${input.type})` : ''}`;
     case 'typecheck':
       return `Running typecheck${input.target ? ` (${input.target})` : ''}`;
+    case 'batch_edit': {
+      const edits = input.edits as any;
+      const count = Array.isArray(edits) ? edits.length : '?';
+      return `Batch editing ${count} files`;
+    }
     default:
       return `Using ${toolName}`;
   }

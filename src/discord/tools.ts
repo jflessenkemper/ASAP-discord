@@ -527,6 +527,30 @@ export const REPO_TOOLS = [
       required: [],
     },
   },
+  {
+    name: 'batch_edit',
+    description:
+      'Apply multiple file edits in a single tool call. More efficient than calling edit_file multiple times. Each edit replaces an exact string in a file (old_string must appear exactly once). Edits are applied sequentially — later edits see the results of earlier ones.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        edits: {
+          type: 'array',
+          description: 'Array of edit operations',
+          items: {
+            type: 'object',
+            properties: {
+              path: { type: 'string', description: 'Relative file path from repo root' },
+              old_string: { type: 'string', description: 'Exact text to find (must appear exactly once)' },
+              new_string: { type: 'string', description: 'Replacement text' },
+            },
+            required: ['path', 'old_string', 'new_string'],
+          },
+        },
+      },
+      required: ['edits'],
+    },
+  },
 ] as const;
 
 // ────────────────────────────────────────────
@@ -586,6 +610,8 @@ export async function executeTool(
         return await ghSearch(input.query, (input.type as 'code' | 'issues' | 'commits') || 'code');
       case 'typecheck':
         return runTypecheck((input.target as 'client' | 'server' | 'both') || 'both');
+      case 'batch_edit':
+        return batchEdit(input.edits as any);
       default:
         return `Unknown tool: ${toolName}`;
     }
@@ -633,6 +659,27 @@ function editFile(relativePath: string, oldString: string, newString: string): s
   const updated = content.replace(oldString, newString);
   fs.writeFileSync(abs, updated, 'utf-8');
   return `Edited ${relativePath} successfully.`;
+}
+
+function batchEdit(edits: Array<{ path: string; old_string: string; new_string: string }>): string {
+  if (!Array.isArray(edits) || edits.length === 0) {
+    return 'No edits provided. Pass an array of {path, old_string, new_string} objects.';
+  }
+  const results: string[] = [];
+  let succeeded = 0;
+  for (let i = 0; i < edits.length; i++) {
+    const { path: p, old_string, new_string } = edits[i];
+    const result = editFile(p, old_string, new_string);
+    if (result.includes('successfully')) {
+      succeeded++;
+    } else {
+      results.push(`Edit ${i + 1} (${p}): ${result}`);
+    }
+  }
+  if (results.length === 0) {
+    return `All ${succeeded} edits applied successfully.`;
+  }
+  return `${succeeded}/${edits.length} edits succeeded.\nFailed:\n${results.join('\n')}`;
 }
 
 function searchFiles(pattern: string, include?: string): string {

@@ -1,5 +1,5 @@
 import puppeteer, { Browser, Page } from 'puppeteer';
-import { TextChannel, AttachmentBuilder } from 'discord.js';
+import { TextChannel, AttachmentBuilder, Collection, Message } from 'discord.js';
 
 /** iPhone 17 Pro Max approximate viewport (6.9" display, 3x retina → logical pixels) */
 const VIEWPORT = { width: 440, height: 956, deviceScaleFactor: 3 };
@@ -52,6 +52,28 @@ export function setScreenshotsChannel(channel: TextChannel): void {
 }
 
 /**
+ * Clear all messages from the screenshots channel before posting new ones.
+ */
+async function clearChannel(channel: TextChannel): Promise<void> {
+  try {
+    let fetched: Collection<string, Message>;
+    do {
+      fetched = await channel.messages.fetch({ limit: 100 });
+      if (fetched.size > 0) {
+        await channel.bulkDelete(fetched, true).catch(async () => {
+          // bulkDelete fails for messages > 14 days old — delete individually
+          for (const msg of fetched.values()) {
+            await msg.delete().catch(() => {});
+          }
+        });
+      }
+    } while (fetched.size >= 2);
+  } catch (err) {
+    console.warn('Could not clear screenshots channel:', err instanceof Error ? err.message : 'Unknown');
+  }
+}
+
+/**
  * Capture screenshots of every screen in the app and post them to Discord.
  * Runs headless Chromium sized to iPhone 17 Pro Max.
  */
@@ -68,6 +90,10 @@ export async function captureAndPostScreenshots(
 
   try {
     const label = buildLabel || new Date().toISOString().slice(0, 19).replace('T', ' ');
+
+    // Clear old screenshots before posting new ones
+    await clearChannel(screenshotsChannel);
+
     await screenshotsChannel.send(`📸 **Build Screenshots** — ${label}\nCapturing on iPhone 17 Pro Max (${VIEWPORT.width}×${VIEWPORT.height} @${VIEWPORT.deviceScaleFactor}x)...`);
 
     browser = await puppeteer.launch({
