@@ -54,8 +54,10 @@ export async function handleAgentMessage(
     // Split response if over Discord's 2000 char limit
     await sendAgentMessage(channel, agent, response);
   } catch (err) {
-    console.error(`Agent ${agent.name} error:`, err instanceof Error ? err.message : 'Unknown');
-    await channel.send(`⚠️ ${agent.name} encountered an error. Please try again.`);
+    const errMsg = err instanceof Error ? err.message : String(err);
+    console.error(`Agent ${agent.name} error:`, errMsg);
+    const short = errMsg.length > 200 ? errMsg.slice(0, 200) + '…' : errMsg;
+    await channel.send(`⚠️ ${agent.name} encountered an error:\n\`\`\`${short}\`\`\``);
   }
 }
 

@@ -177,8 +177,10 @@ async function handleRileyMessage(
     // Check if Riley directed Ace or other agents
     await handleAgentChain(response, groupchat);
   } catch (err) {
-    console.error('Riley error:', err instanceof Error ? err.message : 'Unknown');
-    await groupchat.send('⚠️ Riley encountered an error. Try again.');
+    const errMsg = err instanceof Error ? err.message : String(err);
+    console.error('Riley error:', errMsg);
+    const short = errMsg.length > 200 ? errMsg.slice(0, 200) + '…' : errMsg;
+    await groupchat.send(`⚠️ Riley encountered an error:\n\`\`\`${short}\`\`\``);
   }
 }
 
