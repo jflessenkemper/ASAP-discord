@@ -20,8 +20,14 @@ const MAX_CALL_HISTORY = 40;
  * Sentence boundaries: . ! ? followed by space/end, or newlines.
  */
 function splitSentences(text: string): string[] {
-  const raw = text.match(/[^.!?\n]+[.!?]+[\s]?|[^.!?\n]+$/g) || [text];
-  return raw.map(s => s.trim()).filter(s => s.length > 0);
+  // Handle URLs, decimals, abbreviations, and code by using a more careful pattern.
+  // First, protect URLs and common abbreviations from splitting.
+  const placeholder = '\x00';
+  let protected_ = text
+    .replace(/https?:\/\/[^\s]+/g, (m) => m.replace(/\./g, placeholder))
+    .replace(/\b(Mr|Mrs|Ms|Dr|Jr|Sr|St|vs|etc|e\.g|i\.e)\./gi, (m) => m.replace('.', placeholder));
+  const raw = protected_.match(/[^.!?\n]+[.!?]+[\s]?|[^.!?\n]+$/g) || [text];
+  return raw.map(s => s.replace(new RegExp(placeholder, 'g'), '.').trim()).filter(s => s.length > 0);
 }
 
 /**
@@ -116,7 +122,7 @@ export async function startCall(
     `📞 **Voice call started**\n` +
       `Initiated by **${initiator.displayName}**\n` +
       `${riley?.emoji || '📋'} **Riley** and ${ace?.emoji || '💻'} **Ace** are on the line.\n\n` +
-      `Speak in the **${voiceChannel.name}** voice channel. Use \`/leave\` to end the call.`
+      `Speak in the **${voiceChannel.name}** voice channel. Say "leave" or ask Riley to end the call.`
   );
 
   activeSession.transcript.push(
@@ -128,7 +134,9 @@ export async function startCall(
     if (activeSession) {
       activeSession.processingQueue = activeSession.processingQueue.then(() =>
         handleVoiceInput(transcription)
-      );
+      ).catch((err) => {
+        console.error('Voice processing error:', err instanceof Error ? err.message : 'Unknown');
+      });
     }
   });
   activeSession.unsubscribers.push(unsub);

@@ -77,7 +77,7 @@ export async function elevenLabsTTS(
   const audio = await el.textToSpeech.convert(voiceId, {
     text,
     model_id: 'eleven_turbo_v2_5',
-    output_format: 'pcm_24000',
+    output_format: 'mp3_44100_128',
     voice_settings: {
       stability: 0.5,
       similarity_boost: 0.75,
@@ -116,7 +116,7 @@ export async function* elevenLabsTTSStream(
   const audio = await el.textToSpeech.convert(voiceId, {
     text,
     model_id: 'eleven_turbo_v2_5',
-    output_format: 'pcm_24000',
+    output_format: 'mp3_44100_128',
     voice_settings: {
       stability: 0.5,
       similarity_boost: 0.75,

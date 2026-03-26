@@ -130,9 +130,10 @@ export function listenToUser(
 
   function subscribe() {
     if (destroyed) return;
-    if (resubscribeCount++ >= MAX_RESUBSCRIBES) {
-      console.warn(`Max resubscribes (${MAX_RESUBSCRIBES}) reached for ${member.displayName} — stopping listener`);
-      return;
+    resubscribeCount++;
+    if (resubscribeCount >= MAX_RESUBSCRIBES) {
+      console.warn(`Max resubscribes (${MAX_RESUBSCRIBES}) reached for ${member.displayName} — restarting counter`);
+      resubscribeCount = 0;
     }
 
     const subscription = receiver.subscribe(member.id, {
@@ -159,7 +160,6 @@ export function listenToUser(
           try {
             const text = await transcribeVoice(audioBuffer);
             if (text && !destroyed) {
-              resubscribeCount = 0; // Reset on successful transcription
               onTranscription({
                 userId: member.id,
                 username: member.displayName,
@@ -246,6 +246,13 @@ export function listenToUserDeepgram(
   const receiver = connection.receiver;
 
   // Start Deepgram session
+  const dgTimeout = setTimeout(() => {
+    if (!dgSession && !destroyed) {
+      console.error(`Deepgram session start timed out for ${member.displayName} — falling back to Gemini`);
+      destroyed = true;
+    }
+  }, 10_000);
+
   startLiveTranscription(
     (text) => {
       if (!destroyed && text.trim()) {
@@ -261,6 +268,7 @@ export function listenToUserDeepgram(
       console.error(`Deepgram error for ${member.displayName}:`, err.message);
     }
   ).then((session) => {
+    clearTimeout(dgTimeout);
     if (destroyed) {
       session.close();
       return;

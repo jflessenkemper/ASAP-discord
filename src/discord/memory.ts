@@ -137,3 +137,7 @@ export function flushPendingWrites(): void {
   }
   pendingWrites.clear();
 }
+
+// Safety net: flush memory on process termination signals
+process.on('SIGTERM', () => { flushPendingWrites(); });
+process.on('SIGINT', () => { flushPendingWrites(); });

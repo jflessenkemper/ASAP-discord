@@ -14,6 +14,9 @@ import { captureAndPostScreenshots } from '../services/screenshots';
 const groupHistory: ConversationMessage[] = [];
 const MAX_HISTORY = 40;
 
+// Serial message queue to prevent race conditions on groupHistory
+let messageQueue: Promise<void> = Promise.resolve();
+
 // Active goal tracking for /status
 let activeGoal: string | null = null;
 let goalStatus: string | null = null;
@@ -50,6 +53,20 @@ export async function handleGroupchatMessage(
   const content = message.content.trim();
   if (!content) return;
 
+  // Serialize all groupchat processing to prevent race conditions on shared history
+  messageQueue = messageQueue.then(() =>
+    processGroupchatMessage(message, content, groupchat)
+  ).catch((err) => {
+    console.error('Groupchat queue error:', err instanceof Error ? err.message : 'Unknown');
+  });
+  await messageQueue;
+}
+
+async function processGroupchatMessage(
+  message: Message,
+  content: string,
+  groupchat: TextChannel
+): Promise<void> {
   const senderName = message.member?.displayName || message.author.username;
 
   // Check for explicit @agent mentions — route directly

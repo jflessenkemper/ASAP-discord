@@ -42,8 +42,8 @@ export async function startLiveTranscription(
     interim_results: false,       // Only final results — no flicker
     endpointing: 500,             // 500ms silence = end of utterance
     utterance_end_ms: 1500,       // 1.5s marks end of full utterance
-    encoding: 'opus',             // Discord sends opus
-    sample_rate: 48000,           // Discord opus sample rate
+    encoding: 'linear16',          // Discord receiver decodes to PCM s16le
+    sample_rate: 48000,           // Discord PCM sample rate
     channels: 2,                  // Discord stereo
   });
 
