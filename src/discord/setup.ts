@@ -19,6 +19,7 @@ export interface BotChannels {
   limits: TextChannel;
   screenshots: TextChannel;
   url: TextChannel;
+  terminal: TextChannel;
   voiceChannel: VoiceChannel;
 }
 
@@ -184,6 +185,13 @@ export async function setupChannels(guild: Guild): Promise<BotChannels> {
       `☁️ **Cloud Run**: https://console.cloud.google.com/run/detail/australia-southeast1/asap?project=asap-489910`
   );
 
+  const terminal = await ensureText(
+    'terminal',
+    catOps,
+    '💻 Live feed of all tool calls made by agents — file ops, git, commands, searches',
+    `💻 **Agent Terminal**\n\nReal-time log of every tool invocation by any agent.\nFile reads, writes, edits, searches, git ops, commands, and more.`
+  );
+
   // ── Clean up old agent channels without emoji prefix ──
   const agentIds = [...agents.keys()]; // e.g. 'qa', 'developer', 'lawyer'
   for (const oldName of agentIds) {
@@ -209,5 +217,5 @@ export async function setupChannels(guild: Guild): Promise<BotChannels> {
     }
   }
 
-  return { agentChannels, groupchat, github, callLog, limits, screenshots, url, voiceChannel };
+  return { agentChannels, groupchat, github, callLog, limits, screenshots, url, terminal, voiceChannel };
 }

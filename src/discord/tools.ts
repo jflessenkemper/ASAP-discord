@@ -14,6 +14,7 @@ import {
   addPRComment,
   listPullRequests,
   deleteBranch,
+  searchGitHub,
 } from '../services/github';
 import { getRequiredReviewers } from './handlers/review';
 
@@ -492,6 +493,40 @@ export const REPO_TOOLS = [
       required: [],
     },
   },
+  {
+    name: 'github_search',
+    description:
+      'Search the ASAP GitHub repository for code, issues/PRs, or commits. Use this to find things across the repo history, open issues, or specific code patterns on GitHub.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        query: {
+          type: 'string',
+          description: 'Search query (GitHub search syntax supported)',
+        },
+        type: {
+          type: 'string',
+          description: 'What to search: "code", "issues", or "commits". Default: code',
+        },
+      },
+      required: ['query'],
+    },
+  },
+  {
+    name: 'typecheck',
+    description:
+      'Run TypeScript type-checking (tsc --noEmit) on the client app, server, or both. Returns any type errors found. Use this after making code changes to verify correctness.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        target: {
+          type: 'string',
+          description: 'Which codebase to check: "client", "server", or "both". Default: both',
+        },
+      },
+      required: [],
+    },
+  },
 ] as const;
 
 // ────────────────────────────────────────────
@@ -547,6 +582,10 @@ export async function executeTool(
         return await discordMoveChannel(input.channel_name, input.category);
       case 'read_logs':
         return await readRuntimeLogs(input.severity, parseInt(input.limit, 10) || 30, input.query);
+      case 'github_search':
+        return await ghSearch(input.query, (input.type as 'code' | 'issues' | 'commits') || 'code');
+      case 'typecheck':
+        return runTypecheck((input.target as 'client' | 'server' | 'both') || 'both');
       default:
         return `Unknown tool: ${toolName}`;
     }
@@ -707,6 +746,17 @@ export function setCommandAuditCallback(
 ): void {
   auditCallback = cb;
 }
+
+/** Tool audit log callback — posts every tool invocation to #terminal */
+let toolAuditCallback: ((agentName: string, toolName: string, summary: string) => void) | null = null;
+
+export function setToolAuditCallback(
+  cb: (agentName: string, toolName: string, summary: string) => void
+): void {
+  toolAuditCallback = cb;
+}
+
+export function getToolAuditCallback() { return toolAuditCallback; }
 
 function runCommand(command: string, cwd?: string): string {
   const trimmed = command.trim();
@@ -1071,4 +1121,58 @@ async function readRuntimeLogs(severity?: string, limit = 30, query?: string): P
   });
 
   return lines.join('\n');
+}
+
+// ────────────────────────────────────────────
+// GitHub search
+// ────────────────────────────────────────────
+
+async function ghSearch(query: string, type: 'code' | 'issues' | 'commits'): Promise<string> {
+  try {
+    return await searchGitHub(query, type);
+  } catch (err) {
+    return `GitHub search error: ${err instanceof Error ? err.message : 'Unknown'}`;
+  }
+}
+
+// ────────────────────────────────────────────
+// Typecheck tool
+// ────────────────────────────────────────────
+
+function runTypecheck(target: 'client' | 'server' | 'both'): string {
+  const results: string[] = [];
+
+  if (target === 'client' || target === 'both') {
+    try {
+      execSync('npx tsc --noEmit', {
+        cwd: REPO_ROOT,
+        timeout: 60_000,
+        maxBuffer: 512 * 1024,
+        encoding: 'utf-8',
+      });
+      results.push('✅ Client: No type errors');
+    } catch (err: unknown) {
+      const execErr = err as { stdout?: string; stderr?: string };
+      const output = (execErr.stdout || execErr.stderr || '').trim();
+      results.push(`❌ Client type errors:\n${output.slice(0, 3000)}`);
+    }
+  }
+
+  if (target === 'server' || target === 'both') {
+    try {
+      execSync('npx tsc --noEmit', {
+        cwd: path.join(REPO_ROOT, 'server'),
+        timeout: 60_000,
+        maxBuffer: 512 * 1024,
+        encoding: 'utf-8',
+      });
+      results.push('✅ Server: No type errors');
+    } catch (err: unknown) {
+      const execErr = err as { stdout?: string; stderr?: string };
+      const output = (execErr.stdout || execErr.stderr || '').trim();
+      results.push(`❌ Server type errors:\n${output.slice(0, 3000)}`);
+    }
+  }
+
+  return results.join('\n\n');
 }

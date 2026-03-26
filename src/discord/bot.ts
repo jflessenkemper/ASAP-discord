@@ -7,7 +7,7 @@ import {
 import { setupChannels, BotChannels } from './setup';
 import { getAgentByChannelName } from './agents';
 import { handleAgentMessage } from './handlers/textChannel';
-import { setCommandAuditCallback, setPRReviewCallback, setDiscordGuild } from './tools';
+import { setCommandAuditCallback, setPRReviewCallback, setDiscordGuild, setToolAuditCallback } from './tools';
 import { autoReviewPR } from './handlers/review';
 import { handleGroupchatMessage } from './handlers/groupchat';
 import { endCall, isCallActive } from './handlers/callSession';
@@ -85,6 +85,12 @@ export async function startBot(): Promise<void> {
         const icon = allowed ? '✅' : '🚫';
         const truncated = cmd.length > 100 ? cmd.slice(0, 100) + '...' : cmd;
         botChannels!.github.send(`${icon} \`run_command\`: \`${truncated}\` — ${reason}`).catch(() => {});
+      });
+
+      // Wire tool audit to #terminal channel — every tool invocation from every agent
+      setToolAuditCallback((agentName, toolName, summary) => {
+        const firstName = agentName.split(' ')[0];
+        botChannels!.terminal.send(`🔧 **${firstName}** → \`${toolName}\`: ${summary}`).catch(() => {});
       });
 
       // Wire PR auto-review (Harper + Kane on sensitive files)

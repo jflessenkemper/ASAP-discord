@@ -1,6 +1,6 @@
 import AnthropicVertex from '@anthropic-ai/vertex-sdk';
 import { AgentConfig } from './agents';
-import { REPO_TOOLS, executeTool } from './tools';
+import { REPO_TOOLS, executeTool, getToolAuditCallback } from './tools';
 import { recordClaudeUsage, isClaudeOverLimit } from './usage';
 
 const VERTEX_REGION = process.env.CLAUDE_VERTEX_REGION || 'asia-southeast1';
@@ -151,10 +151,17 @@ You have access to tools that let you read, write, search, and edit files in the
             block.input as Record<string, string>
           );
 
+          const summary = formatToolSummary(block.name, block.input as Record<string, string>);
+
           // Notify the channel about the tool use
           if (onToolUse) {
-            const summary = formatToolSummary(block.name, block.input as Record<string, string>);
             await onToolUse(block.name, summary);
+          }
+
+          // Post to #terminal channel
+          const toolAudit = getToolAuditCallback();
+          if (toolAudit) {
+            toolAudit(agent.name, block.name, summary);
           }
 
           toolResults.push({
@@ -229,6 +236,10 @@ function formatToolSummary(toolName: string, input: Record<string, string>): str
       return `Moving #${input.channel_name} to ${input.category}`;
     case 'read_logs':
       return `Reading Cloud Run logs${input.severity ? ` (${input.severity}+)` : ''}`;
+    case 'github_search':
+      return `Searching GitHub for \`${input.query}\`${input.type ? ` (${input.type})` : ''}`;
+    case 'typecheck':
+      return `Running typecheck${input.target ? ` (${input.target})` : ''}`;
     default:
       return `Using ${toolName}`;
   }

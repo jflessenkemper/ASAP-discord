@@ -126,3 +126,39 @@ export async function deleteBranch(branchName: string): Promise<void> {
     ref: `heads/${branchName}`,
   });
 }
+
+/**
+ * Search the GitHub repository for code, issues, or commits.
+ */
+export async function searchGitHub(
+  query: string,
+  type: 'code' | 'issues' | 'commits' = 'code'
+): Promise<string> {
+  const ok = getOctokit();
+  const repoQualifier = `repo:${OWNER}/${REPO}`;
+  const fullQuery = `${query} ${repoQualifier}`;
+
+  switch (type) {
+    case 'code': {
+      const { data } = await ok.search.code({ q: fullQuery, per_page: 15 });
+      if (data.total_count === 0) return 'No code matches found.';
+      return data.items.map(item =>
+        `${item.path}:${item.name} — ${item.html_url}`
+      ).join('\n');
+    }
+    case 'issues': {
+      const { data } = await ok.search.issuesAndPullRequests({ q: fullQuery, per_page: 15 });
+      if (data.total_count === 0) return 'No matching issues/PRs found.';
+      return data.items.map(item =>
+        `#${item.number} [${item.state}] ${item.title} — ${item.html_url}`
+      ).join('\n');
+    }
+    case 'commits': {
+      const { data } = await ok.search.commits({ q: fullQuery, per_page: 15 });
+      if (data.total_count === 0) return 'No matching commits found.';
+      return data.items.map(item =>
+        `${item.sha.slice(0, 7)} ${item.commit.message.split('\n')[0]} — ${item.html_url}`
+      ).join('\n');
+    }
+  }
+}
