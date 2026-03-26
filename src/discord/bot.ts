@@ -17,6 +17,7 @@ import { setGitHubChannel } from './handlers/github';
 import { setLimitsChannel, startDashboardUpdates, stopDashboardUpdates } from './usage';
 import { flushPendingWrites } from './memory';
 import { setScreenshotsChannel } from './services/screenshots';
+import { setTelephonyChannels, isTelephonyAvailable } from './services/telephony';
 
 let client: Client | null = null;
 let botChannels: BotChannels | null = null;
@@ -78,6 +79,9 @@ export async function startBot(): Promise<void> {
       setLimitsChannel(botChannels.limits);
       setScreenshotsChannel(botChannels.screenshots);
       setDiscordGuild(guild);
+      if (isTelephonyAvailable()) {
+        setTelephonyChannels(botChannels.callLog, botChannels.groupchat);
+      }
       await startDashboardUpdates();
 
       // Wire command audit to #github channel

@@ -38,7 +38,9 @@
     "puppeteer": "^24.40.0",
     "sodium-native": "^5.1.0",
     "tweetnacl": "^1.0.3",
-    "uuid": "^11.1.0"
+    "twilio": "^5.13.1",
+    "uuid": "^11.1.0",
+    "ws": "^8.20.0"
   },
   "devDependencies": {
     "@types/bcrypt": "^5.0.2",
@@ -53,6 +55,7 @@
     "@types/pg": "^8.11.11",
     "@types/supertest": "^7.2.0",
     "@types/uuid": "^10.0.0",
+    "@types/ws": "^8.18.1",
     "jest": "^30.3.0",
     "supertest": "^7.2.2",
     "ts-jest": "^29.4.6",

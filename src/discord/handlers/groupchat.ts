@@ -5,6 +5,7 @@ import { appendToMemory, getMemoryContext, loadMemory, saveMemory, clearMemory, 
 import { documentToChannel } from './documentation';
 import { sendAgentMessage, sendLongMessage, clearHistory } from './textChannel';
 import { startCall, endCall, isCallActive } from './callSession';
+import { makeOutboundCall, isTelephonyAvailable } from '../services/telephony';
 import { getBotChannels } from '../bot';
 import { getUsageReport } from '../usage';
 import { triggerCloudBuild, listRevisions, getCurrentRevision, rollbackToRevision } from '../../services/cloudrun';
@@ -306,6 +307,20 @@ async function executeActions(
             .map((a) => `${a.emoji} **${a.name}**`)
             .join('\n');
           await groupchat.send(`**ASAP Agent Team**\n\n${list}`);
+          break;
+        }
+        case 'CALL': {
+          if (!isTelephonyAvailable()) {
+            await groupchat.send('📞 Phone system not configured (missing Twilio credentials).');
+            break;
+          }
+          const phoneNumber = param || '0436012231';
+          try {
+            await makeOutboundCall(phoneNumber, "Hi Jordan, it's Riley. You asked me to call you — what do you need?");
+            await groupchat.send(`📞 Calling ${phoneNumber}...`);
+          } catch (err) {
+            await groupchat.send(`❌ Call failed: ${err instanceof Error ? err.message : 'Unknown'}`);
+          }
           break;
         }
       }

@@ -20,6 +20,7 @@ import { startBot, stopBot } from './discord/bot';
 import { verifySignature, handleGitHubEvent } from './discord/handlers/github';
 import { captureAndPostScreenshots } from './discord/services/screenshots';
 import { getBotChannels } from './discord/bot';
+import { getInboundTwiML, attachTelephonyWebSocket, isTelephonyAvailable } from './discord/services/telephony';
 
 const app = express();
 const PORT = parseInt(process.env.PORT || '3001', 10);
@@ -123,6 +124,16 @@ app.post('/api/webhooks/build-complete', express.json({ limit: '10kb' }), (req, 
   res.status(200).json({ ok: true, message: 'Screenshot capture triggered' });
 });
 
+// Twilio voice webhook — returns TwiML to connect the call to our WebSocket stream
+app.post('/api/webhooks/twilio/voice', (_req, res) => {
+  res.type('text/xml').send(getInboundTwiML());
+});
+
+// Twilio call status callback
+app.post('/api/webhooks/twilio/status', (_req, res) => {
+  res.sendStatus(200);
+});
+
 // API 404 handler — must come after routes but before SPA fallback
 app.use('/api/*', (_req, res) => {
   res.status(404).json({ error: 'API route not found' });
@@ -146,6 +157,12 @@ app.get(/^\/(?!api\/).*/, (_req, res) => {
 let cleanupInterval: ReturnType<typeof setInterval>;
 const server = app.listen(PORT, () => {
   console.log(`ASAP server running on http://localhost:${PORT}`);
+
+  // Attach Twilio WebSocket handler for phone calls
+  if (isTelephonyAvailable()) {
+    attachTelephonyWebSocket(server);
+    console.log('Telephony WebSocket attached');
+  }
 
   // Start Discord bot (non-blocking — skips gracefully if no token)
   startBot().catch((err) => {
