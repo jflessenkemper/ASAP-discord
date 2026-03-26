@@ -9,7 +9,7 @@ const CAPTURE_TIMEOUT = 90_000;
 
 /** Allowed URL patterns for screenshot targets */
 const ALLOWED_URL_PATTERNS = [
-  /^https:\/\/asap-489910[\w.-]*\.run\.app/,
+  /^https:\/\/asap-(?:489910|960788465571)[\w.-]*\.run\.app/,
   /^https?:\/\/localhost(:\d+)?/,
   /^https?:\/\/127\.0\.0\.1(:\d+)?/,
 ];

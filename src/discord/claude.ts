@@ -1,24 +1,22 @@
-import AnthropicVertex from '@anthropic-ai/vertex-sdk';
+import Anthropic from '@anthropic-ai/sdk';
 import { AgentConfig } from './agents';
 import { REPO_TOOLS, executeTool, getToolAuditCallback } from './tools';
 import { recordClaudeUsage, isClaudeOverLimit } from './usage';
 
-const VERTEX_REGION = process.env.CLAUDE_VERTEX_REGION || 'us-east5';
-const CLAUDE_OPUS = 'claude-opus-4';
-const CLAUDE_SONNET = 'claude-sonnet-4';
+const CLAUDE_OPUS = 'claude-opus-4-20250514';
+const CLAUDE_SONNET = 'claude-sonnet-4-20250514';
 
 /** Riley uses Sonnet (fast, conversational). All other agents use Opus (powerful, tool-heavy). */
 function modelForAgent(agentId: string): string {
   return agentId === 'executive-assistant' ? CLAUDE_SONNET : CLAUDE_OPUS;
 }
 
-let client: AnthropicVertex | null = null;
+let client: Anthropic | null = null;
 
-function getClient(): AnthropicVertex {
+function getClient(): Anthropic {
   if (!client) {
-    client = new AnthropicVertex({
-      region: VERTEX_REGION,
-      projectId: process.env.GCS_PROJECT_ID || process.env.ANTHROPIC_VERTEX_PROJECT_ID,
+    client = new Anthropic({
+      apiKey: process.env.ANTHROPIC_API_KEY,
     });
   }
   return client;

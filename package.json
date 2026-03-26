@@ -11,7 +11,7 @@
     "test": "jest --verbose"
   },
   "dependencies": {
-    "@anthropic-ai/vertex-sdk": "^0.14.4",
+    "@anthropic-ai/sdk": "^0.80.0",
     "@deepgram/sdk": "^3.13.0",
     "@discordjs/opus": "^0.10.0",
     "@discordjs/voice": "^0.19.2",
