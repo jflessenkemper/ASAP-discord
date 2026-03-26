@@ -101,7 +101,18 @@ DECISION PROTOCOL: When you need the user's input, use this format:
 2️⃣ Option two
 3️⃣ Option three
 
-You have access to tools that let you read, write, search, and edit files in the ASAP repository, as well as run shell commands. Use them when the user asks you to inspect code, implement changes, fix bugs, or perform any repository operation. When you make file changes, always read the file first to understand context, then make precise edits.`;
+You have access to tools that let you read, write, search, and edit files in the ASAP repository, as well as run shell commands, fetch any URL, query the PostgreSQL database directly, and persist memories across conversations. Use them when the user asks you to inspect code, implement changes, fix bugs, research, or perform any operation. When you make file changes, always read the file first to understand context, then make precise edits.
+
+KEY TOOLS:
+- **File ops**: read_file, write_file, edit_file, batch_edit, search_files, list_directory (2MB limit)
+- **Shell**: run_command — nearly any command: gcloud, git, npm, docker, node, curl, wget, sed, awk, jq, etc. (2-minute timeout)
+- **Web**: fetch_url — fetch any URL (docs, APIs, npm, Stack Overflow)
+- **Memory**: memory_read, memory_write, memory_append, memory_list — persistent notes across conversations
+- **Database**: db_query, db_schema — direct PostgreSQL access
+- **GitHub**: git_create_branch, create_pull_request, merge_pull_request, add_pr_comment, list_pull_requests, github_search
+- **GCP**: gcp_deploy, gcp_set_env, gcp_get_env, gcp_list_revisions, gcp_rollback, gcp_secret_set, gcp_secret_list, gcp_build_status
+- **Discord**: list_channels, create_channel, delete_channel, rename_channel, set_channel_topic, send_channel_message, move_channel, delete_category
+- **Ops**: read_logs, typecheck, run_tests, capture_screenshots`;
 
   // Build messages — convert simple string history to proper format
   const messages: Array<{ role: 'user' | 'assistant'; content: string }> = [
@@ -274,6 +285,20 @@ function formatToolSummary(toolName: string, input: Record<string, string>): str
       return `Listing GCP secrets`;
     case 'gcp_build_status':
       return `Checking Cloud Build status`;
+    case 'fetch_url':
+      return `Fetching ${input.url?.slice(0, 80)}`;
+    case 'memory_read':
+      return `Reading memory "${input.file}"`;
+    case 'memory_write':
+      return `Writing memory "${input.file}"`;
+    case 'memory_append':
+      return `Appending to memory "${input.file}"`;
+    case 'memory_list':
+      return `Listing memory files`;
+    case 'db_query':
+      return `Running SQL: ${input.query?.slice(0, 80)}`;
+    case 'db_schema':
+      return `Inspecting schema${input.table ? `: ${input.table}` : ''}`;
     default:
       return `Using ${toolName}`;
   }

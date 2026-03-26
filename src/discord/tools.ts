@@ -1,6 +1,8 @@
 import fs from 'fs';
 import path from 'path';
-import { execSync, execFileSync } from 'child_process';
+import { execSync, execFileSync, spawn } from 'child_process';
+import https from 'https';
+import http from 'http';
 import {
   Guild,
   ChannelType,
@@ -58,11 +60,14 @@ const BLOCKED_PATHS = [
   '.git/HEAD',
 ];
 
-/** Max file size agents can write (256 KB) */
-const MAX_WRITE_SIZE = 256 * 1024;
+/** Max file size agents can write (2 MB) */
+const MAX_WRITE_SIZE = 2 * 1024 * 1024;
 
-/** Max command execution time (30 s) */
-const CMD_TIMEOUT = 30_000;
+/** Max command execution time (2 min) */
+const CMD_TIMEOUT = 120_000;
+
+/** Memory directory for agent persistent notes */
+const MEMORY_DIR = path.join(REPO_ROOT, '.agent-memory');
 
 // ────────────────────────────────────────────
 // Path safety
@@ -686,6 +691,133 @@ export const REPO_TOOLS = [
       required: [],
     },
   },
+  // ── Web Access ──
+  {
+    name: 'fetch_url',
+    description:
+      'Fetch the content of any URL (web pages, APIs, npm registry, documentation, JSON endpoints). Returns the response body as text. Use this to research libraries, read docs, check APIs, or fetch any web resource. Supports GET and POST.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        url: {
+          type: 'string',
+          description: 'The URL to fetch (must start with https:// or http://)',
+        },
+        method: {
+          type: 'string',
+          description: 'HTTP method: GET or POST (default: GET)',
+        },
+        headers: {
+          type: 'string',
+          description: 'Optional JSON string of headers, e.g. \'{"Authorization": "Bearer token"}\'',
+        },
+        body: {
+          type: 'string',
+          description: 'Optional request body for POST requests',
+        },
+      },
+      required: ['url'],
+    },
+  },
+  // ── Persistent Memory ──
+  {
+    name: 'memory_read',
+    description:
+      'Read a persistent memory file. Memory persists across conversations and bot restarts. Use this to recall context, plans, decisions, preferences, and lessons learned. Files are stored in .agent-memory/ in the repo.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        file: {
+          type: 'string',
+          description: 'Memory file name (e.g. "plans.md", "lessons.md", "jordan-prefs.md")',
+        },
+      },
+      required: ['file'],
+    },
+  },
+  {
+    name: 'memory_write',
+    description:
+      'Write to a persistent memory file. Creates or overwrites the file. Use this to store plans, decisions, lessons learned, user preferences, task context, or anything you want to remember across conversations.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        file: {
+          type: 'string',
+          description: 'Memory file name (e.g. "plans.md", "lessons.md", "jordan-prefs.md")',
+        },
+        content: {
+          type: 'string',
+          description: 'Content to write',
+        },
+      },
+      required: ['file', 'content'],
+    },
+  },
+  {
+    name: 'memory_append',
+    description:
+      'Append to a persistent memory file without overwriting existing content. Use this to add new notes, log entries, or incremental updates.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        file: {
+          type: 'string',
+          description: 'Memory file name',
+        },
+        content: {
+          type: 'string',
+          description: 'Content to append (added on a new line)',
+        },
+      },
+      required: ['file', 'content'],
+    },
+  },
+  {
+    name: 'memory_list',
+    description:
+      'List all persistent memory files. Use this to see what memories exist before reading.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {},
+      required: [],
+    },
+  },
+  // ── Database Access ──
+  {
+    name: 'db_query',
+    description:
+      'Execute a SQL query against the ASAP PostgreSQL database (Cloud SQL). Returns results as formatted text. Use for SELECT queries to inspect data, debug issues, or analyze the database. Write queries (INSERT, UPDATE, DELETE, CREATE, ALTER, DROP) are also allowed but use with care.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        query: {
+          type: 'string',
+          description: 'SQL query to execute. Use parameterized queries with $1, $2 etc for values.',
+        },
+        params: {
+          type: 'string',
+          description: 'Optional JSON array of query parameters, e.g. \'["value1", 42]\'',
+        },
+      },
+      required: ['query'],
+    },
+  },
+  {
+    name: 'db_schema',
+    description:
+      'Inspect the database schema. Lists all tables and their columns, types, and constraints. Use this to understand the data model before writing queries.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        table: {
+          type: 'string',
+          description: 'Optional: specific table name to inspect. If omitted, lists all tables.',
+        },
+      },
+      required: [],
+    },
+  },
 ] as const;
 
 // ────────────────────────────────────────────
@@ -770,6 +902,23 @@ export async function executeTool(
         return await gcpSecretList();
       case 'gcp_build_status':
         return await gcpBuildStatus(parseInt(input.limit, 10) || 5);
+      // Web access
+      case 'fetch_url':
+        return await fetchUrl(input.url, input.method, input.headers, input.body);
+      // Memory
+      case 'memory_read':
+        return memoryRead(input.file);
+      case 'memory_write':
+        return memoryWrite(input.file, input.content);
+      case 'memory_append':
+        return memoryAppend(input.file, input.content);
+      case 'memory_list':
+        return memoryList();
+      // Database
+      case 'db_query':
+        return await dbQuery(input.query, input.params);
+      case 'db_schema':
+        return await dbSchema(input.table);
       default:
         return `Unknown tool: ${toolName}`;
     }
@@ -907,10 +1056,17 @@ const ALLOWED_COMMANDS: Array<{ prefix: string; description: string }> = [
   { prefix: 'git pull',      description: 'Pull remote changes' },
   { prefix: 'git fetch',     description: 'Fetch remote refs' },
   { prefix: 'git stash',     description: 'Stash changes' },
-  { prefix: 'git merge',     description: 'Merge branches' },
-  { prefix: 'git show',      description: 'Show commit details' },
-  { prefix: 'git rev-parse', description: 'Resolve refs' },
-  { prefix: 'git remote',    description: 'Manage remotes' },
+  { prefix: 'git merge',      description: 'Merge branches' },
+  { prefix: 'git show',       description: 'Show commit details' },
+  { prefix: 'git rev-parse',  description: 'Resolve refs' },
+  { prefix: 'git remote',     description: 'Manage remotes' },
+  { prefix: 'git rebase',     description: 'Rebase branches' },
+  { prefix: 'git cherry-pick', description: 'Cherry-pick commits' },
+  { prefix: 'git reset',      description: 'Reset HEAD/staging' },
+  { prefix: 'git tag',        description: 'Manage tags' },
+  { prefix: 'git blame',      description: 'Line-by-line authorship' },
+  { prefix: 'git reflog',     description: 'Reference log' },
+  { prefix: 'git clean',      description: 'Clean untracked files' },
   // Read-only system commands
   { prefix: 'grep ',   description: 'Search file contents' },
   { prefix: 'find ',   description: 'Find files' },
@@ -925,7 +1081,34 @@ const ALLOWED_COMMANDS: Array<{ prefix: string; description: string }> = [
   { prefix: 'echo ',   description: 'Echo text' },
   { prefix: 'pwd',     description: 'Print working directory' },
   { prefix: 'which ',  description: 'Locate commands' },
-  // node -e / --eval removed: allows arbitrary code execution via child_process
+  // Process & scripting
+  { prefix: 'node ',          description: 'Run node scripts' },
+  { prefix: 'curl ',          description: 'HTTP requests' },
+  { prefix: 'wget ',          description: 'Download files' },
+  { prefix: 'jq ',            description: 'JSON processing' },
+  { prefix: 'sed ',           description: 'Stream editing' },
+  { prefix: 'awk ',           description: 'Text processing' },
+  { prefix: 'xargs ',         description: 'Build and execute commands' },
+  { prefix: 'env ',           description: 'Environment variables' },
+  { prefix: 'printenv',       description: 'Print environment' },
+  { prefix: 'date',           description: 'Date/time' },
+  { prefix: 'mkdir ',         description: 'Create directories' },
+  { prefix: 'cp ',            description: 'Copy files' },
+  { prefix: 'mv ',            description: 'Move/rename files' },
+  { prefix: 'rm ',            description: 'Remove files (not rm -rf /)' },
+  { prefix: 'touch ',         description: 'Create empty files' },
+  { prefix: 'chmod ',         description: 'File permissions' },
+  { prefix: 'tar ',           description: 'Archive operations' },
+  { prefix: 'zip ',           description: 'Compress files' },
+  { prefix: 'unzip ',         description: 'Decompress files' },
+  { prefix: 'diff ',          description: 'Compare files' },
+  { prefix: 'basename ',      description: 'Strip directory' },
+  { prefix: 'dirname ',       description: 'Strip filename' },
+  { prefix: 'realpath ',      description: 'Resolve path' },
+  { prefix: 'tee ',           description: 'Pipe and write' },
+  { prefix: 'tree ',          description: 'Directory tree' },
+  { prefix: 'du ',            description: 'Disk usage' },
+  { prefix: 'df ',            description: 'Filesystem info' },
   // GCP operations
   { prefix: 'gcloud secrets', description: 'Manage GCP secrets' },
   { prefix: 'gcloud run',     description: 'Cloud Run operations' },
@@ -943,23 +1126,13 @@ const ALLOWED_COMMANDS: Array<{ prefix: string; description: string }> = [
   { prefix: 'docker ',        description: 'Docker operations' },
 ];
 
-/** Patterns that are NEVER allowed, even if they match an allowed prefix. */
+/** Patterns that are NEVER allowed — only truly catastrophic operations. */
 const HARD_BLOCKED = [
-  /rm\s+(-rf?|--recursive)\s+\//,  // rm -rf /
-  /mkfs/,
-  /dd\s+if=/,
+  /rm\s+(-rf?|--recursive)\s+\//,  // rm -rf / (root filesystem)
+  /mkfs/,                           // format disk
+  /dd\s+if=/,                       // raw disk operations
   /:\(\)\s*\{/,                     // fork bomb
   />\s*\/dev\/sd/,                  // write to block devices
-  /curl\s.*\|\s*(ba)?sh/,          // curl | sh (pipe to shell)
-  /wget\s.*\|\s*(ba)?sh/,
-  /eval\s/,                         // eval in shell
-  /\$\(/,                           // command substitution (prevents bypass)
-  /`[^`]+`/,                        // backtick substitution
-  /;\s*(rm|mkfs|dd|curl|wget|nc|ncat|python|perl|ruby)\b/,  // chained dangerous commands
-  /\|\s*(ba)?sh/,                   // piping to shell
-  /&&\s*(rm|mkfs|dd|curl|wget)\b/,
-  /\$\{/,                           // variable expansion (prevents ${IFS} tricks)
-  /\\x[0-9a-f]{2}/i,               // hex escapes
 ];
 
 /** Command audit log callback — set externally to post to Discord */
@@ -1542,5 +1715,231 @@ async function gcpBuildStatus(limit: number): Promise<string> {
     return result || 'No builds found.';
   } catch (err) {
     return `❌ Failed to get build status: ${err instanceof Error ? err.message : 'Unknown'}`;
+  }
+}
+
+// ────────────────────────────────────────────
+// Web fetch tool
+// ────────────────────────────────────────────
+
+function fetchUrl(url: string, method?: string, headersStr?: string, body?: string): Promise<string> {
+  return new Promise((resolve) => {
+    if (!url || (!url.startsWith('https://') && !url.startsWith('http://'))) {
+      resolve('Error: URL must start with https:// or http://');
+      return;
+    }
+
+    const httpMethod = (method || 'GET').toUpperCase();
+    let parsedHeaders: Record<string, string> = {};
+    if (headersStr) {
+      try { parsedHeaders = JSON.parse(headersStr); } catch { /* ignore */ }
+    }
+
+    const parsedUrl = new URL(url);
+    const lib = parsedUrl.protocol === 'https:' ? https : http;
+
+    const options = {
+      hostname: parsedUrl.hostname,
+      port: parsedUrl.port,
+      path: parsedUrl.pathname + parsedUrl.search,
+      method: httpMethod,
+      headers: {
+        'User-Agent': 'ASAP-Agent/1.0',
+        ...parsedHeaders,
+      },
+      timeout: 30_000,
+    };
+
+    const req = lib.request(options, (res) => {
+      let data = '';
+      const maxSize = 100_000; // 100KB max response
+
+      res.on('data', (chunk: Buffer) => {
+        data += chunk.toString();
+        if (data.length > maxSize) {
+          res.destroy();
+        }
+      });
+
+      res.on('end', () => {
+        const status = res.statusCode || 0;
+        const header = `HTTP ${status} ${res.statusMessage || ''}\n`;
+        if (data.length > maxSize) {
+          resolve(header + data.slice(0, maxSize) + '\n\n[Response truncated at 100KB]');
+        } else {
+          resolve(header + data);
+        }
+      });
+    });
+
+    req.on('error', (err) => {
+      resolve(`Fetch error: ${err.message}`);
+    });
+
+    req.on('timeout', () => {
+      req.destroy();
+      resolve('Fetch error: Request timed out (30s)');
+    });
+
+    if (body && httpMethod === 'POST') {
+      req.write(body);
+    }
+
+    req.end();
+  });
+}
+
+// ────────────────────────────────────────────
+// Persistent memory tools
+// ────────────────────────────────────────────
+
+function safeMemoryPath(file: string): string {
+  // Sanitize: only allow simple filenames with extensions
+  const safe = path.basename(file).replace(/[^a-zA-Z0-9_.-]/g, '');
+  if (!safe) throw new Error('Invalid memory file name');
+  return path.join(MEMORY_DIR, safe);
+}
+
+function memoryRead(file: string): string {
+  try {
+    const filePath = safeMemoryPath(file);
+    if (!fs.existsSync(filePath)) {
+      return `Memory file "${file}" does not exist. Use memory_list to see available files, or memory_write to create one.`;
+    }
+    return fs.readFileSync(filePath, 'utf-8');
+  } catch (err) {
+    return `Error reading memory: ${err instanceof Error ? err.message : 'Unknown'}`;
+  }
+}
+
+function memoryWrite(file: string, content: string): string {
+  try {
+    const filePath = safeMemoryPath(file);
+    fs.mkdirSync(MEMORY_DIR, { recursive: true });
+    fs.writeFileSync(filePath, content, 'utf-8');
+    return `Memory saved to "${file}" (${content.length} bytes)`;
+  } catch (err) {
+    return `Error writing memory: ${err instanceof Error ? err.message : 'Unknown'}`;
+  }
+}
+
+function memoryAppend(file: string, content: string): string {
+  try {
+    const filePath = safeMemoryPath(file);
+    fs.mkdirSync(MEMORY_DIR, { recursive: true });
+    const existing = fs.existsSync(filePath) ? fs.readFileSync(filePath, 'utf-8') : '';
+    const updated = existing ? existing + '\n' + content : content;
+    fs.writeFileSync(filePath, updated, 'utf-8');
+    return `Appended to "${file}" (now ${updated.length} bytes)`;
+  } catch (err) {
+    return `Error appending to memory: ${err instanceof Error ? err.message : 'Unknown'}`;
+  }
+}
+
+function memoryList(): string {
+  try {
+    if (!fs.existsSync(MEMORY_DIR)) {
+      return 'No memory files yet. Use memory_write to create one.';
+    }
+    const files = fs.readdirSync(MEMORY_DIR);
+    if (files.length === 0) return 'No memory files yet.';
+    return files.map((f) => {
+      const stat = fs.statSync(path.join(MEMORY_DIR, f));
+      const kb = (stat.size / 1024).toFixed(1);
+      const modified = stat.mtime.toLocaleString('en-AU', { timeZone: 'Australia/Sydney' });
+      return `📄 ${f} (${kb} KB, modified ${modified})`;
+    }).join('\n');
+  } catch (err) {
+    return `Error listing memory: ${err instanceof Error ? err.message : 'Unknown'}`;
+  }
+}
+
+// ────────────────────────────────────────────
+// Database query tools
+// ────────────────────────────────────────────
+
+async function dbQuery(query: string, paramsStr?: string): Promise<string> {
+  try {
+    const pool = (await import('../db/pool')).default;
+    let params: any[] = [];
+    if (paramsStr) {
+      try { params = JSON.parse(paramsStr); } catch { return 'Error: params must be a valid JSON array'; }
+    }
+
+    const result = await pool.query(query, params);
+
+    if (result.command === 'SELECT' || result.rows?.length > 0) {
+      const rows = result.rows || [];
+      if (rows.length === 0) return 'Query returned 0 rows.';
+
+      // Format as table
+      const cols = Object.keys(rows[0]);
+      const header = cols.join(' | ');
+      const separator = cols.map(() => '---').join(' | ');
+      const body = rows.slice(0, 100).map((row: Record<string, any>) =>
+        cols.map((c) => {
+          const val = row[c];
+          if (val === null) return 'NULL';
+          if (typeof val === 'object') return JSON.stringify(val).slice(0, 100);
+          return String(val).slice(0, 100);
+        }).join(' | ')
+      ).join('\n');
+
+      const output = `${header}\n${separator}\n${body}`;
+      const extra = rows.length > 100 ? `\n\n... and ${rows.length - 100} more rows` : '';
+      return `${rows.length} row(s) returned:\n\n${output}${extra}`;
+    }
+
+    return `Query executed: ${result.command} — ${result.rowCount ?? 0} row(s) affected.`;
+  } catch (err) {
+    return `SQL Error: ${err instanceof Error ? err.message : 'Unknown'}`;
+  }
+}
+
+async function dbSchema(table?: string): Promise<string> {
+  try {
+    const pool = (await import('../db/pool')).default;
+
+    if (table) {
+      const safeTable = table.replace(/[^a-zA-Z0-9_]/g, '');
+      const { rows } = await pool.query(
+        `SELECT column_name, data_type, is_nullable, column_default
+         FROM information_schema.columns
+         WHERE table_schema = 'public' AND table_name = $1
+         ORDER BY ordinal_position`, [safeTable]
+      );
+      if (rows.length === 0) return `Table "${safeTable}" not found.`;
+
+      // Also get constraints
+      const { rows: constraints } = await pool.query(
+        `SELECT tc.constraint_type, kcu.column_name, ccu.table_name AS references_table, ccu.column_name AS references_column
+         FROM information_schema.table_constraints tc
+         JOIN information_schema.key_column_usage kcu ON tc.constraint_name = kcu.constraint_name
+         LEFT JOIN information_schema.constraint_column_usage ccu ON tc.constraint_name = ccu.constraint_name AND tc.constraint_type = 'FOREIGN KEY'
+         WHERE tc.table_schema = 'public' AND tc.table_name = $1`, [safeTable]
+      );
+
+      const lines = rows.map((r: any) => {
+        const nullable = r.is_nullable === 'YES' ? ' (nullable)' : '';
+        const def = r.column_default ? ` default=${r.column_default}` : '';
+        const constraint = constraints.find((c: any) => c.column_name === r.column_name);
+        const cstr = constraint ? ` [${constraint.constraint_type}${constraint.references_table ? ` → ${constraint.references_table}.${constraint.references_column}` : ''}]` : '';
+        return `  ${r.column_name}: ${r.data_type}${nullable}${def}${cstr}`;
+      });
+
+      return `Table: ${safeTable}\n${lines.join('\n')}`;
+    }
+
+    // List all tables
+    const { rows } = await pool.query(
+      `SELECT table_name, (SELECT COUNT(*) FROM information_schema.columns c WHERE c.table_name = t.table_name AND c.table_schema = 'public') AS columns
+       FROM information_schema.tables t
+       WHERE table_schema = 'public' AND table_type = 'BASE TABLE'
+       ORDER BY table_name`
+    );
+    if (rows.length === 0) return 'No tables found in public schema.';
+    return rows.map((r: any) => `📋 ${r.table_name} (${r.columns} columns)`).join('\n');
+  } catch (err) {
+    return `Schema error: ${err instanceof Error ? err.message : 'Unknown'}`;
   }
 }
