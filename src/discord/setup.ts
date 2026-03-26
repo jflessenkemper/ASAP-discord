@@ -6,6 +6,7 @@ import {
   CategoryChannel,
 } from 'discord.js';
 import { getAgents } from './agents';
+import { getWebhook } from './services/webhooks';
 
 const CAT_MAIN = 'ASAP';
 const CAT_AGENTS = 'Agents';
@@ -238,6 +239,18 @@ export async function setupChannels(guild: Guild): Promise<BotChannels> {
       try { await oldCat.delete('Replaced by new category structure'); } catch { /* ignore */ }
     }
   }
+
+  // ── Pre-create webhooks for all text channels ──
+  const allTextChannels = [groupchat, github, callLog, limits, screenshots, url, terminal, ...agentChannels.values()];
+  console.log('🔗 Pre-creating webhooks for all channels...');
+  for (const channel of allTextChannels) {
+    try {
+      await getWebhook(channel);
+    } catch (err) {
+      console.warn(`  ⚠️ Webhook failed for #${channel.name}: ${err instanceof Error ? err.message : 'Unknown'}`);
+    }
+  }
+  console.log('✅ Webhooks ready');
 
   return { agentChannels, groupchat, github, callLog, limits, screenshots, url, terminal, voiceChannel };
 }

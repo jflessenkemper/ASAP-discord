@@ -258,6 +258,22 @@ function formatToolSummary(toolName: string, input: Record<string, string>): str
       const count = Array.isArray(edits) ? edits.length : '?';
       return `Batch editing ${count} files`;
     }
+    case 'gcp_deploy':
+      return `Deploying to Cloud Run${input.tag ? ` (${input.tag})` : ''}`;
+    case 'gcp_set_env':
+      return `Setting Cloud Run env vars`;
+    case 'gcp_get_env':
+      return `Reading Cloud Run env vars`;
+    case 'gcp_list_revisions':
+      return `Listing Cloud Run revisions`;
+    case 'gcp_rollback':
+      return `Rolling back to ${input.revision}`;
+    case 'gcp_secret_set':
+      return `Setting secret "${input.name}"`;
+    case 'gcp_secret_list':
+      return `Listing GCP secrets`;
+    case 'gcp_build_status':
+      return `Checking Cloud Build status`;
     default:
       return `Using ${toolName}`;
   }

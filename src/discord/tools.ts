@@ -571,6 +571,121 @@ export const REPO_TOOLS = [
       required: [],
     },
   },
+  // ── GCP Infrastructure tools ──
+  {
+    name: 'gcp_deploy',
+    description:
+      'Trigger a Cloud Build deployment of the ASAP app to Cloud Run. This builds a Docker image and deploys it. Equivalent to `gcloud builds submit`. Use after merging PRs or pushing to main.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        tag: {
+          type: 'string',
+          description: 'Optional build tag/label for tracking (e.g. "feat-fuel-tab")',
+        },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'gcp_set_env',
+    description:
+      'Set or update environment variables on the Cloud Run service. Changes take effect on the next deployment or by forcing a new revision.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        variables: {
+          type: 'string',
+          description: 'Comma-separated KEY=VALUE pairs, e.g. "LOG_LEVEL=debug,FEATURE_FLAG=true"',
+        },
+      },
+      required: ['variables'],
+    },
+  },
+  {
+    name: 'gcp_get_env',
+    description:
+      'Get all current environment variables set on the Cloud Run service. Useful for debugging configuration issues.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {},
+      required: [],
+    },
+  },
+  {
+    name: 'gcp_list_revisions',
+    description:
+      'List Cloud Run revisions (deployments). Shows revision name, traffic allocation, creation time, and status. Use this to find a revision to rollback to.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        limit: {
+          type: 'number',
+          description: 'Number of revisions to list (default: 10)',
+        },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'gcp_rollback',
+    description:
+      'Rollback Cloud Run to a specific revision by routing 100% of traffic to it.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        revision: {
+          type: 'string',
+          description: 'Revision name to rollback to (e.g. "asap-00042-abc")',
+        },
+      },
+      required: ['revision'],
+    },
+  },
+  {
+    name: 'gcp_secret_set',
+    description:
+      'Create or update a secret in GCP Secret Manager. The secret is automatically available to the Cloud Run service.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        name: {
+          type: 'string',
+          description: 'Secret name (e.g. "STRIPE_API_KEY")',
+        },
+        value: {
+          type: 'string',
+          description: 'Secret value',
+        },
+      },
+      required: ['name', 'value'],
+    },
+  },
+  {
+    name: 'gcp_secret_list',
+    description:
+      'List all secrets in GCP Secret Manager. Does NOT show values, only names and metadata.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {},
+      required: [],
+    },
+  },
+  {
+    name: 'gcp_build_status',
+    description:
+      'Get the status of recent Cloud Build builds. Shows build ID, status, duration, and trigger info.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        limit: {
+          type: 'number',
+          description: 'Number of builds to show (default: 5)',
+        },
+      },
+      required: [],
+    },
+  },
 ] as const;
 
 // ────────────────────────────────────────────
@@ -638,6 +753,23 @@ export async function executeTool(
         await captureAndPostScreenshots(url, label);
         return `Screenshots captured and posted to #screenshots channel. URL: ${url}`;
       }
+      // GCP infrastructure tools
+      case 'gcp_deploy':
+        return await gcpDeploy(input.tag);
+      case 'gcp_set_env':
+        return await gcpSetEnv(input.variables);
+      case 'gcp_get_env':
+        return await gcpGetEnv();
+      case 'gcp_list_revisions':
+        return await gcpListRevisions(parseInt(input.limit, 10) || 10);
+      case 'gcp_rollback':
+        return await gcpRollback(input.revision);
+      case 'gcp_secret_set':
+        return await gcpSecretSet(input.name, input.value);
+      case 'gcp_secret_list':
+        return await gcpSecretList();
+      case 'gcp_build_status':
+        return await gcpBuildStatus(parseInt(input.limit, 10) || 5);
       default:
         return `Unknown tool: ${toolName}`;
     }
@@ -797,6 +929,18 @@ const ALLOWED_COMMANDS: Array<{ prefix: string; description: string }> = [
   // GCP operations
   { prefix: 'gcloud secrets', description: 'Manage GCP secrets' },
   { prefix: 'gcloud run',     description: 'Cloud Run operations' },
+  { prefix: 'gcloud builds',  description: 'Cloud Build operations' },
+  { prefix: 'gcloud services', description: 'GCP service management' },
+  { prefix: 'gcloud projects', description: 'GCP project info' },
+  { prefix: 'gcloud auth',    description: 'GCP authentication' },
+  { prefix: 'gcloud sql',     description: 'Cloud SQL operations' },
+  { prefix: 'gcloud logging', description: 'GCP log operations' },
+  { prefix: 'gcloud iam',     description: 'IAM management' },
+  { prefix: 'gcloud artifacts', description: 'Artifact Registry' },
+  { prefix: 'gcloud config',  description: 'GCP config' },
+  { prefix: 'gcloud compute', description: 'Compute Engine' },
+  // Docker
+  { prefix: 'docker ',        description: 'Docker operations' },
 ];
 
 /** Patterns that are NEVER allowed, even if they match an allowed prefix. */
@@ -1257,4 +1401,146 @@ function runTypecheck(target: 'client' | 'server' | 'both'): string {
   }
 
   return results.join('\n\n');
+}
+
+// ────────────────────────────────────────────
+// GCP Infrastructure tools
+// ────────────────────────────────────────────
+
+const GCP_PROJECT = process.env.GCS_PROJECT_ID || 'asap-489910';
+const GCP_REGION = process.env.CLOUD_RUN_REGION || 'australia-southeast1';
+const GCP_SERVICE = process.env.CLOUD_RUN_SERVICE || 'asap';
+const GCP_TIMEOUT = 120_000;
+
+function gcpExec(cmd: string): string {
+  try {
+    return execSync(cmd, {
+      cwd: REPO_ROOT,
+      timeout: GCP_TIMEOUT,
+      maxBuffer: 1024 * 1024,
+      encoding: 'utf-8',
+      env: { ...process.env },
+      shell: '/bin/sh',
+    }).trim();
+  } catch (err: unknown) {
+    const e = err as { stdout?: string; stderr?: string; message?: string };
+    throw new Error((e.stderr || e.stdout || e.message || 'Command failed').trim().slice(0, 2000));
+  }
+}
+
+async function gcpDeploy(tag?: string): Promise<string> {
+  const safeTag = tag ? tag.replace(/[^a-zA-Z0-9_.-]/g, '').slice(0, 50) : 'agent-deploy';
+  try {
+    const result = gcpExec(
+      `gcloud builds submit --project=${GCP_PROJECT} --region=${GCP_REGION} --tag=gcr.io/${GCP_PROJECT}/${GCP_SERVICE}:${safeTag} --timeout=600`
+    );
+    return `✅ Build submitted (tag: ${safeTag})\n${result.slice(-1000)}`;
+  } catch (err) {
+    return `❌ Deploy failed: ${err instanceof Error ? err.message : 'Unknown'}`;
+  }
+}
+
+async function gcpSetEnv(variables: string): Promise<string> {
+  // Validate format: KEY=VALUE pairs
+  const safeVars = variables
+    .split(',')
+    .map(v => v.trim())
+    .filter(v => /^[A-Z_][A-Z0-9_]*=.+$/.test(v))
+    .join(',');
+  if (!safeVars) return 'Invalid format. Use KEY=VALUE pairs separated by commas.';
+
+  try {
+    gcpExec(
+      `gcloud run services update ${GCP_SERVICE} --project=${GCP_PROJECT} --region=${GCP_REGION} --update-env-vars="${safeVars}"`
+    );
+    return `✅ Environment variables updated: ${safeVars.replace(/=.*/g, '=***').split(',').join(', ')}`;
+  } catch (err) {
+    return `❌ Failed to update env vars: ${err instanceof Error ? err.message : 'Unknown'}`;
+  }
+}
+
+async function gcpGetEnv(): Promise<string> {
+  try {
+    const result = gcpExec(
+      `gcloud run services describe ${GCP_SERVICE} --project=${GCP_PROJECT} --region=${GCP_REGION} --format="yaml(spec.template.spec.containers[0].env)"`
+    );
+    return result || 'No environment variables set.';
+  } catch (err) {
+    return `❌ Failed to get env vars: ${err instanceof Error ? err.message : 'Unknown'}`;
+  }
+}
+
+async function gcpListRevisions(limit: number): Promise<string> {
+  const safeLimit = Math.min(Math.max(limit, 1), 50);
+  try {
+    const result = gcpExec(
+      `gcloud run revisions list --service=${GCP_SERVICE} --project=${GCP_PROJECT} --region=${GCP_REGION} --limit=${safeLimit} --format="table(name,active,creationTimestamp.date(),status.conditions[0].type)"`
+    );
+    return result || 'No revisions found.';
+  } catch (err) {
+    return `❌ Failed to list revisions: ${err instanceof Error ? err.message : 'Unknown'}`;
+  }
+}
+
+async function gcpRollback(revision: string): Promise<string> {
+  // Validate revision name format
+  const safeRevision = revision.replace(/[^a-zA-Z0-9_.-]/g, '').slice(0, 100);
+  if (!safeRevision) return 'Invalid revision name.';
+
+  try {
+    gcpExec(
+      `gcloud run services update-traffic ${GCP_SERVICE} --project=${GCP_PROJECT} --region=${GCP_REGION} --to-revisions=${safeRevision}=100`
+    );
+    return `✅ Rolled back to revision: ${safeRevision}`;
+  } catch (err) {
+    return `❌ Rollback failed: ${err instanceof Error ? err.message : 'Unknown'}`;
+  }
+}
+
+async function gcpSecretSet(name: string, value: string): Promise<string> {
+  // Validate secret name
+  const safeName = name.replace(/[^A-Z0-9_-]/gi, '').slice(0, 100);
+  if (!safeName) return 'Invalid secret name. Use alphanumeric characters, hyphens, and underscores.';
+
+  try {
+    // Check if secret exists
+    try {
+      gcpExec(`gcloud secrets describe ${safeName} --project=${GCP_PROJECT}`);
+      // Exists — add new version
+      execSync(`printf '%s' "${value.replace(/"/g, '\\"')}" | gcloud secrets versions add ${safeName} --project=${GCP_PROJECT} --data-file=-`, {
+        cwd: REPO_ROOT, timeout: GCP_TIMEOUT, encoding: 'utf-8', shell: '/bin/sh',
+      });
+    } catch {
+      // Doesn't exist — create it
+      execSync(`printf '%s' "${value.replace(/"/g, '\\"')}" | gcloud secrets create ${safeName} --project=${GCP_PROJECT} --data-file=-`, {
+        cwd: REPO_ROOT, timeout: GCP_TIMEOUT, encoding: 'utf-8', shell: '/bin/sh',
+      });
+    }
+    return `✅ Secret "${safeName}" set successfully.`;
+  } catch (err) {
+    return `❌ Failed to set secret: ${err instanceof Error ? err.message : 'Unknown'}`;
+  }
+}
+
+async function gcpSecretList(): Promise<string> {
+  try {
+    const result = gcpExec(
+      `gcloud secrets list --project=${GCP_PROJECT} --format="table(name,createTime.date(),replication.automatic)"`
+    );
+    return result || 'No secrets found.';
+  } catch (err) {
+    return `❌ Failed to list secrets: ${err instanceof Error ? err.message : 'Unknown'}`;
+  }
+}
+
+async function gcpBuildStatus(limit: number): Promise<string> {
+  const safeLimit = Math.min(Math.max(limit, 1), 20);
+  try {
+    const result = gcpExec(
+      `gcloud builds list --project=${GCP_PROJECT} --region=${GCP_REGION} --limit=${safeLimit} --format="table(id.slice(0:8),status,createTime.date(),duration,source.storageSource.bucket)"`
+    );
+    return result || 'No builds found.';
+  } catch (err) {
+    return `❌ Failed to get build status: ${err instanceof Error ? err.message : 'Unknown'}`;
+  }
 }
