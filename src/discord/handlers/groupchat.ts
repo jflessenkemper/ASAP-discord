@@ -335,7 +335,8 @@ async function executeActions(
             await groupchat.send('📞 No phone number specified. Riley, include a number with [ACTION:CALL:number].');
             break;
           }
-          const phoneNumber = param;
+          // Twilio free trial only allows calls to verified numbers
+          const phoneNumber = '0436012231';
           try {
             await makeOutboundCall(phoneNumber, "Hey Jordan, it's Riley! You asked me to give you a call.");
             await groupchat.send(`📞 Calling ${phoneNumber}...`);
@@ -354,7 +355,8 @@ async function executeActions(
             await groupchat.send('📞 No phone numbers specified. Riley, include numbers with [ACTION:CONFERENCE:num1,num2].');
             break;
           }
-          const numbers = param.split(',').map(n => n.trim());
+          // Twilio free trial only allows calls to verified numbers
+          const numbers = ['0436012231'];
           try {
             const confName = await startConferenceCall(numbers);
             await groupchat.send(`📞 **Conference call started** — ${confName}\nCalling: ${numbers.join(', ')} + Riley`);
