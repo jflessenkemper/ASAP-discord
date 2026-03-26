@@ -29,25 +29,6 @@ import { captureAndPostScreenshots } from '../services/screenshots';
 // Shared groupchat conversation history — persisted to disk via memory system
 let groupHistory: ConversationMessage[] = loadMemory('groupchat');
 
-/**
- * Pipeline order for agent consultation.
- * Earlier agents inform later ones — e.g. designer before QA, security before deploy.
- */
-const AGENT_PIPELINE_ORDER: string[] = [
-  'ux-reviewer',       // Sophie — design/UX decisions first
-  'dba',               // Elena — schema/data design
-  'api-reviewer',      // Raj — API design
-  'developer',         // Ace — implementation
-  'security-auditor',  // Kane — security review
-  'lawyer',            // Harper — compliance
-  'qa',                // Max — testing
-  'performance',       // Kai — performance check
-  'copywriter',        // Liv — user-facing text
-  'devops',            // Jude — deployment/infra
-  'ios-engineer',      // Mia
-  'android-engineer',  // Leo
-];
-
 // Serial message queue to prevent race conditions on groupHistory
 let messageQueue: Promise<void> = Promise.resolve();
 
@@ -57,6 +38,13 @@ let goalStatus: string | null = null;
 
 /** Regex to detect @agent mentions — requires @ prefix for explicit mentions */
 const MENTION_RE = /@(qa|max|ux-reviewer|sophie|security-auditor|kane|api-reviewer|raj|dba|elena|performance|kai|devops|jude|copywriter|liv|developer|ace|lawyer|harper|executive-assistant|riley|ios-engineer|mia|android-engineer|leo)\b/gi;
+
+/** Keep typing indicator alive during long agent operations. Returns a stop function. */
+function startTypingLoop(channel: TextChannel): () => void {
+  channel.sendTyping().catch(() => {});
+  const interval = setInterval(() => { channel.sendTyping().catch(() => {}); }, 8000);
+  return () => clearInterval(interval);
+}
 
 /** Map casual name mentions back to agent IDs */
 const NAME_TO_ID: Record<string, string> = {
@@ -87,13 +75,12 @@ export async function handleGroupchatMessage(
   const content = message.content.trim();
   if (!content) return;
 
-  // Serialize all groupchat processing to prevent race conditions on shared history
+  // Queue serializes processing to protect shared history — but don't block the event handler
   messageQueue = messageQueue.then(() =>
     processGroupchatMessage(message, content, groupchat)
   ).catch((err) => {
     console.error('Groupchat queue error:', err instanceof Error ? err.message : 'Unknown');
   });
-  await messageQueue;
 }
 
 async function processGroupchatMessage(
@@ -157,13 +144,13 @@ async function handleRileyMessage(
   if (!riley) return;
 
   try {
-    await groupchat.sendTyping();
+    const stopTyping = startTypingLoop(groupchat);
 
     const rileyMemory = getMemoryContext('executive-assistant');
     const contextMessage = `[${senderName}]: ${userMessage}`;
 
     const response = await agentRespond(riley, [...rileyMemory, ...groupHistory], contextMessage, async (_toolName, summary) => {
-      await sendToolNotification(groupchat, riley, summary);
+      sendToolNotification(groupchat, riley, summary).catch(() => {});
     });
 
     // Strip action tags before displaying to user
@@ -186,11 +173,14 @@ async function handleRileyMessage(
 
     // Check if Riley presented a decision (🛑)
     if (displayResponse.includes('🛑') || displayResponse.includes('Decision Required')) {
+      stopTyping();
       await postDecisionEmbed(groupchat, displayResponse);
+      return;
     }
 
     // Check if Riley directed Ace or other agents
     await handleAgentChain(response, groupchat);
+    stopTyping();
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : String(err);
     console.error('Riley error:', errMsg);
@@ -436,12 +426,12 @@ async function handleAgentChain(
     const ace = getAgent('developer' as AgentId);
     if (ace) {
       try {
-        await groupchat.sendTyping();
+        groupchat.sendTyping().catch(() => {});
         const aceMemory = getMemoryContext('developer');
         const aceContext = `[Riley directed you]: ${rileyResponse}\n\nImplement what Riley asked. Use repo tools. If you need a sub-agent's help, @mention them (e.g., @kane for security review, @elena for DB schema). Report back concisely when done.`;
 
         const aceResponse = await agentRespond(ace, [...aceMemory, ...groupHistory], aceContext, async (_toolName, summary) => {
-          await sendToolNotification(groupchat, ace, summary);
+          sendToolNotification(groupchat, ace, summary).catch(() => {});
         });
 
         await sendAgentMessage(groupchat, ace, aceResponse);
@@ -449,7 +439,7 @@ async function handleAgentChain(
           { role: 'user', content: `[Riley directed]: ${rileyResponse.slice(0, 1000)}` },
           { role: 'assistant', content: `[Ace]: ${aceResponse}` },
         ]);
-        await documentToChannel('developer', aceResponse.slice(0, 300));
+        documentToChannel('developer', aceResponse.slice(0, 300)).catch(() => {});
 
         groupHistory.push({ role: 'assistant', content: `[Ace]: ${aceResponse}` });
         goalStatus = '💻 Ace implementing...';
@@ -478,9 +468,25 @@ async function handleAgentChain(
 }
 
 /**
- * Sub-agents run sequentially in pipeline order so earlier agents' output
- * informs later agents (e.g. designer before QA, security before deploy).
+ * Tier-based parallelism: agents in the same tier run concurrently.
+ * Earlier tiers complete before later tiers start, so designer output
+ * informs implementation, and implementation informs reviewers.
  */
+const AGENT_TIER: Record<string, number> = {
+  'ux-reviewer': 0,      // Sophie — design first
+  'dba': 0,              // Elena — schema design (parallel with Sophie)
+  'api-reviewer': 0,     // Raj — API design (parallel with Sophie/Elena)
+  'developer': 1,        // Ace — implementation (after design)
+  'security-auditor': 2, // Kane — review (parallel with other reviewers)
+  'lawyer': 2,           // Harper — compliance review
+  'qa': 2,               // Max — testing review
+  'performance': 2,      // Kai — perf review
+  'copywriter': 2,       // Liv — copy review
+  'devops': 3,           // Jude — deploy (after review)
+  'ios-engineer': 3,     // Mia — platform (parallel with deploy)
+  'android-engineer': 3, // Leo — platform
+};
+
 async function handleSubAgents(
   agentIds: string[],
   directiveContext: string,
@@ -493,43 +499,64 @@ async function handleSubAgents(
 
   if (validAgents.length === 0) return;
 
-  // Sort agents by pipeline order — earlier phases first
-  validAgents.sort((a, b) => {
-    const aIdx = AGENT_PIPELINE_ORDER.indexOf(a.id);
-    const bIdx = AGENT_PIPELINE_ORDER.indexOf(b.id);
-    return (aIdx === -1 ? 999 : aIdx) - (bIdx === -1 ? 999 : bIdx);
-  });
+  // Group agents by tier
+  const tiers = new Map<number, typeof validAgents>();
+  for (const entry of validAgents) {
+    const tier = AGENT_TIER[entry.id] ?? 99;
+    if (!tiers.has(tier)) tiers.set(tier, []);
+    tiers.get(tier)!.push(entry);
+  }
 
-  // Accumulate earlier agents' findings so later agents can build on them
+  // Execute tiers in order; agents within each tier run in parallel
+  const sortedTiers = [...tiers.keys()].sort((a, b) => a - b);
   const priorFindings: string[] = [];
 
-  for (const { id, agent } of validAgents) {
-    try {
-      await groupchat.sendTyping();
-      await documentToChannel(id, `📥 Received task from groupchat. Working...`);
-      const agentMemory = getMemoryContext(id);
-      const priorContext = priorFindings.length > 0
-        ? `\n\n**Prior agent findings (use these to inform your work):**\n${priorFindings.join('\n')}` : '';
-      const agentContext = `[Directive from groupchat]: ${directiveContext}${priorContext}\n\nDo your job. Be concise in your response — max 200 words. Report what you found or did.`;
-      const agentResponse = await agentRespond(agent, [...agentMemory, ...groupHistory], agentContext, async (_toolName, summary) => {
-        await documentToChannel(id, `🔧 ${summary}`);
-      });
+  for (const tierNum of sortedTiers) {
+    const tierAgents = tiers.get(tierNum)!;
+    groupchat.sendTyping().catch(() => {});
 
-      await sendAgentMessage(groupchat, agent, agentResponse);
-      appendToMemory(id, [
-        { role: 'user', content: `[Groupchat directive]: ${directiveContext.slice(0, 500)}` },
-        { role: 'assistant', content: `[${agent.name}]: ${agentResponse}` },
-      ]);
-      await documentToChannel(id, `✅ ${agentResponse.slice(0, 300)}`);
-      groupHistory.push({ role: 'assistant', content: `[${agent.name.split(' ')[0]}]: ${agentResponse}` });
-      priorFindings.push(`[${agent.name.split(' ')[0]}]: ${agentResponse.slice(0, 500)}`);
-    } catch (err) {
-      console.error(`${agent.name} error:`, err instanceof Error ? err.message : 'Unknown');
-      try {
-        const wh = await getWebhook(groupchat);
-        await wh.send({ content: `⚠️ ${agent.name.split(' ')[0]} had an error.`, username: `${agent.emoji} ${agent.name}`, avatarURL: agent.avatarUrl });
-      } catch {
-        await groupchat.send(`⚠️ ${agent.emoji} ${agent.name.split(' ')[0]} had an error.`);
+    const priorContext = priorFindings.length > 0
+      ? `\n\n**Prior agent findings (use these to inform your work):**\n${priorFindings.join('\n')}` : '';
+
+    const tierResults = await Promise.allSettled(
+      tierAgents.map(async ({ id, agent }) => {
+        documentToChannel(id, `📥 Received task from groupchat. Working...`).catch(() => {});
+        const agentMemory = getMemoryContext(id, 10);
+        const agentContext = `[Directive from groupchat]: ${directiveContext}${priorContext}\n\nDo your job. Be concise in your response — max 200 words. Report what you found or did.`;
+        const agentResponse = await agentRespond(agent, [...agentMemory, ...groupHistory], agentContext, async (_toolName, summary) => {
+          documentToChannel(id, `🔧 ${summary}`).catch(() => {});
+        }, { maxTokens: 4096 });
+
+        await sendAgentMessage(groupchat, agent, agentResponse);
+        appendToMemory(id, [
+          { role: 'user', content: `[Groupchat directive]: ${directiveContext.slice(0, 500)}` },
+          { role: 'assistant', content: `[${agent.name}]: ${agentResponse}` },
+        ]);
+        documentToChannel(id, `✅ ${agentResponse.slice(0, 300)}`).catch(() => {});
+        groupHistory.push({ role: 'assistant', content: `[${agent.name.split(' ')[0]}]: ${agentResponse}` });
+        return `[${agent.name.split(' ')[0]}]: ${agentResponse.slice(0, 500)}`;
+      })
+    );
+
+    // Collect findings from this tier for the next tier
+    for (const result of tierResults) {
+      if (result.status === 'fulfilled') {
+        priorFindings.push(result.value);
+      } else {
+        console.error('Sub-agent tier error:', result.reason);
+      }
+    }
+
+    // Report errors for failed agents
+    for (let i = 0; i < tierResults.length; i++) {
+      if (tierResults[i].status === 'rejected') {
+        const { agent } = tierAgents[i];
+        try {
+          const wh = await getWebhook(groupchat);
+          await wh.send({ content: `⚠️ ${agent.name.split(' ')[0]} had an error.`, username: `${agent.emoji} ${agent.name}`, avatarURL: agent.avatarUrl });
+        } catch {
+          await groupchat.send(`⚠️ ${agent.emoji} ${agent.name.split(' ')[0]} had an error.`);
+        }
       }
     }
   }
@@ -537,7 +564,7 @@ async function handleSubAgents(
 }
 
 /**
- * User explicitly @mentioned agents — route directly to them.
+ * User explicitly @mentioned agents — route directly to them in parallel.
  */
 async function handleDirectedMessage(
   userMessage: string,
@@ -546,27 +573,34 @@ async function handleDirectedMessage(
   groupchat: TextChannel
 ): Promise<void> {
   const contextMessage = `[${senderName}]: ${userMessage}`;
+  groupchat.sendTyping().catch(() => {});
 
-  for (const agentId of agentIds) {
-    const agent = getAgent(agentId as AgentId);
-    if (!agent) continue;
+  const validAgents = agentIds
+    .map((id) => ({ id, agent: getAgent(id as AgentId) }))
+    .filter((a): a is { id: string; agent: AgentConfig } => a.agent !== null && a.agent !== undefined);
 
-    try {
-      await groupchat.sendTyping();
-
-      const agentMemory = getMemoryContext(agentId);
+  const results = await Promise.allSettled(
+    validAgents.map(async ({ id, agent }) => {
+      const agentMemory = getMemoryContext(id, 10);
       const response = await agentRespond(agent, [...agentMemory, ...groupHistory], contextMessage, async (_toolName, summary) => {
-        await sendToolNotification(groupchat, agent, summary);
-      });
+        sendToolNotification(groupchat, agent, summary).catch(() => {});
+      }, { maxTokens: 4096 });
 
       await sendAgentMessage(groupchat, agent, response);
-      appendToMemory(agentId, [
+      appendToMemory(id, [
         { role: 'user', content: contextMessage },
         { role: 'assistant', content: `[${agent.name}]: ${response}` },
       ]);
-      await documentToChannel(agentId, `Direct @mention from ${senderName}: ${response.slice(0, 200)}`);
-    } catch (err) {
-      console.error(`${agent.name} error:`, err instanceof Error ? err.message : 'Unknown');
+      documentToChannel(id, `Direct @mention from ${senderName}: ${response.slice(0, 200)}`).catch(() => {});
+      groupHistory.push({ role: 'assistant', content: `[${agent.name.split(' ')[0]}]: ${response}` });
+    })
+  );
+
+  // Report errors
+  for (let i = 0; i < results.length; i++) {
+    if (results[i].status === 'rejected') {
+      const { agent } = validAgents[i];
+      console.error(`${agent.name} error:`, (results[i] as PromiseRejectedResult).reason);
       try {
         const wh = await getWebhook(groupchat);
         await wh.send({ content: `⚠️ ${agent.name.split(' ')[0]} had an error.`, username: `${agent.emoji} ${agent.name}`, avatarURL: agent.avatarUrl });

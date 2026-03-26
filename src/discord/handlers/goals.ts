@@ -36,13 +36,12 @@ export async function handleGoalsMessage(
   const content = message.content.trim();
   if (!content) return;
 
-  // Serialize goals processing to prevent race conditions on pendingDecision
+  // Queue serializes processing — don't block the event handler
   goalsQueue = goalsQueue.then(() =>
     processGoalsMessage(message, content, goalsChannel, groupchat)
   ).catch((err) => {
     console.error('Goals queue error:', err instanceof Error ? err.message : 'Unknown');
   });
-  await goalsQueue;
 }
 
 /** Send a tool notification as an agent via webhook */
@@ -84,7 +83,7 @@ The user has made their choice. Acknowledge it briefly, then continue executing 
     try {
       const rileyMemory = getMemoryContext('executive-assistant');
       const rileyResponse = await agentRespond(riley, [...rileyMemory, ...goalsHistory], decisionContext, async (_toolName, summary) => {
-        await sendGoalsToolNotification(goalsChannel, riley, summary);
+        sendGoalsToolNotification(goalsChannel, riley, summary).catch(() => {});
       });
 
       await sendAgentMessage(goalsChannel, riley, rileyResponse);
@@ -94,7 +93,7 @@ The user has made their choice. Acknowledge it briefly, then continue executing 
         { role: 'user', content: `[${senderName} decision]: ${content}` },
         { role: 'assistant', content: `[Riley]: ${rileyResponse}` },
       ]);
-      await documentToChannel('executive-assistant', `Received decision from ${senderName}: "${content.slice(0, 200)}". Continuing plan.`);
+      documentToChannel('executive-assistant', `Received decision from ${senderName}: "${content.slice(0, 200)}". Continuing plan.`).catch(() => {});
 
       // Check if Riley's response contains a decision request
       if (rileyResponse.includes('🛑') || rileyResponse.includes('Decision Required')) {
@@ -138,7 +137,7 @@ Remember: You plan and coordinate. Ace implements. Harper reviews compliance. Ot
     // Riley creates the plan
     const rileyMemory = getMemoryContext('executive-assistant');
     const rileyResponse = await agentRespond(riley, [...rileyMemory, ...goalsHistory], goalContext, async (_toolName, summary) => {
-      await sendGoalsToolNotification(goalsChannel, riley, summary);
+      sendGoalsToolNotification(goalsChannel, riley, summary).catch(() => {});
     });
 
     await sendAgentMessage(goalsChannel, riley, rileyResponse);
@@ -149,7 +148,7 @@ Remember: You plan and coordinate. Ace implements. Harper reviews compliance. Ot
       { role: 'user', content: `[GOAL from ${senderName}]: ${content}` },
       { role: 'assistant', content: `[Riley]: ${rileyResponse}` },
     ]);
-    await documentToChannel('executive-assistant', `Received goal from ${senderName}: "${content.slice(0, 200)}". Created plan.`);
+    documentToChannel('executive-assistant', `Received goal from ${senderName}: "${content.slice(0, 200)}". Created plan.`).catch(() => {});
 
     // Check if Riley needs a decision before proceeding
     if (rileyResponse.includes('🛑') || rileyResponse.includes('Decision Required')) {
@@ -158,28 +157,23 @@ Remember: You plan and coordinate. Ace implements. Harper reviews compliance. Ot
       return;
     }
 
-    // Riley's plan is ready — direct Ace to implement
-    await executeAceStep(ace, riley, rileyResponse, senderName, goalsChannel);
+    // Riley's plan is ready — direct Ace to implement and Harper to review in parallel
+    const acePromise = executeAceStep(ace, riley, rileyResponse, senderName, goalsChannel);
 
-    // Harper reviews for compliance
-    if (harper) {
-      await goalsChannel.sendTyping();
+    const harperPromise = harper ? (async () => {
+      goalsChannel.sendTyping().catch(() => {});
 
-      const aceLastResponse = goalsHistory.filter(h => h.content.startsWith('[Ace')).pop()?.content || '';
-      const harperContext = `[Riley planned and Ace implemented a goal from ${senderName}]: "${content}"
+      const harperContext = `[Riley planned a goal from ${senderName}]: "${content}"
 
 Riley's plan:
 ${rileyResponse.slice(0, 1500)}
-
-Ace's implementation:
-${aceLastResponse.slice(0, 1500)}
 
 Review this for Australian business law compliance. Focus on: privacy (APPs), consumer law (ACL), contractor classification, data handling, and any regulatory concerns. Be concise — only flag actual issues.`;
 
       const harperMemory = getMemoryContext('lawyer');
       const harperResponse = await agentRespond(harper, [...harperMemory, ...goalsHistory], harperContext, async (_toolName, summary) => {
-        await sendGoalsToolNotification(goalsChannel, harper, summary);
-      });
+        sendGoalsToolNotification(goalsChannel, harper, summary).catch(() => {});
+      }, { maxTokens: 4096 });
 
       await sendAgentMessage(goalsChannel, harper, harperResponse);
 
@@ -189,8 +183,10 @@ Review this for Australian business law compliance. Focus on: privacy (APPs), co
         { role: 'user', content: `[Compliance review for goal]: ${content.slice(0, 500)}` },
         { role: 'assistant', content: `[Harper]: ${harperResponse}` },
       ]);
-      await documentToChannel('lawyer', `Reviewed compliance for goal: "${content.slice(0, 200)}"`);
-    }
+      documentToChannel('lawyer', `Reviewed compliance for goal: "${content.slice(0, 200)}"`).catch(() => {});
+    })() : Promise.resolve();
+
+    await Promise.allSettled([acePromise, harperPromise]);
 
     trimHistory();
   } catch (err) {
@@ -225,7 +221,7 @@ Riley has created this plan based on a goal from ${senderName}. Implement the st
 
   const aceMemory = getMemoryContext('developer');
   const aceResponse = await agentRespond(ace, [...aceMemory, ...goalsHistory], aceContext, async (_toolName, summary) => {
-    await sendGoalsToolNotification(goalsChannel, ace, summary);
+    sendGoalsToolNotification(goalsChannel, ace, summary).catch(() => {});
   });
 
   await sendAgentMessage(goalsChannel, ace, aceResponse);
@@ -236,7 +232,7 @@ Riley has created this plan based on a goal from ${senderName}. Implement the st
     { role: 'user', content: `[Instruction from Riley]: ${rileyPlan.slice(0, 1000)}` },
     { role: 'assistant', content: `[Ace]: ${aceResponse}` },
   ]);
-  await documentToChannel('developer', `Implemented goal step. ${aceResponse.slice(0, 300)}`);
+  documentToChannel('developer', `Implemented goal step. ${aceResponse.slice(0, 300)}`).catch(() => {});
 }
 
 function trimHistory(): void {

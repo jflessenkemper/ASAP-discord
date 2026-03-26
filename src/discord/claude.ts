@@ -6,9 +6,13 @@ import { recordClaudeUsage, isClaudeOverLimit } from './usage';
 const CLAUDE_OPUS = 'claude-opus-4-20250514';
 const CLAUDE_SONNET = 'claude-sonnet-4-20250514';
 
-/** Riley uses Sonnet (fast, conversational). All other agents use Opus (powerful, tool-heavy). */
+/**
+ * Model selection: Opus for agents that write code or use complex tool chains.
+ * Sonnet for all review/advisory agents — much faster, still high quality.
+ */
+const OPUS_AGENTS = new Set(['developer']); // Only Ace needs Opus for deep code work
 function modelForAgent(agentId: string): string {
-  return agentId === 'executive-assistant' ? CLAUDE_SONNET : CLAUDE_OPUS;
+  return OPUS_AGENTS.has(agentId) ? CLAUDE_OPUS : CLAUDE_SONNET;
 }
 
 let client: Anthropic | null = null;
@@ -31,8 +35,8 @@ export interface ConversationMessage {
 const MAX_TOOL_ROUNDS = 25;
 /** Max total time for a tool loop (ms) */
 const TOOL_LOOP_TIMEOUT = 180_000;
-/** Max concurrent Claude requests to avoid rate limits */
-const MAX_CONCURRENT = 4;
+/** Max concurrent Claude requests — supports parallel agent tiers */
+const MAX_CONCURRENT = 8;
 let activeClaude = 0;
 const claudeQueue: Array<() => void> = [];
 
