@@ -81,7 +81,7 @@ function identifyCaller(number: string): string | null {
  * Learn a new contact — called when Riley discovers someone's name on a call.
  */
 export function learnContact(number: string, name: string): void {
-  let normalized = number.replace(/\\s+/g, '');
+  let normalized = number.replace(/\s+/g, '');
   if (normalized.startsWith('0')) normalized = '+61' + normalized.slice(1);
   else if (!normalized.startsWith('+')) normalized = '+61' + normalized;
   knownContacts[normalized] = name;
@@ -124,8 +124,9 @@ const activeSessions = new Map<string, PhoneSession>();
 export function getInboundTwiML(callerNumber?: string): string {
   const wsUrl = SERVER_URL.replace(/^https?/, 'wss') + '/api/webhooks/twilio/stream';
   // Pass caller number as a custom parameter so the WS handler can identify them
+  const escXml = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
   const paramTag = callerNumber
-    ? `\n      <Parameter name="callerNumber" value="${callerNumber}" />`
+    ? `\n      <Parameter name="callerNumber" value="${escXml(callerNumber)}" />`
     : '';
   return `<?xml version="1.0" encoding="UTF-8"?>
 <Response>

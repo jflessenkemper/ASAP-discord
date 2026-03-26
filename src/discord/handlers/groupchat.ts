@@ -316,7 +316,11 @@ async function executeActions(
             await groupchat.send('📞 Phone system not configured (missing Twilio credentials).');
             break;
           }
-          const phoneNumber = param || '0436012231';
+          if (!param) {
+            await groupchat.send('📞 No phone number specified. Riley, include a number with [ACTION:CALL:number].');
+            break;
+          }
+          const phoneNumber = param;
           try {
             await makeOutboundCall(phoneNumber, "Hey Jordan, it's Riley! You asked me to give you a call.");
             await groupchat.send(`📞 Calling ${phoneNumber}...`);
@@ -331,7 +335,11 @@ async function executeActions(
             break;
           }
           // param format: "0436012231,0412345678" (comma-separated numbers)
-          const numbers = param ? param.split(',').map(n => n.trim()) : ['0436012231'];
+          if (!param) {
+            await groupchat.send('📞 No phone numbers specified. Riley, include numbers with [ACTION:CONFERENCE:num1,num2].');
+            break;
+          }
+          const numbers = param.split(',').map(n => n.trim());
           try {
             const confName = await startConferenceCall(numbers);
             await groupchat.send(`📞 **Conference call started** — ${confName}\nCalling: ${numbers.join(', ')} + Riley`);

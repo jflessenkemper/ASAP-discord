@@ -57,17 +57,23 @@ export function setScreenshotsChannel(channel: TextChannel): void {
 async function clearChannel(channel: TextChannel): Promise<void> {
   try {
     let fetched: Collection<string, Message>;
+    let iterations = 0;
     do {
       fetched = await channel.messages.fetch({ limit: 100 });
       if (fetched.size > 0) {
+        const before = fetched.size;
         await channel.bulkDelete(fetched, true).catch(async () => {
           // bulkDelete fails for messages > 14 days old — delete individually
           for (const msg of fetched.values()) {
             await msg.delete().catch(() => {});
           }
         });
+        // Safety: break if we couldn't reduce the message count
+        const after = (await channel.messages.fetch({ limit: 1 })).size;
+        if (after >= before) break;
       }
-    } while (fetched.size >= 2);
+      iterations++;
+    } while (fetched.size >= 2 && iterations < 20);
   } catch (err) {
     console.warn('Could not clear screenshots channel:', err instanceof Error ? err.message : 'Unknown');
   }

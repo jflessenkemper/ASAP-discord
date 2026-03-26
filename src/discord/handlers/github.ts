@@ -13,12 +13,15 @@ export function setGitHubChannel(channel: TextChannel): void {
  */
 export function verifySignature(payload: string, signature: string | undefined): boolean {
   const secret = process.env.GITHUB_WEBHOOK_SECRET;
-  if (!secret) return true; // No secret configured, skip verification
+  if (!secret) return false; // Reject if no secret configured
 
   if (!signature) return false;
 
   const expected = 'sha256=' + crypto.createHmac('sha256', secret).update(payload).digest('hex');
-  return crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected));
+  const sigBuf = Buffer.from(signature);
+  const expBuf = Buffer.from(expected);
+  if (sigBuf.length !== expBuf.length) return false;
+  return crypto.timingSafeEqual(sigBuf, expBuf);
 }
 
 /**

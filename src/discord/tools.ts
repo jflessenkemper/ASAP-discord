@@ -1,6 +1,6 @@
 import fs from 'fs';
 import path from 'path';
-import { execSync } from 'child_process';
+import { execSync, execFileSync } from 'child_process';
 import {
   Guild,
   ChannelType,
@@ -683,14 +683,16 @@ function batchEdit(edits: Array<{ path: string; old_string: string; new_string: 
 }
 
 function searchFiles(pattern: string, include?: string): string {
-  // Use grep for speed. Sanitize the pattern to prevent command injection.
-  const safePattern = pattern.replace(/['"\\$`!]/g, '\\$&');
-  const includeArg = include ? `--include='${include.replace(/'/g, '')}'` : '--include=*.ts --include=*.tsx --include=*.js --include=*.json --include=*.sql --include=*.md';
+  // Use execFileSync with argument array to prevent command injection.
+  const includeArgs = include
+    ? ['--include=' + include]
+    : ['--include=*.ts', '--include=*.tsx', '--include=*.js', '--include=*.json', '--include=*.sql', '--include=*.md'];
 
   try {
-    const result = execSync(
-      `grep -rn -i -E '${safePattern}' ${includeArg} --max-count=50 . 2>/dev/null || true`,
-      { cwd: REPO_ROOT, timeout: 10_000, maxBuffer: 512 * 1024, encoding: 'utf-8' }
+    const result = execFileSync(
+      'grep',
+      ['-rn', '-i', '-E', pattern, ...includeArgs, '--max-count=50', '.'],
+      { cwd: REPO_ROOT, timeout: 10_000, maxBuffer: 512 * 1024, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] }
     );
     const lines = result.trim();
     if (!lines) return `No matches found for pattern: ${pattern}`;
@@ -703,7 +705,10 @@ function searchFiles(pattern: string, include?: string): string {
       return true;
     }).slice(0, 50);
     return deduped.join('\n');
-  } catch {
+  } catch (err: unknown) {
+    // grep exits with code 1 when no matches found — not an error
+    const execErr = err as { status?: number; stdout?: string };
+    if (execErr.status === 1) return `No matches found for pattern: ${pattern}`;
     return `Search failed for pattern: ${pattern}`;
   }
 }
@@ -762,8 +767,7 @@ const ALLOWED_COMMANDS: Array<{ prefix: string; description: string }> = [
   { prefix: 'echo ',   description: 'Echo text' },
   { prefix: 'pwd',     description: 'Print working directory' },
   { prefix: 'which ',  description: 'Locate commands' },
-  { prefix: 'node -e', description: 'Run inline JS' },
-  { prefix: 'node --eval', description: 'Run inline JS' },
+  // node -e / --eval removed: allows arbitrary code execution via child_process
   // GCP operations
   { prefix: 'gcloud secrets', description: 'Manage GCP secrets' },
   { prefix: 'gcloud run',     description: 'Cloud Run operations' },
@@ -938,8 +942,10 @@ async function ghListPRs(): Promise<string> {
 // ────────────────────────────────────────────
 
 function runTests(pattern?: string): string {
-  const testCmd = pattern
-    ? `npm test -- --testPathPattern="${pattern.replace(/"/g, '')}"`
+  // Sanitize pattern: allow only safe characters for test path patterns
+  const safePattern = pattern ? pattern.replace(/[^a-zA-Z0-9_./\-*?]/g, '') : undefined;
+  const testCmd = safePattern
+    ? `npm test -- --testPathPattern="${safePattern}"`
     : 'npm test';
 
   try {

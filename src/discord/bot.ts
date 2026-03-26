@@ -155,10 +155,10 @@ export async function startBot(): Promise<void> {
  */
 export async function stopBot(): Promise<void> {
   stopDashboardUpdates();
-  flushPendingWrites();
   if (isCallActive()) {
     await endCall();
   }
+  flushPendingWrites();
   if (client) {
     client.destroy();
     client = null;
