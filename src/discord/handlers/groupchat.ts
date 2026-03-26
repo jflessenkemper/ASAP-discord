@@ -195,7 +195,16 @@ async function handleRileyMessage(
     const errMsg = err instanceof Error ? err.message : String(err);
     console.error('Riley error:', errMsg);
     const short = errMsg.length > 200 ? errMsg.slice(0, 200) + '…' : errMsg;
-    await groupchat.send(`⚠️ Riley encountered an error:\n\`\`\`${short}\`\`\``);
+    try {
+      const wh = await getWebhook(groupchat);
+      await wh.send({
+        content: `⚠️ Riley encountered an error:\n\`\`\`${short}\`\`\``,
+        username: `${riley.emoji} ${riley.name}`,
+        avatarURL: riley.avatarUrl,
+      });
+    } catch {
+      await groupchat.send(`⚠️ Riley encountered an error:\n\`\`\`${short}\`\`\``);
+    }
   }
 }
 
@@ -210,6 +219,20 @@ async function executeActions(
   const actionRe = /\[ACTION:(\w+)(?::([^\]]*))?\]/g;
   const actions = [...response.matchAll(actionRe)];
 
+  const riley = getAgent('executive-assistant' as AgentId);
+
+  /** Send a message as Riley via webhook, fallback to bot if webhook fails */
+  async function sendAsRiley(msg: string): Promise<void> {
+    if (riley) {
+      try {
+        const wh = await getWebhook(groupchat);
+        await wh.send({ content: msg, username: `${riley.emoji} ${riley.name}`, avatarURL: riley.avatarUrl });
+        return;
+      } catch { /* fallback */ }
+    }
+    await groupchat.send(msg);
+  }
+
   for (const [, action, param] of actions) {
     try {
       switch (action.toUpperCase()) {
@@ -217,13 +240,13 @@ async function executeActions(
           const channels = getBotChannels();
           if (!channels) break;
           if (isCallActive()) {
-            await groupchat.send('📞 Already in a voice call.');
+            await sendAsRiley('📞 Already in a voice call.');
             break;
           }
           if (member) {
             await startCall(channels.voiceChannel, groupchat, channels.callLog, member);
           } else {
-            await groupchat.send('📞 I need you to be in the server to join VC.');
+            await sendAsRiley('📞 I need you to be in the server to join VC.');
           }
           break;
         }
@@ -231,14 +254,14 @@ async function executeActions(
           if (isCallActive()) {
             await endCall();
           } else {
-            await groupchat.send('No active voice call to leave.');
+            await sendAsRiley('No active voice call to leave.');
           }
           break;
         }
         case 'DEPLOY': {
           try {
             const { buildId, logUrl } = await triggerCloudBuild(param || 'latest');
-            await groupchat.send(
+            await sendAsRiley(
               `🚀 **Build triggered**\nBuild ID: \`${buildId}\`\n[View logs](${logUrl})`
             );
             const channels = getBotChannels();
@@ -251,23 +274,23 @@ async function executeActions(
               );
             }
           } catch (err) {
-            await groupchat.send(`❌ Deploy failed: ${err instanceof Error ? err.message : 'Unknown'}`);
+            await sendAsRiley(`❌ Deploy failed: ${err instanceof Error ? err.message : 'Unknown'}`);
           }
           break;
         }
         case 'SCREENSHOTS': {
           const appUrl = process.env.FRONTEND_URL || 'https://asap-489910.australia-southeast1.run.app';
           captureAndPostScreenshots(appUrl, param || 'manual').catch((err) => {
-            groupchat.send(`❌ Screenshot capture failed: ${err instanceof Error ? err.message : 'Unknown'}`).catch(() => {});
+            sendAsRiley(`❌ Screenshot capture failed: ${err instanceof Error ? err.message : 'Unknown'}`).catch(() => {});
           });
-          await groupchat.send('📸 Capturing screenshots...');
+          await sendAsRiley('📸 Capturing screenshots...');
           break;
         }
         case 'URLS': {
           const appUrl = process.env.FRONTEND_URL || 'https://asap-489910.australia-southeast1.run.app';
           const projectId = process.env.GCS_PROJECT_ID || 'asap-489910';
           const region = process.env.CLOUD_RUN_REGION || 'australia-southeast1';
-          await groupchat.send(
+          await sendAsRiley(
             `🔗 **ASAP Links**\n\n` +
             `🌐 **App**: ${appUrl}\n` +
             `📦 **Cloud Build**: https://console.cloud.google.com/cloud-build/builds?project=${projectId}\n` +
@@ -278,28 +301,28 @@ async function executeActions(
         }
         case 'STATUS': {
           const summary = getStatusSummary();
-          await groupchat.send(summary || '📋 No active tasks.');
+          await sendAsRiley(summary || '📋 No active tasks.');
           break;
         }
         case 'LIMITS': {
           const report = getUsageReport();
-          await groupchat.send(report);
+          await sendAsRiley(report);
           break;
         }
         case 'CLEAR': {
           clearHistory(groupchat.id);
           groupHistory.splice(0);
           clearMemory('groupchat');
-          await groupchat.send('🧹 Conversation context cleared.');
+          await sendAsRiley('🧹 Conversation context cleared.');
           break;
         }
         case 'ROLLBACK': {
           if (param) {
             try {
               const result = await rollbackToRevision(param);
-              await groupchat.send(result);
+              await sendAsRiley(result);
             } catch (err) {
-              await groupchat.send(`❌ Rollback failed: ${err instanceof Error ? err.message : 'Unknown'}`);
+              await sendAsRiley(`❌ Rollback failed: ${err instanceof Error ? err.message : 'Unknown'}`);
             }
           } else {
             try {
@@ -311,9 +334,9 @@ async function executeActions(
                 const active = r.name === current ? ' ← **active**' : '';
                 return `\`${r.name}\` — ${date} (${tag})${active}`;
               }).join('\n');
-              await groupchat.send(`📦 **Cloud Run Revisions**\n\n${list}`);
+              await sendAsRiley(`📦 **Cloud Run Revisions**\n\n${list}`);
             } catch (err) {
-              await groupchat.send(`❌ Failed to list revisions: ${err instanceof Error ? err.message : 'Unknown'}`);
+              await sendAsRiley(`❌ Failed to list revisions: ${err instanceof Error ? err.message : 'Unknown'}`);
             }
           }
           break;
@@ -323,45 +346,45 @@ async function executeActions(
           const list = Array.from(agents.values())
             .map((a) => `${a.emoji} **${a.name}**`)
             .join('\n');
-          await groupchat.send(`**ASAP Agent Team**\n\n${list}`);
+          await sendAsRiley(`**ASAP Agent Team**\n\n${list}`);
           break;
         }
         case 'CALL': {
           if (!isTelephonyAvailable()) {
-            await groupchat.send('📞 Phone system not configured (missing Twilio credentials).');
+            await sendAsRiley('📞 Phone system not configured (missing Twilio credentials).');
             break;
           }
           if (!param) {
-            await groupchat.send('📞 No phone number specified. Riley, include a number with [ACTION:CALL:number].');
+            await sendAsRiley('📞 No phone number specified. Riley, include a number with [ACTION:CALL:number].');
             break;
           }
           // Twilio free trial only allows calls to verified numbers
           const phoneNumber = '0436012231';
           try {
             await makeOutboundCall(phoneNumber, "Hey Jordan, it's Riley! You asked me to give you a call.");
-            await groupchat.send(`📞 Calling ${phoneNumber}...`);
+            await sendAsRiley(`📞 Calling ${phoneNumber}...`);
           } catch (err) {
-            await groupchat.send(`❌ Call failed: ${err instanceof Error ? err.message : 'Unknown'}`);
+            await sendAsRiley(`❌ Call failed: ${err instanceof Error ? err.message : 'Unknown'}`);
           }
           break;
         }
         case 'CONFERENCE': {
           if (!isTelephonyAvailable()) {
-            await groupchat.send('📞 Phone system not configured (missing Twilio credentials).');
+            await sendAsRiley('📞 Phone system not configured (missing Twilio credentials).');
             break;
           }
           // param format: "0436012231,0412345678" (comma-separated numbers)
           if (!param) {
-            await groupchat.send('📞 No phone numbers specified. Riley, include numbers with [ACTION:CONFERENCE:num1,num2].');
+            await sendAsRiley('📞 No phone numbers specified. Riley, include numbers with [ACTION:CONFERENCE:num1,num2].');
             break;
           }
           // Twilio free trial only allows calls to verified numbers
           const numbers = ['0436012231'];
           try {
             const confName = await startConferenceCall(numbers);
-            await groupchat.send(`📞 **Conference call started** — ${confName}\nCalling: ${numbers.join(', ')} + Riley`);
+            await sendAsRiley(`📞 **Conference call started** — ${confName}\nCalling: ${numbers.join(', ')} + Riley`);
           } catch (err) {
-            await groupchat.send(`❌ Conference failed: ${err instanceof Error ? err.message : 'Unknown'}`);
+            await sendAsRiley(`❌ Conference failed: ${err instanceof Error ? err.message : 'Unknown'}`);
           }
           break;
         }
@@ -438,7 +461,12 @@ async function handleAgentChain(
         }
       } catch (err) {
         console.error('Ace error:', err instanceof Error ? err.message : 'Unknown');
-        await groupchat.send(`⚠️ ${ace.emoji} Ace had an error.`);
+        try {
+          const wh = await getWebhook(groupchat);
+          await wh.send({ content: `⚠️ Ace had an error.`, username: `${ace.emoji} ${ace.name}`, avatarURL: ace.avatarUrl });
+        } catch {
+          await groupchat.send(`⚠️ ${ace.emoji} Ace had an error.`);
+        }
       }
     }
   }
@@ -497,7 +525,12 @@ async function handleSubAgents(
       priorFindings.push(`[${agent.name.split(' ')[0]}]: ${agentResponse.slice(0, 500)}`);
     } catch (err) {
       console.error(`${agent.name} error:`, err instanceof Error ? err.message : 'Unknown');
-      await groupchat.send(`⚠️ ${agent.emoji} ${agent.name.split(' ')[0]} had an error.`);
+      try {
+        const wh = await getWebhook(groupchat);
+        await wh.send({ content: `⚠️ ${agent.name.split(' ')[0]} had an error.`, username: `${agent.emoji} ${agent.name}`, avatarURL: agent.avatarUrl });
+      } catch {
+        await groupchat.send(`⚠️ ${agent.emoji} ${agent.name.split(' ')[0]} had an error.`);
+      }
     }
   }
   persistGroupHistory();
@@ -534,7 +567,12 @@ async function handleDirectedMessage(
       await documentToChannel(agentId, `Direct @mention from ${senderName}: ${response.slice(0, 200)}`);
     } catch (err) {
       console.error(`${agent.name} error:`, err instanceof Error ? err.message : 'Unknown');
-      await groupchat.send(`⚠️ ${agent.emoji} ${agent.name.split(' ')[0]} had an error.`);
+      try {
+        const wh = await getWebhook(groupchat);
+        await wh.send({ content: `⚠️ ${agent.name.split(' ')[0]} had an error.`, username: `${agent.emoji} ${agent.name}`, avatarURL: agent.avatarUrl });
+      } catch {
+        await groupchat.send(`⚠️ ${agent.emoji} ${agent.name.split(' ')[0]} had an error.`);
+      }
     }
   }
 

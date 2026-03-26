@@ -49,7 +49,16 @@ async function handleAgentMessageInner(
 
   try {
     const response = await agentRespond(agent, history, userMessage, async (toolName, summary) => {
-      await channel.send(`🔧 ${summary}`);
+      try {
+        const wh = await getWebhook(channel);
+        await wh.send({
+          content: `🔧 ${summary}`,
+          username: `${agent.emoji} ${agent.name}`,
+          avatarURL: agent.avatarUrl,
+        });
+      } catch {
+        await channel.send(`🔧 ${summary}`);
+      }
     });
 
     // Update history
@@ -73,7 +82,16 @@ async function handleAgentMessageInner(
     const errMsg = err instanceof Error ? err.message : String(err);
     console.error(`Agent ${agent.name} error:`, errMsg);
     const short = errMsg.length > 200 ? errMsg.slice(0, 200) + '…' : errMsg;
-    await channel.send(`⚠️ ${agent.name} encountered an error:\n\`\`\`${short}\`\`\``);
+    try {
+      const wh = await getWebhook(channel);
+      await wh.send({
+        content: `⚠️ ${agent.name} encountered an error:\n\`\`\`${short}\`\`\``,
+        username: `${agent.emoji} ${agent.name}`,
+        avatarURL: agent.avatarUrl,
+      });
+    } catch {
+      await channel.send(`⚠️ ${agent.name} encountered an error:\n\`\`\`${short}\`\`\``);
+    }
   }
 }
 

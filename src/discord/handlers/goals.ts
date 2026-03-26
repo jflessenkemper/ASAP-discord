@@ -1,9 +1,10 @@
 import { Message, TextChannel } from 'discord.js';
-import { getAgent, AgentId } from '../agents';
+import { getAgent, AgentId, AgentConfig } from '../agents';
 import { agentRespond, ConversationMessage } from '../claude';
 import { appendToMemory, getMemoryContext } from '../memory';
 import { documentToChannel, setBotChannels } from './documentation';
-import { sendLongMessage } from './textChannel';
+import { sendAgentMessage } from './textChannel';
+import { getWebhook } from '../services/webhooks';
 
 // Goals channel conversation history — persistent across messages
 const goalsHistory: ConversationMessage[] = [];
@@ -44,6 +45,20 @@ export async function handleGoalsMessage(
   await goalsQueue;
 }
 
+/** Send a tool notification as an agent via webhook */
+async function sendGoalsToolNotification(channel: TextChannel, agent: AgentConfig, summary: string): Promise<void> {
+  try {
+    const wh = await getWebhook(channel);
+    await wh.send({
+      content: `🔧 ${summary}`,
+      username: `${agent.emoji} ${agent.name}`,
+      avatarURL: agent.avatarUrl,
+    });
+  } catch {
+    await channel.send(`🔧 ${agent.emoji} ${agent.name} → ${summary}`);
+  }
+}
+
 async function processGoalsMessage(
   message: Message,
   content: string,
@@ -69,10 +84,10 @@ The user has made their choice. Acknowledge it briefly, then continue executing 
     try {
       const rileyMemory = getMemoryContext('executive-assistant');
       const rileyResponse = await agentRespond(riley, [...rileyMemory, ...goalsHistory], decisionContext, async (_toolName, summary) => {
-        await goalsChannel.send(`🔧 ${riley.emoji} ${riley.name} → ${summary}`);
+        await sendGoalsToolNotification(goalsChannel, riley, summary);
       });
 
-      await sendLongMessage(goalsChannel, `${riley.emoji} **${riley.name}**\n${rileyResponse}`);
+      await sendAgentMessage(goalsChannel, riley, rileyResponse);
       goalsHistory.push({ role: 'user', content: `[${senderName} decision]: ${content}` });
       goalsHistory.push({ role: 'assistant', content: `[${riley.name}]: ${rileyResponse}` });
       appendToMemory('executive-assistant', [
@@ -94,7 +109,12 @@ The user has made their choice. Acknowledge it briefly, then continue executing 
       const errMsg = err instanceof Error ? err.message : String(err);
       console.error('Goals decision handler error:', errMsg);
       const short = errMsg.length > 200 ? errMsg.slice(0, 200) + '…' : errMsg;
-      await goalsChannel.send(`⚠️ Error processing your decision:\n\`\`\`${short}\`\`\``);
+      try {
+        const wh = await getWebhook(goalsChannel);
+        await wh.send({ content: `⚠️ Error processing your decision:\n\`\`\`${short}\`\`\``, username: `${riley.emoji} ${riley.name}`, avatarURL: riley.avatarUrl });
+      } catch {
+        await goalsChannel.send(`⚠️ Error processing your decision:\n\`\`\`${short}\`\`\``);
+      }
     }
     return;
   }
@@ -116,10 +136,10 @@ Remember: You plan and coordinate. Ace implements. Harper reviews compliance. Ot
     // Riley creates the plan
     const rileyMemory = getMemoryContext('executive-assistant');
     const rileyResponse = await agentRespond(riley, [...rileyMemory, ...goalsHistory], goalContext, async (_toolName, summary) => {
-      await goalsChannel.send(`🔧 ${riley.emoji} ${riley.name} → ${summary}`);
+      await sendGoalsToolNotification(goalsChannel, riley, summary);
     });
 
-    await sendLongMessage(goalsChannel, `${riley.emoji} **${riley.name}**\n${rileyResponse}`);
+    await sendAgentMessage(goalsChannel, riley, rileyResponse);
 
     goalsHistory.push({ role: 'user', content: `[${senderName}]: ${content}` });
     goalsHistory.push({ role: 'assistant', content: `[${riley.name}]: ${rileyResponse}` });
@@ -156,10 +176,10 @@ Review this for Australian business law compliance. Focus on: privacy (APPs), co
 
       const harperMemory = getMemoryContext('lawyer');
       const harperResponse = await agentRespond(harper, [...harperMemory, ...goalsHistory], harperContext, async (_toolName, summary) => {
-        await goalsChannel.send(`🔧 ${harper.emoji} ${harper.name} → ${summary}`);
+        await sendGoalsToolNotification(goalsChannel, harper, summary);
       });
 
-      await sendLongMessage(goalsChannel, `${harper.emoji} **${harper.name}**\n${harperResponse}`);
+      await sendAgentMessage(goalsChannel, harper, harperResponse);
 
       goalsHistory.push({ role: 'user', content: `[System: Harper reviewing for compliance]` });
       goalsHistory.push({ role: 'assistant', content: `[${harper.name}]: ${harperResponse}` });
@@ -175,7 +195,12 @@ Review this for Australian business law compliance. Focus on: privacy (APPs), co
     const errMsg = err instanceof Error ? err.message : String(err);
     console.error('Goals handler error:', errMsg);
     const short = errMsg.length > 200 ? errMsg.slice(0, 200) + '…' : errMsg;
-    await goalsChannel.send(`⚠️ Error processing this goal:\n\`\`\`${short}\`\`\``);
+    try {
+      const wh = await getWebhook(goalsChannel);
+      await wh.send({ content: `⚠️ Error processing this goal:\n\`\`\`${short}\`\`\``, username: `${riley.emoji} ${riley.name}`, avatarURL: riley.avatarUrl });
+    } catch {
+      await goalsChannel.send(`⚠️ Error processing this goal:\n\`\`\`${short}\`\`\``);
+    }
   }
 }
 
@@ -198,10 +223,10 @@ Riley has created this plan based on a goal from ${senderName}. Implement the st
 
   const aceMemory = getMemoryContext('developer');
   const aceResponse = await agentRespond(ace, [...aceMemory, ...goalsHistory], aceContext, async (_toolName, summary) => {
-    await goalsChannel.send(`🔧 ${ace.emoji} ${ace.name} → ${summary}`);
+    await sendGoalsToolNotification(goalsChannel, ace, summary);
   });
 
-  await sendLongMessage(goalsChannel, `${ace.emoji} **${ace.name}**\n${aceResponse}`);
+  await sendAgentMessage(goalsChannel, ace, aceResponse);
 
   goalsHistory.push({ role: 'user', content: `[Riley's instruction to Ace]` });
   goalsHistory.push({ role: 'assistant', content: `[${ace.name}]: ${aceResponse}` });

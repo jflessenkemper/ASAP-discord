@@ -1,6 +1,6 @@
 import fs from 'fs';
 import path from 'path';
-import { execSync, execFileSync, spawn } from 'child_process';
+import { execSync, execFileSync } from 'child_process';
 import https from 'https';
 import http from 'http';
 import {
@@ -65,9 +65,6 @@ const MAX_WRITE_SIZE = 2 * 1024 * 1024;
 
 /** Max command execution time (2 min) */
 const CMD_TIMEOUT = 120_000;
-
-/** Memory directory for agent persistent notes */
-const MEMORY_DIR = path.join(REPO_ROOT, '.agent-memory');
 
 // ────────────────────────────────────────────
 // Path safety
@@ -907,13 +904,13 @@ export async function executeTool(
         return await fetchUrl(input.url, input.method, input.headers, input.body);
       // Memory
       case 'memory_read':
-        return memoryRead(input.file);
+        return await memoryRead(input.file);
       case 'memory_write':
-        return memoryWrite(input.file, input.content);
+        return await memoryWrite(input.file, input.content);
       case 'memory_append':
-        return memoryAppend(input.file, input.content);
+        return await memoryAppend(input.file, input.content);
       case 'memory_list':
-        return memoryList();
+        return await memoryList();
       // Database
       case 'db_query':
         return await dbQuery(input.query, input.params);
@@ -1677,18 +1674,25 @@ async function gcpSecretSet(name: string, value: string): Promise<string> {
 
   try {
     // Check if secret exists
+    let exists = false;
     try {
       gcpExec(`gcloud secrets describe ${safeName} --project=${GCP_PROJECT}`);
-      // Exists — add new version
-      execSync(`printf '%s' "${value.replace(/"/g, '\\"')}" | gcloud secrets versions add ${safeName} --project=${GCP_PROJECT} --data-file=-`, {
-        cwd: REPO_ROOT, timeout: GCP_TIMEOUT, encoding: 'utf-8', shell: '/bin/sh',
-      });
-    } catch {
-      // Doesn't exist — create it
-      execSync(`printf '%s' "${value.replace(/"/g, '\\"')}" | gcloud secrets create ${safeName} --project=${GCP_PROJECT} --data-file=-`, {
-        cwd: REPO_ROOT, timeout: GCP_TIMEOUT, encoding: 'utf-8', shell: '/bin/sh',
-      });
-    }
+      exists = true;
+    } catch { /* doesn't exist */ }
+
+    // Use execFileSync with stdin to avoid shell injection
+    const action = exists ? 'versions add' : 'create';
+    const args = exists
+      ? ['secrets', 'versions', 'add', safeName, `--project=${GCP_PROJECT}`, '--data-file=-']
+      : ['secrets', 'create', safeName, `--project=${GCP_PROJECT}`, '--data-file=-'];
+
+    execFileSync('gcloud', args, {
+      cwd: REPO_ROOT,
+      timeout: GCP_TIMEOUT,
+      encoding: 'utf-8',
+      input: value,
+    });
+
     return `✅ Secret "${safeName}" set successfully.`;
   } catch (err) {
     return `❌ Failed to set secret: ${err instanceof Error ? err.message : 'Unknown'}`;
@@ -1723,131 +1727,160 @@ async function gcpBuildStatus(limit: number): Promise<string> {
 // ────────────────────────────────────────────
 
 function fetchUrl(url: string, method?: string, headersStr?: string, body?: string): Promise<string> {
-  return new Promise((resolve) => {
-    if (!url || (!url.startsWith('https://') && !url.startsWith('http://'))) {
-      resolve('Error: URL must start with https:// or http://');
-      return;
-    }
+  const MAX_REDIRECTS = 5;
 
-    const httpMethod = (method || 'GET').toUpperCase();
-    let parsedHeaders: Record<string, string> = {};
-    if (headersStr) {
-      try { parsedHeaders = JSON.parse(headersStr); } catch { /* ignore */ }
-    }
+  function doFetch(targetUrl: string, redirectCount: number): Promise<string> {
+    return new Promise((resolve) => {
+      if (!targetUrl || (!targetUrl.startsWith('https://') && !targetUrl.startsWith('http://'))) {
+        resolve('Error: URL must start with https:// or http://');
+        return;
+      }
 
-    const parsedUrl = new URL(url);
-    const lib = parsedUrl.protocol === 'https:' ? https : http;
+      const httpMethod = (method || 'GET').toUpperCase();
+      let parsedHeaders: Record<string, string> = {};
+      if (headersStr) {
+        try { parsedHeaders = JSON.parse(headersStr); } catch { /* ignore */ }
+      }
 
-    const options = {
-      hostname: parsedUrl.hostname,
-      port: parsedUrl.port,
-      path: parsedUrl.pathname + parsedUrl.search,
-      method: httpMethod,
-      headers: {
-        'User-Agent': 'ASAP-Agent/1.0',
-        ...parsedHeaders,
-      },
-      timeout: 30_000,
-    };
+      const parsedUrl = new URL(targetUrl);
+      const lib = parsedUrl.protocol === 'https:' ? https : http;
 
-    const req = lib.request(options, (res) => {
-      let data = '';
-      const maxSize = 100_000; // 100KB max response
+      const options = {
+        hostname: parsedUrl.hostname,
+        port: parsedUrl.port,
+        path: parsedUrl.pathname + parsedUrl.search,
+        method: httpMethod,
+        headers: {
+          'User-Agent': 'ASAP-Agent/1.0',
+          ...parsedHeaders,
+        },
+        timeout: 30_000,
+      };
 
-      res.on('data', (chunk: Buffer) => {
-        data += chunk.toString();
-        if (data.length > maxSize) {
-          res.destroy();
-        }
-      });
-
-      res.on('end', () => {
+      const req = lib.request(options, (res) => {
         const status = res.statusCode || 0;
-        const header = `HTTP ${status} ${res.statusMessage || ''}\n`;
-        if (data.length > maxSize) {
-          resolve(header + data.slice(0, maxSize) + '\n\n[Response truncated at 100KB]');
-        } else {
-          resolve(header + data);
+
+        // Handle redirects
+        if ((status === 301 || status === 302 || status === 303 || status === 307 || status === 308) && res.headers.location) {
+          if (redirectCount >= MAX_REDIRECTS) {
+            resolve(`Error: Too many redirects (max ${MAX_REDIRECTS})`);
+            return;
+          }
+          const location = res.headers.location.startsWith('http')
+            ? res.headers.location
+            : new URL(res.headers.location, targetUrl).toString();
+          res.resume(); // drain the response
+          resolve(doFetch(location, redirectCount + 1));
+          return;
         }
+
+        let data = '';
+        const maxSize = 100_000;
+
+        res.on('data', (chunk: Buffer) => {
+          data += chunk.toString();
+          if (data.length > maxSize) {
+            res.destroy();
+          }
+        });
+
+        res.on('end', () => {
+          const header = `HTTP ${status} ${res.statusMessage || ''}\n`;
+          if (data.length > maxSize) {
+            resolve(header + data.slice(0, maxSize) + '\n\n[Response truncated at 100KB]');
+          } else {
+            resolve(header + data);
+          }
+        });
       });
+
+      req.on('error', (err) => {
+        resolve(`Fetch error: ${err.message}`);
+      });
+
+      req.on('timeout', () => {
+        req.destroy();
+        resolve('Fetch error: Request timed out (30s)');
+      });
+
+      if (body && httpMethod === 'POST') {
+        req.write(body);
+      }
+
+      req.end();
     });
+  }
 
-    req.on('error', (err) => {
-      resolve(`Fetch error: ${err.message}`);
-    });
-
-    req.on('timeout', () => {
-      req.destroy();
-      resolve('Fetch error: Request timed out (30s)');
-    });
-
-    if (body && httpMethod === 'POST') {
-      req.write(body);
-    }
-
-    req.end();
-  });
+  return doFetch(url, 0);
 }
 
 // ────────────────────────────────────────────
-// Persistent memory tools
+// Persistent memory tools (database-backed)
 // ────────────────────────────────────────────
 
-function safeMemoryPath(file: string): string {
-  // Sanitize: only allow simple filenames with extensions
+function safeMemoryName(file: string): string {
   const safe = path.basename(file).replace(/[^a-zA-Z0-9_.-]/g, '');
   if (!safe) throw new Error('Invalid memory file name');
-  return path.join(MEMORY_DIR, safe);
+  return safe;
 }
 
-function memoryRead(file: string): string {
+async function memoryRead(file: string): Promise<string> {
   try {
-    const filePath = safeMemoryPath(file);
-    if (!fs.existsSync(filePath)) {
+    const name = safeMemoryName(file);
+    const pool = (await import('../db/pool')).default;
+    const { rows } = await pool.query('SELECT content FROM agent_memory WHERE file_name = $1', [name]);
+    if (rows.length === 0) {
       return `Memory file "${file}" does not exist. Use memory_list to see available files, or memory_write to create one.`;
     }
-    return fs.readFileSync(filePath, 'utf-8');
+    return rows[0].content;
   } catch (err) {
     return `Error reading memory: ${err instanceof Error ? err.message : 'Unknown'}`;
   }
 }
 
-function memoryWrite(file: string, content: string): string {
+async function memoryWrite(file: string, content: string): Promise<string> {
   try {
-    const filePath = safeMemoryPath(file);
-    fs.mkdirSync(MEMORY_DIR, { recursive: true });
-    fs.writeFileSync(filePath, content, 'utf-8');
+    const name = safeMemoryName(file);
+    const pool = (await import('../db/pool')).default;
+    await pool.query(
+      `INSERT INTO agent_memory (file_name, content, updated_at) VALUES ($1, $2, NOW())
+       ON CONFLICT (file_name) DO UPDATE SET content = $2, updated_at = NOW()`,
+      [name, content]
+    );
     return `Memory saved to "${file}" (${content.length} bytes)`;
   } catch (err) {
     return `Error writing memory: ${err instanceof Error ? err.message : 'Unknown'}`;
   }
 }
 
-function memoryAppend(file: string, content: string): string {
+async function memoryAppend(file: string, content: string): Promise<string> {
   try {
-    const filePath = safeMemoryPath(file);
-    fs.mkdirSync(MEMORY_DIR, { recursive: true });
-    const existing = fs.existsSync(filePath) ? fs.readFileSync(filePath, 'utf-8') : '';
-    const updated = existing ? existing + '\n' + content : content;
-    fs.writeFileSync(filePath, updated, 'utf-8');
-    return `Appended to "${file}" (now ${updated.length} bytes)`;
+    const name = safeMemoryName(file);
+    const pool = (await import('../db/pool')).default;
+    const { rows } = await pool.query(
+      `INSERT INTO agent_memory (file_name, content, updated_at) VALUES ($1, $2, NOW())
+       ON CONFLICT (file_name) DO UPDATE SET content = agent_memory.content || E'\\n' || $2, updated_at = NOW()
+       RETURNING length(content) AS total_len`,
+      [name, content]
+    );
+    const totalLen = rows[0]?.total_len || content.length;
+    return `Appended to "${file}" (now ${totalLen} bytes)`;
   } catch (err) {
     return `Error appending to memory: ${err instanceof Error ? err.message : 'Unknown'}`;
   }
 }
 
-function memoryList(): string {
+async function memoryList(): Promise<string> {
   try {
-    if (!fs.existsSync(MEMORY_DIR)) {
-      return 'No memory files yet. Use memory_write to create one.';
-    }
-    const files = fs.readdirSync(MEMORY_DIR);
-    if (files.length === 0) return 'No memory files yet.';
-    return files.map((f) => {
-      const stat = fs.statSync(path.join(MEMORY_DIR, f));
-      const kb = (stat.size / 1024).toFixed(1);
-      const modified = stat.mtime.toLocaleString('en-AU', { timeZone: 'Australia/Sydney' });
-      return `📄 ${f} (${kb} KB, modified ${modified})`;
+    const pool = (await import('../db/pool')).default;
+    const { rows } = await pool.query(
+      `SELECT file_name, length(content) AS size_bytes, updated_at FROM agent_memory ORDER BY updated_at DESC`
+    );
+    if (rows.length === 0) return 'No memory files yet. Use memory_write to create one.';
+    return rows.map((r: any) => {
+      const kb = (r.size_bytes / 1024).toFixed(1);
+      const modified = new Date(r.updated_at).toLocaleString('en-AU', { timeZone: 'Australia/Sydney' });
+      return `📄 ${r.file_name} (${kb} KB, modified ${modified})`;
     }).join('\n');
   } catch (err) {
     return `Error listing memory: ${err instanceof Error ? err.message : 'Unknown'}`;
