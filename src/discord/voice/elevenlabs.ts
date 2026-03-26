@@ -17,8 +17,8 @@ function getClient(): ElevenLabsClient {
  *  Full catalog: https://elevenlabs.io/voice-library */
 const VOICE_ID_MAP: Record<string, string> = {
   // ── Agent voice mappings (keyed by Gemini voice name from agents.ts) ──
-  Achernar: 'EXAVITQu4vr4xnSDxMaL',  // Riley → Sarah
-  Aoede: 'pNInz6obpgDQGcFmaJgB',       // Ace → Adam
+  Achernar: '1u9fzC9CaZV94lApNwFM',  // Riley → ASAPCommander
+  Aoede: '1u9fzC9CaZV94lApNwFM',       // Ace → ASAPCommander
 
   // ── ElevenLabs default voices (pick by name) ──
   sarah: 'EXAVITQu4vr4xnSDxMaL',
@@ -57,7 +57,7 @@ const VOICE_ID_MAP: Record<string, string> = {
 };
 
 /** Default voice if agent voice not mapped */
-const DEFAULT_VOICE_ID = 'EXAVITQu4vr4xnSDxMaL'; // Sarah
+const DEFAULT_VOICE_ID = '1u9fzC9CaZV94lApNwFM'; // ASAPCommander
 
 /**
  * Generate speech with ElevenLabs — returns complete audio buffer.
