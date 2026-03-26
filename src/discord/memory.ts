@@ -171,10 +171,12 @@ export async function compressMemory(agentId: string): Promise<void> {
   if (history.length < COMPRESS_THRESHOLD) return;
 
   compressionInProgress.add(agentId);
+  // Snapshot the length before async work — new messages may arrive during summarization
+  const snapshotLen = history.length;
   try {
     // Split: older messages to compress, recent to keep
-    const toCompress = history.slice(0, history.length - KEEP_RECENT);
-    const toKeep = history.slice(history.length - KEEP_RECENT);
+    const toCompress = history.slice(0, snapshotLen - KEEP_RECENT);
+    const toKeep = history.slice(snapshotLen - KEEP_RECENT);
 
     // Build the text to summarize
     const existingSummary = loadSummary(agentId);
@@ -186,10 +188,18 @@ export async function compressMemory(agentId: string): Promise<void> {
     const { summarizeConversation } = await import('./claude');
     const newSummary = await summarizeConversation(existingSummary, contextToSummarize, agentId);
 
-    // Save the new summary and replace history with just the recent messages
+    // Preserve any messages that arrived during compression
+    const currentHistory = loadMemory(agentId);
+    const newMessagesSinceSnapshot = currentHistory.slice(snapshotLen);
+
+    // Save the new summary and replace history with kept + any new messages
     saveSummary(agentId, newSummary);
-    saveMemory(agentId, toKeep);
-    console.log(`Compressed memory for ${agentId}: ${history.length} → ${toKeep.length} messages + summary`);
+    const preserved = [...toKeep, ...newMessagesSinceSnapshot];
+    // Mutate in place so existing references stay valid
+    currentHistory.length = 0;
+    currentHistory.push(...preserved);
+    saveMemory(agentId, currentHistory);
+    console.log(`Compressed memory for ${agentId}: ${snapshotLen} → ${preserved.length} messages + summary`);
   } catch (err) {
     console.error(`Memory compression failed for ${agentId}:`, err instanceof Error ? err.message : 'Unknown');
   } finally {

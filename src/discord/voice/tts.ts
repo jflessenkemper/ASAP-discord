@@ -34,7 +34,7 @@ export async function transcribeVoice(audioBuffer: Buffer): Promise<string> {
     {
       text: 'Transcribe the following audio recording. Return ONLY the transcribed text, nothing else. If the audio is unclear or silent, respond with [silence].',
     },
-    { inlineData: { mimeType: 'audio/webm', data: base64Audio } },
+    { inlineData: { mimeType: 'audio/l16;rate=48000;channels=2', data: base64Audio } },
   ]);
 
   const text = result.response.text().trim();

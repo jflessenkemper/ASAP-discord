@@ -231,9 +231,11 @@ async function updateDashboard(): Promise<void> {
   try {
     const messages = await limitsChannel.messages.fetch({ limit: 50 });
     if (messages.size > 0) {
-      await limitsChannel.bulkDelete(messages, true).catch(() => {
-        // bulkDelete fails on messages > 14 days old — delete individually
-        messages.forEach((m) => m.delete().catch(() => {}));
+      await limitsChannel.bulkDelete(messages, true).catch(async () => {
+        // bulkDelete fails on messages > 14 days old — delete individually (sequentially to respect rate limits)
+        for (const m of messages.values()) {
+          await m.delete().catch(() => {});
+        }
       });
     }
   } catch {

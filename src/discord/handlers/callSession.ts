@@ -3,7 +3,7 @@ import { VoiceConnection } from '@discordjs/voice';
 import { getAgents, getAgent, AgentConfig, AgentId } from '../agents';
 import { agentRespond, ConversationMessage, summarizeCall } from '../claude';
 import { textToSpeech } from '../voice/tts';
-import { joinVC, leaveVC, speakInVC, listenToUser, listenToAllMembers, listenToAllMembersSmart, VoiceTranscription } from '../voice/connection';
+import { joinVC, leaveVC, speakInVC, listenToUser, listenToAllMembers, listenToAllMembersSmart, getConnection, VoiceTranscription } from '../voice/connection';
 import { appendToMemory, getMemoryContext } from '../memory';
 import { documentToChannel } from './documentation';
 
@@ -105,12 +105,16 @@ export async function startCall(
   };
 
   // Heartbeat — detect disconnected voice channel
-  activeSession.heartbeatTimer = setInterval(async () => {
+  activeSession.heartbeatTimer = setInterval(() => {
     if (!activeSession?.active) return;
-    const conn = (await import('../voice/connection')).getConnection();
-    if (!conn || conn.state.status === 'destroyed' || conn.state.status === 'disconnected') {
-      console.warn('Voice connection lost — ending call');
-      await endCall();
+    try {
+      const conn = getConnection();
+      if (!conn || conn.state.status === 'destroyed' || conn.state.status === 'disconnected') {
+        console.warn('Voice connection lost — ending call');
+        endCall().catch((err) => console.error('Heartbeat endCall error:', err instanceof Error ? err.message : 'Unknown'));
+      }
+    } catch (err) {
+      console.error('Heartbeat error:', err instanceof Error ? err.message : 'Unknown');
     }
   }, HEARTBEAT_INTERVAL);
 

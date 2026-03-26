@@ -5,13 +5,28 @@ import { appendToMemory, getMemoryContext } from '../memory';
 
 // Per-channel conversation history (in-memory, keyed by channelId)
 const conversationHistories = new Map<string, ConversationMessage[]>();
+// Per-channel message queue to prevent concurrent processing
+const channelQueues = new Map<string, Promise<void>>();
 
 const MAX_HISTORY = 20; // Keep last 20 messages for context
 
 /**
  * Handle a message in an individual agent channel.
+ * Serialized per-channel to prevent race conditions on history.
  */
 export async function handleAgentMessage(
+  message: Message,
+  agent: AgentConfig
+): Promise<void> {
+  const channelId = message.channel.id;
+  const prev = channelQueues.get(channelId) || Promise.resolve();
+  const next = prev.then(() => handleAgentMessageInner(message, agent)).catch((err) => {
+    console.error(`Agent queue error for ${agent.name}:`, err instanceof Error ? err.message : 'Unknown');
+  });
+  channelQueues.set(channelId, next);
+}
+
+async function handleAgentMessageInner(
   message: Message,
   agent: AgentConfig
 ): Promise<void> {

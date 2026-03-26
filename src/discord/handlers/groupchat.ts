@@ -618,8 +618,10 @@ function persistGroupHistory(): void {
   // Trigger compression when history gets long (runs in background)
   if (groupHistory.length >= 60) {
     compressMemory('groupchat').then(() => {
-      // Reload the compressed history
-      groupHistory = loadMemory('groupchat');
+      // Reload the compressed history into the same array reference
+      const compressed = loadMemory('groupchat');
+      groupHistory.length = 0;
+      groupHistory.push(...compressed);
     }).catch(() => {});
   }
 }

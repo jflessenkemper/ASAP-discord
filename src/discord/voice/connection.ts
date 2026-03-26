@@ -69,6 +69,11 @@ export async function speakInVC(audioBuffer: Buffer): Promise<void> {
   const resource = createAudioResource(stream);
 
   return new Promise<void>((resolve, reject) => {
+    const player = audioPlayer;
+    if (!player) {
+      reject(new Error('Audio player not available'));
+      return;
+    }
     const onIdle = () => {
       cleanup();
       resolve();
@@ -83,14 +88,14 @@ export async function speakInVC(audioBuffer: Buffer): Promise<void> {
     }, 30_000);
 
     const cleanup = () => {
-      audioPlayer!.off(AudioPlayerStatus.Idle, onIdle);
-      audioPlayer!.off('error', onError);
+      player.off(AudioPlayerStatus.Idle, onIdle);
+      player.off('error', onError);
       clearTimeout(timeout);
     };
 
-    audioPlayer!.on(AudioPlayerStatus.Idle, onIdle);
-    audioPlayer!.on('error', onError);
-    audioPlayer!.play(resource);
+    player.on(AudioPlayerStatus.Idle, onIdle);
+    player.on('error', onError);
+    player.play(resource);
   });
 }
 
@@ -134,8 +139,8 @@ export function listenToUser(
     if (destroyed) return;
     resubscribeCount++;
     if (resubscribeCount >= MAX_RESUBSCRIBES) {
-      console.warn(`Max resubscribes (${MAX_RESUBSCRIBES}) reached for ${member.displayName} — restarting counter`);
-      resubscribeCount = 0;
+      console.warn(`Max resubscribes (${MAX_RESUBSCRIBES}) reached for ${member.displayName} — stopping listener`);
+      return; // Stop listening instead of continuing forever
     }
 
     const subscription = receiver.subscribe(member.id, {
