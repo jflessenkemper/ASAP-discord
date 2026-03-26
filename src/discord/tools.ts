@@ -17,6 +17,7 @@ import {
   searchGitHub,
 } from '../services/github';
 import { getRequiredReviewers } from './handlers/review';
+import { captureAndPostScreenshots } from './services/screenshots';
 
 // ────────────────────────────────────────────
 // Discord guild reference — set from bot.ts
@@ -551,6 +552,25 @@ export const REPO_TOOLS = [
       required: ['edits'],
     },
   },
+  {
+    name: 'capture_screenshots',
+    description:
+      'Capture screenshots of the live app and post them to the #screenshots Discord channel. Uses headless Chromium sized to iPhone 17 Pro Max. Takes ~15-20 seconds. Use this to visually verify deployed changes, test UI, or generate visual documentation. Screenshots are posted automatically to Discord.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        url: {
+          type: 'string',
+          description: 'App URL to screenshot. Defaults to the deployed ASAP app.',
+        },
+        label: {
+          type: 'string',
+          description: 'Label for this screenshot batch (e.g. "after login fix", "new dashboard")',
+        },
+      },
+      required: [],
+    },
+  },
 ] as const;
 
 // ────────────────────────────────────────────
@@ -612,6 +632,11 @@ export async function executeTool(
         return runTypecheck((input.target as 'client' | 'server' | 'both') || 'both');
       case 'batch_edit':
         return batchEdit(input.edits as any);
+      case 'capture_screenshots': {
+        const url = input.url || process.env.FRONTEND_URL || 'https://asap-489910.australia-southeast1.run.app';
+        await captureAndPostScreenshots(url, input.label || 'tool-invoked');
+        return `Screenshots captured and posted to #screenshots channel. URL: ${url}`;
+      }
       default:
         return `Unknown tool: ${toolName}`;
     }
