@@ -234,6 +234,8 @@ export function listenToAllMembers(
  * Instead of buffering silence-delimited chunks and batch-transcribing,
  * this streams raw audio to Deepgram and gets transcripts back in real-time
  * with ~200-400ms latency (vs ~1-2s for batch Gemini).
+ *
+ * Falls back to Gemini batch STT if Deepgram fails to start within 10s.
  */
 export function listenToUserDeepgram(
   connection: VoiceConnection,
@@ -242,14 +244,16 @@ export function listenToUserDeepgram(
 ): () => void {
   let destroyed = false;
   let dgSession: DeepgramLiveSession | null = null;
+  let fallbackUnsub: (() => void) | null = null;
 
   const receiver = connection.receiver;
 
-  // Start Deepgram session
+  // Start Deepgram session with timeout fallback
   const dgTimeout = setTimeout(() => {
     if (!dgSession && !destroyed) {
-      console.error(`Deepgram session start timed out for ${member.displayName} — falling back to Gemini`);
-      destroyed = true;
+      console.warn(`Deepgram session start timed out for ${member.displayName} — falling back to Gemini batch STT`);
+      // Fall back to Gemini listener instead of going silent
+      fallbackUnsub = listenToUser(connection, member, onTranscription);
     }
   }, 10_000);
 
@@ -266,10 +270,17 @@ export function listenToUserDeepgram(
     },
     (err) => {
       console.error(`Deepgram error for ${member.displayName}:`, err.message);
+      // On runtime error, fall back to Gemini if not already
+      if (!destroyed && !fallbackUnsub) {
+        console.warn(`Deepgram runtime error — falling back to Gemini for ${member.displayName}`);
+        dgSession = null;
+        fallbackUnsub = listenToUser(connection, member, onTranscription);
+      }
     }
   ).then((session) => {
     clearTimeout(dgTimeout);
-    if (destroyed) {
+    if (destroyed || fallbackUnsub) {
+      // Already fell back to Gemini or was cleaned up
       session.close();
       return;
     }
@@ -296,12 +307,19 @@ export function listenToUserDeepgram(
 
     subscribe();
   }).catch((err) => {
+    clearTimeout(dgTimeout);
     console.error(`Failed to start Deepgram for ${member.displayName}:`, err instanceof Error ? err.message : 'Unknown');
+    // Fall back to Gemini
+    if (!destroyed && !fallbackUnsub) {
+      console.warn(`Deepgram connection failed — falling back to Gemini for ${member.displayName}`);
+      fallbackUnsub = listenToUser(connection, member, onTranscription);
+    }
   });
 
   return () => {
     destroyed = true;
     dgSession?.close();
+    fallbackUnsub?.();
   };
 }
 

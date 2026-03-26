@@ -211,8 +211,8 @@ async function handleVoiceInput(transcription: VoiceTranscription): Promise<void
     `[${transcription.timestamp.toLocaleTimeString()}] ${transcription.username}: ${userText}`
   );
 
-  // Post the transcription to groupchat
-  await session.groupchat.send(`🎤 **${transcription.username}**: ${userText}`);
+  // Post the transcription to call log
+  await session.callLog.send(`🎤 **${transcription.username}**: ${userText}`);
 
   const riley = getAgent('executive-assistant' as AgentId);
 
@@ -252,8 +252,8 @@ Keep your spoken response brief — you're in a voice call, not a text chat.`;
         `[${new Date().toLocaleTimeString()}] Riley (EA): ${response}`
       );
 
-      // Send text message and save memory while pipelined TTS + playback runs
-      await session.groupchat.send(`${riley.emoji} **${riley.name}**: ${response.slice(0, 1900)}`);
+      // Send text to call-log (not groupchat — keep it clean)
+      await session.callLog.send(`${riley.emoji} **${riley.name}**: ${response.slice(0, 1900)}`);
       appendToMemory('executive-assistant', [
         { role: 'user', content: `[Voice from ${transcription.username}]: ${userText}` },
         { role: 'assistant', content: `[Riley]: ${response}` },
@@ -264,7 +264,7 @@ Keep your spoken response brief — you're in a voice call, not a text chat.`;
         await speakPipelined(response, riley.voice);
       } catch (ttsErr) {
         console.error('TTS error for Riley:', ttsErr instanceof Error ? ttsErr.message : 'Unknown');
-        session.groupchat.send('⚠️ Voice playback unavailable — Riley\'s response is in text above.').catch(() => {});
+        session.groupchat.send('⚠️ Voice playback unavailable — check call-log for Riley\'s response.').catch(() => {});
       }
 
       // Check if Riley directed Ace
@@ -295,8 +295,8 @@ Keep your spoken response brief — you're in a voice call, not a text chat.`;
               `[${new Date().toLocaleTimeString()}] Ace (Developer): ${aceResponse}`
             );
 
-            // Send text and save memory
-            await session.groupchat.send(`${ace.emoji} **Ace**: ${aceResponse.slice(0, 1900)}`);
+            // Send text to call-log
+            await session.callLog.send(`${ace.emoji} **Ace**: ${aceResponse.slice(0, 1900)}`);
             appendToMemory('developer', [
               { role: 'user', content: `[Directed by Riley for voice call]: ${userText.slice(0, 500)}` },
               { role: 'assistant', content: `[Ace]: ${aceResponse}` },
@@ -308,7 +308,7 @@ Keep your spoken response brief — you're in a voice call, not a text chat.`;
               await speakPipelined(aceResponse, ace.voice);
             } catch (ttsErr) {
               console.error('TTS error for Ace:', ttsErr instanceof Error ? ttsErr.message : 'Unknown');
-              session.groupchat.send('⚠️ Voice playback unavailable — Ace\'s response is in text above.').catch(() => {});
+              session.groupchat.send('⚠️ Voice playback unavailable — check call-log for Ace\'s response.').catch(() => {});
             }
           } catch (err) {
             console.error('Ace voice response error:', err instanceof Error ? err.message : 'Unknown');
@@ -329,7 +329,7 @@ Keep your spoken response brief — you're in a voice call, not a text chat.`;
             [...agentMemory, ...session.conversationHistory],
             `[Riley directed you during voice call]: ${response}\n[Original from ${transcription.username}]: ${userText}`
           );
-          await session.groupchat.send(`${agent.emoji} **${agent.name.split(' ')[0]}** (text): ${agentResponse.slice(0, 1900)}`);
+          await session.groupchat.send(`${agent.emoji} **${agent.name.split(' ')[0]}**: ${agentResponse.slice(0, 1900)}`);
           appendToMemory(agentId, [
             { role: 'user', content: `[Voice call directive]: ${userText.slice(0, 500)}` },
             { role: 'assistant', content: `[${agent.name}]: ${agentResponse}` },

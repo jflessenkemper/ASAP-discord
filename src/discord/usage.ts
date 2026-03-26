@@ -3,7 +3,7 @@ import { TextChannel, EmbedBuilder } from 'discord.js';
 // ─── Daily limits (configurable via env vars) ───────────────────────────────
 const DAILY_LIMITS = {
   /** Max Claude input+output tokens per day */
-  claudeTokens: parseInt(process.env.DAILY_LIMIT_CLAUDE_TOKENS || '500000', 10),
+  claudeTokens: parseInt(process.env.DAILY_LIMIT_CLAUDE_TOKENS || '2000000', 10),
   /** Max Gemini API calls per day (TTS + transcription) */
   geminiCalls: parseInt(process.env.DAILY_LIMIT_GEMINI_CALLS || '500', 10),
   /** Max ElevenLabs characters per day */
@@ -75,9 +75,9 @@ export function isElevenLabsOverLimit(): boolean {
 }
 
 // ─── Cost estimates ─────────────────────────────────────────────────────────
-// Claude Sonnet 4 pricing via Vertex AI (per 1M tokens)
-const CLAUDE_INPUT_COST_PER_M = 3.0;
-const CLAUDE_OUTPUT_COST_PER_M = 15.0;
+// Claude Opus 4 pricing via Vertex AI (per 1M tokens)
+const CLAUDE_INPUT_COST_PER_M = 15.0;
+const CLAUDE_OUTPUT_COST_PER_M = 75.0;
 // Gemini 2.0 Flash — very cheap, approximate
 const GEMINI_COST_PER_CALL = 0.0005;
 // ElevenLabs — depends on plan, approximate per character

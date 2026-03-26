@@ -78,8 +78,14 @@ export async function autoReviewPR(
 
   const prUrl = `https://github.com/${process.env.GITHUB_REPO || 'jflessenkemper/ASAP'}/pull/${prNumber}`;
 
-  // Fire all reviewer calls in parallel
-  const reviewTasks = [...reviewers].map(async ([agentId, reasons]) => {
+  // Fire reviewer calls with concurrency limit of 3
+  const reviewEntries = [...reviewers];
+  const MAX_PARALLEL_REVIEWS = 3;
+
+  for (let i = 0; i < reviewEntries.length; i += MAX_PARALLEL_REVIEWS) {
+    const batch = reviewEntries.slice(i, i + MAX_PARALLEL_REVIEWS);
+    await Promise.allSettled(
+      batch.map(async ([agentId, reasons]) => {
     const agent = getAgent(agentId as AgentId);
     if (!agent) return;
 
@@ -128,7 +134,7 @@ Keep your review under 300 words.`;
       console.error(`Auto-review error (${agentId}):`, err instanceof Error ? err.message : 'Unknown');
       await groupchat.send(`⚠️ ${agent.emoji} ${agent.name.split(' ')[0]} could not review PR #${prNumber}`);
     }
-  });
-
-  await Promise.allSettled(reviewTasks);
+      })
+    );
+  }
 }

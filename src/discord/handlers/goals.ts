@@ -9,8 +9,10 @@ import { sendLongMessage } from './textChannel';
 const goalsHistory: ConversationMessage[] = [];
 const MAX_HISTORY = 40;
 
-// Tracks whether we're waiting for a decision from the user
+// Tracks whether we're waiting for a decision from the user.
+// Using a message queue to prevent race conditions on concurrent messages.
 let pendingDecision = false;
+let goalsQueue: Promise<void> = Promise.resolve();
 
 export function isDecisionPending(): boolean {
   return pendingDecision;
@@ -33,6 +35,21 @@ export async function handleGoalsMessage(
   const content = message.content.trim();
   if (!content) return;
 
+  // Serialize goals processing to prevent race conditions on pendingDecision
+  goalsQueue = goalsQueue.then(() =>
+    processGoalsMessage(message, content, goalsChannel, groupchat)
+  ).catch((err) => {
+    console.error('Goals queue error:', err instanceof Error ? err.message : 'Unknown');
+  });
+  await goalsQueue;
+}
+
+async function processGoalsMessage(
+  message: Message,
+  content: string,
+  goalsChannel: TextChannel,
+  groupchat: TextChannel
+): Promise<void> {
   const senderName = message.member?.displayName || message.author.username;
   const riley = getAgent('executive-assistant' as AgentId);
   const ace = getAgent('developer' as AgentId);

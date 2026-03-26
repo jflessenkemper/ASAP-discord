@@ -67,6 +67,7 @@ export async function elevenLabsTTS(
   text: string,
   voiceName: string = 'Achernar'
 ): Promise<Buffer> {
+  if (!text || text.trim().length < 2) return Buffer.alloc(0);
   if (isElevenLabsOverLimit()) {
     throw new Error('Daily ElevenLabs character limit reached');
   }
@@ -106,6 +107,7 @@ export async function* elevenLabsTTSStream(
   text: string,
   voiceName: string = 'Achernar'
 ): AsyncGenerator<Buffer> {
+  if (!text || text.trim().length < 2) return;
   if (isElevenLabsOverLimit()) {
     throw new Error('Daily ElevenLabs character limit reached');
   }
