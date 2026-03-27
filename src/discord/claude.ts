@@ -72,8 +72,11 @@ export interface ConversationMessage {
 
 /** Max tool-use iterations before forcing a text response */
 const MAX_TOOL_ROUNDS = 25;
-/** Max total time for a tool loop (ms) */
-const TOOL_LOOP_TIMEOUT = 180_000;
+/**
+ * Max total time for a tool loop (ms).
+ * Set to 0 (default) to disable wall-clock timeout so agents can run as long as needed.
+ */
+const TOOL_LOOP_TIMEOUT = parseInt(process.env.TOOL_LOOP_TIMEOUT_MS || '0', 10);
 /** Max concurrent Claude requests — kept low to stay within 30k input tokens/min rate limit */
 const MAX_CONCURRENT = 3;
 let activeClaude = 0;
@@ -86,6 +89,13 @@ const claudeQueue: Array<() => void> = [];
  */
 let rateLimitedUntil = 0;
 let creditsExhaustedUntil = 0;
+
+function isAbortError(err: any): boolean {
+  const code = String(err?.code || '');
+  const name = String(err?.name || '');
+  const msg = String(err?.message || err || '').toLowerCase();
+  return code === 'ABORT_ERR' || name === 'AbortError' || msg.includes('aborted') || msg.includes('aborterror');
+}
 
 function isLowCreditError(err: any): boolean {
   const msg = String(err?.message || err || '').toLowerCase();
@@ -128,6 +138,8 @@ async function withRetry<T>(fn: () => Promise<T>, retries = 3, delayMs = 2000): 
     try {
       return await fn();
     } catch (err: any) {
+      // User interruption/cancellation should stop immediately without retries
+      if (isAbortError(err)) throw err;
       if (i === retries) throw err;
       const status = err?.status || err?.statusCode;
       // Only retry on transient errors (5xx, network, 429 rate limit)
@@ -164,7 +176,7 @@ export async function agentRespond(
   conversationHistory: ConversationMessage[],
   userMessage: string,
   onToolUse?: (toolName: string, summary: string) => Promise<void>,
-  options?: { modelOverride?: string; maxTokens?: number }
+  options?: { modelOverride?: string; maxTokens?: number; signal?: AbortSignal }
 ): Promise<string> {
   const anthropic = getClient();
 
@@ -230,15 +242,24 @@ TOKENS: ${tokenUsed.toLocaleString()} used / ${tokenLimit.toLocaleString()} dail
   let selectedModel = options?.modelOverride || modelForAgent(agent.id, userMessage);
   let escalatedToOpus = selectedModel === CLAUDE_OPUS;
   logAgentEvent(agent.id, 'invoke', `model=${selectedModel}, context=${messages.length} msgs, prompt="${userMessage.slice(0, 200)}"`);
+  // Check for pre-abort before starting any work
+  if (options?.signal?.aborted) return '';
+
   for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
     if (isClaudeOverLimit() || isBudgetExceeded()) {
       const reason = isBudgetExceeded() ? 'Daily dollar budget exceeded' : 'Daily token limit reached';
       logAgentEvent(agent.id, 'error', reason);
       return '⚠️ Daily Claude token limit reached. Try again tomorrow or adjust DAILY_LIMIT_CLAUDE_TOKENS.';
     }
-    if (Date.now() - loopStart > TOOL_LOOP_TIMEOUT) {
+    if (TOOL_LOOP_TIMEOUT > 0 && Date.now() - loopStart > TOOL_LOOP_TIMEOUT) {
       logAgentEvent(agent.id, 'error', `Tool loop timeout after ${totalToolCalls} tool calls`, { durationMs: Date.now() - loopStart });
-      return 'Tool loop timed out after 3 minutes. Check the repository for any partial changes.';
+      return `Tool loop timed out after ${Math.round(TOOL_LOOP_TIMEOUT / 60000)} minutes. Check the repository for any partial changes.`;
+    }
+
+    // Check if the request was aborted (user sent a new message)
+    if (options?.signal?.aborted) {
+      logAgentEvent(agent.id, 'error', 'Request interrupted by user', { durationMs: Date.now() - loopStart });
+      return '';
     }
 
     let response;
@@ -251,11 +272,15 @@ TOKENS: ${tokenUsed.toLocaleString()} used / ${tokenLimit.toLocaleString()} dail
             system: systemPrompt,
             tools: agentTools as any,
             messages: currentMessages,
-          });
+          }, { signal: options?.signal ?? undefined });
           return stream.finalMessage();
         })
       );
     } catch (err: any) {
+      if (isAbortError(err)) {
+        logAgentEvent(agent.id, 'error', 'Request interrupted by user', { durationMs: Date.now() - loopStart });
+        return '';
+      }
       if (isLowCreditError(err)) {
         creditsExhaustedUntil = Date.now() + 60 * 60 * 1000; // suppress churn for 1h
         logAgentEvent(agent.id, 'error', 'Anthropic credits exhausted');
@@ -285,7 +310,7 @@ TOKENS: ${tokenUsed.toLocaleString()} used / ${tokenLimit.toLocaleString()} dail
         'git_create_branch', 'create_pull_request', 'merge_pull_request', 'add_pr_comment',
         // Discord management
         'delete_channel', 'create_channel', 'rename_channel', 'set_channel_topic',
-        'send_channel_message', 'delete_category', 'move_channel',
+        'send_channel_message', 'clear_channel_messages', 'delete_category', 'move_channel',
         // GCP
         'gcp_deploy', 'gcp_set_env', 'gcp_rollback', 'gcp_secret_set',
         // Memory

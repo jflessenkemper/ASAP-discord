@@ -13,6 +13,44 @@ const CAT_MAIN = 'ASAP';
 const CAT_AGENTS = 'Agents';
 const CAT_OPS = 'Operations';
 
+const MAIN_CHANNELS = {
+  groupchat: '💬-groupchat',
+  voice: '🎙️-command',
+} as const;
+
+const OPS_CHANNELS = {
+  github: '📦-github',
+  callLog: '📋-call-log',
+  limits: '📊-limits',
+  screenshots: '📸-screenshots',
+  url: '🔗-url',
+  terminal: '💻-terminal',
+} as const;
+
+const LEGACY_ACCIDENTAL_CHANNELS = new Set([
+  'developer',
+  'qa',
+  'security',
+  'ux',
+  'database',
+  'devops',
+  'legal',
+  'copywriter',
+  'performance',
+  'api',
+  '-groupchat',
+  '-developer',
+  '-qa',
+  '-security',
+  '-ux',
+  '-database',
+  '-devops',
+  '-legal',
+  '-copywriter',
+  '-performance',
+  '-api',
+]);
+
 export interface BotChannels {
   agentChannels: Map<string, TextChannel>;
   groupchat: TextChannel;
@@ -131,7 +169,7 @@ export async function setupChannels(guild: Guild): Promise<BotChannels> {
 
   // ── ASAP (main) ──
   const groupchat = await ensureText(
-    'groupchat',
+    MAIN_CHANNELS.groupchat,
     catMain,
     '💬 Talk to Riley naturally. She coordinates everything.',
     `**ASAP Command Center**\n\n` +
@@ -144,7 +182,7 @@ export async function setupChannels(guild: Guild): Promise<BotChannels> {
 
   // Voice channel under main
   let voiceChannel = guild.channels.cache.find(
-    (c) => c.type === ChannelType.GuildVoice && c.name === 'command'
+    (c) => c.type === ChannelType.GuildVoice && c.name === MAIN_CHANNELS.voice
   ) as VoiceChannel | undefined;
 
   if (voiceChannel) {
@@ -153,7 +191,7 @@ export async function setupChannels(guild: Guild): Promise<BotChannels> {
     }
   } else {
     voiceChannel = await guild.channels.create({
-      name: 'command',
+      name: MAIN_CHANNELS.voice,
       type: ChannelType.GuildVoice,
       parent: catMain,
     });
@@ -173,26 +211,26 @@ export async function setupChannels(guild: Guild): Promise<BotChannels> {
 
   // ── Operations ──
   const github = await ensureText(
-    'github',
+    OPS_CHANNELS.github,
     catOps,
     '📦 Live GitHub activity feed — commits, PRs, issues, releases',
     `📦 **GitHub Activity Feed**\n\nThis channel shows real-time updates from the ASAP repository.\nCommits, pull requests, issues, releases, and more.`
   );
 
   const callLog = await ensureText(
-    'call-log',
+    OPS_CHANNELS.callLog,
     catOps,
     '📋 Automatic transcripts and summaries of voice calls'
   );
 
   const limits = await ensureText(
-    'limits',
+    OPS_CHANNELS.limits,
     catOps,
     '📊 API usage limits, costs, and remaining credits — updated every 5 minutes'
   );
 
   const screenshots = await ensureText(
-    'screenshots',
+    OPS_CHANNELS.screenshots,
     catOps,
     '📸 Automated screenshots of every app screen after each build (iPhone 17 Pro Max)',
     `📸 **Build Screenshots**\n\nAutomated screenshots of every screen captured on iPhone 17 Pro Max viewport after each successful build.`
@@ -200,7 +238,7 @@ export async function setupChannels(guild: Guild): Promise<BotChannels> {
 
   const appUrl = process.env.FRONTEND_URL || 'https://asap-489910.australia-southeast1.run.app';
   const url = await ensureText(
-    'url',
+    OPS_CHANNELS.url,
     catOps,
     '🔗 Live app URL and build links — updated on every deploy',
     `🔗 **ASAP URLs**\n\n` +
@@ -210,7 +248,7 @@ export async function setupChannels(guild: Guild): Promise<BotChannels> {
   );
 
   const terminal = await ensureText(
-    'terminal',
+    OPS_CHANNELS.terminal,
     catOps,
     '💻 Live feed of all tool calls made by agents — file ops, git, commands, searches',
     `💻 **Agent Terminal**\n\nReal-time log of every tool invocation by any agent.\nFile reads, writes, edits, searches, git ops, commands, and more.`
@@ -227,6 +265,19 @@ export async function setupChannels(guild: Guild): Promise<BotChannels> {
         await oldChannel.delete('Replaced by emoji-prefixed channel');
         console.log(`  Deleted old channel: #${oldName}`);
       } catch { /* ignore */ }
+    }
+  }
+
+  // Remove accidentally-created short names from failed recoveries (security, ux, api, etc.)
+  for (const ch of guild.channels.cache.values()) {
+    if (ch.type !== ChannelType.GuildText) continue;
+    if (LEGACY_ACCIDENTAL_CHANNELS.has(ch.name)) {
+      try {
+        await ch.delete('Removing accidental recovery channel');
+        console.log(`  Deleted accidental channel: #${ch.name}`);
+      } catch {
+        // ignore
+      }
     }
   }
 

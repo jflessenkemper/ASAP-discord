@@ -32,6 +32,9 @@ let groupHistory: ConversationMessage[] = loadMemory('groupchat');
 // Serial message queue to prevent race conditions on groupHistory
 let messageQueue: Promise<void> = Promise.resolve();
 
+// Tracks in-flight message processing so a new message can interrupt it
+let activeAbortController: AbortController | null = null;
+
 // Active goal tracking for /status
 let activeGoal: string | null = null;
 let goalStatus: string | null = null;
@@ -84,10 +87,24 @@ export async function handleGroupchatMessage(
   const content = message.content.trim();
   if (!content) return;
 
-  // Queue serializes processing to protect shared history — but don't block the event handler
-  messageQueue = messageQueue.then(() =>
-    processGroupchatMessage(message, content, groupchat)
-  ).catch((err) => {
+  // Interrupt any in-progress response — user has already moved on
+  if (activeAbortController) {
+    activeAbortController.abort();
+    activeAbortController = null;
+  }
+
+  const controller = new AbortController();
+  activeAbortController = controller;
+
+  // Still queue to serialise history writes, but in-progress work exits early on abort
+  messageQueue = messageQueue.then(async () => {
+    if (controller.signal.aborted) return;
+    try {
+      await processGroupchatMessage(message, content, groupchat, controller.signal);
+    } finally {
+      if (activeAbortController === controller) activeAbortController = null;
+    }
+  }).catch((err) => {
     console.error('Groupchat queue error:', err instanceof Error ? err.message : 'Unknown');
   });
 }
@@ -95,7 +112,8 @@ export async function handleGroupchatMessage(
 async function processGroupchatMessage(
   message: Message,
   content: string,
-  groupchat: TextChannel
+  groupchat: TextChannel,
+  signal?: AbortSignal
 ): Promise<void> {
   const senderName = message.member?.displayName || message.author.username;
 
@@ -108,10 +126,10 @@ async function processGroupchatMessage(
 
   if (uniqueMentions.length > 0) {
     // User explicitly @mentioned agents — route to them directly
-    await handleDirectedMessage(content, senderName, uniqueMentions, groupchat);
+    await handleDirectedMessage(content, senderName, uniqueMentions, groupchat, signal);
   } else {
     // No @mentions — goes to Riley, she coordinates
-    await handleRileyMessage(content, senderName, message.member || undefined, groupchat);
+    await handleRileyMessage(content, senderName, message.member || undefined, groupchat, signal);
   }
 }
 
@@ -147,20 +165,24 @@ async function handleRileyMessage(
   userMessage: string,
   senderName: string,
   member: GuildMember | undefined,
-  groupchat: TextChannel
+  groupchat: TextChannel,
+  signal?: AbortSignal
 ): Promise<void> {
   const riley = getAgent('executive-assistant' as AgentId);
   if (!riley) return;
 
+  let stopTyping: () => void = () => {};
   try {
-    const stopTyping = startTypingLoop(groupchat);
+    stopTyping = startTypingLoop(groupchat);
 
     const rileyMemory = getMemoryContext('executive-assistant');
     const contextMessage = `[${senderName}]: ${userMessage}`;
 
     const response = await agentRespond(riley, [...rileyMemory, ...groupHistory], contextMessage, async (_toolName, summary) => {
       sendToolNotification(groupchat, riley, summary).catch(() => {});
-    });
+    }, { signal });
+
+    if (signal?.aborted) return;
 
     // Strip action tags before displaying to user
     const displayResponse = response.replace(/\[ACTION:[^\]]+\]/g, '').trim();
@@ -177,20 +199,24 @@ async function handleRileyMessage(
     groupHistory.push({ role: 'assistant', content: `[Riley]: ${response}` });
     persistGroupHistory();
 
+    if (signal?.aborted) return;
+
     // Execute any actions Riley triggered
     await executeActions(response, member, groupchat);
 
     // Check if Riley presented a decision (🛑)
     if (displayResponse.includes('🛑') || displayResponse.includes('Decision Required')) {
-      stopTyping();
       await postDecisionEmbed(groupchat, displayResponse);
       return;
     }
 
+    if (signal?.aborted) return;
+
     // Check if Riley directed Ace or other agents
-    await handleAgentChain(response, groupchat);
-    stopTyping();
+    await handleAgentChain(response, groupchat, signal);
   } catch (err) {
+    const abortLike = String((err as any)?.name || '').includes('Abort') || String((err as any)?.message || '').toLowerCase().includes('abort');
+    if (abortLike || signal?.aborted) return;
     const errMsg = err instanceof Error ? err.message : String(err);
     console.error('Riley error:', errMsg);
     const short = errMsg.length > 200 ? errMsg.slice(0, 200) + '…' : errMsg;
@@ -204,6 +230,8 @@ async function handleRileyMessage(
     } catch {
       await groupchat.send(`⚠️ Riley encountered an error:\n\`\`\`${short}\`\`\``);
     }
+  } finally {
+    stopTyping();
   }
 }
 
@@ -422,7 +450,8 @@ function parseDirectives(text: string): string[] {
  */
 async function handleAgentChain(
   rileyResponse: string,
-  groupchat: TextChannel
+  groupchat: TextChannel,
+  signal?: AbortSignal
 ): Promise<void> {
   const directedAgents = parseDirectives(rileyResponse);
   if (directedAgents.length === 0) return;
@@ -437,6 +466,7 @@ async function handleAgentChain(
     const ace = getAgent('developer' as AgentId);
     if (ace) {
       try {
+        if (signal?.aborted) return;
         const aceChannel = GROUPCHAT_SUMMARY_ONLY ? getAgentWorkChannel('developer', groupchat) : groupchat;
         aceChannel.sendTyping().catch(() => {});
         const aceMemory = getMemoryContext('developer');
@@ -444,7 +474,9 @@ async function handleAgentChain(
 
         const aceResponse = await agentRespond(ace, [...aceMemory, ...groupHistory], aceContext, async (_toolName, summary) => {
           sendToolNotification(aceChannel, ace, summary).catch(() => {});
-        });
+        }, { signal });
+
+        if (signal?.aborted) return;
 
         await sendAgentMessage(aceChannel, ace, aceResponse);
         appendToMemory('developer', [
@@ -461,7 +493,7 @@ async function handleAgentChain(
         // Ace may direct sub-agents
         const aceSubDirectives = parseDirectives(aceResponse);
         if (aceSubDirectives.length > 0) {
-          const sub = await handleSubAgents(aceSubDirectives, aceResponse, groupchat);
+          const sub = await handleSubAgents(aceSubDirectives, aceResponse, groupchat, signal);
           summaryLines.push(...sub.findings);
           errorLines.push(...sub.errors);
         }
@@ -482,7 +514,7 @@ async function handleAgentChain(
 
   // Handle other agents Riley directed directly (not through Ace)
   if (otherDirected.length > 0) {
-    const sub = await handleSubAgents(otherDirected, rileyResponse, groupchat);
+    const sub = await handleSubAgents(otherDirected, rileyResponse, groupchat, signal);
     summaryLines.push(...sub.findings);
     errorLines.push(...sub.errors);
   }
@@ -526,7 +558,8 @@ const AGENT_TIER: Record<string, number> = {
 async function handleSubAgents(
   agentIds: string[],
   directiveContext: string,
-  groupchat: TextChannel
+  groupchat: TextChannel,
+  signal?: AbortSignal
 ): Promise<{ findings: string[]; errors: string[] }> {
   const validAgents = agentIds
     .filter((id) => id !== 'executive-assistant')
@@ -550,6 +583,7 @@ async function handleSubAgents(
 
   for (const tierNum of sortedTiers) {
     const tierAgents = tiers.get(tierNum)!;
+    if (signal?.aborted) break;
     groupchat.sendTyping().catch(() => {});
 
     const priorContext = priorFindings.length > 0
@@ -557,12 +591,15 @@ async function handleSubAgents(
 
     const tierResults = await Promise.allSettled(
       tierAgents.map(async ({ id, agent }) => {
+        if (signal?.aborted) return;
         documentToChannel(id, `📥 Received task from groupchat. Working...`).catch(() => {});
         const agentMemory = getMemoryContext(id, 10);
         const agentContext = `[Directive from groupchat]: ${directiveContext}${priorContext}\n\nDo your job. Be concise in your response — max 200 words. Report what you found or did.`;
         const agentResponse = await agentRespond(agent, [...agentMemory, ...groupHistory], agentContext, async (_toolName, summary) => {
           documentToChannel(id, `🔧 ${summary}`).catch(() => {});
-        }, { maxTokens: 4096 });
+        }, { maxTokens: 4096, signal });
+
+        if (signal?.aborted) return;
 
         const outChannel = GROUPCHAT_SUMMARY_ONLY ? getAgentWorkChannel(id, groupchat) : groupchat;
         await sendAgentMessage(outChannel, agent, agentResponse);
@@ -579,7 +616,9 @@ async function handleSubAgents(
     // Collect findings from this tier for the next tier
     for (const result of tierResults) {
       if (result.status === 'fulfilled') {
-        priorFindings.push(result.value);
+        if (typeof result.value === 'string' && result.value.length > 0) {
+          priorFindings.push(result.value);
+        }
       } else {
         console.error('Sub-agent tier error:', result.reason);
       }
@@ -612,7 +651,8 @@ async function handleDirectedMessage(
   userMessage: string,
   senderName: string,
   agentIds: string[],
-  groupchat: TextChannel
+  groupchat: TextChannel,
+  signal?: AbortSignal
 ): Promise<void> {
   const contextMessage = `[${senderName}]: ${userMessage}`;
   groupchat.sendTyping().catch(() => {});
@@ -626,11 +666,14 @@ async function handleDirectedMessage(
 
   const results = await Promise.allSettled(
     validAgents.map(async ({ id, agent }) => {
+      if (signal?.aborted) return;
       const agentMemory = getMemoryContext(id, 10);
       const response = await agentRespond(agent, [...agentMemory, ...groupHistory], contextMessage, async (_toolName, summary) => {
         const outChannel = GROUPCHAT_SUMMARY_ONLY ? getAgentWorkChannel(id, groupchat) : groupchat;
         sendToolNotification(outChannel, agent, summary).catch(() => {});
-      }, { maxTokens: 4096 });
+      }, { maxTokens: 4096, signal });
+
+      if (signal?.aborted) return;
 
       const outChannel = GROUPCHAT_SUMMARY_ONLY ? getAgentWorkChannel(id, groupchat) : groupchat;
       await sendAgentMessage(outChannel, agent, response);

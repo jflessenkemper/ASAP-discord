@@ -9,6 +9,8 @@ import { mirrorAgentResponse } from '../services/diagnosticsWebhook';
 const conversationHistories = new Map<string, ConversationMessage[]>();
 // Per-channel message queue to prevent concurrent processing
 const channelQueues = new Map<string, Promise<void>>();
+// Per-channel abort controller so a new message can interrupt in-flight generation
+const channelAbortControllers = new Map<string, AbortController>();
 
 const MAX_HISTORY = 20; // Keep last 20 messages for context
 
@@ -21,8 +23,21 @@ export async function handleAgentMessage(
   agent: AgentConfig
 ): Promise<void> {
   const channelId = message.channel.id;
+
+  // Interrupt any in-flight response in this channel so the agent listens to the latest message
+  const prevController = channelAbortControllers.get(channelId);
+  if (prevController) prevController.abort();
+  const controller = new AbortController();
+  channelAbortControllers.set(channelId, controller);
+
   const prev = channelQueues.get(channelId) || Promise.resolve();
-  const next = prev.then(() => handleAgentMessageInner(message, agent)).catch((err) => {
+  const next = prev.then(async () => {
+    if (controller.signal.aborted) return;
+    await handleAgentMessageInner(message, agent, controller.signal);
+    if (channelAbortControllers.get(channelId) === controller) {
+      channelAbortControllers.delete(channelId);
+    }
+  }).catch((err) => {
     console.error(`Agent queue error for ${agent.name}:`, err instanceof Error ? err.message : 'Unknown');
   });
   channelQueues.set(channelId, next);
@@ -30,7 +45,8 @@ export async function handleAgentMessage(
 
 async function handleAgentMessageInner(
   message: Message,
-  agent: AgentConfig
+  agent: AgentConfig,
+  signal?: AbortSignal
 ): Promise<void> {
   const channelId = message.channel.id;
   const userMessage = message.content.trim();
@@ -50,6 +66,7 @@ async function handleAgentMessageInner(
 
   try {
     const response = await agentRespond(agent, history, userMessage, async (toolName, summary) => {
+      if (signal?.aborted) return;
       try {
         const wh = await getWebhook(channel);
         await wh.send({
@@ -60,7 +77,9 @@ async function handleAgentMessageInner(
       } catch {
         await channel.send(`🔧 ${summary}`);
       }
-    });
+      }, { signal });
+
+      if (signal?.aborted) return;
 
     // Update history
     history.push({ role: 'user', content: userMessage });
@@ -78,8 +97,11 @@ async function handleAgentMessageInner(
     ]);
 
     // Split response if over Discord's 2000 char limit
+    if (signal?.aborted) return;
     await sendAgentMessage(channel, agent, response);
   } catch (err) {
+    const abortLike = String((err as any)?.name || '').includes('Abort') || String((err as any)?.message || '').toLowerCase().includes('abort');
+    if (abortLike || signal?.aborted) return;
     const errMsg = err instanceof Error ? err.message : String(err);
     console.error(`Agent ${agent.name} error:`, errMsg);
     const short = errMsg.length > 200 ? errMsg.slice(0, 200) + '…' : errMsg;

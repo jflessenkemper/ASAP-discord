@@ -31,8 +31,12 @@ export function setDiscordGuild(guild: Guild): void {
   discordGuild = guild;
 }
 
-/** Channels that must never be deleted by agents */
-const PROTECTED_CHANNELS = ['groupchat', 'command', 'github', 'call-log', 'limits'];
+/** Channels that must never be deleted by agents (canonical key form). */
+const PROTECTED_CHANNEL_KEYS = ['groupchat', 'command', 'github', 'call-log', 'limits', 'screenshots', 'url', 'terminal'];
+
+function toChannelProtectionKey(name: string): string {
+  return String(name || '').toLowerCase().replace(/^[^a-z0-9]+/, '');
+}
 
 /** Callback for triggering auto-review on PR creation — set from bot.ts */
 let prReviewCallback: ((prNumber: number, prTitle: string, changedFiles: string[], diffSummary: string) => Promise<void>) | null = null;
@@ -342,7 +346,7 @@ export const REPO_TOOLS = [
   {
     name: 'delete_channel',
     description:
-      'Delete a Discord channel by name. Cannot delete protected channels (groupchat, command, github, call-log, limits). Use with caution.',
+      'Permanently delete a Discord channel by name. Cannot delete protected channels (groupchat, command, github, call-log, limits). NEVER use this for "reset/clear" requests — use clear_channel_messages instead.',
     input_schema: {
       type: 'object' as const,
       properties: {
@@ -436,6 +440,25 @@ export const REPO_TOOLS = [
         },
       },
       required: ['channel_name', 'message'],
+    },
+  },
+  {
+    name: 'clear_channel_messages',
+    description:
+      'Delete messages inside a text channel without deleting the channel itself. Use this when asked to reset/clear a channel.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        channel_name: {
+          type: 'string',
+          description: 'Channel name to clear',
+        },
+        limit: {
+          type: 'string',
+          description: 'Optional max messages to delete (default 500, max 2000)',
+        },
+      },
+      required: ['channel_name'],
     },
   },
   {
@@ -876,6 +899,8 @@ export async function executeTool(
         return await discordSetTopic(input.channel_name, input.topic);
       case 'send_channel_message':
         return await discordSendMessage(input.channel_name, input.message);
+      case 'clear_channel_messages':
+        return await discordClearChannelMessages(input.channel_name, parseInt(input.limit, 10) || 500);
       case 'delete_category':
         return await discordDeleteCategory(input.category_name);
       case 'move_channel':
@@ -1370,7 +1395,8 @@ async function discordListChannels(): Promise<string> {
 async function discordDeleteChannel(channelName: string, reason: string): Promise<string> {
   const guild = requireGuild();
 
-  if (PROTECTED_CHANNELS.includes(channelName)) {
+  const key = toChannelProtectionKey(channelName);
+  if (PROTECTED_CHANNEL_KEYS.includes(key)) {
     return `Cannot delete protected channel: #${channelName}`;
   }
 
@@ -1456,6 +1482,46 @@ async function discordSendMessage(channelName: string, message: string, agentNam
     }
   }
   return `Sent message to #${channelName} (${message.length} chars)`;
+}
+
+async function discordClearChannelMessages(channelName: string, limit = 500): Promise<string> {
+  const guild = requireGuild();
+  const maxDelete = Math.min(Math.max(limit, 1), 2000);
+
+  const channel = guild.channels.cache.find(
+    (c) => c.type === ChannelType.GuildText && c.name === channelName
+  ) as TextChannel | undefined;
+  if (!channel) return `Channel not found: #${channelName}`;
+
+  let deleted = 0;
+  let remaining = maxDelete;
+
+  while (remaining > 0) {
+    const batchSize = Math.min(100, remaining);
+    const fetched = await channel.messages.fetch({ limit: batchSize });
+    if (fetched.size === 0) break;
+
+    try {
+      // bulkDelete only removes messages newer than 14 days
+      await channel.bulkDelete(fetched, true);
+      deleted += fetched.size;
+    } catch {
+      // Fallback: delete messages one by one (works for older messages)
+      for (const msg of fetched.values()) {
+        try {
+          await msg.delete();
+          deleted += 1;
+        } catch {
+          // Ignore individual delete failures to continue best-effort cleanup
+        }
+      }
+    }
+
+    remaining -= fetched.size;
+    if (fetched.size < batchSize) break;
+  }
+
+  return `Cleared ${deleted} message(s) from #${channelName}`;
 }
 
 async function discordDeleteCategory(categoryName: string): Promise<string> {

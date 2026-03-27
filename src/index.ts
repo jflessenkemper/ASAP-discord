@@ -21,6 +21,7 @@ import { verifySignature, handleGitHubEvent } from './discord/handlers/github';
 import { captureAndPostScreenshots } from './discord/services/screenshots';
 import { getBotChannels } from './discord/bot';
 import { getInboundTwiML, attachTelephonyWebSocket, isTelephonyAvailable } from './discord/services/telephony';
+import twilio from 'twilio';
 
 const app = express();
 const PORT = parseInt(process.env.PORT || '3001', 10);
@@ -186,14 +187,39 @@ app.post('/api/webhooks/build-complete', express.json({ limit: '10kb' }), (req, 
   res.status(200).json({ ok: true, message: 'Screenshot capture triggered' });
 });
 
+// Twilio request signature validation middleware
+function twilioWebhookAuth(req: express.Request, res: express.Response, next: express.NextFunction): void {
+  const authToken = process.env.TWILIO_AUTH_TOKEN;
+  if (!authToken) {
+    // If no auth token configured, block the request rather than allow unauthenticated access
+    res.status(500).json({ error: 'Twilio auth token not configured' });
+    return;
+  }
+  const signature = req.headers['x-twilio-signature'] as string | undefined;
+  if (!signature) {
+    res.status(403).send('Forbidden');
+    return;
+  }
+  // Build the full URL Twilio signed — prefer SERVER_URL env var, fall back to host header
+  const baseUrl = process.env.SERVER_URL || `https://${req.headers.host}`;
+  const fullUrl = `${baseUrl}${req.path}`;
+  const params = req.body || {};
+  const valid = twilio.validateRequest(authToken, signature, fullUrl, params);
+  if (!valid) {
+    res.status(403).send('Forbidden');
+    return;
+  }
+  next();
+}
+
 // Twilio voice webhook — returns TwiML to connect the call to our WebSocket stream
-app.post('/api/webhooks/twilio/voice', (req, res) => {
+app.post('/api/webhooks/twilio/voice', twilioWebhookAuth, (req, res) => {
   const callerNumber = req.body?.From || req.query?.From;
   res.type('text/xml').send(getInboundTwiML(callerNumber));
 });
 
 // Twilio call status callback
-app.post('/api/webhooks/twilio/status', (_req, res) => {
+app.post('/api/webhooks/twilio/status', twilioWebhookAuth, (_req, res) => {
   res.sendStatus(200);
 });
 

@@ -101,6 +101,22 @@ const DISPLAY_NAME: Record<string, string> = {
   'android-engineer': 'Leo (Android Engineer)',
 };
 
+const CHANNEL_NAME_MAP: Record<string, string> = {
+  qa: '🧪-qa',
+  'ux-reviewer': '🎨-ux-reviewer',
+  'security-auditor': '🔒-security-auditor',
+  'api-reviewer': '📡-api-reviewer',
+  dba: '🗄️-dba',
+  performance: '⚡-performance',
+  devops: '🚀-devops',
+  copywriter: '✍️-copywriter',
+  developer: '💻-developer',
+  lawyer: '⚖️-lawyer',
+  'executive-assistant': '📋-executive-assistant',
+  'ios-engineer': '🍎-ios-engineer',
+  'android-engineer': '🤖-android-engineer',
+};
+
 function loadSystemPrompt(agentId: string): string {
   // Try multiple paths — Docker copies to /app/.github/agents/, local dev uses repo root
   const candidates = [
@@ -156,7 +172,7 @@ export function getAgents(): Map<AgentId, AgentConfig> {
     agentCache.set(id, {
       id,
       name: DISPLAY_NAME[id] || id,
-      channelName: `${emoji}${id}`,
+      channelName: CHANNEL_NAME_MAP[id] || `${emoji}-${id}`,
       emoji,
       color: COLOR_MAP[id] || 0x99AAB5,
       voice: VOICE_MAP[id] || 'Kore',
@@ -175,8 +191,12 @@ export function getAgent(id: AgentId): AgentConfig | undefined {
 }
 
 export function getAgentByChannelName(channelName: string): AgentConfig | undefined {
+  const normalized = channelName.toLowerCase();
+  const stripped = normalized.replace(/^[^a-z0-9]+/, '');
   for (const agent of getAgents().values()) {
-    if (agent.channelName === channelName || agent.id === channelName) return agent;
+    const canonical = agent.channelName.toLowerCase();
+    const canonicalStripped = canonical.replace(/^[^a-z0-9]+/, '');
+    if (canonical === normalized || canonicalStripped === stripped || agent.id === normalized || agent.id === stripped) return agent;
   }
   return undefined;
 }
