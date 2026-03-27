@@ -1,4 +1,6 @@
 import { postDiagnostic } from './diagnosticsWebhook';
+import pool from '../../db/pool';
+import type { PoolClient } from 'pg';
 
 interface CheckResult {
   name: string;
@@ -9,8 +11,12 @@ interface CheckResult {
 const ANTHROPIC_MODELS = ['claude-sonnet-4-20250514', 'claude-opus-4-20250514'];
 const GEMINI_TEXT_MODEL = 'gemini-2.0-flash';
 const GEMINI_TTS_MODEL = 'gemini-2.5-flash-preview-tts';
+let lockClient: PoolClient | null = null;
 
 export async function runModelHealthChecks(): Promise<void> {
+  const shouldRun = await acquireRevisionHealthLock();
+  if (!shouldRun) return;
+
   const results: CheckResult[] = [];
 
   results.push(await checkAnthropic());
@@ -28,6 +34,25 @@ export async function runModelHealthChecks(): Promise<void> {
     source: 'startup:model-health',
     detail,
   });
+}
+
+async function acquireRevisionHealthLock(): Promise<boolean> {
+  const revision = process.env.K_REVISION || 'local';
+  const lockId = hashLockKey(`startup-health:${revision}`);
+
+  try {
+    const client = await pool.connect();
+    const result = await client.query('SELECT pg_try_advisory_lock($1) AS locked', [lockId]);
+    if (result.rows[0]?.locked) {
+      lockClient = client; // Keep lock for process lifetime so only one instance posts per revision
+      return true;
+    }
+    client.release();
+    return false;
+  } catch (err) {
+    console.warn('Health lock unavailable, running anyway:', err instanceof Error ? err.message : 'Unknown');
+    return true;
+  }
 }
 
 async function checkAnthropic(): Promise<CheckResult> {
@@ -65,6 +90,12 @@ async function checkGeminiText(): Promise<CheckResult> {
   const key = process.env.GEMINI_API_KEY;
   if (!key) return { name: 'Gemini text', ok: false, detail: 'GEMINI_API_KEY missing' };
 
+  const models = await getGeminiModels(key);
+  if (!models.ok) return { name: 'Gemini text', ok: false, detail: models.detail };
+  if (!models.names.has(`models/${GEMINI_TEXT_MODEL}`)) {
+    return { name: 'Gemini text', ok: false, detail: `${GEMINI_TEXT_MODEL} not listed for this API key/project` };
+  }
+
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_TEXT_MODEL}:generateContent?key=${encodeURIComponent(key)}`;
   try {
     const res = await fetchWithTimeout(url, {
@@ -78,6 +109,9 @@ async function checkGeminiText(): Promise<CheckResult> {
 
     if (!res.ok) {
       const body = await safeText(res);
+      if (res.status === 429) {
+        return { name: 'Gemini text', ok: false, detail: 'quota exceeded or billing disabled for generateContent' };
+      }
       return { name: 'Gemini text', ok: false, detail: `HTTP ${res.status} ${body.slice(0, 120)}` };
     }
     return { name: 'Gemini text', ok: true, detail: `${GEMINI_TEXT_MODEL} reachable` };
@@ -90,31 +124,32 @@ async function checkGeminiTTS(): Promise<CheckResult> {
   const key = process.env.GEMINI_API_KEY;
   if (!key) return { name: 'Gemini TTS', ok: false, detail: 'GEMINI_API_KEY missing' };
 
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_TTS_MODEL}:generateContent?key=${encodeURIComponent(key)}`;
-  try {
-    const res = await fetchWithTimeout(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: [{ parts: [{ text: 'ok' }] }],
-        generationConfig: {
-          responseModalities: ['AUDIO'],
-          speechConfig: {
-            voiceConfig: {
-              prebuiltVoiceConfig: { voiceName: 'Kore' },
-            },
-          },
-        },
-      }),
-    }, 20000);
+  const models = await getGeminiModels(key);
+  if (!models.ok) return { name: 'Gemini TTS', ok: false, detail: models.detail };
+  if (!models.names.has(`models/${GEMINI_TTS_MODEL}`)) {
+    return { name: 'Gemini TTS', ok: false, detail: `${GEMINI_TTS_MODEL} not listed for this API key/project` };
+  }
+  return { name: 'Gemini TTS', ok: true, detail: `${GEMINI_TTS_MODEL} enabled` };
+}
 
+async function getGeminiModels(key: string): Promise<{ ok: true; names: Set<string> } | { ok: false; detail: string }> {
+  const url = `https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(key)}`;
+  try {
+    const res = await fetchWithTimeout(url, { method: 'GET' }, 15000);
     if (!res.ok) {
       const body = await safeText(res);
-      return { name: 'Gemini TTS', ok: false, detail: `HTTP ${res.status} ${body.slice(0, 120)}` };
+      if (res.status === 429) {
+        return { ok: false, detail: 'quota exceeded or billing disabled for Gemini API key' };
+      }
+      return { ok: false, detail: `HTTP ${res.status} ${body.slice(0, 120)}` };
     }
-    return { name: 'Gemini TTS', ok: true, detail: `${GEMINI_TTS_MODEL} reachable` };
+    const data = await res.json() as { models?: Array<{ name?: string }> };
+    return {
+      ok: true,
+      names: new Set((data.models || []).map((m) => m.name).filter(Boolean) as string[]),
+    };
   } catch (err) {
-    return { name: 'Gemini TTS', ok: false, detail: err instanceof Error ? err.message : 'request failed' };
+    return { ok: false, detail: err instanceof Error ? err.message : 'request failed' };
   }
 }
 
@@ -174,4 +209,12 @@ async function safeText(res: Response): Promise<string> {
   } catch {
     return '';
   }
+}
+
+function hashLockKey(input: string): number {
+  let hash = 0;
+  for (let i = 0; i < input.length; i++) {
+    hash = ((hash << 5) - hash + input.charCodeAt(i)) | 0;
+  }
+  return Math.abs(hash || 1);
 }
