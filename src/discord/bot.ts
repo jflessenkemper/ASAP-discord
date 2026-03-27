@@ -18,6 +18,7 @@ import { setLimitsChannel, startDashboardUpdates, stopDashboardUpdates } from '.
 import { flushPendingWrites, initMemory } from './memory';
 import { setScreenshotsChannel } from './services/screenshots';
 import { setTelephonyChannels, isTelephonyAvailable, initContacts } from './services/telephony';
+import { runModelHealthChecks } from './services/modelHealth';
 
 let client: Client | null = null;
 let botChannels: BotChannels | null = null;
@@ -85,6 +86,10 @@ export async function startBot(): Promise<void> {
         await initContacts();
       }
       await startDashboardUpdates();
+      // Startup health snapshot to bot-diagnostics webhook
+      runModelHealthChecks().catch((err) => {
+        console.error('Model health check failed:', err instanceof Error ? err.message : 'Unknown');
+      });
 
       // Wire command audit to #github channel
       setCommandAuditCallback((cmd, allowed, reason) => {
