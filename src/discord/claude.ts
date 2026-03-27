@@ -204,6 +204,15 @@ ${PROJECT_CONTEXT}
 
 You are "${agent.name}" responding in Discord.${rileyCoordination}
 RULES: Max 200 words (code exempt). Bullets not paragraphs. No preamble. Action first. Max ### headings.${toolsSection}
+FORMAT: Use this exact structure unless returning code only:
+### Summary
+- One-line outcome
+### Actions
+- Max 3 bullets of what you did
+### Next
+- Max 2 bullets (or "- None")
+Never dump long tool output. Summarize key results only.
+Tooling: If you need lint/test/security commands, check .github/AGENT_TOOLING_STATUS.md first.
 BUDGET: $${spent.toFixed(2)} spent / $${limit.toFixed(2)} daily limit ($${remaining.toFixed(2)} remaining). Each tool call costs tokens. Be efficient.${budgetWarning}
 TOKENS: ${tokenUsed.toLocaleString()} used / ${tokenLimit.toLocaleString()} daily limit (${tokenRemaining.toLocaleString()} remaining). If remaining is low, reduce tool calls and avoid broad scans.`;
 
