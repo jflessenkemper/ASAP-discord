@@ -85,6 +85,16 @@ const claudeQueue: Array<() => void> = [];
  * of failed requests that burn through retries for nothing.
  */
 let rateLimitedUntil = 0;
+let creditsExhaustedUntil = 0;
+
+function isLowCreditError(err: any): boolean {
+  const msg = String(err?.message || err || '').toLowerCase();
+  return msg.includes('credit balance is too low') || msg.includes('plans & billing');
+}
+
+function isCreditsExhaustedNow(): boolean {
+  return creditsExhaustedUntil > Date.now();
+}
 
 async function waitForRateLimit(): Promise<void> {
   const now = Date.now();
@@ -158,6 +168,10 @@ export async function agentRespond(
 ): Promise<string> {
   const anthropic = getClient();
 
+  if (isCreditsExhaustedNow()) {
+    return '⚠️ Anthropic credits are currently exhausted. Agent execution is paused. Add credits (Plans & Billing) and try again.';
+  }
+
   // Hard budget gate — stop ALL agents if daily budget exceeded
   if (isBudgetExceeded()) {
     const { spent, limit } = getRemainingBudget();
@@ -218,18 +232,28 @@ TOKENS: ${tokenUsed.toLocaleString()} used / ${tokenLimit.toLocaleString()} dail
       return 'Tool loop timed out after 3 minutes. Check the repository for any partial changes.';
     }
 
-    const response = await withConcurrencyLimit(() =>
-      withRetry(async () => {
-        const stream = anthropic.messages.stream({
-          model: selectedModel,
-          max_tokens: options?.maxTokens || 16384,
-          system: systemPrompt,
-          tools: agentTools as any,
-          messages: currentMessages,
-        });
-        return stream.finalMessage();
-      })
-    );
+    let response;
+    try {
+      response = await withConcurrencyLimit(() =>
+        withRetry(async () => {
+          const stream = anthropic.messages.stream({
+            model: selectedModel,
+            max_tokens: options?.maxTokens || 16384,
+            system: systemPrompt,
+            tools: agentTools as any,
+            messages: currentMessages,
+          });
+          return stream.finalMessage();
+        })
+      );
+    } catch (err: any) {
+      if (isLowCreditError(err)) {
+        creditsExhaustedUntil = Date.now() + 60 * 60 * 1000; // suppress churn for 1h
+        logAgentEvent(agent.id, 'error', 'Anthropic credits exhausted');
+        return '⚠️ Anthropic credits are exhausted, so I cannot run tools right now. Please top up billing and retry.';
+      }
+      throw err;
+    }
 
     // If the model wants to use tools, execute them and continue
     if (response.stop_reason === 'tool_use') {
