@@ -12,6 +12,9 @@ const DAILY_LIMITS = {
   budgetUsd: parseFloat(process.env.DAILY_BUDGET_USD || '2.00'),
 };
 
+/** Optional running Anthropic credit cap for estimating remaining credits */
+const ANTHROPIC_CREDIT_CAP_USD = parseFloat(process.env.ANTHROPIC_CREDIT_CAP_USD || '0');
+
 // ─── Usage counters ─────────────────────────────────────────────────────────
 interface UsageCounters {
   claudeInputTokens: number;
@@ -125,6 +128,17 @@ function estimateDailyCost(): { claude: number; gemini: number; elevenLabs: numb
   return { claude, gemini, elevenLabs, total: claude + gemini + elevenLabs };
 }
 
+/** Estimated Anthropic credit status based on local token accounting. */
+export function getAnthropicCreditStatus(): { remaining: number; spent: number; cap: number } | null {
+  if (!Number.isFinite(ANTHROPIC_CREDIT_CAP_USD) || ANTHROPIC_CREDIT_CAP_USD <= 0) return null;
+  const spent = estimateDailyCost().claude;
+  return {
+    remaining: Math.max(0, ANTHROPIC_CREDIT_CAP_USD - spent),
+    spent,
+    cap: ANTHROPIC_CREDIT_CAP_USD,
+  };
+}
+
 // ─── Progress bar helper ────────────────────────────────────────────────────
 function progressBar(used: number, limit: number, length: number = 20): string {
   const ratio = Math.min(used / limit, 1);
@@ -141,6 +155,7 @@ export function getUsageEmbed(): EmbedBuilder {
   resetIfNewDay();
   const totalClaudeTokens = usage.claudeInputTokens + usage.claudeOutputTokens;
   const cost = estimateDailyCost();
+  const credit = getAnthropicCreditStatus();
   const totalRatio = Math.max(
     totalClaudeTokens / DAILY_LIMITS.claudeTokens,
     usage.geminiCalls / DAILY_LIMITS.geminiCalls,
@@ -178,7 +193,14 @@ export function getUsageEmbed(): EmbedBuilder {
         name: '💰 Total Cost Today',
         value: `**$${cost.total.toFixed(4)}**`,
         inline: true,
-      }
+      },
+      ...(credit
+        ? [{
+            name: '🏦 Anthropic Credit (Estimate)',
+            value: `Remaining: **$${credit.remaining.toFixed(2)}**\nSpent: $${credit.spent.toFixed(2)} / $${credit.cap.toFixed(2)}`,
+            inline: true,
+          }]
+        : [])
     )
     .setFooter({ text: 'Resets at midnight UTC · Updates every hour' })
     .setTimestamp();
@@ -189,6 +211,13 @@ export function getUsageReport(): string {
   resetIfNewDay();
   const totalClaudeTokens = usage.claudeInputTokens + usage.claudeOutputTokens;
   const cost = estimateDailyCost();
+  const credit = getAnthropicCreditStatus();
+
+  const creditSection = credit
+    ? `\n\n**Anthropic Credit (Estimate)**\n` +
+      `Remaining: **$${credit.remaining.toFixed(2)}**\n` +
+      `Spent: $${credit.spent.toFixed(2)} / $${credit.cap.toFixed(2)}`
+    : '';
 
   return (
     `📊 **ASAP Usage Dashboard** — ${usage.lastReset}\n\n` +
@@ -205,7 +234,8 @@ export function getUsageReport(): string {
     `${progressBar(usage.elevenLabsChars, DAILY_LIMITS.elevenLabsChars)}\n` +
     `${usage.elevenLabsChars.toLocaleString()} / ${DAILY_LIMITS.elevenLabsChars.toLocaleString()} characters\n` +
     `Est. cost: **$${cost.elevenLabs.toFixed(4)}**\n\n` +
-    `💰 **Total estimated cost today: $${cost.total.toFixed(4)}**`
+    `💰 **Total estimated cost today: $${cost.total.toFixed(4)}**` +
+    creditSection
   );
 }
 
