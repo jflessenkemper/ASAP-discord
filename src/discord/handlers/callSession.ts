@@ -6,6 +6,8 @@ import { textToSpeech } from '../voice/tts';
 import { joinVC, leaveVC, speakInVC, listenToUser, listenToAllMembers, listenToAllMembersSmart, getConnection, VoiceTranscription } from '../voice/connection';
 import { appendToMemory, getMemoryContext } from '../memory';
 import { documentToChannel } from './documentation';
+import { isGeminiOverLimit } from '../usage';
+import { isDeepgramAvailable } from '../voice/deepgram';
 
 /** Only Riley (EA) and Ace (Developer) speak in voice calls */
 const VOICE_SPEAKERS = new Set(['executive-assistant', 'developer']);
@@ -132,6 +134,25 @@ export async function startCall(
   activeSession.transcript.push(
     `[${new Date().toLocaleTimeString()}] Call started by ${initiator.displayName}`
   );
+
+  // Voice output self-test: fail fast with a clear operator hint instead of silent VC.
+  try {
+    const checkAudio = await textToSpeech('Voice channel connected. Riley is ready.');
+    await speakInVC(checkAudio);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : 'Unknown error';
+    console.error('Voice output self-test failed:', msg);
+    await groupchat.send(
+      `⚠️ Voice output check failed: ${msg}. ` +
+      `The bot can still type in call-log, but speaking is unavailable right now.`
+    );
+  }
+
+  if (!isDeepgramAvailable() && isGeminiOverLimit()) {
+    await groupchat.send(
+      '⚠️ Voice transcription is unavailable: Deepgram is not configured and Gemini quota is exhausted.'
+    );
+  }
 
   // Listen to ALL members using best available STT (Deepgram real-time or Gemini batch)
   const unsub = listenToAllMembersSmart(connection, voiceChannel, (transcription) => {

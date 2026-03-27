@@ -66,11 +66,15 @@ export async function speakInVC(audioBuffer: Buffer): Promise<void> {
   if (!currentConnection || !audioPlayer) {
     throw new Error('Not connected to a voice channel');
   }
+  if (!audioBuffer || audioBuffer.length === 0) {
+    throw new Error('TTS returned empty audio buffer');
+  }
 
   const stream = Readable.from(audioBuffer);
   // ElevenLabs returns MP3, Gemini may return WAV/PCM — use Arbitrary so
   // prism-media/FFmpeg auto-detects and transcodes to Opus for Discord.
   const resource = createAudioResource(stream, { inputType: StreamType.Arbitrary });
+  console.log(`VC playback: queued ${audioBuffer.length} bytes`);
 
   return new Promise<void>((resolve, reject) => {
     const player = audioPlayer;
@@ -78,7 +82,15 @@ export async function speakInVC(audioBuffer: Buffer): Promise<void> {
       reject(new Error('Audio player not available'));
       return;
     }
+    let sawPlaying = false;
+
+    const onPlaying = () => {
+      sawPlaying = true;
+      console.log('VC playback: started');
+    };
     const onIdle = () => {
+      // Ignore idle transitions before playback actually starts.
+      if (!sawPlaying) return;
       cleanup();
       resolve();
     };
@@ -88,15 +100,21 @@ export async function speakInVC(audioBuffer: Buffer): Promise<void> {
     };
     const timeout = setTimeout(() => {
       cleanup();
-      resolve(); // Don't throw on timeout — just continue
-    }, 30_000);
+      if (!sawPlaying) {
+        reject(new Error('Playback timed out before audio started (check ffmpeg/transcoding)'));
+      } else {
+        reject(new Error('Playback timed out before completion'));
+      }
+    }, 20_000);
 
     const cleanup = () => {
+      player.off(AudioPlayerStatus.Playing, onPlaying);
       player.off(AudioPlayerStatus.Idle, onIdle);
       player.off('error', onError);
       clearTimeout(timeout);
     };
 
+    player.on(AudioPlayerStatus.Playing, onPlaying);
     player.on(AudioPlayerStatus.Idle, onIdle);
     player.on('error', onError);
     player.play(resource);
@@ -132,7 +150,11 @@ const MAX_AUDIO_BUFFER = 5 * 1024 * 1024;
  * them and emits a continuous PCM stream that STT services expect.
  */
 function createOpusDecoder(): Transform {
-  return new prism.opus.Decoder({ rate: 48000, channels: 2, frameSize: 960 });
+  try {
+    return new prism.opus.Decoder({ rate: 48000, channels: 2, frameSize: 960 });
+  } catch (err) {
+    throw new Error(`Failed to initialize Opus decoder: ${err instanceof Error ? err.message : 'Unknown error'}`);
+  }
 }
 
 /**
@@ -162,7 +184,13 @@ export function listenToUser(
     });
 
     // Decode Opus frames → PCM (s16le, 48kHz, stereo) before collecting
-    const decoder = createOpusDecoder();
+    let decoder: Transform;
+    try {
+      decoder = createOpusDecoder();
+    } catch (err) {
+      console.error(`Opus decoder error for ${member.displayName}:`, err instanceof Error ? err.message : 'Unknown');
+      return;
+    }
     subscription.pipe(decoder);
 
     const chunks: Buffer[] = [];
@@ -204,8 +232,17 @@ export function listenToUser(
       subscribe();
     });
 
+    decoder.on('error', (err: Error) => {
+      console.error(`Decoder stream error for ${member.displayName}:`, err.message);
+      if (!destroyed) subscribe();
+    });
+
     // If the Opus subscription ends, make sure the decoder also ends
     subscription.on('end', () => { decoder.end(); });
+    subscription.on('error', (err: Error) => {
+      console.error(`Voice subscription error for ${member.displayName}:`, err.message);
+      decoder.end();
+    });
   }
 
   subscribe();
@@ -324,7 +361,13 @@ export function listenToUserDeepgram(
       });
 
       // Decode Opus frames → PCM before sending to Deepgram (expects linear16)
-      const decoder = createOpusDecoder();
+      let decoder: Transform;
+      try {
+        decoder = createOpusDecoder();
+      } catch (err) {
+        console.error(`Opus decoder error for ${member.displayName}:`, err instanceof Error ? err.message : 'Unknown');
+        return;
+      }
       subscription.pipe(decoder);
 
       decoder.on('data', (chunk: Buffer) => {
@@ -337,8 +380,17 @@ export function listenToUserDeepgram(
         if (!destroyed) subscribe(); // Re-subscribe for next utterance
       });
 
+      decoder.on('error', (err: Error) => {
+        console.error(`Deepgram decoder error for ${member.displayName}:`, err.message);
+        if (!destroyed) subscribe();
+      });
+
       // When Opus subscription ends, also end the decoder
       subscription.on('end', () => { decoder.end(); });
+      subscription.on('error', (err: Error) => {
+        console.error(`Deepgram voice subscription error for ${member.displayName}:`, err.message);
+        decoder.end();
+      });
     }
 
     subscribe();
