@@ -8,6 +8,7 @@ import { appendToMemory, getMemoryContext } from '../memory';
 import { documentToChannel } from './documentation';
 import { isGeminiOverLimit } from '../usage';
 import { isDeepgramAvailable } from '../voice/deepgram';
+import { postDiagnostic } from '../services/diagnosticsWebhook';
 
 /** Only Riley (EA) and Ace (Developer) speak in voice calls */
 const VOICE_SPEAKERS = new Set(['executive-assistant', 'developer']);
@@ -139,9 +140,19 @@ export async function startCall(
   try {
     const checkAudio = await textToSpeech('Voice channel connected. Riley is ready.');
     await speakInVC(checkAudio);
+    await postDiagnostic('Voice self-test passed at call start.', {
+      level: 'info',
+      source: 'callSession.startCall',
+      detail: `Channel=${voiceChannel.name} Initiator=${initiator.displayName}`,
+    });
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'Unknown error';
     console.error('Voice output self-test failed:', msg);
+    await postDiagnostic('Voice self-test failed.', {
+      level: 'error',
+      source: 'callSession.startCall',
+      detail: msg,
+    });
     await groupchat.send(
       `⚠️ Voice output check failed: ${msg}. ` +
       `The bot can still type in call-log, but speaking is unavailable right now.`
@@ -149,6 +160,10 @@ export async function startCall(
   }
 
   if (!isDeepgramAvailable() && isGeminiOverLimit()) {
+    await postDiagnostic('Voice transcription unavailable: Deepgram missing and Gemini over quota.', {
+      level: 'warn',
+      source: 'callSession.startCall',
+    });
     await groupchat.send(
       '⚠️ Voice transcription is unavailable: Deepgram is not configured and Gemini quota is exhausted.'
     );
@@ -294,6 +309,11 @@ Keep your spoken response brief — you're in a voice call, not a text chat.${la
         await speakPipelined(response, riley.voice);
       } catch (ttsErr) {
         console.error('TTS error for Riley:', ttsErr instanceof Error ? ttsErr.message : 'Unknown');
+              await postDiagnostic('Riley TTS playback failed during call.', {
+                level: 'error',
+                source: 'callSession.handleVoiceInput',
+                detail: ttsErr instanceof Error ? ttsErr.message : 'Unknown',
+              });
         session.groupchat.send('⚠️ Voice playback unavailable — check call-log for Riley\'s response.').catch(() => {});
       }
 
@@ -338,6 +358,11 @@ Keep your spoken response brief — you're in a voice call, not a text chat.${la
               await speakPipelined(aceResponse, ace.voice);
             } catch (ttsErr) {
               console.error('TTS error for Ace:', ttsErr instanceof Error ? ttsErr.message : 'Unknown');
+              await postDiagnostic('Ace TTS playback failed during call.', {
+                level: 'error',
+                source: 'callSession.handleVoiceInput',
+                detail: ttsErr instanceof Error ? ttsErr.message : 'Unknown',
+              });
               session.groupchat.send('⚠️ Voice playback unavailable — check call-log for Ace\'s response.').catch(() => {});
             }
           } catch (err) {
