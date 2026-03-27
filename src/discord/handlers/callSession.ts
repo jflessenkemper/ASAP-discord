@@ -9,6 +9,7 @@ import { documentToChannel } from './documentation';
 import { isGeminiOverLimit } from '../usage';
 import { isDeepgramAvailable } from '../voice/deepgram';
 import { postDiagnostic, mirrorAgentResponse, mirrorVoiceTranscript } from '../services/diagnosticsWebhook';
+import { getWebhook } from '../services/webhooks';
 
 /** Only Riley (EA) and Ace (Developer) speak in voice calls */
 const VOICE_SPEAKERS = new Set(['executive-assistant', 'developer']);
@@ -78,6 +79,24 @@ export interface CallSession {
 
 let activeSession: CallSession | null = null;
 
+async function sendAsAgent(channel: TextChannel, content: string, agentId: AgentId = 'executive-assistant'): Promise<void> {
+  const agent = getAgent(agentId);
+  if (agent) {
+    try {
+      const wh = await getWebhook(channel);
+      await wh.send({
+        content,
+        username: `${agent.emoji} ${agent.name}`,
+        avatarURL: agent.avatarUrl,
+      });
+      return;
+    } catch {
+      // fall through
+    }
+  }
+  await channel.send(content).catch(() => {});
+}
+
 /**
  * Start a voice call session — bot joins VC and begins listening.
  */
@@ -88,7 +107,7 @@ export async function startCall(
   initiator: GuildMember
 ): Promise<void> {
   if (activeSession?.active) {
-    await groupchat.send('⚠️ A call is already in progress. Say `LEAVE` to end it first.');
+    await sendAsAgent(groupchat, '⚠️ A call is already in progress. Say `LEAVE` to end it first.');
     return;
   }
 
@@ -125,7 +144,8 @@ export async function startCall(
   const riley = getAgent('executive-assistant' as AgentId);
   const ace = getAgent('developer' as AgentId);
 
-  await groupchat.send(
+  await sendAsAgent(
+    groupchat,
     `📞 **Voice call started**\n` +
       `Initiated by **${initiator.displayName}**\n` +
       `${riley?.emoji || '📋'} **Riley** and ${ace?.emoji || '💻'} **Ace** are on the line.\n\n` +
@@ -153,7 +173,8 @@ export async function startCall(
       source: 'callSession.startCall',
       detail: msg,
     });
-    await groupchat.send(
+    await sendAsAgent(
+      groupchat,
       `⚠️ Voice output check failed: ${msg}. ` +
       `The bot can still type in call-log, but speaking is unavailable right now.`
     );
@@ -164,7 +185,8 @@ export async function startCall(
       level: 'warn',
       source: 'callSession.startCall',
     });
-    await groupchat.send(
+    await sendAsAgent(
+      groupchat,
       '⚠️ Voice transcription is unavailable: Deepgram is not configured and Gemini quota is exhausted.'
     );
   }
@@ -226,12 +248,13 @@ export async function endCall(): Promise<void> {
     const summary = await summarizeCall(session.transcript, participants);
 
     await session.callLog.send(`📝 **Summary**\n${summary}`);
-    await session.groupchat.send(
+    await sendAsAgent(
+      session.groupchat,
       `📞 **Call ended** (${duration} min)\nSummary posted in <#${session.callLog.id}>`
     );
   } catch (err) {
     console.error('Call summary error:', err instanceof Error ? err.message : 'Unknown');
-    await session.groupchat.send(`📞 **Call ended** (${duration} min)`);
+    await sendAsAgent(session.groupchat, `📞 **Call ended** (${duration} min)`);
   }
 
   activeSession = null;
@@ -316,7 +339,7 @@ Keep your spoken response brief — you're in a voice call, not a text chat.${la
                 source: 'callSession.handleVoiceInput',
                 detail: ttsErr instanceof Error ? ttsErr.message : 'Unknown',
               });
-        session.groupchat.send('⚠️ Voice playback unavailable — check call-log for Riley\'s response.').catch(() => {});
+        sendAsAgent(session.groupchat, '⚠️ Voice playback unavailable — check call-log for Riley\'s response.').catch(() => {});
       }
 
       // Check if Riley directed Ace
@@ -366,7 +389,7 @@ Keep your spoken response brief — you're in a voice call, not a text chat.${la
                 source: 'callSession.handleVoiceInput',
                 detail: ttsErr instanceof Error ? ttsErr.message : 'Unknown',
               });
-              session.groupchat.send('⚠️ Voice playback unavailable — check call-log for Ace\'s response.').catch(() => {});
+              sendAsAgent(session.groupchat, '⚠️ Voice playback unavailable — check call-log for Ace\'s response.').catch(() => {});
             }
           } catch (err) {
             console.error('Ace voice response error:', err instanceof Error ? err.message : 'Unknown');
@@ -387,7 +410,7 @@ Keep your spoken response brief — you're in a voice call, not a text chat.${la
             [...agentMemory, ...session.conversationHistory],
             `[Riley directed you during voice call]: ${response}\n[Original from ${transcription.username}]: ${userText}`
           );
-          await session.groupchat.send(`${agent.emoji} **${agent.name.split(' ')[0]}**: ${agentResponse.slice(0, 1900)}`);
+          await sendAsAgent(session.groupchat, agentResponse.slice(0, 1900), agentId as AgentId);
           await mirrorAgentResponse(agent.name, 'groupchat', agentResponse);
           appendToMemory(agentId, [
             { role: 'user', content: `[Voice call directive]: ${userText.slice(0, 500)}` },
@@ -400,10 +423,10 @@ Keep your spoken response brief — you're in a voice call, not a text chat.${la
       }
     } catch (err) {
       console.error('Riley voice error:', err instanceof Error ? err.message : 'Unknown');
-      await session.groupchat.send('⚠️ Riley had an error processing voice input.');
+      await sendAsAgent(session.groupchat, '⚠️ Riley had an error processing voice input.');
     }
   } else {
-    await session.groupchat.send('⚠️ Riley is unavailable. Voice input not processed.');
+    await sendAsAgent(session.groupchat, '⚠️ Riley is unavailable. Voice input not processed.');
   }
 }
 

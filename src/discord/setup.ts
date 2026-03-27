@@ -4,6 +4,7 @@ import {
   TextChannel,
   VoiceChannel,
   CategoryChannel,
+  PermissionFlagsBits,
 } from 'discord.js';
 import { getAgents } from './agents';
 import { getWebhook } from './services/webhooks';
@@ -249,6 +250,31 @@ export async function setupChannels(guild: Guild): Promise<BotChannels> {
   const failed = webhookResults.filter((r) => r.status === 'rejected').length;
   if (failed > 0) console.warn(`  ⚠️ ${failed}/${allTextChannels.length} webhook(s) failed`);
   console.log('✅ Webhooks ready');
+
+  // Restrict raw bot posting in groupchat + agent channels.
+  // Agents should appear via webhooks/personas only.
+  const botId = guild.client.user?.id;
+  if (botId) {
+    const restricted = [groupchat, ...agentChannels.values()];
+    for (const ch of restricted) {
+      try {
+        await ch.permissionOverwrites.edit(botId, {
+          SendMessages: false,
+          SendMessagesInThreads: false,
+          CreatePublicThreads: false,
+          CreatePrivateThreads: false,
+          AddReactions: false,
+          // Keep webhook management so persona posting still works
+          ManageWebhooks: true,
+          ViewChannel: true,
+          ReadMessageHistory: true,
+        });
+      } catch (err) {
+        console.warn(`Failed to apply bot posting restriction in #${ch.name}:`, err instanceof Error ? err.message : 'Unknown');
+      }
+    }
+    console.log(`🔒 Restricted raw bot posting in ${restricted.length} channel(s)`);
+  }
 
   return { agentChannels, groupchat, github, callLog, limits, screenshots, url, terminal, voiceChannel };
 }
