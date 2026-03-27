@@ -1,8 +1,18 @@
 import Anthropic from '@anthropic-ai/sdk';
+import { readFileSync } from 'fs';
+import { join } from 'path';
 import { AgentConfig } from './agents';
 import { REPO_TOOLS, REVIEW_TOOLS, executeTool, getToolAuditCallback } from './tools';
-import { recordClaudeUsage, isClaudeOverLimit } from './usage';
+import { recordClaudeUsage, isClaudeOverLimit, isBudgetExceeded, getRemainingBudget } from './usage';
 import { logAgentEvent } from './activityLog';
+
+// Load project context once at startup — shared by all agents
+let PROJECT_CONTEXT = '';
+try {
+  PROJECT_CONTEXT = readFileSync(join(__dirname, '../../../.github/PROJECT_CONTEXT.md'), 'utf-8');
+} catch {
+  console.warn('PROJECT_CONTEXT.md not found — agents will lack project context');
+}
 
 const CLAUDE_OPUS = 'claude-opus-4-20250514';
 const CLAUDE_SONNET = 'claude-sonnet-4-20250514';
@@ -130,7 +140,15 @@ export async function agentRespond(
 ): Promise<string> {
   const anthropic = getClient();
 
+  // Hard budget gate — stop ALL agents if daily budget exceeded
+  if (isBudgetExceeded()) {
+    const { spent, limit } = getRemainingBudget();
+    logAgentEvent(agent.id, 'error', `Budget exceeded: $${spent.toFixed(2)}/$${limit.toFixed(2)}`);
+    return `⚠️ Daily budget of $${limit.toFixed(2)} has been reached ($${spent.toFixed(2)} spent). All agents paused until midnight UTC.`;
+  }
+
   const isFullToolAgent = FULL_TOOL_AGENTS.has(agent.id);
+  const { remaining, spent, limit } = getRemainingBudget();
 
   // Build system prompt — compact version for review agents to save ~1,500 tokens
   const rileyCoordination = agent.id === 'executive-assistant' ? `
@@ -143,10 +161,17 @@ CRITICAL: Do NOT use send_channel_message — ONLY @mentions work for agent coor
 You have repo tools: read/write/edit/search files, run_command (shell), fetch_url, memory_read/write, db_query/db_schema, GitHub ops, GCP ops, Discord channel ops, run_tests, typecheck, capture_screenshots.` : `
 You have read-only tools: read_file, search_files, list_directory, fetch_url, db_query, db_schema, memory_read, memory_list, run_tests, typecheck.`;
 
+  const budgetWarning = remaining < 0.50 ? `\n⚠️ LOW BUDGET: $${remaining.toFixed(2)} remaining of $${limit.toFixed(2)} daily limit. Be extremely efficient — minimize tool calls, keep responses short.` : '';
+
   const systemPrompt = `${agent.systemPrompt}
 
+<project_context>
+${PROJECT_CONTEXT}
+</project_context>
+
 You are "${agent.name}" responding in Discord.${rileyCoordination}
-RULES: Max 200 words (code exempt). Bullets not paragraphs. No preamble. Action first. Max ### headings.${toolsSection}`;
+RULES: Max 200 words (code exempt). Bullets not paragraphs. No preamble. Action first. Max ### headings.${toolsSection}
+BUDGET: $${spent.toFixed(2)} spent / $${limit.toFixed(2)} daily limit ($${remaining.toFixed(2)} remaining). Each tool call costs tokens. Be efficient.${budgetWarning}`;
 
   // Build messages — convert simple string history to proper format
   const messages: Array<{ role: 'user' | 'assistant'; content: string }> = [
@@ -161,8 +186,9 @@ RULES: Max 200 words (code exempt). Bullets not paragraphs. No preamble. Action 
   const agentTools = toolsForAgent(agent.id);
   logAgentEvent(agent.id, 'invoke', `model=${options?.modelOverride || modelForAgent(agent.id)}, context=${messages.length} msgs, prompt="${userMessage.slice(0, 200)}"`);
   for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
-    if (isClaudeOverLimit()) {
-      logAgentEvent(agent.id, 'error', 'Daily token limit reached');
+    if (isClaudeOverLimit() || isBudgetExceeded()) {
+      const reason = isBudgetExceeded() ? 'Daily dollar budget exceeded' : 'Daily token limit reached';
+      logAgentEvent(agent.id, 'error', reason);
       return '⚠️ Daily Claude token limit reached. Try again tomorrow or adjust DAILY_LIMIT_CLAUDE_TOKENS.';
     }
     if (Date.now() - loopStart > TOOL_LOOP_TIMEOUT) {

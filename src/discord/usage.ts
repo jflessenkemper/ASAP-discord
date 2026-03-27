@@ -8,6 +8,8 @@ const DAILY_LIMITS = {
   geminiCalls: parseInt(process.env.DAILY_LIMIT_GEMINI_CALLS || '500', 10),
   /** Max ElevenLabs characters per day */
   elevenLabsChars: parseInt(process.env.DAILY_LIMIT_ELEVENLABS_CHARS || '10000', 10),
+  /** Hard dollar budget — ALL agents stop when this is exceeded */
+  budgetUsd: parseFloat(process.env.DAILY_BUDGET_USD || '2.00'),
 };
 
 // ─── Usage counters ─────────────────────────────────────────────────────────
@@ -74,10 +76,30 @@ export function isElevenLabsOverLimit(): boolean {
   return usage.elevenLabsChars >= DAILY_LIMITS.elevenLabsChars;
 }
 
+/** Check if the daily dollar budget has been exceeded */
+export function isBudgetExceeded(): boolean {
+  resetIfNewDay();
+  return estimateDailyCost().total >= DAILY_LIMITS.budgetUsd;
+}
+
+/** Get remaining budget in USD (for injection into agent prompts) */
+export function getRemainingBudget(): { remaining: number; spent: number; limit: number } {
+  resetIfNewDay();
+  const spent = estimateDailyCost().total;
+  return {
+    remaining: Math.max(0, DAILY_LIMITS.budgetUsd - spent),
+    spent,
+    limit: DAILY_LIMITS.budgetUsd,
+  };
+}
+
 // ─── Cost estimates ─────────────────────────────────────────────────────────
-// Claude Opus 4 pricing via Anthropic API (per 1M tokens)
-const CLAUDE_INPUT_COST_PER_M = 15.0;
-const CLAUDE_OUTPUT_COST_PER_M = 75.0;
+// Claude pricing per 1M tokens (Anthropic API direct)
+// Opus 4: $15 input / $75 output — only used by Ace (developer)
+// Sonnet 4: $3 input / $15 output — used by all other agents
+// We use a blended rate assuming ~90% Sonnet usage
+const CLAUDE_INPUT_COST_PER_M = 4.2;   // blended: 0.9*3 + 0.1*15
+const CLAUDE_OUTPUT_COST_PER_M = 21.0;  // blended: 0.9*15 + 0.1*75
 // Gemini 2.0 Flash — very cheap, approximate
 const GEMINI_COST_PER_CALL = 0.0005;
 // ElevenLabs — depends on plan, approximate per character
