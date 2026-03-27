@@ -3,7 +3,7 @@ import { readFileSync } from 'fs';
 import { join } from 'path';
 import { AgentConfig } from './agents';
 import { REPO_TOOLS, REVIEW_TOOLS, executeTool, getToolAuditCallback } from './tools';
-import { recordClaudeUsage, isClaudeOverLimit, isBudgetExceeded, getRemainingBudget } from './usage';
+import { recordClaudeUsage, isClaudeOverLimit, isBudgetExceeded, getRemainingBudget, getClaudeTokenStatus } from './usage';
 import { logAgentEvent } from './activityLog';
 
 // Load project context once at startup — shared by all agents
@@ -18,12 +18,30 @@ const CLAUDE_OPUS = 'claude-opus-4-20250514';
 const CLAUDE_SONNET = 'claude-sonnet-4-20250514';
 
 /**
- * Model selection: Opus for agents that write code or use complex tool chains.
- * Sonnet for all review/advisory agents — much faster, still high quality.
+ * High-stakes prompts for Ace where Opus quality is worth the cost.
+ * Everything else defaults to Sonnet for cost efficiency.
  */
-const OPUS_AGENTS = new Set(['developer']); // Only Ace needs Opus for deep code work
-function modelForAgent(agentId: string): string {
-  return OPUS_AGENTS.has(agentId) ? CLAUDE_OPUS : CLAUDE_SONNET;
+const HIGH_STAKES_RE = /(high[-\s]?stakes|critical|prod(?:uction)?|hotfix|incident|security|auth|migration|rollback|data\s+loss|schema|deploy)/i;
+function isHighStakesPrompt(userMessage: string): boolean {
+  return HIGH_STAKES_RE.test(userMessage);
+}
+
+/** Detect failed tests/typecheck outputs that warrant escalation to Opus. */
+function hasValidationFailure(toolName: string, result: string): boolean {
+  if (toolName !== 'run_tests' && toolName !== 'typecheck') return false;
+  return /(\bFAIL\b|failing|failed|Type error|not assignable|Compilation error|[1-9]\d*\s+errors?\b|Tests?:\s*[1-9]\d*\s+failed)/i.test(result);
+}
+
+/**
+ * Model policy:
+ * - Default: Sonnet for all agents (including Ace)
+ * - Escalate: Opus for Ace on explicit high-stakes prompts
+ */
+function modelForAgent(agentId: string, userMessage: string): string {
+  if (agentId === 'developer' && isHighStakesPrompt(userMessage)) {
+    return CLAUDE_OPUS;
+  }
+  return CLAUDE_SONNET;
 }
 
 /**
@@ -149,6 +167,7 @@ export async function agentRespond(
 
   const isFullToolAgent = FULL_TOOL_AGENTS.has(agent.id);
   const { remaining, spent, limit } = getRemainingBudget();
+  const { used: tokenUsed, remaining: tokenRemaining, limit: tokenLimit } = getClaudeTokenStatus();
 
   // Build system prompt — compact version for review agents to save ~1,500 tokens
   const rileyCoordination = agent.id === 'executive-assistant' ? `
@@ -171,7 +190,8 @@ ${PROJECT_CONTEXT}
 
 You are "${agent.name}" responding in Discord.${rileyCoordination}
 RULES: Max 200 words (code exempt). Bullets not paragraphs. No preamble. Action first. Max ### headings.${toolsSection}
-BUDGET: $${spent.toFixed(2)} spent / $${limit.toFixed(2)} daily limit ($${remaining.toFixed(2)} remaining). Each tool call costs tokens. Be efficient.${budgetWarning}`;
+BUDGET: $${spent.toFixed(2)} spent / $${limit.toFixed(2)} daily limit ($${remaining.toFixed(2)} remaining). Each tool call costs tokens. Be efficient.${budgetWarning}
+TOKENS: ${tokenUsed.toLocaleString()} used / ${tokenLimit.toLocaleString()} daily limit (${tokenRemaining.toLocaleString()} remaining). If remaining is low, reduce tool calls and avoid broad scans.`;
 
   // Build messages — convert simple string history to proper format
   const messages: Array<{ role: 'user' | 'assistant'; content: string }> = [
@@ -184,7 +204,9 @@ BUDGET: $${spent.toFixed(2)} spent / $${limit.toFixed(2)} daily limit ($${remain
   const loopStart = Date.now();
   let totalToolCalls = 0;
   const agentTools = toolsForAgent(agent.id);
-  logAgentEvent(agent.id, 'invoke', `model=${options?.modelOverride || modelForAgent(agent.id)}, context=${messages.length} msgs, prompt="${userMessage.slice(0, 200)}"`);
+  let selectedModel = options?.modelOverride || modelForAgent(agent.id, userMessage);
+  let escalatedToOpus = selectedModel === CLAUDE_OPUS;
+  logAgentEvent(agent.id, 'invoke', `model=${selectedModel}, context=${messages.length} msgs, prompt="${userMessage.slice(0, 200)}"`);
   for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
     if (isClaudeOverLimit() || isBudgetExceeded()) {
       const reason = isBudgetExceeded() ? 'Daily dollar budget exceeded' : 'Daily token limit reached';
@@ -199,7 +221,7 @@ BUDGET: $${spent.toFixed(2)} spent / $${limit.toFixed(2)} daily limit ($${remain
     const response = await withConcurrencyLimit(() =>
       withRetry(async () => {
         const stream = anthropic.messages.stream({
-          model: options?.modelOverride || modelForAgent(agent.id),
+          model: selectedModel,
           max_tokens: options?.maxTokens || 16384,
           system: systemPrompt,
           tools: agentTools as any,
@@ -256,10 +278,14 @@ BUDGET: $${spent.toFixed(2)} spent / $${limit.toFixed(2)} daily limit ($${remain
         content: string;
       }> = [];
 
+      let sawValidationFailure = false;
       const processBlock = async (block: any) => {
         const toolStart = Date.now();
         totalToolCalls++;
         const result = await executeTool(block.name, block.input as Record<string, string>);
+        if (agent.id === 'developer' && !options?.modelOverride && hasValidationFailure(block.name, result)) {
+          sawValidationFailure = true;
+        }
         const summary = formatToolSummary(block.name, block.input as Record<string, string>);
         logAgentEvent(agent.id, 'tool', summary, { durationMs: Date.now() - toolStart });
         if (onToolUse) await onToolUse(block.name, summary);
@@ -290,6 +316,24 @@ BUDGET: $${spent.toFixed(2)} spent / $${limit.toFixed(2)} daily limit ($${remain
         role: 'user',
         content: toolResults as any,
       } as any);
+
+      // Cost-aware escalation policy for Ace:
+      // if tests/typecheck fail while on Sonnet, switch this request to Opus.
+      if (
+        agent.id === 'developer' &&
+        !options?.modelOverride &&
+        !escalatedToOpus &&
+        selectedModel === CLAUDE_SONNET &&
+        sawValidationFailure
+      ) {
+        selectedModel = CLAUDE_OPUS;
+        escalatedToOpus = true;
+        logAgentEvent(agent.id, 'response', 'Escalated Sonnet -> Opus after validation failure');
+        currentMessages.push({
+          role: 'user',
+          content: 'Validation failed (tests/typecheck). Re-plan and fix using deeper reasoning before final response.',
+        });
+      }
 
       continue;
     }

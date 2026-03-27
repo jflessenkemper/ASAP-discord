@@ -93,6 +93,17 @@ export function getRemainingBudget(): { remaining: number; spent: number; limit:
   };
 }
 
+/** Get Claude token status so agents can self-regulate tool usage */
+export function getClaudeTokenStatus(): { used: number; remaining: number; limit: number } {
+  resetIfNewDay();
+  const used = usage.claudeInputTokens + usage.claudeOutputTokens;
+  return {
+    used,
+    remaining: Math.max(0, DAILY_LIMITS.claudeTokens - used),
+    limit: DAILY_LIMITS.claudeTokens,
+  };
+}
+
 // ─── Cost estimates ─────────────────────────────────────────────────────────
 // Claude pricing per 1M tokens (Anthropic API direct)
 // Opus 4: $15 input / $75 output — only used by Ace (developer)
