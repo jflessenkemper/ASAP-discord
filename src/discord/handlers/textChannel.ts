@@ -3,6 +3,7 @@ import { AgentConfig } from '../agents';
 import { agentRespond, ConversationMessage } from '../claude';
 import { appendToMemory, getMemoryContext } from '../memory';
 import { getWebhook } from '../services/webhooks';
+import { mirrorAgentResponse } from '../services/diagnosticsWebhook';
 
 // Per-channel conversation history (in-memory, keyed by channelId)
 const conversationHistories = new Map<string, ConversationMessage[]>();
@@ -123,6 +124,7 @@ export async function sendAgentMessage(
         avatarURL: agent.avatarUrl,
       });
     }
+    await mirrorAgentResponse(agent.name, channel.name, response);
   } catch (err) {
     // Fallback to embeds if webhook fails (permissions, etc.)
     console.warn(`Webhook send failed for ${agent.name}, falling back to embeds:`, err instanceof Error ? err.message : 'Unknown');
@@ -140,6 +142,7 @@ export async function sendAgentMessage(
     for (let i = 0; i < embeds.length; i += 10) {
       await channel.send({ embeds: embeds.slice(i, i + 10) });
     }
+    await mirrorAgentResponse(agent.name, channel.name, response);
   }
 }
 

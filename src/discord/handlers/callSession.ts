@@ -8,7 +8,7 @@ import { appendToMemory, getMemoryContext } from '../memory';
 import { documentToChannel } from './documentation';
 import { isGeminiOverLimit } from '../usage';
 import { isDeepgramAvailable } from '../voice/deepgram';
-import { postDiagnostic } from '../services/diagnosticsWebhook';
+import { postDiagnostic, mirrorAgentResponse, mirrorVoiceTranscript } from '../services/diagnosticsWebhook';
 
 /** Only Riley (EA) and Ace (Developer) speak in voice calls */
 const VOICE_SPEAKERS = new Set(['executive-assistant', 'developer']);
@@ -255,6 +255,7 @@ async function handleVoiceInput(transcription: VoiceTranscription): Promise<void
 
   // Post the transcription to call log
   await session.callLog.send(`🎤 **${transcription.username}**: ${userText}`);
+  await mirrorVoiceTranscript(transcription.username, userText, transcription.language);
 
   const riley = getAgent('executive-assistant' as AgentId);
 
@@ -299,6 +300,7 @@ Keep your spoken response brief — you're in a voice call, not a text chat.${la
 
       // Send text to call-log (not groupchat — keep it clean)
       await session.callLog.send(`${riley.emoji} **${riley.name}**: ${response.slice(0, 1900)}`);
+      await mirrorAgentResponse(riley.name, 'call-log', response);
       appendToMemory('executive-assistant', [
         { role: 'user', content: `[Voice from ${transcription.username}]: ${userText}` },
         { role: 'assistant', content: `[Riley]: ${response}` },
@@ -347,6 +349,7 @@ Keep your spoken response brief — you're in a voice call, not a text chat.${la
 
             // Send text to call-log
             await session.callLog.send(`${ace.emoji} **Ace**: ${aceResponse.slice(0, 1900)}`);
+            await mirrorAgentResponse(ace.name, 'call-log', aceResponse);
             appendToMemory('developer', [
               { role: 'user', content: `[Directed by Riley for voice call]: ${userText.slice(0, 500)}` },
               { role: 'assistant', content: `[Ace]: ${aceResponse}` },
@@ -385,6 +388,7 @@ Keep your spoken response brief — you're in a voice call, not a text chat.${la
             `[Riley directed you during voice call]: ${response}\n[Original from ${transcription.username}]: ${userText}`
           );
           await session.groupchat.send(`${agent.emoji} **${agent.name.split(' ')[0]}**: ${agentResponse.slice(0, 1900)}`);
+          await mirrorAgentResponse(agent.name, 'groupchat', agentResponse);
           appendToMemory(agentId, [
             { role: 'user', content: `[Voice call directive]: ${userText.slice(0, 500)}` },
             { role: 'assistant', content: `[${agent.name}]: ${agentResponse}` },
