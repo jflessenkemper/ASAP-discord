@@ -3,7 +3,7 @@ import pool from '../db/pool';
 
 // ─── Daily limits (configurable via env vars) ───────────────────────────────
 const DAILY_LIMITS = {
-  /** Max Claude input+output tokens per day */
+  /** Max LLM input+output tokens per day (Gemini) */
   claudeTokens: parseInt(process.env.DAILY_LIMIT_CLAUDE_TOKENS || '2000000', 10),
   /** Max Gemini API calls per day (TTS + transcription) */
   geminiCalls: parseInt(process.env.DAILY_LIMIT_GEMINI_CALLS || '500', 10),
@@ -14,8 +14,8 @@ const DAILY_LIMITS = {
 };
 const DEFAULT_BUDGET_APPROVAL_INCREMENT_USD = parseFloat(process.env.BUDGET_APPROVAL_INCREMENT_USD || '5.00');
 
-/** Optional running Anthropic credit cap for estimating remaining credits */
-const ANTHROPIC_CREDIT_CAP_USD = parseFloat(process.env.ANTHROPIC_CREDIT_CAP_USD || '0');
+/** Optional running Anthropic credit cap — no longer used with Gemini */
+const ANTHROPIC_CREDIT_CAP_USD = 0;
 
 // ─── Usage counters ─────────────────────────────────────────────────────────
 interface UsageCounters {
@@ -196,14 +196,14 @@ export function getClaudeTokenStatus(): { used: number; remaining: number; limit
 }
 
 // ─── Cost estimates ─────────────────────────────────────────────────────────
-// Claude pricing per 1M tokens (Anthropic API direct)
-// Opus 4: $15 input / $75 output — only used by Ace (developer)
-// Sonnet 4: $3 input / $15 output — used by all other agents
-// We use a blended rate assuming ~90% Sonnet usage
-const CLAUDE_INPUT_COST_PER_M = 4.2;   // blended: 0.9*3 + 0.1*15
-const CLAUDE_OUTPUT_COST_PER_M = 21.0;  // blended: 0.9*15 + 0.1*75
-// Gemini 2.0 Flash — very cheap, approximate
-const GEMINI_COST_PER_CALL = 0.0005;
+// Gemini pricing per 1M tokens (Google AI / Vertex AI)
+// Gemini 2.0 Flash: $0.075 input / $0.30 output
+// Gemini 2.5 Pro:   $1.25  input / $10.00 output
+// Blended rate assuming ~90% Flash usage:
+const CLAUDE_INPUT_COST_PER_M = 0.20;   // blended: 0.9*0.075 + 0.1*1.25
+const CLAUDE_OUTPUT_COST_PER_M = 1.27;  // blended: 0.9*0.30  + 0.1*10.00
+// Gemini TTS/transcription calls — very cheap
+const GEMINI_COST_PER_CALL = 0.0001;
 // ElevenLabs — depends on plan, approximate per character
 const ELEVENLABS_COST_PER_CHAR = 0.00018;
 
@@ -214,17 +214,6 @@ function estimateDailyCost(): { claude: number; gemini: number; elevenLabs: numb
   const gemini = usage.geminiCalls * GEMINI_COST_PER_CALL;
   const elevenLabs = usage.elevenLabsChars * ELEVENLABS_COST_PER_CHAR;
   return { claude, gemini, elevenLabs, total: claude + gemini + elevenLabs };
-}
-
-/** Estimated Anthropic credit status based on local token accounting. */
-export function getAnthropicCreditStatus(): { remaining: number; spent: number; cap: number } | null {
-  if (!Number.isFinite(ANTHROPIC_CREDIT_CAP_USD) || ANTHROPIC_CREDIT_CAP_USD <= 0) return null;
-  const spent = estimateDailyCost().claude;
-  return {
-    remaining: Math.max(0, ANTHROPIC_CREDIT_CAP_USD - spent),
-    spent,
-    cap: ANTHROPIC_CREDIT_CAP_USD,
-  };
 }
 
 // ─── Progress bar helper ────────────────────────────────────────────────────
@@ -243,7 +232,6 @@ export function getUsageEmbed(): EmbedBuilder {
   resetIfNewDay();
   const totalClaudeTokens = usage.claudeInputTokens + usage.claudeOutputTokens;
   const cost = estimateDailyCost();
-  const credit = getAnthropicCreditStatus();
   const extraBudget = usage.approvedBudgetUsd;
   const totalRatio = Math.max(
     totalClaudeTokens / DAILY_LIMITS.claudeTokens,
@@ -257,7 +245,7 @@ export function getUsageEmbed(): EmbedBuilder {
     .setColor(color)
     .addFields(
       {
-        name: '🧠 Claude (Anthropic)',
+        name: '� Gemini LLM (Google)',
         value:
           `${progressBar(totalClaudeTokens, DAILY_LIMITS.claudeTokens)}\n` +
           `${totalClaudeTokens.toLocaleString()} / ${DAILY_LIMITS.claudeTokens.toLocaleString()} tokens\n` +
@@ -282,14 +270,7 @@ export function getUsageEmbed(): EmbedBuilder {
         name: '💰 Total Cost Today',
         value: `**$${cost.total.toFixed(4)}**\nLimit: **$${effectiveBudgetLimit().toFixed(2)}**${extraBudget > 0 ? ` (base $${DAILY_LIMITS.budgetUsd.toFixed(2)} + approved $${extraBudget.toFixed(2)})` : ''}`,
         inline: true,
-      },
-      ...(credit
-        ? [{
-            name: '🏦 Anthropic Credit (Estimate)',
-            value: `Remaining: **$${credit.remaining.toFixed(2)}**\nSpent: $${credit.spent.toFixed(2)} / $${credit.cap.toFixed(2)}`,
-            inline: true,
-          }]
-        : [])
+      }
     )
     .setFooter({ text: 'Resets at midnight UTC · Updates every hour' })
     .setTimestamp();
@@ -300,18 +281,11 @@ export function getUsageReport(): string {
   resetIfNewDay();
   const totalClaudeTokens = usage.claudeInputTokens + usage.claudeOutputTokens;
   const cost = estimateDailyCost();
-  const credit = getAnthropicCreditStatus();
   const extraBudget = usage.approvedBudgetUsd;
-
-  const creditSection = credit
-    ? `\n\n**Anthropic Credit (Estimate)**\n` +
-      `Remaining: **$${credit.remaining.toFixed(2)}**\n` +
-      `Spent: $${credit.spent.toFixed(2)} / $${credit.cap.toFixed(2)}`
-    : '';
 
   return (
     `📊 **ASAP Usage Dashboard** — ${usage.lastReset}\n\n` +
-    `**Claude (Anthropic)**\n` +
+    `**Gemini LLM (Google)**\n` +
     `${progressBar(totalClaudeTokens, DAILY_LIMITS.claudeTokens)}\n` +
     `${totalClaudeTokens.toLocaleString()} / ${DAILY_LIMITS.claudeTokens.toLocaleString()} tokens` +
     ` (${usage.claudeInputTokens.toLocaleString()} in · ${usage.claudeOutputTokens.toLocaleString()} out)\n` +
@@ -325,8 +299,7 @@ export function getUsageReport(): string {
     `${usage.elevenLabsChars.toLocaleString()} / ${DAILY_LIMITS.elevenLabsChars.toLocaleString()} characters\n` +
     `Est. cost: **$${cost.elevenLabs.toFixed(4)}**\n\n` +
     `💰 **Total estimated cost today: $${cost.total.toFixed(4)}**\n` +
-    `Budget limit: **$${effectiveBudgetLimit().toFixed(2)}**${extraBudget > 0 ? ` (base $${DAILY_LIMITS.budgetUsd.toFixed(2)} + approved $${extraBudget.toFixed(2)})` : ''}` +
-    creditSection
+    `Budget limit: **$${effectiveBudgetLimit().toFixed(2)}**${extraBudget > 0 ? ` (base $${DAILY_LIMITS.budgetUsd.toFixed(2)} + approved $${extraBudget.toFixed(2)})` : ''}`
   );
 }
 

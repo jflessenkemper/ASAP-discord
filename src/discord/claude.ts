@@ -1,8 +1,8 @@
-import Anthropic from '@anthropic-ai/sdk';
+import { GoogleGenerativeAI, Content, Part, FunctionDeclaration, Tool } from '@google/generative-ai';
 import { readFileSync } from 'fs';
 import { join } from 'path';
 import { AgentConfig } from './agents';
-import { PROMPT_REPO_TOOLS, PROMPT_REVIEW_TOOLS, executeTool, getToolAuditCallback } from './tools';
+import { REPO_TOOLS, REVIEW_TOOLS, executeTool, getToolAuditCallback } from './tools';
 import { recordClaudeUsage, isClaudeOverLimit, isBudgetExceeded, getRemainingBudget, getClaudeTokenStatus } from './usage';
 import { logAgentEvent } from './activityLog';
 
@@ -21,19 +21,20 @@ if (PROJECT_CONTEXT.length > PROJECT_CONTEXT_MAX_CHARS) {
 const PROJECT_CONTEXT_LIGHT_MAX_CHARS = parseInt(process.env.PROJECT_CONTEXT_LIGHT_MAX_CHARS || '1200', 10);
 const PROJECT_CONTEXT_LIGHT = PROJECT_CONTEXT.slice(0, PROJECT_CONTEXT_LIGHT_MAX_CHARS);
 
-const CLAUDE_OPUS = 'claude-opus-4-20250514';
-const CLAUDE_SONNET = 'claude-sonnet-4-20250514';
+// Gemini model identifiers
+const GEMINI_FLASH = 'gemini-2.0-flash';
+const GEMINI_PRO = 'gemini-2.5-pro';
 
 /**
- * High-stakes prompts for Ace where Opus quality is worth the cost.
- * Everything else defaults to Sonnet for cost efficiency.
+ * High-stakes prompts for Ace where Pro quality is worth the cost.
+ * Everything else defaults to Flash for cost efficiency.
  */
 const HIGH_STAKES_RE = /(high[-\s]?stakes|critical|prod(?:uction)?|hotfix|incident|security|auth|migration|rollback|data\s+loss|schema|deploy)/i;
 function isHighStakesPrompt(userMessage: string): boolean {
   return HIGH_STAKES_RE.test(userMessage);
 }
 
-/** Detect failed tests/typecheck outputs that warrant escalation to Opus. */
+/** Detect failed tests/typecheck outputs that warrant escalation to Pro. */
 function hasValidationFailure(toolName: string, result: string): boolean {
   if (toolName !== 'run_tests' && toolName !== 'typecheck') return false;
   return /(\bFAIL\b|failing|failed|Type error|not assignable|Compilation error|[1-9]\d*\s+errors?\b|Tests?:\s*[1-9]\d*\s+failed)/i.test(result);
@@ -41,33 +42,69 @@ function hasValidationFailure(toolName: string, result: string): boolean {
 
 /**
  * Model policy:
- * - Default: Sonnet for all agents (including Ace)
- * - Escalate: Opus for Ace on explicit high-stakes prompts
+ * - Default: Flash for all agents (fast, cheap)
+ * - Escalate: Pro for Ace on explicit high-stakes prompts
  */
 function modelForAgent(agentId: string, userMessage: string): string {
   if (agentId === 'developer' && isHighStakesPrompt(userMessage)) {
-    return CLAUDE_OPUS;
+    return GEMINI_PRO;
   }
-  return CLAUDE_SONNET;
+  return GEMINI_FLASH;
 }
 
 /**
  * Agents that need full tool access (write files, deploy, manage Discord, etc.).
- * All other agents get the lightweight REVIEW_TOOLS subset (~10 tools vs 40),
- * saving ~4,000–6,000 input tokens per request.
+ * All other agents get the lightweight REVIEW_TOOLS subset.
  */
 const FULL_TOOL_AGENTS = new Set(['developer', 'devops', 'executive-assistant']);
-function toolsForAgent(agentId: string) {
-  return FULL_TOOL_AGENTS.has(agentId) ? PROMPT_REPO_TOOLS : PROMPT_REVIEW_TOOLS;
+
+type AnyTool = { name: string; description: string; input_schema: any };
+
+function toolsForAgent(agentId: string): AnyTool[] {
+  return (FULL_TOOL_AGENTS.has(agentId) ? REPO_TOOLS : REVIEW_TOOLS) as unknown as AnyTool[];
 }
 
-let client: Anthropic | null = null;
+/**
+ * Convert Anthropic input_schema (lowercase types, input_schema key) to
+ * Gemini FunctionDeclaration parameters (uppercase types, parameters key).
+ */
+function convertSchemaNode(node: any): any {
+  if (!node || typeof node !== 'object') return node;
+  if (Array.isArray(node)) return node.map(convertSchemaNode);
 
-function getClient(): Anthropic {
+  const out: Record<string, any> = {};
+  for (const [key, value] of Object.entries(node)) {
+    if (key === 'type' && typeof value === 'string') {
+      out[key] = value.toUpperCase();
+    } else if (key === 'properties' && value && typeof value === 'object') {
+      out[key] = {};
+      for (const [prop, schema] of Object.entries(value as Record<string, any>)) {
+        out[key][prop] = convertSchemaNode(schema);
+      }
+    } else if (key === 'items') {
+      out[key] = convertSchemaNode(value);
+    } else {
+      out[key] = value;
+    }
+  }
+  return out;
+}
+
+function toGeminiTools(tools: AnyTool[]): Tool[] {
+  return [{
+    functionDeclarations: tools.map((tool) => ({
+      name: tool.name,
+      description: tool.description || tool.name,
+      parameters: convertSchemaNode(tool.input_schema),
+    } as FunctionDeclaration)),
+  }];
+}
+
+let client: GoogleGenerativeAI | null = null;
+
+function getClient(): GoogleGenerativeAI {
   if (!client) {
-    client = new Anthropic({
-      apiKey: process.env.ANTHROPIC_API_KEY,
-    });
+    client = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || '');
   }
   return client;
 }
@@ -110,33 +147,6 @@ function getProjectContextForAgent(agentId: string): string {
   return FULL_TOOL_AGENTS.has(agentId) ? PROJECT_CONTEXT : PROJECT_CONTEXT_LIGHT;
 }
 
-function estimateMessageChars(content: unknown): number {
-  if (typeof content === 'string') return content.length;
-  try {
-    return JSON.stringify(content).length;
-  } catch {
-    return 1000;
-  }
-}
-
-function trimLoopMessages(
-  messages: Array<{ role: 'user' | 'assistant'; content: any }>
-): Array<{ role: 'user' | 'assistant'; content: any }> {
-  if (messages.length <= MAX_LOOP_MESSAGES) return messages;
-
-  const trimmed: Array<{ role: 'user' | 'assistant'; content: any }> = [];
-  let chars = 0;
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const msg = messages[i];
-    const msgChars = estimateMessageChars(msg.content);
-    if (trimmed.length >= MAX_LOOP_MESSAGES || chars + msgChars > MAX_LOOP_CHARS) break;
-    trimmed.push(msg);
-    chars += msgChars;
-  }
-  trimmed.reverse();
-  return trimmed;
-}
-
 export interface ConversationMessage {
   role: 'user' | 'assistant';
   content: string;
@@ -146,20 +156,17 @@ export interface ConversationMessage {
 const MAX_TOOL_ROUNDS = parseInt(process.env.MAX_TOOL_ROUNDS || '30', 10);
 const MAX_TOOL_ROUNDS_DEVELOPER = parseInt(process.env.MAX_TOOL_ROUNDS_DEVELOPER || '45', 10);
 const MAX_TOOL_ROUNDS_EXECUTIVE = parseInt(process.env.MAX_TOOL_ROUNDS_EXECUTIVE || '35', 10);
-/** Maximum history messages to send to Claude per request (excludes current user message) */
+/** Maximum history messages to send per request (excludes current user message) */
 const MAX_CONTEXT_MESSAGES = parseInt(process.env.MAX_CONTEXT_MESSAGES || '35', 10);
-/** Soft cap for history character volume sent to Claude per request */
+/** Soft cap for history character volume sent per request */
 const MAX_CONTEXT_CHARS = parseInt(process.env.MAX_CONTEXT_CHARS || '16000', 10);
-/** Cap ongoing tool loop conversation size to prevent token blow-up over many rounds */
-const MAX_LOOP_MESSAGES = parseInt(process.env.MAX_LOOP_MESSAGES || '28', 10);
-const MAX_LOOP_CHARS = parseInt(process.env.MAX_LOOP_CHARS || '18000', 10);
 /**
  * Max total time for a tool loop (ms).
  * Set to 0 (default) to disable wall-clock timeout so agents can run as long as needed.
  */
 const TOOL_LOOP_TIMEOUT = parseInt(process.env.TOOL_LOOP_TIMEOUT_MS || '0', 10);
-/** Max concurrent Claude requests — kept low to stay within 30k input tokens/min rate limit */
-const MAX_CONCURRENT = 3;
+/** Max concurrent Gemini requests */
+const MAX_CONCURRENT = 5;
 let activeClaude = 0;
 const claudeQueue: Array<() => void> = [];
 
@@ -178,9 +185,17 @@ function isAbortError(err: any): boolean {
   return code === 'ABORT_ERR' || name === 'AbortError' || msg.includes('aborted') || msg.includes('aborterror');
 }
 
-function isLowCreditError(err: any): boolean {
+function isGeminiQuotaError(err: any): boolean {
   const msg = String(err?.message || err || '').toLowerCase();
-  return msg.includes('credit balance is too low') || msg.includes('plans & billing');
+  const status = err?.status || err?.statusCode;
+  return (
+    msg.includes('quota') ||
+    msg.includes('resource_exhausted') ||
+    msg.includes('billing') ||
+    msg.includes('api key not valid') ||
+    msg.includes('invalid api key') ||
+    status === 429
+  );
 }
 
 function isCreditsExhaustedNow(): boolean {
@@ -228,16 +243,13 @@ async function withRetry<T>(fn: () => Promise<T>, retries = 3, delayMs = 2000): 
 
       let delay: number;
       if (status === 429) {
-        // Extract retry-after from error headers (Anthropic SDK exposes this)
-        const retryAfter = err?.headers?.['retry-after'];
-        delay = retryAfter ? Math.ceil(Number(retryAfter) * 1000) : 60_000;
-        // Set global gate so all concurrent requests pause too
+        delay = 60_000;
         rateLimitedUntil = Math.max(rateLimitedUntil, Date.now() + delay);
         console.warn(`429 rate limited — global pause for ${Math.ceil(delay / 1000)}s (retry ${i + 1}/${retries})`);
         logAgentEvent('system', 'rate_limit', `429 — pausing ${Math.ceil(delay / 1000)}s`);
       } else {
         delay = delayMs * Math.pow(2, i);
-        console.warn(`Claude retry ${i + 1}/${retries} after ${delay}ms: ${err?.message || 'Unknown'}`);
+        console.warn(`Gemini retry ${i + 1}/${retries} after ${delay}ms: ${err?.message || 'Unknown'}`);
       }
       await new Promise((r) => setTimeout(r, delay));
     }
@@ -259,18 +271,16 @@ export async function agentRespond(
   onToolUse?: (toolName: string, summary: string) => Promise<void>,
   options?: { modelOverride?: string; maxTokens?: number; signal?: AbortSignal }
 ): Promise<string> {
-    const maxToolRounds = agent.id === 'developer'
-      ? MAX_TOOL_ROUNDS_DEVELOPER
-      : agent.id === 'executive-assistant'
-        ? MAX_TOOL_ROUNDS_EXECUTIVE
-        : MAX_TOOL_ROUNDS;
-
-  const anthropic = getClient();
+  const maxToolRounds = agent.id === 'developer'
+    ? MAX_TOOL_ROUNDS_DEVELOPER
+    : agent.id === 'executive-assistant'
+      ? MAX_TOOL_ROUNDS_EXECUTIVE
+      : MAX_TOOL_ROUNDS;
 
   if (isCreditsExhaustedNow()) {
     return agent.id === 'executive-assistant'
-      ? '⚠️ Anthropic credits are exhausted right now. Pause the team and ask Jordan whether he wants to top them up before more work continues.'
-      : '⚠️ Anthropic credits are exhausted right now. Ask Riley to request Jordan approval for more credits before continuing.';
+      ? '⚠️ Gemini quota is exhausted right now. Pause the team and ask Jordan to check Google Cloud billing before more work continues.'
+      : '⚠️ Gemini quota is exhausted right now. Ask Riley to request Jordan approval for more credits before continuing.';
   }
 
   // Hard budget gate — stop ALL agents if daily budget exceeded
@@ -286,7 +296,6 @@ export async function agentRespond(
   const { remaining, spent, limit } = getRemainingBudget();
   const { used: tokenUsed, remaining: tokenRemaining, limit: tokenLimit } = getClaudeTokenStatus();
 
-  // Build system prompt — compact version for review agents to save ~1,500 tokens
   const rileyCoordination = agent.id === 'executive-assistant' ? `
 AGENT COORDINATION: Coordinate agents via @mentions in your response text. The system parses and routes automatically.
 @ace @max @sophie @kane @raj @elena @kai @jude @liv @harper @mia @leo
@@ -295,7 +304,7 @@ CRITICAL: Do NOT use send_channel_message — ONLY @mentions work for agent coor
 
   const governanceSection = agent.id === 'executive-assistant' ? `
 GOVERNANCE:
-- You are Jordan's token master. Any request to increase Claude tokens, Anthropic credits, ElevenLabs credit, or daily budget must come through you.
+- You are Jordan's token master. Any request to increase Gemini tokens, Google Cloud credits, ElevenLabs credit, or daily budget must come through you.
 - When the team hits a limit, pause the work, explain what increase is needed, and ask Jordan for explicit approval before anyone resumes.
 - Ace is the Tool Master. If tooling is missing, stale, or unreliable, direct @ace to prepare it before the rest of the team proceeds.
 ` : agent.id === 'developer' ? `
@@ -332,23 +341,70 @@ ${governanceSection}
 BUDGET: $${spent.toFixed(2)} spent / $${limit.toFixed(2)} daily limit ($${remaining.toFixed(2)} remaining). Each tool call costs tokens. Be efficient.${budgetWarning}
 TOKENS: ${tokenUsed.toLocaleString()} used / ${tokenLimit.toLocaleString()} daily limit (${tokenRemaining.toLocaleString()} remaining). If remaining is low, reduce tool calls and avoid broad scans.`;
 
-  // Build messages — convert simple string history to proper format
+  // Convert conversation history to Gemini Content format
   const trimmedHistory = trimConversationHistory(conversationHistory);
-  const messages: Array<{ role: 'user' | 'assistant'; content: string }> = [
-    ...trimmedHistory,
-    { role: 'user', content: userMessage },
-  ];
+  const history: Content[] = trimmedHistory.map((msg) => ({
+    role: msg.role === 'assistant' ? 'model' : 'user',
+    parts: [{ text: msg.content }],
+  }));
 
-  // Tool-use loop
-  let currentMessages: typeof messages = [...messages];
+  const agentTools = toolsForAgent(agent.id);
+  const geminiTools = toGeminiTools(agentTools);
+  let currentModelName = options?.modelOverride || modelForAgent(agent.id, userMessage);
+  let escalatedToPro = currentModelName === GEMINI_PRO;
+
+  logAgentEvent(agent.id, 'invoke', `model=${currentModelName}, context=${trimmedHistory.length} msgs, prompt="${userMessage.slice(0, 200)}"`);
+
+  if (options?.signal?.aborted) return '';
+
+  const genAI = getClient();
   const loopStart = Date.now();
   let totalToolCalls = 0;
-  const agentTools = toolsForAgent(agent.id);
-  let selectedModel = options?.modelOverride || modelForAgent(agent.id, userMessage);
-  let escalatedToOpus = selectedModel === CLAUDE_OPUS;
-  logAgentEvent(agent.id, 'invoke', `model=${selectedModel}, context=${messages.length} msgs, prompt="${userMessage.slice(0, 200)}"`);
-  // Check for pre-abort before starting any work
-  if (options?.signal?.aborted) return '';
+
+  const makeModel = (modelName: string) => genAI.getGenerativeModel({
+    model: modelName,
+    systemInstruction: systemPrompt,
+    tools: geminiTools,
+    generationConfig: { maxOutputTokens: options?.maxTokens || 8192 },
+  });
+
+  let model = makeModel(currentModelName);
+  let chat = model.startChat({ history });
+
+  // Send initial user message
+  let response;
+  try {
+    response = await withConcurrencyLimit(() =>
+      withRetry(() => chat.sendMessage(userMessage, options?.signal ? { signal: options.signal } : undefined))
+    );
+  } catch (err: any) {
+    if (isAbortError(err)) {
+      logAgentEvent(agent.id, 'error', 'Request interrupted by user', { durationMs: Date.now() - loopStart });
+      return '';
+    }
+    if (isGeminiQuotaError(err)) {
+      creditsExhaustedUntil = Date.now() + 60 * 60 * 1000;
+      logAgentEvent(agent.id, 'error', 'Gemini quota exhausted');
+      return agent.id === 'executive-assistant'
+        ? '⚠️ Gemini quota is exhausted. Pause the team and ask Jordan to top up Google Cloud billing.'
+        : '⚠️ Gemini quota is exhausted right now. Ask Riley to request Jordan approval for more credits before continuing.';
+    }
+    throw err;
+  }
+
+  // Tool-use loop
+  const WRITE_TOOLS = new Set([
+    'write_file', 'edit_file', 'batch_edit',
+    'run_command',
+    'git_create_branch', 'create_pull_request', 'merge_pull_request', 'add_pr_comment',
+    'delete_channel', 'create_channel', 'rename_channel', 'set_channel_topic',
+    'send_channel_message', 'clear_channel_messages', 'delete_category', 'move_channel',
+    'gcp_deploy', 'gcp_set_env', 'gcp_rollback', 'gcp_secret_set',
+    'memory_write', 'memory_append',
+    'db_query',
+    'capture_screenshots',
+    'mobile_harness_start', 'mobile_harness_step', 'mobile_harness_snapshot', 'mobile_harness_stop',
+  ]);
 
   for (let round = 0; round < maxToolRounds; round++) {
     if (isClaudeOverLimit() || isBudgetExceeded()) {
@@ -361,170 +417,114 @@ TOKENS: ${tokenUsed.toLocaleString()} used / ${tokenLimit.toLocaleString()} dail
           : `⚠️ Daily budget of $${roundLimit.toFixed(2)} has been reached ($${roundSpent.toFixed(2)} spent). Ask Riley to request approval before continuing.`;
       }
       return agent.id === 'executive-assistant'
-        ? '⚠️ Daily Claude token limit reached. Ask Jordan whether he wants to raise DAILY_LIMIT_CLAUDE_TOKENS before the team continues.'
-        : '⚠️ Daily Claude token limit reached. Ask Riley to request approval before continuing.';
+        ? '⚠️ Daily token limit reached. Ask Jordan whether he wants to raise DAILY_LIMIT_CLAUDE_TOKENS before the team continues.'
+        : '⚠️ Daily token limit reached. Ask Riley to request approval before continuing.';
     }
+
     if (TOOL_LOOP_TIMEOUT > 0 && Date.now() - loopStart > TOOL_LOOP_TIMEOUT) {
       logAgentEvent(agent.id, 'error', `Tool loop timeout after ${totalToolCalls} tool calls`, { durationMs: Date.now() - loopStart });
       return `Tool loop timed out after ${Math.round(TOOL_LOOP_TIMEOUT / 60000)} minutes. Check the repository for any partial changes.`;
     }
 
-    // Check if the request was aborted (user sent a new message)
     if (options?.signal?.aborted) {
       logAgentEvent(agent.id, 'error', 'Request interrupted by user', { durationMs: Date.now() - loopStart });
       return '';
     }
 
-    let response;
+    const functionCalls = response.response.functionCalls();
+
+    if (!functionCalls || functionCalls.length === 0) {
+      // No tool calls — final text response
+      recordClaudeUsage(
+        response.response.usageMetadata?.promptTokenCount || 0,
+        response.response.usageMetadata?.candidatesTokenCount || 0,
+      );
+      const finalText = response.response.text() || 'Done.';
+      logAgentEvent(agent.id, 'response', `${totalToolCalls} tools, response="${finalText.slice(0, 300)}"`, {
+        durationMs: Date.now() - loopStart,
+        tokensIn: response.response.usageMetadata?.promptTokenCount,
+        tokensOut: response.response.usageMetadata?.candidatesTokenCount,
+      });
+      return finalText;
+    }
+
+    // Record usage for this round
+    recordClaudeUsage(
+      response.response.usageMetadata?.promptTokenCount || 0,
+      response.response.usageMetadata?.candidatesTokenCount || 0,
+    );
+
+    // Separate read-only (parallel) and write (sequential) calls
+    const readCalls = functionCalls.filter((c) => !WRITE_TOOLS.has(c.name));
+    const writeCalls = functionCalls.filter((c) => WRITE_TOOLS.has(c.name));
+
+    const functionResponses: Part[] = [];
+    let sawValidationFailure = false;
+
+    const processCall = async (call: { name: string; args: object }) => {
+      const toolStart = Date.now();
+      totalToolCalls++;
+      const args = call.args as Record<string, string>;
+      const result = await executeTool(call.name, args, { agentId: agent.id });
+      if (agent.id === 'developer' && !options?.modelOverride && hasValidationFailure(call.name, result)) {
+        sawValidationFailure = true;
+      }
+      const summary = formatToolSummary(call.name, args);
+      logAgentEvent(agent.id, 'tool', summary, { durationMs: Date.now() - toolStart });
+      if (onToolUse) await onToolUse(call.name, summary);
+      const toolAudit = getToolAuditCallback();
+      if (toolAudit) toolAudit(agent.name, call.name, summary);
+      return {
+        functionResponse: {
+          name: call.name,
+          response: { output: truncateToolResult(result) },
+        },
+      } as Part;
+    };
+
+    if (readCalls.length > 0) {
+      const readResults = await Promise.all(readCalls.map(processCall));
+      functionResponses.push(...readResults);
+    }
+    for (const call of writeCalls) {
+      functionResponses.push(await processCall(call));
+    }
+
+    // Cost-aware escalation: if tests/typecheck fail on Flash, switch to Pro
+    if (
+      agent.id === 'developer' &&
+      !options?.modelOverride &&
+      !escalatedToPro &&
+      currentModelName === GEMINI_FLASH &&
+      sawValidationFailure
+    ) {
+      escalatedToPro = true;
+      currentModelName = GEMINI_PRO;
+      logAgentEvent(agent.id, 'response', 'Escalated Flash -> Pro after validation failure');
+      const accumulatedHistory = await chat.getHistory();
+      model = makeModel(GEMINI_PRO);
+      chat = model.startChat({ history: accumulatedHistory });
+    }
+
+    // Send tool results back
     try {
       response = await withConcurrencyLimit(() =>
-        withRetry(async () => {
-          const stream = anthropic.messages.stream({
-            model: selectedModel,
-            max_tokens: options?.maxTokens || 8192,
-            system: systemPrompt,
-            tools: agentTools as any,
-            messages: currentMessages,
-          }, { signal: options?.signal ?? undefined });
-          return stream.finalMessage();
-        })
+        withRetry(() => chat.sendMessage(functionResponses, options?.signal ? { signal: options.signal } : undefined))
       );
     } catch (err: any) {
       if (isAbortError(err)) {
         logAgentEvent(agent.id, 'error', 'Request interrupted by user', { durationMs: Date.now() - loopStart });
         return '';
       }
-      if (isLowCreditError(err)) {
-        creditsExhaustedUntil = Date.now() + 60 * 60 * 1000; // suppress churn for 1h
-        logAgentEvent(agent.id, 'error', 'Anthropic credits exhausted');
-        return '⚠️ Anthropic credits are exhausted, so I cannot run tools right now. Please top up billing and retry.';
+      if (isGeminiQuotaError(err)) {
+        creditsExhaustedUntil = Date.now() + 60 * 60 * 1000;
+        logAgentEvent(agent.id, 'error', 'Gemini quota exhausted mid-loop');
+        return agent.id === 'executive-assistant'
+          ? '⚠️ Gemini quota is exhausted. Pause the team and ask Jordan to top up Google Cloud billing.'
+          : '⚠️ Gemini quota is exhausted right now. Ask Riley to request Jordan approval for more credits before continuing.';
       }
       throw err;
     }
-
-    // If the model wants to use tools, execute them and continue
-    if (response.stop_reason === 'tool_use') {
-      // Track token usage for this round
-      recordClaudeUsage(response.usage?.input_tokens || 0, response.usage?.output_tokens || 0);
-      // Add assistant message with tool_use blocks
-      currentMessages.push({
-        role: 'assistant',
-        content: response.content as any,
-      } as any);
-
-      // Execute tool calls in parallel (read-only tools) or sequentially (write tools)
-      const toolBlocks = response.content.filter((b) => b.type === 'tool_use');
-      const WRITE_TOOLS = new Set([
-        // File ops
-        'write_file', 'edit_file', 'batch_edit',
-        // Shell
-        'run_command',
-        // Git/GitHub
-        'git_create_branch', 'create_pull_request', 'merge_pull_request', 'add_pr_comment',
-        // Discord management
-        'delete_channel', 'create_channel', 'rename_channel', 'set_channel_topic',
-        'send_channel_message', 'clear_channel_messages', 'delete_category', 'move_channel',
-        // GCP
-        'gcp_deploy', 'gcp_set_env', 'gcp_rollback', 'gcp_secret_set',
-        // Memory
-        'memory_write', 'memory_append',
-        // Database (may contain INSERT/UPDATE/DELETE)
-        'db_query',
-        // Screenshots
-        'capture_screenshots',
-        // Interactive mobile harness
-        'mobile_harness_start', 'mobile_harness_step', 'mobile_harness_snapshot', 'mobile_harness_stop',
-      ]);
-
-      // Separate into read-only (parallelizable) and write (sequential) batches
-      const readBatch: typeof toolBlocks = [];
-      const writeBatch: typeof toolBlocks = [];
-      for (const block of toolBlocks) {
-        if (block.type === 'tool_use') {
-          (WRITE_TOOLS.has(block.name) ? writeBatch : readBatch).push(block);
-        }
-      }
-
-      const toolResults: Array<{
-        type: 'tool_result';
-        tool_use_id: string;
-        content: string;
-      }> = [];
-
-      let sawValidationFailure = false;
-      const processBlock = async (block: any) => {
-        const toolStart = Date.now();
-        totalToolCalls++;
-        const result = await executeTool(
-          block.name,
-          block.input as Record<string, string>,
-          { agentId: agent.id }
-        );
-        if (agent.id === 'developer' && !options?.modelOverride && hasValidationFailure(block.name, result)) {
-          sawValidationFailure = true;
-        }
-        const summary = formatToolSummary(block.name, block.input as Record<string, string>);
-        logAgentEvent(agent.id, 'tool', summary, { durationMs: Date.now() - toolStart });
-        if (onToolUse) await onToolUse(block.name, summary);
-        const toolAudit = getToolAuditCallback();
-        if (toolAudit) toolAudit(agent.name, block.name, summary);
-        return {
-          type: 'tool_result' as const,
-          tool_use_id: block.id,
-          content: truncateToolResult(result),
-        };
-      };
-
-      // Run read-only tools in parallel
-      if (readBatch.length > 0) {
-        const readResults = await Promise.all(readBatch.map(processBlock));
-        toolResults.push(...readResults);
-      }
-
-      // Run write tools sequentially (order matters)
-      for (const block of writeBatch) {
-        toolResults.push(await processBlock(block));
-      }
-
-      // Add tool results as a user message
-      currentMessages.push({
-        role: 'user',
-        content: toolResults as any,
-      } as any);
-
-      // Cost-aware escalation policy for Ace:
-      // if tests/typecheck fail while on Sonnet, switch this request to Opus.
-      if (
-        agent.id === 'developer' &&
-        !options?.modelOverride &&
-        !escalatedToOpus &&
-        selectedModel === CLAUDE_SONNET &&
-        sawValidationFailure
-      ) {
-        selectedModel = CLAUDE_OPUS;
-        escalatedToOpus = true;
-        logAgentEvent(agent.id, 'response', 'Escalated Sonnet -> Opus after validation failure');
-        currentMessages.push({
-          role: 'user',
-          content: 'Validation failed (tests/typecheck). Re-plan and fix using deeper reasoning before final response.',
-        });
-      }
-
-      currentMessages = trimLoopMessages(currentMessages as any) as any;
-
-      continue;
-    }
-
-    // Model finished with text — extract and return it
-    recordClaudeUsage(response.usage?.input_tokens || 0, response.usage?.output_tokens || 0);
-    const textBlock = response.content.find((b) => b.type === 'text');
-    const finalText = textBlock?.text || 'Done.';
-    logAgentEvent(agent.id, 'response', `${totalToolCalls} tools, response="${finalText.slice(0, 300)}"`, {
-      durationMs: Date.now() - loopStart,
-      tokensIn: response.usage?.input_tokens,
-      tokensOut: response.usage?.output_tokens,
-    });
-    return finalText;
   }
 
   logAgentEvent(agent.id, 'error', `Max tool iterations (${maxToolRounds}) after ${totalToolCalls} tool calls`, { durationMs: Date.now() - loopStart });
@@ -639,27 +639,24 @@ export async function summarizeCall(
   participants: string[]
 ): Promise<string> {
   if (isClaudeOverLimit()) {
-    return '⚠️ Daily Claude token limit reached — cannot generate summary.';
+    return '⚠️ Daily token limit reached — cannot generate summary.';
   }
 
-  const anthropic = getClient();
-
-  const response = await anthropic.messages.create({
-    model: CLAUDE_SONNET,
-    max_tokens: 1024,
-    system: 'You are a concise meeting summarizer. Produce a clear summary with key points, decisions, and action items. Format for Discord markdown. Keep under 1900 characters.',
-    messages: [
-      {
-        role: 'user',
-        content: `Summarize this voice call between ${participants.join(', ')}:\n\n${transcript.join('\n')}`,
-      },
-    ],
+  const genAI = getClient();
+  const model = genAI.getGenerativeModel({
+    model: GEMINI_FLASH,
+    systemInstruction: 'You are a concise meeting summarizer. Produce a clear summary with key points, decisions, and action items. Format for Discord markdown. Keep under 1900 characters.',
   });
 
-  recordClaudeUsage(response.usage?.input_tokens || 0, response.usage?.output_tokens || 0);
+  const result = await model.generateContent(
+    `Summarize this voice call between ${participants.join(', ')}:\n\n${transcript.join('\n')}`
+  );
 
-  const textBlock = response.content.find((b) => b.type === 'text');
-  return textBlock?.text || 'Could not generate summary.';
+  recordClaudeUsage(
+    result.response.usageMetadata?.promptTokenCount || 0,
+    result.response.usageMetadata?.candidatesTokenCount || 0,
+  );
+  return result.response.text() || 'Could not generate summary.';
 }
 
 /**
@@ -679,8 +676,6 @@ export async function summarizeConversation(
   if (isClaudeOverLimit()) {
     return existingSummary || 'Summary unavailable — token limit reached.';
   }
-
-  const anthropic = getClient();
 
   const prompt = existingSummary
     ? `You are compressing conversation history for an AI agent (${agentId}) to maintain long-term context efficiently.
@@ -713,18 +708,19 @@ Create a condensed summary. Prioritize:
 
 Keep the summary under 700 words. Use bullet points. Drop small talk and redundant exchanges.`;
 
-  const response = await withConcurrencyLimit(() =>
-    withRetry(() =>
-      anthropic.messages.create({
-        model: CLAUDE_SONNET,
-        max_tokens: 2048,
-        system: 'You are a conversation compressor. Produce structured, information-dense summaries that preserve all actionable context while discarding noise. Output only the summary — no meta-commentary.',
-        messages: [{ role: 'user', content: prompt }],
-      })
-    )
+  const genAI = getClient();
+  const model = genAI.getGenerativeModel({
+    model: GEMINI_FLASH,
+    systemInstruction: 'You are a conversation compressor. Produce structured, information-dense summaries that preserve all actionable context while discarding noise. Output only the summary — no meta-commentary.',
+  });
+
+  const result = await withConcurrencyLimit(() =>
+    withRetry(() => model.generateContent(prompt))
   );
 
-  recordClaudeUsage(response.usage?.input_tokens || 0, response.usage?.output_tokens || 0);
-  const textBlock = response.content.find((b) => b.type === 'text');
-  return textBlock?.text || existingSummary || 'Could not generate summary.';
+  recordClaudeUsage(
+    result.response.usageMetadata?.promptTokenCount || 0,
+    result.response.usageMetadata?.candidatesTokenCount || 0,
+  );
+  return result.response.text() || existingSummary || 'Could not generate summary.';
 }
