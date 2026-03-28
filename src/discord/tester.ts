@@ -1,8 +1,8 @@
 /**
  * ASAP Agent Smoke Test Suite
  *
- * Sends a domain-specific prompt to each of the 13 agent channels and waits
- * for a bot/webhook reply.  Uses ASAPTester bot (DISCORD_TEST_BOT_TOKEN).
+ * Sends @mention prompts to each agent through 💬-groupchat and waits for a
+ * bot/webhook reply in that same channel.  Uses ASAPTester bot.
  *
  * Usage:
  *   npm run discord:test:dist                        # run all agents
@@ -11,15 +11,16 @@
  * Env vars:
  *   DISCORD_TEST_BOT_TOKEN  required
  *   DISCORD_GUILD_ID        required
- *   DISCORD_TEST_TIMEOUT_MS optional (default 60000 ms per agent)
+ *   DISCORD_TEST_TIMEOUT_MS optional (default 90000 ms per agent)
+ *   DISCORD_GROUPCHAT_ID    optional — override groupchat channel ID lookup
  */
 import 'dotenv/config';
 import { ChannelType, Client, GatewayIntentBits, Message, TextChannel } from 'discord.js';
 
 interface AgentTestCase {
   id: string;
-  /** Channel name suffix after the emoji, e.g. "qa", "ux-reviewer" */
-  slug: string;
+  /** Mention handle used in the groupchat message (maps to NAME_TO_ID in groupchat handler) */
+  mention: string;
   name: string;
   prompt: string;
 }
@@ -29,93 +30,99 @@ interface TestResult {
   passed: boolean;
   elapsed: number;
   snippet: string;
-  skipped?: boolean;
 }
 
 const AGENT_TESTS: AgentTestCase[] = [
   {
     id: 'executive-assistant',
-    slug: 'executive-assistant',
+    mention: 'riley',
     name: 'Riley (Executive Assistant)',
-    prompt: '[ASAPTester smoke test] What is your primary role on this team? Reply in 1–2 sentences.',
+    prompt: '@riley [smoke test] What is your primary role on this team? Reply in 1–2 sentences.',
   },
   {
     id: 'developer',
-    slug: 'developer',
+    mention: 'ace',
     name: 'Ace (Developer)',
-    prompt: '[ASAPTester smoke test] What programming language does the ASAP mobile app use? Reply in 1 sentence.',
+    prompt: '@ace [smoke test] What programming language does the ASAP mobile app use? Reply in 1 sentence.',
   },
   {
     id: 'qa',
-    slug: 'qa',
+    mention: 'max',
     name: 'Max (QA)',
-    prompt: '[ASAPTester smoke test] Name one critical test case for a job-matching feature. Reply in 1 sentence.',
+    prompt: '@max [smoke test] Name one critical test case for a job-matching feature. Reply in 1 sentence.',
   },
   {
     id: 'ux-reviewer',
-    slug: 'ux-reviewer',
+    mention: 'sophie',
     name: 'Sophie (UX Reviewer)',
-    prompt: '[ASAPTester smoke test] What is the most important UX principle for a gig economy mobile app? Reply in 1 sentence.',
+    prompt: '@sophie [smoke test] What is the most important UX principle for a gig economy mobile app? Reply in 1 sentence.',
   },
   {
     id: 'security-auditor',
-    slug: 'security-auditor',
+    mention: 'kane',
     name: 'Kane (Security Auditor)',
-    prompt: '[ASAPTester smoke test] What is the most common authentication vulnerability in mobile apps? Reply in 1 sentence.',
+    prompt: '@kane [smoke test] What is the most common authentication vulnerability in mobile apps? Reply in 1 sentence.',
   },
   {
     id: 'api-reviewer',
-    slug: 'api-reviewer',
+    mention: 'raj',
     name: 'Raj (API Reviewer)',
-    prompt: '[ASAPTester smoke test] What HTTP status code should a REST API return when a resource is not found? Reply in 1 sentence.',
+    prompt: '@raj [smoke test] What HTTP status code should a REST API return when a resource is not found? Reply in 1 sentence.',
   },
   {
     id: 'dba',
-    slug: 'dba',
+    mention: 'elena',
     name: 'Elena (DBA)',
-    prompt: '[ASAPTester smoke test] What database does this project use? Reply in 1 sentence.',
+    prompt: '@elena [smoke test] What database does this project use? Reply in 1 sentence.',
   },
   {
     id: 'performance',
-    slug: 'performance',
+    mention: 'kai',
     name: 'Kai (Performance)',
-    prompt: '[ASAPTester smoke test] What is the single most impactful performance optimisation for a React Native app? Reply in 1 sentence.',
+    prompt: '@kai [smoke test] What is the single most impactful performance optimisation for a React Native app? Reply in 1 sentence.',
   },
   {
     id: 'devops',
-    slug: 'devops',
+    mention: 'jude',
     name: 'Jude (DevOps)',
-    prompt: '[ASAPTester smoke test] What CI/CD platform does this project use? Reply in 1 sentence.',
+    prompt: '@jude [smoke test] What CI/CD platform does this project use? Reply in 1 sentence.',
   },
   {
     id: 'copywriter',
-    slug: 'copywriter',
+    mention: 'liv',
     name: 'Liv (Copywriter)',
-    prompt: '[ASAPTester smoke test] Write a 5-word tagline for the ASAP gig worker app.',
+    prompt: '@liv [smoke test] Write a 5-word tagline for the ASAP gig worker app.',
   },
   {
     id: 'lawyer',
-    slug: 'lawyer',
+    mention: 'harper',
     name: 'Harper (Lawyer)',
-    prompt: '[ASAPTester smoke test] What is the key legal distinction between an employee and a contractor in Australia? Reply in 1 sentence.',
+    prompt: '@harper [smoke test] What is the key legal distinction between an employee and a contractor in Australia? Reply in 1 sentence.',
   },
   {
     id: 'ios-engineer',
-    slug: 'ios-engineer',
+    mention: 'mia',
     name: 'Mia (iOS Engineer)',
-    prompt: '[ASAPTester smoke test] What is the primary programming language for iOS development? Reply in 1 sentence.',
+    prompt: '@mia [smoke test] What is the primary programming language for iOS development? Reply in 1 sentence.',
   },
   {
     id: 'android-engineer',
-    slug: 'android-engineer',
+    mention: 'leo',
     name: 'Leo (Android Engineer)',
-    prompt: '[ASAPTester smoke test] What is the primary programming language for Android development? Reply in 1 sentence.',
+    prompt: '@leo [smoke test] What is the primary programming language for Android development? Reply in 1 sentence.',
   },
 ];
 
-function findChannelBySlug(guild: { channels: { cache: Map<string, any> } }, slug: string): TextChannel | undefined {
+function findGroupchat(guild: { channels: { cache: Map<string, any> } }): TextChannel | undefined {
+  // Allow explicit override via env var
+  const overrideId = process.env.DISCORD_GROUPCHAT_ID;
+  if (overrideId) {
+    const ch = guild.channels.cache.get(overrideId);
+    if (ch?.type === ChannelType.GuildText) return ch as TextChannel;
+  }
+  // Fall back to name match
   for (const ch of guild.channels.cache.values()) {
-    if (ch.type === ChannelType.GuildText && (ch.name as string).endsWith(slug)) {
+    if (ch.type === ChannelType.GuildText && (ch.name as string).includes('groupchat')) {
       return ch as TextChannel;
     }
   }
@@ -197,7 +204,7 @@ async function testAgent(
 async function run(): Promise<void> {
   const token = process.env.DISCORD_TEST_BOT_TOKEN;
   const guildId = process.env.DISCORD_GUILD_ID;
-  const timeoutMs = Number(process.env.DISCORD_TEST_TIMEOUT_MS ?? '60000');
+  const timeoutMs = Number(process.env.DISCORD_TEST_TIMEOUT_MS ?? '90000');
   const agentFilter = process.argv.find((a) => a.startsWith('--agent='))?.slice('--agent='.length);
 
   if (!token) throw new Error('Missing DISCORD_TEST_BOT_TOKEN');
@@ -217,18 +224,27 @@ async function run(): Promise<void> {
   const guild = await client.guilds.fetch(guildId);
   await guild.channels.fetch();
 
+  const groupchat = findGroupchat(guild);
+  if (!groupchat) {
+    console.error('FATAL: Could not find 💬-groupchat channel. Set DISCORD_GROUPCHAT_ID env var.');
+    await client.destroy();
+    process.exit(1);
+  }
+
   console.log(`\n╔══════════════════════════════════════╗`);
   console.log(`║    ASAP Agent Smoke Test Suite       ║`);
   console.log(`╚══════════════════════════════════════╝`);
-  console.log(`Guild  : ${guild.name}`);
-  console.log(`Timeout: ${timeoutMs / 1000}s per agent`);
-  if (agentFilter) console.log(`Filter : --agent=${agentFilter}`);
+  console.log(`Guild    : ${guild.name}`);
+  console.log(`Channel  : #${groupchat.name} (${groupchat.id})`);
+  console.log(`Timeout  : ${timeoutMs / 1000}s per agent`);
+  if (agentFilter) console.log(`Filter   : --agent=${agentFilter}`);
   console.log('');
 
   const testsToRun = agentFilter
     ? AGENT_TESTS.filter(
         (t) =>
           t.id === agentFilter ||
+          t.mention === agentFilter ||
           t.name.toLowerCase().includes(agentFilter.toLowerCase()),
       )
     : AGENT_TESTS;
@@ -242,17 +258,9 @@ async function run(): Promise<void> {
   const results: TestResult[] = [];
 
   for (const test of testsToRun) {
-    const channel = findChannelBySlug(guild, test.slug);
+    process.stdout.write(`⏳  ${test.name} ... `);
 
-    if (!channel) {
-      console.log(`⚠️  SKIP  ${test.name} — no channel ending in '${test.slug}'`);
-      results.push({ agent: test.name, passed: false, elapsed: 0, snippet: 'Channel not found', skipped: true });
-      continue;
-    }
-
-    process.stdout.write(`⏳  ${test.name} (#${channel.name}) ... `);
-
-    const { passed, elapsed, snippet } = await testAgent(channel, test, client.user!.id, timeoutMs);
+    const { passed, elapsed, snippet } = await testAgent(groupchat, test, client.user!.id, timeoutMs);
 
     if (passed) {
       console.log(`✅ PASS (${(elapsed / 1000).toFixed(1)}s)`);
@@ -263,20 +271,19 @@ async function run(): Promise<void> {
 
     results.push({ agent: test.name, passed, elapsed, snippet });
 
-    // Small pause between agents to avoid flooding
-    await new Promise((r) => setTimeout(r, 1500));
+    // Pause between agents to let the bot finish its response
+    await new Promise((r) => setTimeout(r, 3000));
   }
 
   // ── Summary ────────────────────────────────────────────
   const passed = results.filter((r) => r.passed).length;
-  const skipped = results.filter((r) => r.skipped).length;
-  const failed = results.filter((r) => !r.passed && !r.skipped).length;
+  const failed = results.filter((r) => !r.passed).length;
 
   console.log('\n══════════════════════════════════════');
-  console.log(`Results: ${passed} passed, ${failed} failed, ${skipped} skipped`);
+  console.log(`Results: ${passed} passed, ${failed} failed`);
   console.log('══════════════════════════════════════');
   for (const r of results) {
-    const icon = r.passed ? '✅' : r.skipped ? '⚠️ ' : '❌';
+    const icon = r.passed ? '✅' : '❌';
     console.log(`${icon}  ${r.agent}`);
   }
 
