@@ -147,8 +147,9 @@ export async function startBot(): Promise<void> {
   });
 
   client.on(Events.MessageCreate, async (message) => {
-    // Ignore bot messages
-    if (message.author.bot) return;
+    // Ignore bot messages — unless it's the test harness (DISCORD_TESTER_BOT_ID)
+    const testerBotId = process.env.DISCORD_TESTER_BOT_ID;
+    if (message.author.bot && message.author.id !== testerBotId) return;
     if (!botChannels) return;
 
     const channelId = message.channel.id;
