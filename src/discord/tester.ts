@@ -56,7 +56,7 @@ function isCandidateReply(reply: Message, sentAt: number, selfBotId: string, tar
 async function run(): Promise<void> {
   const config = parseArgs();
   const client = new Client({
-    intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent],
+    intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages],
   });
 
   const timeoutHandle = setTimeout(() => {
