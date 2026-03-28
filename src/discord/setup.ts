@@ -235,7 +235,7 @@ export async function setupChannels(guild: Guild): Promise<BotChannels> {
   const limits = await ensureText(
     OPS_CHANNELS.limits,
     catOps,
-    '📊 API usage limits, costs, and remaining credits — updated every 5 minutes'
+    '📊 Gemini/GCP usage, quotas, and estimated spend — refreshed every 5 minutes'
   );
 
   const screenshots = await ensureText(

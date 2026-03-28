@@ -4,7 +4,7 @@ import pool from '../db/pool';
 // ─── Daily limits (configurable via env vars) ───────────────────────────────
 const DAILY_LIMITS = {
   /** Max LLM input+output tokens per day (Gemini) */
-  claudeTokens: parseInt(process.env.DAILY_LIMIT_CLAUDE_TOKENS || '2000000', 10),
+  claudeTokens: parseInt(process.env.DAILY_LIMIT_GEMINI_LLM_TOKENS || process.env.DAILY_LIMIT_CLAUDE_TOKENS || '2000000', 10),
   /** Max Gemini API calls per day (TTS + transcription) */
   geminiCalls: parseInt(process.env.DAILY_LIMIT_GEMINI_CALLS || '500', 10),
   /** Max ElevenLabs characters per day */
@@ -13,6 +13,7 @@ const DAILY_LIMITS = {
   budgetUsd: parseFloat(process.env.DAILY_BUDGET_USD || '2.00'),
 };
 const DEFAULT_BUDGET_APPROVAL_INCREMENT_USD = parseFloat(process.env.BUDGET_APPROVAL_INCREMENT_USD || '5.00');
+const DASHBOARD_UPDATE_INTERVAL_MS = 5 * 60 * 1000;
 
 /** Optional running Anthropic credit cap — no longer used with Gemini */
 const ANTHROPIC_CREDIT_CAP_USD = 0;
@@ -242,37 +243,38 @@ export function getUsageEmbed(): EmbedBuilder {
 
   return new EmbedBuilder()
     .setTitle('📊 ASAP Usage Dashboard')
+    .setDescription('Estimated Gemini/GCP and voice spend from internal usage counters. This is not a live Cloud Billing credit balance.')
     .setColor(color)
     .addFields(
       {
-        name: '� Gemini LLM (Google)',
+        name: '🧠 Gemini LLM (Google)',
         value:
           `${progressBar(totalClaudeTokens, DAILY_LIMITS.claudeTokens)}\n` +
           `${totalClaudeTokens.toLocaleString()} / ${DAILY_LIMITS.claudeTokens.toLocaleString()} tokens\n` +
           `(${usage.claudeInputTokens.toLocaleString()} in · ${usage.claudeOutputTokens.toLocaleString()} out)\n` +
-          `Est: **$${cost.claude.toFixed(4)}**`,
+          `Estimated spend: **$${cost.claude.toFixed(4)}**`,
       },
       {
-        name: '🔊 Gemini (TTS + Transcription)',
+        name: '🔊 Gemini Voice APIs',
         value:
           `${progressBar(usage.geminiCalls, DAILY_LIMITS.geminiCalls)}\n` +
           `${usage.geminiCalls} / ${DAILY_LIMITS.geminiCalls} API calls\n` +
-          `Est: **$${cost.gemini.toFixed(4)}**`,
+          `Estimated spend: **$${cost.gemini.toFixed(4)}**`,
       },
       {
-        name: '🗣️ ElevenLabs (TTS)',
+        name: '🗣️ ElevenLabs TTS',
         value:
           `${progressBar(usage.elevenLabsChars, DAILY_LIMITS.elevenLabsChars)}\n` +
           `${usage.elevenLabsChars.toLocaleString()} / ${DAILY_LIMITS.elevenLabsChars.toLocaleString()} chars\n` +
-          `Est: **$${cost.elevenLabs.toFixed(4)}**`,
+          `Estimated spend: **$${cost.elevenLabs.toFixed(4)}**`,
       },
       {
-        name: '💰 Total Cost Today',
-        value: `**$${cost.total.toFixed(4)}**\nLimit: **$${effectiveBudgetLimit().toFixed(2)}**${extraBudget > 0 ? ` (base $${DAILY_LIMITS.budgetUsd.toFixed(2)} + approved $${extraBudget.toFixed(2)})` : ''}`,
+        name: '💰 Estimated Spend Today',
+        value: `**$${cost.total.toFixed(4)}**\nBudget gate: **$${effectiveBudgetLimit().toFixed(2)}**${extraBudget > 0 ? ` (base $${DAILY_LIMITS.budgetUsd.toFixed(2)} + approved $${extraBudget.toFixed(2)})` : ''}`,
         inline: true,
       }
     )
-    .setFooter({ text: 'Resets at midnight UTC · Updates every hour' })
+    .setFooter({ text: 'Resets at midnight UTC · Updates every 5 minutes · Estimated from app counters, not live billing credits' })
     .setTimestamp();
 }
 
@@ -285,21 +287,22 @@ export function getUsageReport(): string {
 
   return (
     `📊 **ASAP Usage Dashboard** — ${usage.lastReset}\n\n` +
+    `Tracking mode: estimated Gemini/GCP spend from app counters, not live Cloud Billing credits.\n\n` +
     `**Gemini LLM (Google)**\n` +
     `${progressBar(totalClaudeTokens, DAILY_LIMITS.claudeTokens)}\n` +
     `${totalClaudeTokens.toLocaleString()} / ${DAILY_LIMITS.claudeTokens.toLocaleString()} tokens` +
     ` (${usage.claudeInputTokens.toLocaleString()} in · ${usage.claudeOutputTokens.toLocaleString()} out)\n` +
-    `Est. cost: **$${cost.claude.toFixed(4)}**\n\n` +
-    `**Gemini (TTS + Transcription)**\n` +
+    `Estimated spend: **$${cost.claude.toFixed(4)}**\n\n` +
+    `**Gemini Voice APIs**\n` +
     `${progressBar(usage.geminiCalls, DAILY_LIMITS.geminiCalls)}\n` +
     `${usage.geminiCalls} / ${DAILY_LIMITS.geminiCalls} API calls\n` +
-    `Est. cost: **$${cost.gemini.toFixed(4)}**\n\n` +
-    `**ElevenLabs (TTS)**\n` +
+    `Estimated spend: **$${cost.gemini.toFixed(4)}**\n\n` +
+    `**ElevenLabs TTS**\n` +
     `${progressBar(usage.elevenLabsChars, DAILY_LIMITS.elevenLabsChars)}\n` +
     `${usage.elevenLabsChars.toLocaleString()} / ${DAILY_LIMITS.elevenLabsChars.toLocaleString()} characters\n` +
-    `Est. cost: **$${cost.elevenLabs.toFixed(4)}**\n\n` +
-    `💰 **Total estimated cost today: $${cost.total.toFixed(4)}**\n` +
-    `Budget limit: **$${effectiveBudgetLimit().toFixed(2)}**${extraBudget > 0 ? ` (base $${DAILY_LIMITS.budgetUsd.toFixed(2)} + approved $${extraBudget.toFixed(2)})` : ''}`
+    `Estimated spend: **$${cost.elevenLabs.toFixed(4)}**\n\n` +
+    `💰 **Total estimated spend today: $${cost.total.toFixed(4)}**\n` +
+    `Budget gate: **$${effectiveBudgetLimit().toFixed(2)}**${extraBudget > 0 ? ` (base $${DAILY_LIMITS.budgetUsd.toFixed(2)} + approved $${extraBudget.toFixed(2)})` : ''}`
   );
 }
 
@@ -313,7 +316,7 @@ export function setLimitsChannel(channel: TextChannel): void {
 }
 
 /**
- * Start periodic dashboard updates (every 1 hour).
+ * Start periodic dashboard updates (every 5 minutes).
  * Clears the channel and posts a fresh embed each time.
  */
 export async function startDashboardUpdates(): Promise<void> {
@@ -322,12 +325,16 @@ export async function startDashboardUpdates(): Promise<void> {
   // Post initial dashboard
   await updateDashboard();
 
-  // Update every 1 hour
+  // Update every 5 minutes
   updateInterval = setInterval(() => {
     updateDashboard().catch((err) =>
       console.error('Dashboard update error:', err instanceof Error ? err.message : 'Unknown')
     );
-  }, 60 * 60 * 1000);
+  }, DASHBOARD_UPDATE_INTERVAL_MS);
+}
+
+export async function refreshUsageDashboard(): Promise<void> {
+  await updateDashboard();
 }
 
 export function stopDashboardUpdates(): void {

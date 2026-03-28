@@ -7,7 +7,7 @@ import { sendAgentMessage, clearHistory } from './textChannel';
 import { startCall, endCall, isCallActive } from './callSession';
 import { makeOutboundCall, startConferenceCall, isTelephonyAvailable } from '../services/telephony';
 import { getBotChannels } from '../bot';
-import { approveAdditionalBudget, getUsageReport } from '../usage';
+import { approveAdditionalBudget, getUsageReport, refreshUsageDashboard } from '../usage';
 import { getWebhook } from '../services/webhooks';
 
 /** Send a tool-use notification as the agent (via webhook). */
@@ -164,6 +164,7 @@ async function processGroupchatMessage(
   if (approvedAmount !== null) {
     const riley = getAgent('executive-assistant' as AgentId);
     const result = approveAdditionalBudget(Number.isFinite(approvedAmount) ? approvedAmount : undefined);
+    await refreshUsageDashboard().catch(() => {});
 
     if (riley) {
       await sendAgentMessage(

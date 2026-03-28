@@ -417,8 +417,8 @@ TOKENS: ${tokenUsed.toLocaleString()} used / ${tokenLimit.toLocaleString()} dail
           : `⚠️ Daily budget of $${roundLimit.toFixed(2)} has been reached ($${roundSpent.toFixed(2)} spent). Ask Riley to request approval before continuing.`;
       }
       return agent.id === 'executive-assistant'
-        ? '⚠️ Daily token limit reached. Ask Jordan whether he wants to raise DAILY_LIMIT_CLAUDE_TOKENS before the team continues.'
-        : '⚠️ Daily token limit reached. Ask Riley to request approval before continuing.';
+        ? '⚠️ Daily Gemini token limit reached. Ask Jordan whether he wants to raise DAILY_LIMIT_GEMINI_LLM_TOKENS (legacy: DAILY_LIMIT_CLAUDE_TOKENS) before the team continues.'
+        : '⚠️ Daily Gemini token limit reached. Ask Riley to request approval before continuing.';
     }
 
     if (TOOL_LOOP_TIMEOUT > 0 && Date.now() - loopStart > TOOL_LOOP_TIMEOUT) {
