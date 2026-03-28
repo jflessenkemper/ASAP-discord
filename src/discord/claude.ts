@@ -129,7 +129,15 @@ function trimConversationHistory(conversationHistory: ConversationMessage[]): Co
   }
 
   recent.reverse();
-  return summaryMsg ? [summaryMsg, ...recent] : recent;
+  const merged = summaryMsg ? [summaryMsg, ...recent] : recent;
+
+  // Gemini chat history must start with a user message.
+  // Groupchat edge cases can occasionally leave an assistant-first history.
+  while (merged.length > 0 && merged[0].role !== 'user') {
+    merged.shift();
+  }
+
+  return merged;
 }
 
 function truncateToolResult(result: string, maxChars = 3500): string {
