@@ -22,7 +22,7 @@ const PROJECT_CONTEXT_LIGHT_MAX_CHARS = parseInt(process.env.PROJECT_CONTEXT_LIG
 const PROJECT_CONTEXT_LIGHT = PROJECT_CONTEXT.slice(0, PROJECT_CONTEXT_LIGHT_MAX_CHARS);
 
 // Gemini model identifiers
-const GEMINI_FLASH = 'gemini-2.0-flash';
+const GEMINI_FLASH = 'gemini-2.5-flash';
 const GEMINI_PRO = 'gemini-2.5-pro';
 
 /**
