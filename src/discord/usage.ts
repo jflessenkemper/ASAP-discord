@@ -12,6 +12,7 @@ const DAILY_LIMITS = {
   /** Hard dollar budget — ALL agents stop when this is exceeded */
   budgetUsd: parseFloat(process.env.DAILY_BUDGET_USD || '2.00'),
 };
+const DEFAULT_BUDGET_APPROVAL_INCREMENT_USD = parseFloat(process.env.BUDGET_APPROVAL_INCREMENT_USD || '5.00');
 
 /** Optional running Anthropic credit cap for estimating remaining credits */
 const ANTHROPIC_CREDIT_CAP_USD = parseFloat(process.env.ANTHROPIC_CREDIT_CAP_USD || '0');
@@ -23,6 +24,7 @@ interface UsageCounters {
   geminiCalls: number;
   geminiInputTokens: number;
   elevenLabsChars: number;
+  approvedBudgetUsd: number;
   lastReset: string; // ISO date string (YYYY-MM-DD)
 }
 
@@ -32,6 +34,7 @@ const usage: UsageCounters = {
   geminiCalls: 0,
   geminiInputTokens: 0,
   elevenLabsChars: 0,
+  approvedBudgetUsd: 0,
   lastReset: new Date().toISOString().split('T')[0],
 };
 
@@ -64,6 +67,7 @@ export async function initUsageCounters(): Promise<void> {
       usage.geminiCalls = Number(parsed.geminiCalls) || 0;
       usage.geminiInputTokens = Number(parsed.geminiInputTokens) || 0;
       usage.elevenLabsChars = Number(parsed.elevenLabsChars) || 0;
+      usage.approvedBudgetUsd = Number(parsed.approvedBudgetUsd) || 0;
       usage.lastReset = typeof parsed.lastReset === 'string'
         ? parsed.lastReset
         : new Date().toISOString().split('T')[0];
@@ -99,9 +103,14 @@ function resetIfNewDay(): void {
     usage.geminiCalls = 0;
     usage.geminiInputTokens = 0;
     usage.elevenLabsChars = 0;
+    usage.approvedBudgetUsd = 0;
     usage.lastReset = today;
     markUsageDirty();
   }
+}
+
+function effectiveBudgetLimit(): number {
+  return DAILY_LIMITS.budgetUsd + usage.approvedBudgetUsd;
 }
 
 // ─── Recording functions ────────────────────────────────────────────────────
@@ -143,17 +152,35 @@ export function isElevenLabsOverLimit(): boolean {
 /** Check if the daily dollar budget has been exceeded */
 export function isBudgetExceeded(): boolean {
   resetIfNewDay();
-  return estimateDailyCost().total >= DAILY_LIMITS.budgetUsd;
+  return estimateDailyCost().total >= effectiveBudgetLimit();
 }
 
 /** Get remaining budget in USD (for injection into agent prompts) */
 export function getRemainingBudget(): { remaining: number; spent: number; limit: number } {
   resetIfNewDay();
   const spent = estimateDailyCost().total;
+  const limit = effectiveBudgetLimit();
   return {
-    remaining: Math.max(0, DAILY_LIMITS.budgetUsd - spent),
+    remaining: Math.max(0, limit - spent),
     spent,
-    limit: DAILY_LIMITS.budgetUsd,
+    limit,
+  };
+}
+
+export function approveAdditionalBudget(amountUsd?: number): { added: number; limit: number; spent: number; remaining: number } {
+  resetIfNewDay();
+  const amount = Number.isFinite(amountUsd as number) && (amountUsd as number) > 0
+    ? Number(amountUsd)
+    : DEFAULT_BUDGET_APPROVAL_INCREMENT_USD;
+  usage.approvedBudgetUsd += amount;
+  markUsageDirty();
+  const spent = estimateDailyCost().total;
+  const limit = effectiveBudgetLimit();
+  return {
+    added: amount,
+    limit,
+    spent,
+    remaining: Math.max(0, limit - spent),
   };
 }
 
@@ -217,6 +244,7 @@ export function getUsageEmbed(): EmbedBuilder {
   const totalClaudeTokens = usage.claudeInputTokens + usage.claudeOutputTokens;
   const cost = estimateDailyCost();
   const credit = getAnthropicCreditStatus();
+  const extraBudget = usage.approvedBudgetUsd;
   const totalRatio = Math.max(
     totalClaudeTokens / DAILY_LIMITS.claudeTokens,
     usage.geminiCalls / DAILY_LIMITS.geminiCalls,
@@ -252,7 +280,7 @@ export function getUsageEmbed(): EmbedBuilder {
       },
       {
         name: '💰 Total Cost Today',
-        value: `**$${cost.total.toFixed(4)}**`,
+        value: `**$${cost.total.toFixed(4)}**\nLimit: **$${effectiveBudgetLimit().toFixed(2)}**${extraBudget > 0 ? ` (base $${DAILY_LIMITS.budgetUsd.toFixed(2)} + approved $${extraBudget.toFixed(2)})` : ''}`,
         inline: true,
       },
       ...(credit
@@ -273,6 +301,7 @@ export function getUsageReport(): string {
   const totalClaudeTokens = usage.claudeInputTokens + usage.claudeOutputTokens;
   const cost = estimateDailyCost();
   const credit = getAnthropicCreditStatus();
+  const extraBudget = usage.approvedBudgetUsd;
 
   const creditSection = credit
     ? `\n\n**Anthropic Credit (Estimate)**\n` +
@@ -295,7 +324,8 @@ export function getUsageReport(): string {
     `${progressBar(usage.elevenLabsChars, DAILY_LIMITS.elevenLabsChars)}\n` +
     `${usage.elevenLabsChars.toLocaleString()} / ${DAILY_LIMITS.elevenLabsChars.toLocaleString()} characters\n` +
     `Est. cost: **$${cost.elevenLabs.toFixed(4)}**\n\n` +
-    `💰 **Total estimated cost today: $${cost.total.toFixed(4)}**` +
+    `💰 **Total estimated cost today: $${cost.total.toFixed(4)}**\n` +
+    `Budget limit: **$${effectiveBudgetLimit().toFixed(2)}**${extraBudget > 0 ? ` (base $${DAILY_LIMITS.budgetUsd.toFixed(2)} + approved $${extraBudget.toFixed(2)})` : ''}` +
     creditSection
   );
 }

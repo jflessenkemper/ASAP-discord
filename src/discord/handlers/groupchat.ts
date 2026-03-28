@@ -7,7 +7,7 @@ import { sendAgentMessage, clearHistory } from './textChannel';
 import { startCall, endCall, isCallActive } from './callSession';
 import { makeOutboundCall, startConferenceCall, isTelephonyAvailable } from '../services/telephony';
 import { getBotChannels } from '../bot';
-import { getUsageReport } from '../usage';
+import { approveAdditionalBudget, getUsageReport } from '../usage';
 import { getWebhook } from '../services/webhooks';
 
 /** Send a tool-use notification as the agent (via webhook). */
@@ -97,6 +97,22 @@ function parseMentionedAgentIds(text: string, allowedIds?: Set<string>): string[
 // Riley posts a single consolidated summary to groupchat.
 const GROUPCHAT_SUMMARY_ONLY = process.env.GROUPCHAT_SUMMARY_ONLY !== 'false';
 
+function parseBudgetApproval(text: string): number | undefined | null {
+  const normalized = text.toLowerCase();
+  const looksLikeApproval =
+    /(approve|approved|increase|raise|bump)/i.test(normalized) &&
+    /(budget|spend|limit|credits?)/i.test(normalized);
+  if (!looksLikeApproval) return null;
+
+  const dollarMatch = text.match(/\$\s*(\d+(?:\.\d{1,2})?)/);
+  if (dollarMatch) return parseFloat(dollarMatch[1]);
+
+  const numberMatch = text.match(/\b(\d+(?:\.\d{1,2})?)\b/);
+  if (numberMatch) return parseFloat(numberMatch[1]);
+
+  return undefined;
+}
+
 function getAgentWorkChannel(agentId: string, fallback: TextChannel): TextChannel {
   const channels = getBotChannels();
   return channels?.agentChannels.get(agentId) || fallback;
@@ -143,6 +159,32 @@ async function processGroupchatMessage(
   signal?: AbortSignal
 ): Promise<void> {
   const senderName = message.member?.displayName || message.author.username;
+
+  const approvedAmount = parseBudgetApproval(content);
+  if (approvedAmount !== null) {
+    const riley = getAgent('executive-assistant' as AgentId);
+    const result = approveAdditionalBudget(Number.isFinite(approvedAmount) ? approvedAmount : undefined);
+
+    if (riley) {
+      await sendAgentMessage(
+        groupchat,
+        riley,
+        `Budget approval recorded. I added $${result.added.toFixed(2)} of extra budget for today, so the new limit is $${result.limit.toFixed(2)}. We've spent $${result.spent.toFixed(2)} so far and have $${result.remaining.toFixed(2)} remaining.`
+      );
+    }
+
+    if (activeGoal) {
+      goalStatus = '▶️ Resuming after budget approval';
+      await handleRileyMessage(
+        `Budget approval has been granted by ${senderName}. Resume the paused work on this goal: ${activeGoal}`,
+        senderName,
+        message.member || undefined,
+        groupchat,
+        signal
+      );
+    }
+    return;
+  }
 
   // Check for explicit @agent mentions — route directly
   const uniqueMentions = parseMentionedAgentIds(content);
