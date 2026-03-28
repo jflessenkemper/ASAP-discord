@@ -26,7 +26,7 @@ export async function transcribeVoice(audioBuffer: Buffer): Promise<string> {
 
   if (isGeminiOverLimit()) throw new Error('Daily Gemini API call limit reached');
 
-  const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' });
+  const model = genAI.getGenerativeModel({ model: 'gemini-flash-latest' });
 
   const base64Audio = audioBuffer.toString('base64');
 
