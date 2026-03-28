@@ -322,7 +322,10 @@ ${getProjectContextForAgent(agent.id)}
 </project_context>
 
 You are "${agent.name}" responding in Discord.${rileyCoordination}
-RULES: Max 200 words (code exempt). Speak like a real teammate, not a ticket template. Use short paragraphs or bullets only when helpful. No forced "Summary / Actions / Next" sections. Lead with the useful part.${toolsSection}
+RULES: Max 320 words (code exempt). Speak like a real teammate, not a ticket template. Lead with the useful part.${toolsSection}
+When doing work, explain a bit more than before: what you're doing, why you're doing it, and what happened.
+Default format (lightweight, not rigid): 1) action taken, 2) key result, 3) immediate next step or blocker (if any).
+Use short paragraphs or bullets when helpful. Do not pad with fluff.
 Never dump long tool output. Summarize the important result only.
 Tooling: Ace owns tool readiness. Check .github/AGENT_TOOLING_STATUS.md first. If tooling looks stale or a required tool may not be ready, coordinate with @ace before relying on it.
 ${governanceSection}
@@ -531,17 +534,17 @@ TOKENS: ${tokenUsed.toLocaleString()} used / ${tokenLimit.toLocaleString()} dail
 function formatToolSummary(toolName: string, input: Record<string, string>): string {
   switch (toolName) {
     case 'read_file':
-      return `Reading \`${input.path}\``;
+      return `Reading \`${input.path}\` to gather implementation context`;
     case 'write_file':
-      return `Writing \`${input.path}\``;
+      return `Writing \`${input.path}\` with the requested changes`;
     case 'edit_file':
-      return `Editing \`${input.path}\``;
+      return `Editing \`${input.path}\` to implement or refine behavior`;
     case 'search_files':
-      return `Searching for \`${input.pattern}\`${input.include ? ` in ${input.include}` : ''}`;
+      return `Searching for \`${input.pattern}\`${input.include ? ` in ${input.include}` : ''} to locate relevant code paths`;
     case 'list_directory':
-      return `Listing \`${input.path || '.'}\``;
+      return `Listing \`${input.path || '.'}\` to inspect project structure`;
     case 'run_command':
-      return `Running \`${input.command.slice(0, 100)}\``;
+      return `Running \`${input.command.slice(0, 100)}\` to validate or apply changes`;
     case 'git_create_branch':
       return `Creating branch \`${input.branch_name}\``;
     case 'create_pull_request':
@@ -553,7 +556,7 @@ function formatToolSummary(toolName: string, input: Record<string, string>): str
     case 'list_pull_requests':
       return 'Listing open PRs';
     case 'run_tests':
-      return `Running tests${input.test_pattern ? ` (${input.test_pattern})` : ''}`;
+      return `Running tests${input.test_pattern ? ` (${input.test_pattern})` : ''} to verify behavior and catch regressions`;
     case 'list_channels':
       return 'Listing Discord channels';
     case 'delete_channel':
@@ -575,18 +578,18 @@ function formatToolSummary(toolName: string, input: Record<string, string>): str
     case 'github_search':
       return `Searching GitHub for \`${input.query}\`${input.type ? ` (${input.type})` : ''}`;
     case 'typecheck':
-      return `Running typecheck${input.target ? ` (${input.target})` : ''}`;
+      return `Running typecheck${input.target ? ` (${input.target})` : ''} to confirm compile-time correctness`;
     case 'batch_edit': {
       const edits = input.edits as any;
       const count = Array.isArray(edits) ? edits.length : '?';
       return `Batch editing ${count} files`;
     }
     case 'capture_screenshots':
-      return `Capturing app screenshots${input.channel_name ? ` to #${input.channel_name}` : ''}`;
+      return `Capturing app screenshots${input.channel_name ? ` to #${input.channel_name}` : ''} for visual verification`;
     case 'mobile_harness_start':
       return `Starting mobile harness${input.url ? ` at ${input.url.slice(0, 60)}` : ''}`;
     case 'mobile_harness_step':
-      return `Mobile harness step: ${input.action || 'wait'}`;
+      return `Mobile harness step: ${input.action || 'wait'} (interactive flow verification)`;
     case 'mobile_harness_snapshot':
       return `Capturing mobile harness snapshot`;
     case 'mobile_harness_stop':
