@@ -53,8 +53,8 @@ async function sendGoalsToolNotification(channel: TextChannel, agent: AgentConfi
       username: `${agent.emoji} ${agent.name}`,
       avatarURL: agent.avatarUrl,
     });
-  } catch {
-    await channel.send(`🔧 ${agent.emoji} ${agent.name} → ${summary}`);
+  } catch (err) {
+    console.warn(`Webhook tool notification failed for ${agent.name}:`, err instanceof Error ? err.message : 'Unknown');
   }
 }
 

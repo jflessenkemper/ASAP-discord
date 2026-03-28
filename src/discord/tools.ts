@@ -852,6 +852,39 @@ const REVIEW_TOOL_NAMES = new Set([
 ]);
 export const REVIEW_TOOLS = REPO_TOOLS.filter((t) => REVIEW_TOOL_NAMES.has(t.name));
 
+type PromptTool = {
+  name: string;
+  description: string;
+  input_schema: any;
+};
+
+function compactSchemaNode(node: any): any {
+  if (Array.isArray(node)) return node.map((item) => compactSchemaNode(item));
+  if (!node || typeof node !== 'object') return node;
+
+  const out: Record<string, any> = {};
+  for (const [key, value] of Object.entries(node)) {
+    if (key === 'description') continue;
+    out[key] = compactSchemaNode(value);
+  }
+  return out;
+}
+
+function compactToolForPrompt(tool: any): PromptTool {
+  return {
+    name: tool.name,
+    description: `Use ${tool.name}`,
+    input_schema: compactSchemaNode(tool.input_schema),
+  };
+}
+
+/**
+ * Compact prompt-facing tool definitions to reduce input tokens while
+ * preserving the same executable tool surface.
+ */
+export const PROMPT_REPO_TOOLS: PromptTool[] = REPO_TOOLS.map(compactToolForPrompt);
+export const PROMPT_REVIEW_TOOLS: PromptTool[] = REVIEW_TOOLS.map(compactToolForPrompt);
+
 // ────────────────────────────────────────────
 // Tool execution
 // ────────────────────────────────────────────

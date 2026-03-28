@@ -195,7 +195,7 @@ export async function compressMemory(agentId: string): Promise<void> {
 
     const existingSummary = loadSummary(agentId);
     const contextToSummarize = toCompress.map(m =>
-      `${m.role === 'user' ? 'User' : 'Agent'}: ${m.content.slice(0, 500)}`
+      `${m.role === 'user' ? 'User' : 'Agent'}: ${m.content.slice(0, 300)}`
     ).join('\n');
 
     // Lazy import to avoid circular dependency
@@ -225,7 +225,7 @@ export async function compressMemory(agentId: string): Promise<void> {
  * If no summary exists, returns the last N raw messages.
  * Also triggers background compression if history is getting long.
  */
-export function getMemoryContext(agentId: string, maxMessages = 30): ConversationMessage[] {
+export function getMemoryContext(agentId: string, maxMessages = 20): ConversationMessage[] {
   const history = loadMemory(agentId);
 
   if (history.length >= COMPRESS_THRESHOLD) {
@@ -234,18 +234,17 @@ export function getMemoryContext(agentId: string, maxMessages = 30): Conversatio
 
   const summary = loadSummary(agentId);
   if (summary) {
-    const recent = history.length <= maxMessages * 2
+    const recent = history.length <= maxMessages
       ? history
-      : history.slice(history.length - maxMessages * 2);
+      : history.slice(history.length - maxMessages);
     return [
       { role: 'user', content: `[Conversation Summary — earlier context]\n${summary}` },
-      { role: 'assistant', content: 'Understood, I have this context from our earlier conversation.' },
       ...recent,
     ];
   }
 
-  if (history.length <= maxMessages * 2) return history;
-  return history.slice(history.length - maxMessages * 2);
+  if (history.length <= maxMessages) return history;
+  return history.slice(history.length - maxMessages);
 }
 
 /**

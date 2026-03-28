@@ -386,8 +386,15 @@ async function executeActions(
             await sendAsRiley('📞 No phone number specified. Riley, include a number with [ACTION:CALL:number].');
             break;
           }
-          // Twilio free trial only allows calls to verified numbers
-          const phoneNumber = '0436012231';
+          const verifiedNumbers = (process.env.TWILIO_VERIFIED_NUMBERS || '0436012231')
+            .split(',')
+            .map((n) => n.trim())
+            .filter(Boolean);
+          const phoneNumber = param.trim();
+          if (!verifiedNumbers.includes(phoneNumber)) {
+            await sendAsRiley(`📞 ${phoneNumber} is not in the verified list for this Twilio account. Verified numbers: ${verifiedNumbers.join(', ')}`);
+            break;
+          }
           try {
             await makeOutboundCall(phoneNumber, "Hey Jordan, it's Riley! You asked me to give you a call.");
             await sendAsRiley(`📞 Calling ${phoneNumber}...`);
@@ -406,8 +413,21 @@ async function executeActions(
             await sendAsRiley('📞 No phone numbers specified. Riley, include numbers with [ACTION:CONFERENCE:num1,num2].');
             break;
           }
-          // Twilio free trial only allows calls to verified numbers
-          const numbers = ['0436012231'];
+          const verifiedNumbers = new Set(
+            (process.env.TWILIO_VERIFIED_NUMBERS || '0436012231')
+              .split(',')
+              .map((n) => n.trim())
+              .filter(Boolean)
+          );
+          const requested = param
+            .split(',')
+            .map((n) => n.trim())
+            .filter(Boolean);
+          const numbers = requested.filter((n) => verifiedNumbers.has(n));
+          if (numbers.length === 0) {
+            await sendAsRiley(`📞 None of the requested numbers are verified for this Twilio account. Verified numbers: ${[...verifiedNumbers].join(', ')}`);
+            break;
+          }
           try {
             const confName = await startConferenceCall(numbers);
             await sendAsRiley(`📞 **Conference call started** — ${confName}\nCalling: ${numbers.join(', ')} + Riley`);

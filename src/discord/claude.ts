@@ -2,7 +2,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import { readFileSync } from 'fs';
 import { join } from 'path';
 import { AgentConfig } from './agents';
-import { REPO_TOOLS, REVIEW_TOOLS, executeTool, getToolAuditCallback } from './tools';
+import { PROMPT_REPO_TOOLS, PROMPT_REVIEW_TOOLS, executeTool, getToolAuditCallback } from './tools';
 import { recordClaudeUsage, isClaudeOverLimit, isBudgetExceeded, getRemainingBudget, getClaudeTokenStatus } from './usage';
 import { logAgentEvent } from './activityLog';
 
@@ -12,6 +12,11 @@ try {
   PROJECT_CONTEXT = readFileSync(join(__dirname, '../../../.github/PROJECT_CONTEXT.md'), 'utf-8');
 } catch {
   console.warn('PROJECT_CONTEXT.md not found — agents will lack project context');
+}
+
+const PROJECT_CONTEXT_MAX_CHARS = parseInt(process.env.PROJECT_CONTEXT_MAX_CHARS || '4500', 10);
+if (PROJECT_CONTEXT.length > PROJECT_CONTEXT_MAX_CHARS) {
+  PROJECT_CONTEXT = PROJECT_CONTEXT.slice(0, PROJECT_CONTEXT_MAX_CHARS) + '\n\n[Project context truncated for token efficiency]';
 }
 
 const CLAUDE_OPUS = 'claude-opus-4-20250514';
@@ -51,7 +56,7 @@ function modelForAgent(agentId: string, userMessage: string): string {
  */
 const FULL_TOOL_AGENTS = new Set(['developer', 'devops', 'executive-assistant']);
 function toolsForAgent(agentId: string) {
-  return FULL_TOOL_AGENTS.has(agentId) ? REPO_TOOLS : REVIEW_TOOLS;
+  return FULL_TOOL_AGENTS.has(agentId) ? PROMPT_REPO_TOOLS : PROMPT_REVIEW_TOOLS;
 }
 
 let client: Anthropic | null = null;
@@ -65,13 +70,51 @@ function getClient(): Anthropic {
   return client;
 }
 
+function trimConversationHistory(conversationHistory: ConversationMessage[]): ConversationMessage[] {
+  if (conversationHistory.length === 0) return conversationHistory;
+
+  // Keep summarized long-term context if present, then recent detailed messages.
+  const summaryMsg = conversationHistory.find(
+    (m) => m.role === 'user' && m.content.startsWith('[Conversation Summary')
+  );
+
+  const recent: ConversationMessage[] = [];
+  let chars = 0;
+  for (let i = conversationHistory.length - 1; i >= 0; i--) {
+    const msg = conversationHistory[i];
+    if (summaryMsg && msg === summaryMsg) continue;
+    const msgLen = msg.content.length;
+    if (recent.length >= MAX_CONTEXT_MESSAGES || chars + msgLen > MAX_CONTEXT_CHARS) break;
+    recent.push(msg);
+    chars += msgLen;
+  }
+
+  recent.reverse();
+  return summaryMsg ? [summaryMsg, ...recent] : recent;
+}
+
+function truncateToolResult(result: string, maxChars = 3500): string {
+  if (result.length <= maxChars) return result;
+  const head = Math.floor(maxChars * 0.75);
+  const tail = maxChars - head;
+  return (
+    result.slice(0, head) +
+    `\n\n[Output truncated — original was ${result.length} chars]\n\n` +
+    result.slice(-tail)
+  );
+}
+
 export interface ConversationMessage {
   role: 'user' | 'assistant';
   content: string;
 }
 
 /** Max tool-use iterations before forcing a text response */
-const MAX_TOOL_ROUNDS = 25;
+const MAX_TOOL_ROUNDS = parseInt(process.env.MAX_TOOL_ROUNDS || '20', 10);
+/** Maximum history messages to send to Claude per request (excludes current user message) */
+const MAX_CONTEXT_MESSAGES = parseInt(process.env.MAX_CONTEXT_MESSAGES || '50', 10);
+/** Soft cap for history character volume sent to Claude per request */
+const MAX_CONTEXT_CHARS = parseInt(process.env.MAX_CONTEXT_CHARS || '24000', 10);
 /**
  * Max total time for a tool loop (ms).
  * Set to 0 (default) to disable wall-clock timeout so agents can run as long as needed.
@@ -222,9 +265,9 @@ GOVERNANCE:
 - Ace is the Tool Master. Before tool-heavy work, or anytime tool readiness is uncertain, check with @ace first and wait for the green light.
 `;
 
-  const toolsSection = isFullToolAgent ? `
-You have repo tools: read/write/edit/search files, run_command (shell), fetch_url, memory_read/write, db_query/db_schema, GitHub ops, GCP ops, Discord channel ops, run_tests, typecheck, capture_screenshots.` : `
-You have read-only tools: read_file, search_files, list_directory, fetch_url, db_query, db_schema, memory_read, memory_list, run_tests, typecheck.`;
+  const toolsSection = isFullToolAgent
+    ? `\nYou can use the available tools for code, infra, and Discord operations.`
+    : `\nYou can use the available read-only tools for analysis and verification.`;
 
   const budgetWarning = remaining < 0.50 ? `\n⚠️ LOW BUDGET: $${remaining.toFixed(2)} remaining of $${limit.toFixed(2)} daily limit. Be extremely efficient — minimize tool calls, keep responses short.` : '';
 
@@ -235,7 +278,7 @@ ${PROJECT_CONTEXT}
 </project_context>
 
 You are "${agent.name}" responding in Discord.${rileyCoordination}
-RULES: Max 200 words (code exempt). Speak like a real teammate, not a ticket template. Use short paragraphs or bullets only when they help. No forced "Summary / Actions / Next" sections. No preamble. Lead with the useful part.${toolsSection}
+RULES: Max 200 words (code exempt). Speak like a real teammate, not a ticket template. Use short paragraphs or bullets only when helpful. No forced "Summary / Actions / Next" sections. Lead with the useful part.${toolsSection}
 Never dump long tool output. Summarize the important result only.
 Tooling: Ace owns tool readiness. Check .github/AGENT_TOOLING_STATUS.md first. If tooling looks stale or a required tool may not be ready, coordinate with @ace before relying on it.
 ${governanceSection}
@@ -243,8 +286,9 @@ BUDGET: $${spent.toFixed(2)} spent / $${limit.toFixed(2)} daily limit ($${remain
 TOKENS: ${tokenUsed.toLocaleString()} used / ${tokenLimit.toLocaleString()} daily limit (${tokenRemaining.toLocaleString()} remaining). If remaining is low, reduce tool calls and avoid broad scans.`;
 
   // Build messages — convert simple string history to proper format
+  const trimmedHistory = trimConversationHistory(conversationHistory);
   const messages: Array<{ role: 'user' | 'assistant'; content: string }> = [
-    ...conversationHistory,
+    ...trimmedHistory,
     { role: 'user', content: userMessage },
   ];
 
@@ -290,7 +334,7 @@ TOKENS: ${tokenUsed.toLocaleString()} used / ${tokenLimit.toLocaleString()} dail
         withRetry(async () => {
           const stream = anthropic.messages.stream({
             model: selectedModel,
-            max_tokens: options?.maxTokens || 16384,
+            max_tokens: options?.maxTokens || 8192,
             system: systemPrompt,
             tools: agentTools as any,
             messages: currentMessages,
@@ -374,9 +418,7 @@ TOKENS: ${tokenUsed.toLocaleString()} used / ${tokenLimit.toLocaleString()} dail
         return {
           type: 'tool_result' as const,
           tool_use_id: block.id,
-          content: result.length > 8000
-            ? result.slice(0, 8000) + '\n\n[Output truncated — original was ' + result.length + ' chars]'
-            : result,
+          content: truncateToolResult(result),
         };
       };
 
@@ -589,7 +631,7 @@ Create an UPDATED summary that merges the existing summary with the new messages
 4. Active tasks / blockers / next steps
 5. Important facts (names, IDs, configurations)
 
-Keep the summary under 1500 words. Use bullet points. Drop redundant or superseded information.`
+Keep the summary under 700 words. Use bullet points. Drop redundant or superseded information.`
     : `You are compressing conversation history for an AI agent (${agentId}) to maintain long-term context efficiently.
 
 MESSAGES to summarize:
@@ -602,7 +644,7 @@ Create a condensed summary. Prioritize:
 4. Active tasks / blockers / next steps
 5. Important facts (names, IDs, configurations)
 
-Keep the summary under 1500 words. Use bullet points. Drop small talk and redundant exchanges.`;
+Keep the summary under 700 words. Use bullet points. Drop small talk and redundant exchanges.`;
 
   const response = await withConcurrencyLimit(() =>
     withRetry(() =>
