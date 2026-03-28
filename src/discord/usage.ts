@@ -1,5 +1,6 @@
 import { TextChannel, EmbedBuilder } from 'discord.js';
 import pool from '../db/pool';
+import { getLiveBillingSnapshot, refreshLiveBillingSnapshot } from '../services/billing';
 
 // ─── Daily limits (configurable via env vars) ───────────────────────────────
 const DAILY_LIMITS = {
@@ -114,6 +115,23 @@ function effectiveBudgetLimit(): number {
   return DAILY_LIMITS.budgetUsd + usage.approvedBudgetUsd;
 }
 
+function effectiveGcpSpendForBudget(estimatedGcpSpend: number): number {
+  const live = getLiveBillingSnapshot();
+  if (!live.available || live.dailyCostUsd === null || !Number.isFinite(live.dailyCostUsd)) {
+    return estimatedGcpSpend;
+  }
+
+  // Cloud Billing can lag by a few minutes; keep the larger value to avoid under-gating.
+  return Math.max(estimatedGcpSpend, live.dailyCostUsd);
+}
+
+function effectiveTotalSpendForBudget(): number {
+  const estimated = estimateDailyCost();
+  const gcpEstimated = estimated.claude + estimated.gemini;
+  const effectiveGcp = effectiveGcpSpendForBudget(gcpEstimated);
+  return effectiveGcp + estimated.elevenLabs;
+}
+
 // ─── Recording functions ────────────────────────────────────────────────────
 export function recordClaudeUsage(inputTokens: number, outputTokens: number): void {
   resetIfNewDay();
@@ -153,13 +171,13 @@ export function isElevenLabsOverLimit(): boolean {
 /** Check if the daily dollar budget has been exceeded */
 export function isBudgetExceeded(): boolean {
   resetIfNewDay();
-  return estimateDailyCost().total >= effectiveBudgetLimit();
+  return effectiveTotalSpendForBudget() >= effectiveBudgetLimit();
 }
 
 /** Get remaining budget in USD (for injection into agent prompts) */
 export function getRemainingBudget(): { remaining: number; spent: number; limit: number } {
   resetIfNewDay();
-  const spent = estimateDailyCost().total;
+  const spent = effectiveTotalSpendForBudget();
   const limit = effectiveBudgetLimit();
   return {
     remaining: Math.max(0, limit - spent),
@@ -175,7 +193,7 @@ export function approveAdditionalBudget(amountUsd?: number): { added: number; li
     : DEFAULT_BUDGET_APPROVAL_INCREMENT_USD;
   usage.approvedBudgetUsd += amount;
   markUsageDirty();
-  const spent = estimateDailyCost().total;
+  const spent = effectiveTotalSpendForBudget();
   const limit = effectiveBudgetLimit();
   return {
     added: amount,
@@ -233,6 +251,10 @@ export function getUsageEmbed(): EmbedBuilder {
   resetIfNewDay();
   const totalClaudeTokens = usage.claudeInputTokens + usage.claudeOutputTokens;
   const cost = estimateDailyCost();
+  const estimatedGcp = cost.claude + cost.gemini;
+  const live = getLiveBillingSnapshot();
+  const effectiveGcpSpend = effectiveGcpSpendForBudget(estimatedGcp);
+  const effectiveTotalSpend = effectiveGcpSpend + cost.elevenLabs;
   const extraBudget = usage.approvedBudgetUsd;
   const totalRatio = Math.max(
     totalClaudeTokens / DAILY_LIMITS.claudeTokens,
@@ -243,7 +265,7 @@ export function getUsageEmbed(): EmbedBuilder {
 
   return new EmbedBuilder()
     .setTitle('📊 ASAP Usage Dashboard')
-    .setDescription('Estimated Gemini/GCP and voice spend from internal usage counters. This is not a live Cloud Billing credit balance.')
+    .setDescription('Live GCP billed spend (Cloud Monitoring) + estimated non-GCP spend from internal counters.')
     .setColor(color)
     .addFields(
       {
@@ -269,12 +291,18 @@ export function getUsageEmbed(): EmbedBuilder {
           `Estimated spend: **$${cost.elevenLabs.toFixed(4)}**`,
       },
       {
-        name: '💰 Estimated Spend Today',
-        value: `**$${cost.total.toFixed(4)}**\nBudget gate: **$${effectiveBudgetLimit().toFixed(2)}**${extraBudget > 0 ? ` (base $${DAILY_LIMITS.budgetUsd.toFixed(2)} + approved $${extraBudget.toFixed(2)})` : ''}`,
+        name: '☁️ Live GCP Billed Spend',
+        value: live.available && live.dailyCostUsd !== null
+          ? `Today (UTC): **$${live.dailyCostUsd.toFixed(4)} ${live.currency}**\nMonth-to-date: **$${(live.monthCostUsd || 0).toFixed(4)} ${live.currency}**\nSource: Cloud Monitoring`
+          : `Unavailable right now (${live.error || 'no billing metric data yet'})`,
+      },
+      {
+        name: '💰 Budget Gate (Today)',
+        value: `Effective spend: **$${effectiveTotalSpend.toFixed(4)}**\nGCP used for gate: **$${effectiveGcpSpend.toFixed(4)}**\nLimit: **$${effectiveBudgetLimit().toFixed(2)}**${extraBudget > 0 ? ` (base $${DAILY_LIMITS.budgetUsd.toFixed(2)} + approved $${extraBudget.toFixed(2)})` : ''}`,
         inline: true,
       }
     )
-    .setFooter({ text: 'Resets at midnight UTC · Updates every 5 minutes · Estimated from app counters, not live billing credits' })
+    .setFooter({ text: 'Resets at midnight UTC · Updates every 5 minutes · Live GCP billing may be delayed a few minutes' })
     .setTimestamp();
 }
 
@@ -283,11 +311,19 @@ export function getUsageReport(): string {
   resetIfNewDay();
   const totalClaudeTokens = usage.claudeInputTokens + usage.claudeOutputTokens;
   const cost = estimateDailyCost();
+  const estimatedGcp = cost.claude + cost.gemini;
+  const live = getLiveBillingSnapshot();
+  const effectiveGcpSpend = effectiveGcpSpendForBudget(estimatedGcp);
+  const effectiveTotalSpend = effectiveGcpSpend + cost.elevenLabs;
   const extraBudget = usage.approvedBudgetUsd;
+
+  const liveLine = live.available && live.dailyCostUsd !== null
+    ? `Live GCP billed spend today (UTC): **$${live.dailyCostUsd.toFixed(4)} ${live.currency}** (month-to-date **$${(live.monthCostUsd || 0).toFixed(4)} ${live.currency}**).`
+    : `Live GCP billed spend is currently unavailable (${live.error || 'no billing metric data yet'}).`;
 
   return (
     `📊 **ASAP Usage Dashboard** — ${usage.lastReset}\n\n` +
-    `Tracking mode: estimated Gemini/GCP spend from app counters, not live Cloud Billing credits.\n\n` +
+    `${liveLine}\n\n` +
     `**Gemini LLM (Google)**\n` +
     `${progressBar(totalClaudeTokens, DAILY_LIMITS.claudeTokens)}\n` +
     `${totalClaudeTokens.toLocaleString()} / ${DAILY_LIMITS.claudeTokens.toLocaleString()} tokens` +
@@ -301,7 +337,7 @@ export function getUsageReport(): string {
     `${progressBar(usage.elevenLabsChars, DAILY_LIMITS.elevenLabsChars)}\n` +
     `${usage.elevenLabsChars.toLocaleString()} / ${DAILY_LIMITS.elevenLabsChars.toLocaleString()} characters\n` +
     `Estimated spend: **$${cost.elevenLabs.toFixed(4)}**\n\n` +
-    `💰 **Total estimated spend today: $${cost.total.toFixed(4)}**\n` +
+    `💰 **Effective spend for budget gate today: $${effectiveTotalSpend.toFixed(4)}**\n` +
     `Budget gate: **$${effectiveBudgetLimit().toFixed(2)}**${extraBudget > 0 ? ` (base $${DAILY_LIMITS.budgetUsd.toFixed(2)} + approved $${extraBudget.toFixed(2)})` : ''}`
   );
 }
@@ -337,6 +373,10 @@ export async function refreshUsageDashboard(): Promise<void> {
   await updateDashboard();
 }
 
+export async function refreshLiveBillingData(): Promise<void> {
+  await refreshLiveBillingSnapshot();
+}
+
 export function stopDashboardUpdates(): void {
   if (updateInterval) {
     clearInterval(updateInterval);
@@ -346,6 +386,10 @@ export function stopDashboardUpdates(): void {
 
 async function updateDashboard(): Promise<void> {
   if (!limitsChannel) return;
+
+  await refreshLiveBillingSnapshot().catch((err) => {
+    console.warn('Live billing refresh failed:', err instanceof Error ? err.message : 'Unknown');
+  });
 
   const embed = getUsageEmbed();
 

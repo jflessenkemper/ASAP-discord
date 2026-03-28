@@ -7,7 +7,7 @@ import { sendAgentMessage, clearHistory } from './textChannel';
 import { startCall, endCall, isCallActive } from './callSession';
 import { makeOutboundCall, startConferenceCall, isTelephonyAvailable } from '../services/telephony';
 import { getBotChannels } from '../bot';
-import { approveAdditionalBudget, getUsageReport, refreshUsageDashboard } from '../usage';
+import { approveAdditionalBudget, getUsageReport, refreshLiveBillingData, refreshUsageDashboard } from '../usage';
 import { getWebhook } from '../services/webhooks';
 
 /** Send a tool-use notification as the agent (via webhook). */
@@ -401,6 +401,7 @@ async function executeActions(
           break;
         }
         case 'LIMITS': {
+          await refreshLiveBillingData().catch(() => {});
           const report = getUsageReport();
           await sendAsRiley(report);
           break;
