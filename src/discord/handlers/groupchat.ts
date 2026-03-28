@@ -39,6 +39,14 @@ let activeAbortController: AbortController | null = null;
 let activeGoal: string | null = null;
 let goalStatus: string | null = null;
 
+// Dedicated channel for overnight decision queuing (set from bot.ts)
+let decisionsChannel: TextChannel | null = null;
+
+/** Wire up the #decisions channel from bot startup. */
+export function setDecisionsChannel(channel: TextChannel): void {
+  decisionsChannel = channel;
+}
+
 /** Generic @mention parser, aliases resolved through NAME_TO_ID + known agent IDs. */
 const AGENT_MENTION_RE = /@([a-z0-9-]+)\b/gi;
 
@@ -220,9 +228,11 @@ async function handleRileyMessage(
     await executeActions(response, member, groupchat);
 
     // Check if Riley presented a decision (🛑)
+    // Fire-and-forget: post to #decisions without blocking so Riley continues with stated assumption
     if (displayResponse.includes('🛑') || displayResponse.includes('Decision Required')) {
-      await postDecisionEmbed(groupchat, displayResponse);
-      return;
+      const target = decisionsChannel || groupchat;
+      postDecisionEmbed(target, groupchat, displayResponse).catch(() => {});
+      // Riley does NOT stop here — she proceeds with her stated assumption
     }
 
     if (signal?.aborted) return;
@@ -752,10 +762,36 @@ async function handleDirectedMessage(
 }
 
 /**
+ * Handle a reply typed in the #decisions channel.
+ * Routes the answer back to Riley in groupchat so she can continue blocked work.
+ */
+export async function handleDecisionReply(
+  message: Message,
+  groupchat: TextChannel
+): Promise<void> {
+  const userName = message.member?.displayName || message.author.username;
+  const content = message.content.trim();
+  if (!content) return;
+
+  // Acknowledge inline so the user knows it was received
+  try {
+    await message.react('✅');
+  } catch { /* ignore — bot may lack reaction perms */ }
+
+  await handleRileyMessage(
+    `[Decision response from ${userName} in #decisions]: ${content}`,
+    userName,
+    message.member || undefined,
+    groupchat
+  );
+}
+
+/**
  * Post a reaction-based decision embed.
  * Parses numbered options from Riley's response and adds reaction buttons.
  */
 async function postDecisionEmbed(
+  targetChannel: TextChannel,
   groupchat: TextChannel,
   rileyResponse: string
 ): Promise<void> {
@@ -784,6 +820,8 @@ async function postDecisionEmbed(
 
   if (options.length === 0) return; // No parseable options
 
+  const isDecisionsChannel = decisionsChannel && targetChannel.id === decisionsChannel.id;
+
   const embed = new EmbedBuilder()
     .setTitle('🛑 Decision Required')
     .setDescription(
@@ -793,33 +831,29 @@ async function postDecisionEmbed(
         .join('\n\n')
     )
     .setColor(0xff4444)
-    .setFooter({ text: 'React to choose • Times out in 5 minutes' });
+    .setFooter({ text: isDecisionsChannel ? 'React to choose or type your answer here' : 'React to choose • Times out in 5 minutes' });
 
-  const decisionMsg = await groupchat.send({ embeds: [embed] });
+  const decisionMsg = await targetChannel.send({ embeds: [embed] });
 
   // Add reaction buttons
   for (let i = 0; i < Math.min(options.length, 5); i++) {
-    await decisionMsg.react(reactions[i]);
+    await decisionMsg.react(reactions[i]).catch(() => {});
   }
 
-  // Wait for user reaction
+  // Background reaction listener:
+  // - In #decisions: 12h window (overnight) — non-blocking
+  // - In groupchat fallback: 5-min window as before, but still non-blocking
+  const timeoutMs = isDecisionsChannel ? 12 * 60 * 60 * 1000 : 5 * 60 * 1000;
   const filter = (reaction: any, user: any) => {
     return reactions.slice(0, options.length).includes(reaction.emoji.name || '') && !user.bot;
   };
 
-  try {
-    const collected = await decisionMsg.awaitReactions({
-      filter,
-      max: 1,
-      time: 5 * 60 * 1000, // 5 minutes
-    });
-
-    const reaction = collected.first();
-    if (reaction) {
+  decisionMsg.awaitReactions({ filter, max: 1, time: timeoutMs })
+    .then(async (collected) => {
+      const reaction = collected.first();
+      if (!reaction) return;
       const choiceIndex = reactions.indexOf(reaction.emoji.name || '');
       const choice = options[choiceIndex] || `Option ${choiceIndex + 1}`;
-
-      // Get the user who reacted
       const users = await reaction.users.fetch();
       const reactUser = users.find((u) => !u.bot);
       const userName = reactUser?.username || 'User';
@@ -829,34 +863,22 @@ async function postDecisionEmbed(
       const riley = getAgent('executive-assistant' as AgentId);
       if (riley) {
         try {
-          const wh = await getWebhook(groupchat);
+          const wh = await getWebhook(targetChannel);
           await wh.send({ content: `✅ **${userName}** chose: **${choice}**`, username: `${riley.emoji} ${riley.name}`, avatarURL: riley.avatarUrl });
         } catch {
-          await groupchat.send(`✅ **${userName}** chose: **${choice}**`);
+          await targetChannel.send(`✅ **${userName}** chose: **${choice}**`);
         }
       } else {
-        await groupchat.send(`✅ **${userName}** chose: **${choice}**`);
+        await targetChannel.send(`✅ **${userName}** chose: **${choice}**`);
       }
 
       // Feed the decision back to Riley
       const decisionMessage = `${userName} chose option ${choiceIndex + 1}: ${choice}`;
       await handleRileyMessage(decisionMessage, userName, undefined, groupchat);
-    }
-  } catch {
-    // Timeout — delete the stale decision embed and notify
-    try { await decisionMsg.delete(); } catch { /* already deleted */ }
-    const riley = getAgent('executive-assistant' as AgentId);
-    if (riley) {
-      try {
-        const wh = await getWebhook(groupchat);
-        await wh.send({ content: '⏰ Decision timed out. Please tell Riley what you want to do.', username: `${riley.emoji} ${riley.name}`, avatarURL: riley.avatarUrl });
-      } catch {
-        await groupchat.send('⏰ Decision timed out. Please tell Riley what you want to do.');
-      }
-    } else {
-      await groupchat.send('⏰ Decision timed out. Please tell Riley what you want to do.');
-    }
-  }
+    })
+    .catch(() => {
+      // Timeout — silent, user can still reply in #decisions or groupchat
+    });
 }
 
 /** Persist groupHistory to disk. Called after every interaction. */

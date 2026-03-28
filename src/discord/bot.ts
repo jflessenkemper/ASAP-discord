@@ -10,6 +10,7 @@ import { handleAgentMessage } from './handlers/textChannel';
 import { setCommandAuditCallback, setPRReviewCallback, setDiscordGuild, setToolAuditCallback, setAgentChannelResolver } from './tools';
 import { autoReviewPR } from './handlers/review';
 import { handleGroupchatMessage } from './handlers/groupchat';
+import { setDecisionsChannel, handleDecisionReply } from './handlers/groupchat';
 import { endCall, isCallActive } from './handlers/callSession';
 import { setBotChannels } from './handlers/documentation';
 import { unregisterCommands } from './commands';
@@ -83,6 +84,7 @@ export async function startBot(): Promise<void> {
       setScreenshotsChannel(botChannels.screenshots);
       setDiscordGuild(guild);
       setAgentChannelResolver((agentId: string) => botChannels?.agentChannels.get(agentId) || null);
+      setDecisionsChannel(botChannels.decisions);
       if (isTelephonyAvailable()) {
         setTelephonyChannels(botChannels.callLog, botChannels.groupchat);
         await initContacts();
@@ -166,6 +168,12 @@ export async function startBot(): Promise<void> {
       // Check if this is the groupchat
       if (channelId === botChannels.groupchat.id) {
         await handleGroupchatMessage(message, botChannels.groupchat);
+        return;
+      }
+
+      // Check if this is the decisions channel — route replies to Riley
+      if (channelId === botChannels.decisions.id) {
+        await handleDecisionReply(message, botChannels.groupchat);
         return;
       }
     } catch (err) {
