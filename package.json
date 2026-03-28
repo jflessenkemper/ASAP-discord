@@ -6,6 +6,8 @@
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
     "start": "node dist/index.js",
+    "discord:test": "tsx src/discord/tester.ts",
+    "discord:test:dist": "node dist/discord/tester.js",
     "migrate": "tsx src/db/migrate.ts",
     "seed": "tsx src/db/seed.ts",
     "test": "jest --verbose",
