@@ -24,12 +24,13 @@ export function setBotChannels(botChannels: BotChannels): void {
 export async function documentToChannel(agentId: string, summary: string): Promise<void> {
   if (!channels) return;
 
-  const channel = channels.agentChannels.get(agentId);
+  const channel = channels.terminal;
   if (!channel) return;
 
   try {
     const timestamp = new Date().toLocaleTimeString('en-AU', { hour12: false });
-    const entry = `📝 *[${timestamp}]* ${summary.slice(0, 1900)}`;
+    const label = channels.agentChannels.get(agentId)?.name || agentId;
+    const entry = `📝 *[${timestamp}]* **${label}** ${summary.slice(0, 1800)}`;
     await channel.send(entry);
   } catch (err) {
     console.error(`Documentation error for ${agentId}:`, err instanceof Error ? err.message : 'Unknown');
@@ -46,12 +47,13 @@ export async function documentActionToChannel(
 ): Promise<void> {
   if (!channels) return;
 
-  const channel = channels.agentChannels.get(agentId);
+  const channel = channels.terminal;
   if (!channel) return;
 
   try {
     const timestamp = new Date().toLocaleTimeString('en-AU', { hour12: false });
-    const entry = `📝 *[${timestamp}]* **${title}**\n${details.slice(0, 1800)}`;
+    const label = channels.agentChannels.get(agentId)?.name || agentId;
+    const entry = `📝 *[${timestamp}]* **${label} — ${title}**\n${details.slice(0, 1700)}`;
     await channel.send(entry);
   } catch (err) {
     console.error(`Documentation error for ${agentId}:`, err instanceof Error ? err.message : 'Unknown');

@@ -302,11 +302,13 @@ export async function setupChannels(guild: Guild): Promise<BotChannels> {
   if (failed > 0) console.warn(`  ⚠️ ${failed}/${allTextChannels.length} webhook(s) failed`);
   console.log('✅ Webhooks ready');
 
-  // Restrict raw bot posting in groupchat + agent channels.
-  // Agents should appear via webhooks/personas only.
+  // Restrict raw bot posting in every non-Operations text channel.
+  // The bot may post directly only in Operations; everywhere else it should
+  // appear via agent webhooks/personas only.
   const botId = guild.client.user?.id;
   if (botId) {
-    const restricted = [groupchat, ...agentChannels.values()];
+    const opsChannels = [github, callLog, limits, screenshots, url, terminal];
+    const restricted = allTextChannels.filter((channel) => !opsChannels.some((ops) => ops.id === channel.id));
     for (const ch of restricted) {
       try {
         await ch.permissionOverwrites.edit(botId, {
@@ -324,7 +326,23 @@ export async function setupChannels(guild: Guild): Promise<BotChannels> {
         console.warn(`Failed to apply bot posting restriction in #${ch.name}:`, err instanceof Error ? err.message : 'Unknown');
       }
     }
-    console.log(`🔒 Restricted raw bot posting in ${restricted.length} channel(s)`);
+    for (const ch of opsChannels) {
+      try {
+        await ch.permissionOverwrites.edit(botId, {
+          SendMessages: true,
+          SendMessagesInThreads: true,
+          CreatePublicThreads: true,
+          CreatePrivateThreads: true,
+          AddReactions: true,
+          ManageWebhooks: true,
+          ViewChannel: true,
+          ReadMessageHistory: true,
+        });
+      } catch (err) {
+        console.warn(`Failed to apply bot Operations permissions in #${ch.name}:`, err instanceof Error ? err.message : 'Unknown');
+      }
+    }
+    console.log(`🔒 Restricted raw bot posting in ${restricted.length} non-Operations channel(s)`);
   }
 
   return { agentChannels, groupchat, github, callLog, limits, screenshots, url, terminal, voiceChannel };

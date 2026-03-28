@@ -25,6 +25,7 @@ import twilio from 'twilio';
 
 const app = express();
 const PORT = parseInt(process.env.PORT || '3001', 10);
+const DISCORD_BOT_ENABLED = process.env.DISCORD_BOT_ENABLED !== 'false';
 
 // Validate required production env vars
 if (process.env.NODE_ENV === 'production' && !process.env.FRONTEND_URL) {
@@ -253,10 +254,14 @@ const server = app.listen(PORT, () => {
     console.log('Telephony WebSocket attached');
   }
 
-  // Start Discord bot (non-blocking — skips gracefully if no token)
-  startBot().catch((err) => {
-    console.error('Discord bot startup error:', err instanceof Error ? err.message : 'Unknown');
-  });
+  // Run the Discord bot only on the dedicated voice-capable host.
+  if (DISCORD_BOT_ENABLED) {
+    startBot().catch((err) => {
+      console.error('Discord bot startup error:', err instanceof Error ? err.message : 'Unknown');
+    });
+  } else {
+    console.log('Discord bot startup disabled by DISCORD_BOT_ENABLED=false');
+  }
 
   // Clean up expired sessions and 2FA codes every hour
   cleanupInterval = setInterval(async () => {

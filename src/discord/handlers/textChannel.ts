@@ -2,7 +2,7 @@ import { Message, TextChannel, EmbedBuilder } from 'discord.js';
 import { AgentConfig } from '../agents';
 import { agentRespond, ConversationMessage } from '../claude';
 import { appendToMemory, getMemoryContext } from '../memory';
-import { getWebhook } from '../services/webhooks';
+import { clearWebhookCache, getWebhook } from '../services/webhooks';
 import { mirrorAgentResponse } from '../services/diagnosticsWebhook';
 
 // Per-channel conversation history (in-memory, keyed by channelId)
@@ -74,8 +74,8 @@ async function handleAgentMessageInner(
           username: `${agent.emoji} ${agent.name}`,
           avatarURL: agent.avatarUrl,
         });
-      } catch {
-        await channel.send(`🔧 ${summary}`);
+      } catch (err) {
+        console.warn(`Webhook tool notification failed for ${agent.name}:`, err instanceof Error ? err.message : 'Unknown');
       }
       }, { signal });
 
@@ -112,8 +112,8 @@ async function handleAgentMessageInner(
         username: `${agent.emoji} ${agent.name}`,
         avatarURL: agent.avatarUrl,
       });
-    } catch {
-      await channel.send(`⚠️ ${agent.name} encountered an error:\n\`\`\`${short}\`\`\``);
+    } catch (webhookErr) {
+      console.warn(`Webhook error notification failed for ${agent.name}:`, webhookErr instanceof Error ? webhookErr.message : 'Unknown');
     }
   }
 }
@@ -148,23 +148,22 @@ export async function sendAgentMessage(
     }
     await mirrorAgentResponse(agent.name, channel.name, response);
   } catch (err) {
-    // Fallback to embeds if webhook fails (permissions, etc.)
-    console.warn(`Webhook send failed for ${agent.name}, falling back to embeds:`, err instanceof Error ? err.message : 'Unknown');
-    const embedChunks = splitMessage(response, 4000);
-    const embeds: EmbedBuilder[] = [];
-    for (let i = 0; i < embedChunks.length; i++) {
-      const embed = new EmbedBuilder()
-        .setColor(agent.color)
-        .setDescription(embedChunks[i]);
-      if (i === 0) {
-        embed.setAuthor({ name: `${agent.emoji} ${agent.name}` });
+    console.warn(`Webhook send failed for ${agent.name}, retrying with a fresh webhook:`, err instanceof Error ? err.message : 'Unknown');
+    clearWebhookCache();
+    try {
+      const retryWebhook = await getWebhook(channel);
+      for (const chunk of chunks) {
+        await retryWebhook.send({
+          content: chunk,
+          username: `${agent.emoji} ${agent.name}`,
+          avatarURL: agent.avatarUrl,
+        });
       }
-      embeds.push(embed);
+      await mirrorAgentResponse(agent.name, channel.name, response);
+      return;
+    } catch (retryErr) {
+      console.error(`Webhook retry failed for ${agent.name}:`, retryErr instanceof Error ? retryErr.message : 'Unknown');
     }
-    for (let i = 0; i < embeds.length; i += 10) {
-      await channel.send({ embeds: embeds.slice(i, i + 10) });
-    }
-    await mirrorAgentResponse(agent.name, channel.name, response);
   }
 }
 

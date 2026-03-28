@@ -181,14 +181,18 @@ export async function agentRespond(
   const anthropic = getClient();
 
   if (isCreditsExhaustedNow()) {
-    return '⚠️ Anthropic credits are currently exhausted. Agent execution is paused. Add credits (Plans & Billing) and try again.';
+    return agent.id === 'executive-assistant'
+      ? '⚠️ Anthropic credits are exhausted right now. Pause the team and ask Jordan whether he wants to top them up before more work continues.'
+      : '⚠️ Anthropic credits are exhausted right now. Ask Riley to request Jordan approval for more credits before continuing.';
   }
 
   // Hard budget gate — stop ALL agents if daily budget exceeded
   if (isBudgetExceeded()) {
     const { spent, limit } = getRemainingBudget();
     logAgentEvent(agent.id, 'error', `Budget exceeded: $${spent.toFixed(2)}/$${limit.toFixed(2)}`);
-    return `⚠️ Daily budget of $${limit.toFixed(2)} has been reached ($${spent.toFixed(2)} spent). All agents paused until midnight UTC.`;
+    return agent.id === 'executive-assistant'
+      ? `⚠️ Daily budget of $${limit.toFixed(2)} has been reached ($${spent.toFixed(2)} spent). Pause the team and ask Jordan whether he wants to approve more budget before work resumes.`
+      : `⚠️ Daily budget of $${limit.toFixed(2)} has been reached ($${spent.toFixed(2)} spent). Ask Riley to request Jordan approval before any extra spend.`;
   }
 
   const isFullToolAgent = FULL_TOOL_AGENTS.has(agent.id);
@@ -201,6 +205,22 @@ AGENT COORDINATION: Coordinate agents via @mentions in your response text. The s
 @ace @max @sophie @kane @raj @elena @kai @jude @liv @harper @mia @leo
 CRITICAL: Do NOT use send_channel_message — ONLY @mentions work for agent coordination.
 ` : '';
+
+  const governanceSection = agent.id === 'executive-assistant' ? `
+GOVERNANCE:
+- You are Jordan's token master. Any request to increase Claude tokens, Anthropic credits, ElevenLabs credit, or daily budget must come through you.
+- When the team hits a limit, pause the work, explain what increase is needed, and ask Jordan for explicit approval before anyone resumes.
+- Ace is the Tool Master. If tooling is missing, stale, or unreliable, direct @ace to prepare it before the rest of the team proceeds.
+` : agent.id === 'developer' ? `
+GOVERNANCE:
+- You are the Tool Master. Own tool readiness for the whole team.
+- Keep .github/AGENT_TOOLING_STATUS.md accurate, make missing tools available where possible, and confirm readiness before other agents depend on them.
+- Riley is the token master. If more budget, credits, or token headroom is needed, report that to Riley instead of asking Jordan directly.
+` : `
+GOVERNANCE:
+- Riley is the token master. Never ask Jordan directly for more tokens, budget, or credits. Ask Riley so she can seek approval.
+- Ace is the Tool Master. Before tool-heavy work, or anytime tool readiness is uncertain, check with @ace first and wait for the green light.
+`;
 
   const toolsSection = isFullToolAgent ? `
 You have repo tools: read/write/edit/search files, run_command (shell), fetch_url, memory_read/write, db_query/db_schema, GitHub ops, GCP ops, Discord channel ops, run_tests, typecheck, capture_screenshots.` : `
@@ -215,16 +235,10 @@ ${PROJECT_CONTEXT}
 </project_context>
 
 You are "${agent.name}" responding in Discord.${rileyCoordination}
-RULES: Max 200 words (code exempt). Bullets not paragraphs. No preamble. Action first. Max ### headings.${toolsSection}
-FORMAT: Use this exact structure unless returning code only:
-### Summary
-- One-line outcome
-### Actions
-- Max 3 bullets of what you did
-### Next
-- Max 2 bullets (or "- None")
-Never dump long tool output. Summarize key results only.
-Tooling: If you need lint/test/security commands, check .github/AGENT_TOOLING_STATUS.md first.
+RULES: Max 200 words (code exempt). Speak like a real teammate, not a ticket template. Use short paragraphs or bullets only when they help. No forced "Summary / Actions / Next" sections. No preamble. Lead with the useful part.${toolsSection}
+Never dump long tool output. Summarize the important result only.
+Tooling: Ace owns tool readiness. Check .github/AGENT_TOOLING_STATUS.md first. If tooling looks stale or a required tool may not be ready, coordinate with @ace before relying on it.
+${governanceSection}
 BUDGET: $${spent.toFixed(2)} spent / $${limit.toFixed(2)} daily limit ($${remaining.toFixed(2)} remaining). Each tool call costs tokens. Be efficient.${budgetWarning}
 TOKENS: ${tokenUsed.toLocaleString()} used / ${tokenLimit.toLocaleString()} daily limit (${tokenRemaining.toLocaleString()} remaining). If remaining is low, reduce tool calls and avoid broad scans.`;
 
@@ -249,7 +263,15 @@ TOKENS: ${tokenUsed.toLocaleString()} used / ${tokenLimit.toLocaleString()} dail
     if (isClaudeOverLimit() || isBudgetExceeded()) {
       const reason = isBudgetExceeded() ? 'Daily dollar budget exceeded' : 'Daily token limit reached';
       logAgentEvent(agent.id, 'error', reason);
-      return '⚠️ Daily Claude token limit reached. Try again tomorrow or adjust DAILY_LIMIT_CLAUDE_TOKENS.';
+      if (isBudgetExceeded()) {
+        const { spent: roundSpent, limit: roundLimit } = getRemainingBudget();
+        return agent.id === 'executive-assistant'
+          ? `⚠️ Daily budget of $${roundLimit.toFixed(2)} has been reached ($${roundSpent.toFixed(2)} spent). Ask Jordan whether he approves more budget before the team continues.`
+          : `⚠️ Daily budget of $${roundLimit.toFixed(2)} has been reached ($${roundSpent.toFixed(2)} spent). Ask Riley to request approval before continuing.`;
+      }
+      return agent.id === 'executive-assistant'
+        ? '⚠️ Daily Claude token limit reached. Ask Jordan whether he wants to raise DAILY_LIMIT_CLAUDE_TOKENS before the team continues.'
+        : '⚠️ Daily Claude token limit reached. Ask Riley to request approval before continuing.';
     }
     if (TOOL_LOOP_TIMEOUT > 0 && Date.now() - loopStart > TOOL_LOOP_TIMEOUT) {
       logAgentEvent(agent.id, 'error', `Tool loop timeout after ${totalToolCalls} tool calls`, { durationMs: Date.now() - loopStart });

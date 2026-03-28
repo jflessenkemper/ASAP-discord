@@ -19,8 +19,8 @@ async function sendToolNotification(channel: TextChannel, agent: AgentConfig, su
       username: `${agent.emoji} ${agent.name}`,
       avatarURL: agent.avatarUrl,
     });
-  } catch {
-    await channel.send(`🔧 ${agent.emoji} → ${summary}`);
+  } catch (err) {
+    console.warn(`Webhook tool notification failed for ${agent.name}:`, err instanceof Error ? err.message : 'Unknown');
   }
 }
 import { triggerCloudBuild, listRevisions, getCurrentRevision, rollbackToRevision } from '../../services/cloudrun';
@@ -255,9 +255,10 @@ async function executeActions(
         const wh = await getWebhook(groupchat);
         await wh.send({ content: msg, username: `${riley.emoji} ${riley.name}`, avatarURL: riley.avatarUrl });
         return;
-      } catch { /* fallback */ }
+      } catch (err) {
+        console.warn('Webhook send failed for Riley action response:', err instanceof Error ? err.message : 'Unknown');
+      }
     }
-    await groupchat.send(msg);
   }
 
   for (const [, action, param] of actions) {
@@ -504,8 +505,8 @@ async function handleAgentChain(
           try {
             const wh = await getWebhook(groupchat);
             await wh.send({ content: `⚠️ Ace had an error.`, username: `${ace.emoji} ${ace.name}`, avatarURL: ace.avatarUrl });
-          } catch {
-            await groupchat.send(`⚠️ ${ace.emoji} Ace had an error.`);
+          } catch (webhookErr) {
+            console.warn('Webhook error notification failed for Ace:', webhookErr instanceof Error ? webhookErr.message : 'Unknown');
           }
         }
       }
@@ -523,12 +524,12 @@ async function handleAgentChain(
     const riley = getAgent('executive-assistant' as AgentId);
     if (riley) {
       const summary =
-        `Work completed in agent channels.\n\n` +
+        `Quick update from the team.\n\n` +
         (summaryLines.length > 0
-          ? `Findings:\n${summaryLines.slice(0, 12).map((s) => `- ${s}`).join('\n')}`
-          : 'Findings:\n- No agent findings returned.') +
+          ? `What came back:\n${summaryLines.slice(0, 12).map((s) => `- ${s}`).join('\n')}`
+          : 'What came back:\n- No agent findings returned yet.') +
         (errorLines.length > 0
-          ? `\n\nErrors:\n${errorLines.slice(0, 8).map((e) => `- ${e}`).join('\n')}`
+          ? `\n\nA couple blockers showed up:\n${errorLines.slice(0, 8).map((e) => `- ${e}`).join('\n')}`
           : '');
       await sendAgentMessage(groupchat, riley, summary);
     }
@@ -633,8 +634,8 @@ async function handleSubAgents(
           try {
             const wh = await getWebhook(groupchat);
             await wh.send({ content: `⚠️ ${agent.name.split(' ')[0]} had an error.`, username: `${agent.emoji} ${agent.name}`, avatarURL: agent.avatarUrl });
-          } catch {
-            await groupchat.send(`⚠️ ${agent.emoji} ${agent.name.split(' ')[0]} had an error.`);
+          } catch (webhookErr) {
+            console.warn(`Webhook error notification failed for ${agent.name}:`, webhookErr instanceof Error ? webhookErr.message : 'Unknown');
           }
         }
       }
@@ -697,8 +698,8 @@ async function handleDirectedMessage(
         try {
           const wh = await getWebhook(groupchat);
           await wh.send({ content: `⚠️ ${agent.name.split(' ')[0]} had an error.`, username: `${agent.emoji} ${agent.name}`, avatarURL: agent.avatarUrl });
-        } catch {
-          await groupchat.send(`⚠️ ${agent.emoji} ${agent.name.split(' ')[0]} had an error.`);
+        } catch (webhookErr) {
+          console.warn(`Webhook error notification failed for ${agent.name}:`, webhookErr instanceof Error ? webhookErr.message : 'Unknown');
         }
       }
     }
@@ -708,13 +709,13 @@ async function handleDirectedMessage(
     const riley = getAgent('executive-assistant' as AgentId);
     if (riley) {
       const summary =
-        `Directed work finished in agent channels.\n\n` +
-        `Findings:\n${(summaryLines.length > 0 ? summaryLines : ['No agent findings returned.'])
+        `Quick update from the people you tagged.\n\n` +
+        `What they said:\n${(summaryLines.length > 0 ? summaryLines : ['No agent findings returned yet.'])
           .slice(0, 12)
           .map((s) => `- ${s}`)
           .join('\n')}` +
         (errorLines.length > 0
-          ? `\n\nErrors:\n${errorLines.slice(0, 8).map((e) => `- ${e}`).join('\n')}`
+          ? `\n\nA couple blockers showed up:\n${errorLines.slice(0, 8).map((e) => `- ${e}`).join('\n')}`
           : '');
       await sendAgentMessage(groupchat, riley, summary);
     }
