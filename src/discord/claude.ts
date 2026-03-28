@@ -18,6 +18,8 @@ const PROJECT_CONTEXT_MAX_CHARS = parseInt(process.env.PROJECT_CONTEXT_MAX_CHARS
 if (PROJECT_CONTEXT.length > PROJECT_CONTEXT_MAX_CHARS) {
   PROJECT_CONTEXT = PROJECT_CONTEXT.slice(0, PROJECT_CONTEXT_MAX_CHARS) + '\n\n[Project context truncated for token efficiency]';
 }
+const PROJECT_CONTEXT_LIGHT_MAX_CHARS = parseInt(process.env.PROJECT_CONTEXT_LIGHT_MAX_CHARS || '1200', 10);
+const PROJECT_CONTEXT_LIGHT = PROJECT_CONTEXT.slice(0, PROJECT_CONTEXT_LIGHT_MAX_CHARS);
 
 const CLAUDE_OPUS = 'claude-opus-4-20250514';
 const CLAUDE_SONNET = 'claude-sonnet-4-20250514';
@@ -104,6 +106,37 @@ function truncateToolResult(result: string, maxChars = 3500): string {
   );
 }
 
+function getProjectContextForAgent(agentId: string): string {
+  return FULL_TOOL_AGENTS.has(agentId) ? PROJECT_CONTEXT : PROJECT_CONTEXT_LIGHT;
+}
+
+function estimateMessageChars(content: unknown): number {
+  if (typeof content === 'string') return content.length;
+  try {
+    return JSON.stringify(content).length;
+  } catch {
+    return 1000;
+  }
+}
+
+function trimLoopMessages(
+  messages: Array<{ role: 'user' | 'assistant'; content: any }>
+): Array<{ role: 'user' | 'assistant'; content: any }> {
+  if (messages.length <= MAX_LOOP_MESSAGES) return messages;
+
+  const trimmed: Array<{ role: 'user' | 'assistant'; content: any }> = [];
+  let chars = 0;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const msg = messages[i];
+    const msgChars = estimateMessageChars(msg.content);
+    if (trimmed.length >= MAX_LOOP_MESSAGES || chars + msgChars > MAX_LOOP_CHARS) break;
+    trimmed.push(msg);
+    chars += msgChars;
+  }
+  trimmed.reverse();
+  return trimmed;
+}
+
 export interface ConversationMessage {
   role: 'user' | 'assistant';
   content: string;
@@ -112,9 +145,12 @@ export interface ConversationMessage {
 /** Max tool-use iterations before forcing a text response */
 const MAX_TOOL_ROUNDS = parseInt(process.env.MAX_TOOL_ROUNDS || '20', 10);
 /** Maximum history messages to send to Claude per request (excludes current user message) */
-const MAX_CONTEXT_MESSAGES = parseInt(process.env.MAX_CONTEXT_MESSAGES || '50', 10);
+const MAX_CONTEXT_MESSAGES = parseInt(process.env.MAX_CONTEXT_MESSAGES || '35', 10);
 /** Soft cap for history character volume sent to Claude per request */
-const MAX_CONTEXT_CHARS = parseInt(process.env.MAX_CONTEXT_CHARS || '24000', 10);
+const MAX_CONTEXT_CHARS = parseInt(process.env.MAX_CONTEXT_CHARS || '16000', 10);
+/** Cap ongoing tool loop conversation size to prevent token blow-up over many rounds */
+const MAX_LOOP_MESSAGES = parseInt(process.env.MAX_LOOP_MESSAGES || '28', 10);
+const MAX_LOOP_CHARS = parseInt(process.env.MAX_LOOP_CHARS || '18000', 10);
 /**
  * Max total time for a tool loop (ms).
  * Set to 0 (default) to disable wall-clock timeout so agents can run as long as needed.
@@ -274,7 +310,7 @@ GOVERNANCE:
   const systemPrompt = `${agent.systemPrompt}
 
 <project_context>
-${PROJECT_CONTEXT}
+${getProjectContextForAgent(agent.id)}
 </project_context>
 
 You are "${agent.name}" responding in Discord.${rileyCoordination}
@@ -456,6 +492,8 @@ TOKENS: ${tokenUsed.toLocaleString()} used / ${tokenLimit.toLocaleString()} dail
           content: 'Validation failed (tests/typecheck). Re-plan and fix using deeper reasoning before final response.',
         });
       }
+
+      currentMessages = trimLoopMessages(currentMessages as any) as any;
 
       continue;
     }

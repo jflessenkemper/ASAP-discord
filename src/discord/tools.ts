@@ -873,7 +873,7 @@ function compactSchemaNode(node: any): any {
 function compactToolForPrompt(tool: any): PromptTool {
   return {
     name: tool.name,
-    description: `Use ${tool.name}`,
+    description: tool.name,
     input_schema: compactSchemaNode(tool.input_schema),
   };
 }
