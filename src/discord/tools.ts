@@ -816,6 +816,105 @@ export const REPO_TOOLS = [
       required: [],
     },
   },
+  // ── GCP Extended ──
+  {
+    name: 'gcp_logs_query',
+    description:
+      'Query Cloud Logging across any GCP service using a full filter expression. More powerful than read_logs — supports any resource type (cloud_run_revision, gce_instance, cloudsql_database, etc.), severity filters, and time ranges.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        filter: {
+          type: 'string',
+          description: 'Cloud Logging filter, e.g. "resource.type=cloud_run_revision severity>=ERROR" or "resource.type=gce_instance"',
+        },
+        limit: {
+          type: 'number',
+          description: 'Max log lines (default: 50, max: 200)',
+        },
+      },
+      required: ['filter'],
+    },
+  },
+  {
+    name: 'gcp_run_describe',
+    description:
+      'Get detailed status of the Cloud Run service: URL, latest revision, traffic splits, and environment variable names. Use to verify a deployment went live.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {},
+      required: [],
+    },
+  },
+  {
+    name: 'gcp_storage_ls',
+    description:
+      'List files and folders in a GCS bucket. Use to browse uploaded evidence, build artifacts, or other GCS content.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        bucket: {
+          type: 'string',
+          description: 'Bucket name without gs:// prefix, e.g. "asap-evidence"',
+        },
+        prefix: {
+          type: 'string',
+          description: 'Optional path prefix to list a sub-folder, e.g. "jobs/2024/"',
+        },
+      },
+      required: ['bucket'],
+    },
+  },
+  {
+    name: 'gcp_artifact_list',
+    description:
+      'List Docker images and tags in Artifact Registry. Useful for identifying rollback targets or confirming a build was pushed.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        limit: {
+          type: 'number',
+          description: 'Max images to show (default: 20)',
+        },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'gcp_sql_describe',
+    description:
+      'Get Cloud SQL instance details: connection name, IP address, database version, tier, and state. Use for DBA work or debugging connection issues.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {},
+      required: [],
+    },
+  },
+  {
+    name: 'gcp_vm_ssh',
+    description:
+      'Run a validated command on the GCE VM (asap-bot-vm) via gcloud SSH. Use to restart the Discord bot, pull code, check PM2 status, or inspect VM health. Commands must match the safe allowlist.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        command: {
+          type: 'string',
+          description: 'Command to run on the VM. Allowed prefixes: pm2 status/restart/logs/list, git pull/log/status/rev-parse/fetch, npm run build/ci/install, node --version, df -h, free -h, uptime',
+        },
+      },
+      required: ['command'],
+    },
+  },
+  {
+    name: 'gcp_project_info',
+    description:
+      'Get a high-level overview of the GCP project: enabled APIs, project ID, and region. Use to confirm what services are active or debug "API not enabled" errors.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {},
+      required: [],
+    },
+  },
   // ── Web Access ──
   {
     name: 'fetch_url',
@@ -976,6 +1075,7 @@ const REVIEW_TOOL_NAMES = new Set([
   'capture_screenshots',
   'mobile_harness_start', 'mobile_harness_step', 'mobile_harness_snapshot', 'mobile_harness_stop',
   'gcp_deploy', 'gcp_set_env', 'gcp_get_env', 'gcp_list_revisions', 'gcp_rollback', 'gcp_secret_set', 'gcp_secret_list', 'gcp_build_status',
+  'gcp_logs_query', 'gcp_run_describe', 'gcp_storage_ls', 'gcp_artifact_list', 'gcp_sql_describe', 'gcp_project_info',
 ]);
 export const REVIEW_TOOLS = REPO_TOOLS.filter((t) => REVIEW_TOOL_NAMES.has(t.name));
 
@@ -1131,6 +1231,20 @@ export async function executeTool(
         return await gcpSecretList();
       case 'gcp_build_status':
         return await gcpBuildStatus(parseInt(input.limit, 10) || 5);
+      case 'gcp_logs_query':
+        return await gcpLogsQuery(input.filter, parseInt(input.limit, 10) || 50);
+      case 'gcp_run_describe':
+        return await gcpRunDescribe();
+      case 'gcp_storage_ls':
+        return await gcpStorageLs(input.bucket, input.prefix);
+      case 'gcp_artifact_list':
+        return await gcpArtifactList(parseInt(input.limit, 10) || 20);
+      case 'gcp_sql_describe':
+        return await gcpSqlDescribe();
+      case 'gcp_vm_ssh':
+        return await gcpVmSsh(input.command);
+      case 'gcp_project_info':
+        return await gcpProjectInfo();
       // Web access
       case 'fetch_url':
         return await fetchUrl(input.url, input.method, input.headers, input.body);
@@ -2034,6 +2148,117 @@ async function gcpBuildStatus(limit: number): Promise<string> {
     return result || 'No builds found.';
   } catch (err) {
     return `❌ Failed to get build status: ${err instanceof Error ? err.message : 'Unknown'}`;
+  }
+}
+
+// Cloud SQL instance name
+const GCP_SQL_INSTANCE = 'asap-db';
+// GCE VM hosting the Discord bot
+const GCP_BOT_VM = 'asap-bot-vm';
+const GCP_BOT_ZONE = 'australia-southeast1-c';
+
+/** Safe command prefixes allowed to run on the GCE VM via gcp_vm_ssh */
+const VM_ALLOWED_PREFIXES = [
+  'pm2 status', 'pm2 restart', 'pm2 logs', 'pm2 list',
+  'git pull', 'git log', 'git status', 'git rev-parse', 'git fetch',
+  'npm run build', 'npm ci', 'npm install',
+  'node --version',
+  'df -h', 'free -h', 'uptime', 'cat /proc/loadavg',
+];
+
+async function gcpLogsQuery(filter: string, limit: number): Promise<string> {
+  const safeLimit = Math.min(Math.max(limit || 50, 1), 200);
+  // filter is passed as a double-quoted shell argument — validate no shell injection
+  if (/[`$\\]/.test(filter)) return '❌ Invalid characters in filter expression.';
+  try {
+    const result = gcpExec(
+      `gcloud logging read "${filter.replace(/"/g, '\\"')}" --project=${GCP_PROJECT} --limit=${safeLimit} --format="table(timestamp.date(),resource.type,severity,textPayload.slice(0:120))"`
+    );
+    return result || 'No log entries matched.';
+  } catch (err) {
+    return `❌ Failed to query logs: ${err instanceof Error ? err.message : 'Unknown'}`;
+  }
+}
+
+async function gcpRunDescribe(): Promise<string> {
+  try {
+    const result = gcpExec(
+      `gcloud run services describe ${GCP_SERVICE} --region=${GCP_REGION} --project=${GCP_PROJECT} --format="yaml(status.url,status.conditions,status.traffic,spec.template.metadata.name,spec.template.spec.containers[0].resources)"`
+    );
+    return result || 'No service info returned.';
+  } catch (err) {
+    return `❌ Failed to describe Cloud Run service: ${err instanceof Error ? err.message : 'Unknown'}`;
+  }
+}
+
+async function gcpStorageLs(bucket: string, prefix?: string): Promise<string> {
+  if (!/^[a-z0-9][a-z0-9._-]{1,61}[a-z0-9]$/i.test(bucket)) return '❌ Invalid bucket name.';
+  if (prefix && !/^[a-zA-Z0-9_./-]+$/.test(prefix)) return '❌ Invalid prefix.';
+  const path = prefix ? `gs://${bucket}/${prefix}` : `gs://${bucket}/`;
+  try {
+    const result = gcpExec(`gcloud storage ls "${path}"`);
+    return result || 'Empty bucket or prefix.';
+  } catch (err) {
+    return `❌ Failed to list bucket: ${err instanceof Error ? err.message : 'Unknown'}`;
+  }
+}
+
+async function gcpArtifactList(limit: number): Promise<string> {
+  const safeLimit = Math.min(Math.max(limit || 20, 1), 100);
+  try {
+    const result = gcpExec(
+      `gcloud artifacts docker images list ${GCP_REGION}-docker.pkg.dev/${GCP_PROJECT}/asap --include-tags --limit=${safeLimit} --sort-by="~create_time" --format="table(package.basename(),tags,create_time.date())"`
+    );
+    return result || 'No images found.';
+  } catch (err) {
+    return `❌ Failed to list artifacts: ${err instanceof Error ? err.message : 'Unknown'}`;
+  }
+}
+
+async function gcpSqlDescribe(): Promise<string> {
+  try {
+    const result = gcpExec(
+      `gcloud sql instances describe ${GCP_SQL_INSTANCE} --project=${GCP_PROJECT} --format="table(name,state,databaseVersion,settings.tier,ipAddresses[0].ipAddress,connectionName)"`
+    );
+    return result || 'No SQL instance info returned.';
+  } catch (err) {
+    return `❌ Failed to describe Cloud SQL: ${err instanceof Error ? err.message : 'Unknown'}`;
+  }
+}
+
+async function gcpVmSsh(command: string): Promise<string> {
+  const trimmed = command.trim();
+  // Allowlist check
+  const allowed = VM_ALLOWED_PREFIXES.some((prefix) => trimmed.startsWith(prefix));
+  if (!allowed) {
+    return `❌ Command not in VM allowlist. Allowed: pm2 status/restart/logs/list, git pull/log/status/rev-parse/fetch, npm run build/ci/install, node --version, df -h, free -h, uptime.`;
+  }
+  // Reject shell metacharacters to prevent injection on the remote VM
+  if (/[;&|`$<>()\n\\]/.test(trimmed)) {
+    return '❌ Command contains disallowed characters.';
+  }
+  try {
+    const escaped = trimmed.replace(/"/g, '\\"');
+    const result = gcpExec(
+      `gcloud compute ssh ${GCP_BOT_VM} --zone=${GCP_BOT_ZONE} --project=${GCP_PROJECT} --quiet --command="${escaped}"`
+    );
+    return result || '(no output)';
+  } catch (err) {
+    return `❌ SSH command failed: ${err instanceof Error ? err.message : 'Unknown'}`;
+  }
+}
+
+async function gcpProjectInfo(): Promise<string> {
+  try {
+    const info = gcpExec(
+      `gcloud projects describe ${GCP_PROJECT} --format="yaml(name,projectId,projectNumber,lifecycleState)"`
+    );
+    const apis = gcpExec(
+      `gcloud services list --enabled --project=${GCP_PROJECT} --format="table(name,title)" --limit=60`
+    );
+    return `## Project\n${info}\n\n## Enabled APIs\n${apis}`;
+  } catch (err) {
+    return `❌ Failed to get project info: ${err instanceof Error ? err.message : 'Unknown'}`;
   }
 }
 

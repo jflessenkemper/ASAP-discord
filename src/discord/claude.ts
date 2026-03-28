@@ -399,7 +399,7 @@ TOKENS: ${tokenUsed.toLocaleString()} used / ${tokenLimit.toLocaleString()} dail
     'git_create_branch', 'create_pull_request', 'merge_pull_request', 'add_pr_comment',
     'delete_channel', 'create_channel', 'rename_channel', 'set_channel_topic',
     'send_channel_message', 'clear_channel_messages', 'delete_category', 'move_channel',
-    'gcp_deploy', 'gcp_set_env', 'gcp_rollback', 'gcp_secret_set',
+    'gcp_deploy', 'gcp_set_env', 'gcp_rollback', 'gcp_secret_set', 'gcp_vm_ssh',
     'memory_write', 'memory_append',
     'db_query',
     'capture_screenshots',
@@ -610,6 +610,20 @@ function formatToolSummary(toolName: string, input: Record<string, string>): str
       return `Listing GCP secrets`;
     case 'gcp_build_status':
       return `Checking Cloud Build status`;
+    case 'gcp_logs_query':
+      return `Querying GCP logs: ${(input.filter || 'all').slice(0, 60)}`;
+    case 'gcp_run_describe':
+      return `Getting Cloud Run service status and URL`;
+    case 'gcp_storage_ls':
+      return `Listing GCS bucket: ${input.bucket}${input.prefix ? `/${input.prefix}` : ''}`;
+    case 'gcp_artifact_list':
+      return `Listing Docker images in Artifact Registry`;
+    case 'gcp_sql_describe':
+      return `Getting Cloud SQL instance details`;
+    case 'gcp_vm_ssh':
+      return `Running on VM: ${(input.command || '').slice(0, 60)}`;
+    case 'gcp_project_info':
+      return `Getting GCP project info and enabled APIs`;
     case 'fetch_url':
       return `Fetching ${input.url?.slice(0, 80)}`;
     case 'memory_read':
