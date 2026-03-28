@@ -45,8 +45,9 @@ function parseArgs(): TesterConfig {
   };
 }
 
-function isCandidateReply(reply: Message, sentAt: number, targetBotId?: string): boolean {
+function isCandidateReply(reply: Message, sentAt: number, selfBotId: string, targetBotId?: string): boolean {
   if (reply.createdTimestamp < sentAt) return false;
+  if (reply.author.id === selfBotId) return false;
   if (targetBotId && reply.author.id !== targetBotId) return false;
   if (!targetBotId && reply.author.bot === false) return false;
   return true;
@@ -76,7 +77,8 @@ async function run(): Promise<void> {
 
       const collector = channel.createMessageCollector({ time: config.timeoutMs });
       collector.on('collect', (msg) => {
-        if (!isCandidateReply(msg, sent.createdTimestamp, config.targetBotId)) return;
+        if (!client.user) return;
+        if (!isCandidateReply(msg, sent.createdTimestamp, client.user.id, config.targetBotId)) return;
 
         const content = msg.content || '';
         const passesContains = config.expectedContains
