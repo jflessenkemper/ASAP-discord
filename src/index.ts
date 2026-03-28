@@ -284,8 +284,8 @@ const server = app.listen(PORT, () => {
 function shutdown(signal: string) {
   console.log(`${signal} received, shutting down gracefully`);
   clearInterval(cleanupInterval);
-  stopBot().catch(() => {});
   server.close(async () => {
+    await stopBot().catch(() => {});
     await pool.end();
     console.log('Server shut down');
     process.exit(0);

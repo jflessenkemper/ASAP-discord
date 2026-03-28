@@ -39,8 +39,8 @@ let activeAbortController: AbortController | null = null;
 let activeGoal: string | null = null;
 let goalStatus: string | null = null;
 
-/** Regex to detect @agent mentions — requires @ prefix for explicit mentions */
-const MENTION_RE = /@(qa|max|ux-reviewer|sophie|security-auditor|kane|api-reviewer|raj|dba|elena|performance|kai|devops|jude|copywriter|liv|developer|ace|lawyer|harper|executive-assistant|riley|ios-engineer|mia|android-engineer|leo)\b/gi;
+/** Generic @mention parser, aliases resolved through NAME_TO_ID + known agent IDs. */
+const AGENT_MENTION_RE = /@([a-z0-9-]+)\b/gi;
 
 /** Keep typing indicator alive during long agent operations. Returns a stop function. */
 function startTypingLoop(channel: TextChannel): () => void {
@@ -65,6 +65,25 @@ const NAME_TO_ID: Record<string, string> = {
   'ios-engineer': 'ios-engineer', mia: 'ios-engineer',
   'android-engineer': 'android-engineer', leo: 'android-engineer',
 };
+
+function resolveMentionedAgentId(raw: string): string | null {
+  const key = raw.toLowerCase();
+  const mapped = NAME_TO_ID[key] || key;
+  if (getAgents().has(mapped as AgentId)) return mapped;
+  return null;
+}
+
+function parseMentionedAgentIds(text: string, allowedIds?: Set<string>): string[] {
+  const found = new Set<string>();
+  AGENT_MENTION_RE.lastIndex = 0;
+  for (const match of text.matchAll(AGENT_MENTION_RE)) {
+    const resolved = resolveMentionedAgentId(match[1]);
+    if (!resolved) continue;
+    if (allowedIds && !allowedIds.has(resolved)) continue;
+    found.add(resolved);
+  }
+  return [...found];
+}
 
 // Keep groupchat concise: specialist agents work in their own channels, then
 // Riley posts a single consolidated summary to groupchat.
@@ -118,11 +137,7 @@ async function processGroupchatMessage(
   const senderName = message.member?.displayName || message.author.username;
 
   // Check for explicit @agent mentions — route directly
-  const mentions = [...content.matchAll(MENTION_RE)].map((m) => {
-    const key = m[1].toLowerCase();
-    return NAME_TO_ID[key] || key;
-  });
-  const uniqueMentions = [...new Set(mentions)];
+  const uniqueMentions = parseMentionedAgentIds(content);
 
   if (uniqueMentions.length > 0) {
     // User explicitly @mentioned agents — route to them directly
@@ -447,23 +462,14 @@ async function executeActions(
  * Parse Riley/Ace's response for @agent directives using strict word-boundary regex.
  * Only matches explicit @name patterns to avoid false positives.
  */
-const DIRECTIVE_RE = /@(ace|max|sophie|kane|raj|elena|kai|jude|liv|harper|mia|leo)\b/gi;
-const DIRECTIVE_NAME_TO_ID: Record<string, string> = {
-  ace: 'developer', max: 'qa', sophie: 'ux-reviewer',
-  kane: 'security-auditor', raj: 'api-reviewer', elena: 'dba',
-  kai: 'performance', jude: 'devops', liv: 'copywriter', harper: 'lawyer',
-  mia: 'ios-engineer', leo: 'android-engineer',
-};
+const DIRECTED_AGENT_IDS = new Set<string>([
+  'developer', 'qa', 'ux-reviewer', 'security-auditor', 'api-reviewer',
+  'dba', 'performance', 'devops', 'copywriter', 'lawyer',
+  'ios-engineer', 'android-engineer',
+]);
 
 function parseDirectives(text: string): string[] {
-  const found = new Set<string>();
-  // Reset lastIndex since the regex has the global flag
-  DIRECTIVE_RE.lastIndex = 0;
-  for (const match of text.matchAll(DIRECTIVE_RE)) {
-    const name = match[1].toLowerCase();
-    if (DIRECTIVE_NAME_TO_ID[name]) found.add(DIRECTIVE_NAME_TO_ID[name]);
-  }
-  return [...found];
+  return parseMentionedAgentIds(text, DIRECTED_AGENT_IDS);
 }
 
 /**

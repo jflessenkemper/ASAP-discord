@@ -1,4 +1,5 @@
 import { TextChannel, EmbedBuilder } from 'discord.js';
+import pool from '../db/pool';
 
 // ─── Daily limits (configurable via env vars) ───────────────────────────────
 const DAILY_LIMITS = {
@@ -34,6 +35,62 @@ const usage: UsageCounters = {
   lastReset: new Date().toISOString().split('T')[0],
 };
 
+const USAGE_DB_KEY = 'usage-counters-v1';
+let usageLoaded = false;
+let usageDirty = false;
+let usageWriteTimer: ReturnType<typeof setTimeout> | null = null;
+
+function markUsageDirty(): void {
+  usageDirty = true;
+  if (usageWriteTimer) clearTimeout(usageWriteTimer);
+  usageWriteTimer = setTimeout(() => {
+    flushUsageCounters().catch((err) => {
+      console.error('Usage counter flush failed:', err instanceof Error ? err.message : 'Unknown');
+    });
+  }, 2000);
+}
+
+export async function initUsageCounters(): Promise<void> {
+  if (usageLoaded) return;
+  try {
+    const { rows } = await pool.query(
+      'SELECT content FROM agent_memory WHERE file_name = $1 LIMIT 1',
+      [USAGE_DB_KEY]
+    );
+    if (rows.length > 0 && rows[0].content) {
+      const parsed = JSON.parse(rows[0].content);
+      usage.claudeInputTokens = Number(parsed.claudeInputTokens) || 0;
+      usage.claudeOutputTokens = Number(parsed.claudeOutputTokens) || 0;
+      usage.geminiCalls = Number(parsed.geminiCalls) || 0;
+      usage.geminiInputTokens = Number(parsed.geminiInputTokens) || 0;
+      usage.elevenLabsChars = Number(parsed.elevenLabsChars) || 0;
+      usage.lastReset = typeof parsed.lastReset === 'string'
+        ? parsed.lastReset
+        : new Date().toISOString().split('T')[0];
+    }
+  } catch (err) {
+    console.error('Failed to initialize usage counters:', err instanceof Error ? err.message : 'Unknown');
+  } finally {
+    usageLoaded = true;
+    resetIfNewDay();
+  }
+}
+
+export async function flushUsageCounters(): Promise<void> {
+  if (!usageLoaded || !usageDirty) return;
+  if (usageWriteTimer) {
+    clearTimeout(usageWriteTimer);
+    usageWriteTimer = null;
+  }
+  const payload = JSON.stringify(usage);
+  await pool.query(
+    `INSERT INTO agent_memory (file_name, content, updated_at) VALUES ($1, $2, NOW())
+     ON CONFLICT (file_name) DO UPDATE SET content = $2, updated_at = NOW()`,
+    [USAGE_DB_KEY, payload]
+  );
+  usageDirty = false;
+}
+
 function resetIfNewDay(): void {
   const today = new Date().toISOString().split('T')[0];
   if (usage.lastReset !== today) {
@@ -43,6 +100,7 @@ function resetIfNewDay(): void {
     usage.geminiInputTokens = 0;
     usage.elevenLabsChars = 0;
     usage.lastReset = today;
+    markUsageDirty();
   }
 }
 
@@ -51,16 +109,19 @@ export function recordClaudeUsage(inputTokens: number, outputTokens: number): vo
   resetIfNewDay();
   usage.claudeInputTokens += inputTokens;
   usage.claudeOutputTokens += outputTokens;
+  markUsageDirty();
 }
 
 export function recordGeminiUsage(calls: number = 1): void {
   resetIfNewDay();
   usage.geminiCalls += calls;
+  markUsageDirty();
 }
 
 export function recordElevenLabsUsage(chars: number): void {
   resetIfNewDay();
   usage.elevenLabsChars += chars;
+  markUsageDirty();
 }
 
 // ─── Limit checks ──────────────────────────────────────────────────────────

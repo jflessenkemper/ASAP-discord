@@ -805,6 +805,25 @@ export const REPO_TOOLS = [
   },
   // ── Database Access ──
   {
+    name: 'db_query_readonly',
+    description:
+      'Execute a read-only SQL query (SELECT/CTE/EXPLAIN/SHOW) against the ASAP PostgreSQL database. Any write/mutation SQL is blocked.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        query: {
+          type: 'string',
+          description: 'Read-only SQL query to execute.',
+        },
+        params: {
+          type: 'string',
+          description: 'Optional JSON array of query parameters, e.g. ["value1", 42]',
+        },
+      },
+      required: ['query'],
+    },
+  },
+  {
     name: 'db_query',
     description:
       'Execute a SQL query against the ASAP PostgreSQL database (Cloud SQL). Returns results as formatted text. Use for SELECT queries to inspect data, debug issues, or analyze the database. Write queries (INSERT, UPDATE, DELETE, CREATE, ALTER, DROP) are also allowed but use with care.',
@@ -847,7 +866,7 @@ export const REPO_TOOLS = [
  */
 const REVIEW_TOOL_NAMES = new Set([
   'read_file', 'search_files', 'list_directory', 'fetch_url',
-  'db_query', 'db_schema', 'memory_read', 'memory_list',
+  'db_query_readonly', 'db_schema', 'memory_read', 'memory_list',
   'run_tests', 'typecheck',
 ]);
 export const REVIEW_TOOLS = REPO_TOOLS.filter((t) => REVIEW_TOOL_NAMES.has(t.name));
@@ -982,6 +1001,8 @@ export async function executeTool(
       case 'memory_list':
         return await memoryList();
       // Database
+      case 'db_query_readonly':
+        return await dbQueryReadonly(input.query, input.params);
       case 'db_query':
         return await dbQuery(input.query, input.params);
       case 'db_schema':
@@ -1129,11 +1150,9 @@ const ALLOWED_COMMANDS: Array<{ prefix: string; description: string }> = [
   { prefix: 'git remote',     description: 'Manage remotes' },
   { prefix: 'git rebase',     description: 'Rebase branches' },
   { prefix: 'git cherry-pick', description: 'Cherry-pick commits' },
-  { prefix: 'git reset',      description: 'Reset HEAD/staging' },
   { prefix: 'git tag',        description: 'Manage tags' },
   { prefix: 'git blame',      description: 'Line-by-line authorship' },
   { prefix: 'git reflog',     description: 'Reference log' },
-  { prefix: 'git clean',      description: 'Clean untracked files' },
   // Read-only system commands
   { prefix: 'grep ',   description: 'Search file contents' },
   { prefix: 'find ',   description: 'Find files' },
@@ -1162,7 +1181,6 @@ const ALLOWED_COMMANDS: Array<{ prefix: string; description: string }> = [
   { prefix: 'mkdir ',         description: 'Create directories' },
   { prefix: 'cp ',            description: 'Copy files' },
   { prefix: 'mv ',            description: 'Move/rename files' },
-  { prefix: 'rm ',            description: 'Remove files (not rm -rf /)' },
   { prefix: 'touch ',         description: 'Create empty files' },
   { prefix: 'chmod ',         description: 'File permissions' },
   { prefix: 'tar ',           description: 'Archive operations' },
@@ -1196,6 +1214,9 @@ const ALLOWED_COMMANDS: Array<{ prefix: string; description: string }> = [
 /** Patterns that are NEVER allowed — only truly catastrophic operations. */
 const HARD_BLOCKED = [
   /rm\s+(-rf?|--recursive)\s+\//,  // rm -rf / (root filesystem)
+  /git\s+reset\s+--hard\b/,        // destructive reset
+  /git\s+clean\s+-[^\n]*f[^\n]*/, // force clean (-f / -fd / -ffdx)
+  /git\s+checkout\s+--\b/,         // discard file changes
   /mkfs/,                           // format disk
   /dd\s+if=/,                       // raw disk operations
   /:\(\)\s*\{/,                     // fork bomb
@@ -2083,6 +2104,39 @@ async function dbQuery(query: string, paramsStr?: string): Promise<string> {
   } catch (err) {
     return `SQL Error: ${err instanceof Error ? err.message : 'Unknown'}`;
   }
+}
+
+function sanitizeSql(sql: string): string {
+  // Remove line comments and block comments, then trim.
+  return sql
+    .replace(/--.*$/gm, '')
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .trim();
+}
+
+function isReadOnlySql(sql: string): boolean {
+  const cleaned = sanitizeSql(sql).replace(/;\s*$/, '').trim().toLowerCase();
+  if (!cleaned) return false;
+
+  // Single statement only (allow one trailing semicolon handled above).
+  if (cleaned.includes(';')) return false;
+
+  // Allow common read-only statements.
+  if (/^(select|with|explain|show)\b/.test(cleaned)) {
+    // Block known write/mutation verbs anywhere in statement body.
+    if (/\b(insert|update|delete|alter|drop|create|truncate|grant|revoke|comment|vacuum|analyze|refresh|reindex|call|do|copy)\b/.test(cleaned)) {
+      return false;
+    }
+    return true;
+  }
+  return false;
+}
+
+async function dbQueryReadonly(query: string, paramsStr?: string): Promise<string> {
+  if (!isReadOnlySql(query)) {
+    return 'Blocked: db_query_readonly only allows single-statement SELECT/WITH/EXPLAIN/SHOW queries with no write/mutation keywords.';
+  }
+  return dbQuery(query, paramsStr);
 }
 
 async function dbSchema(table?: string): Promise<string> {
