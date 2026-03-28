@@ -96,6 +96,21 @@ function buildSslConfig(): false | { rejectUnauthorized: boolean; ca?: string } 
 
 const sslConfig = buildSslConfig();
 
+/**
+ * Strip SSL-related query parameters from DATABASE_URL so pg-connection-string
+ * doesn't apply its own (potentially stricter) SSL handling.  Our explicit
+ * `ssl` option passed to the Pool constructor is the single source of truth.
+ */
+function stripSslParams(url: string): string {
+  try {
+    const parsed = new URL(url);
+    ['sslmode', 'sslcert', 'sslkey', 'sslrootcert', 'sslcrl'].forEach((p) => parsed.searchParams.delete(p));
+    return parsed.toString();
+  } catch {
+    return url;
+  }
+}
+
 // Cloud SQL via Unix socket (Cloud Run): INSTANCE_UNIX_SOCKET=/cloudsql/project:region:instance
 const instanceSocket = process.env.INSTANCE_UNIX_SOCKET;
 
@@ -109,7 +124,7 @@ const pool = instanceSocket
     })
   : process.env.DATABASE_URL
     ? new Pool({
-        connectionString: process.env.DATABASE_URL,
+        connectionString: stripSslParams(process.env.DATABASE_URL),
         ssl: sslConfig,
       })
     : new Pool({
