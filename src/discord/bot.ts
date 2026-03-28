@@ -7,7 +7,7 @@ import {
 import { setupChannels, BotChannels } from './setup';
 import { getAgentByChannelName } from './agents';
 import { handleAgentMessage } from './handlers/textChannel';
-import { setCommandAuditCallback, setPRReviewCallback, setDiscordGuild, setToolAuditCallback } from './tools';
+import { setCommandAuditCallback, setPRReviewCallback, setDiscordGuild, setToolAuditCallback, setAgentChannelResolver } from './tools';
 import { autoReviewPR } from './handlers/review';
 import { handleGroupchatMessage } from './handlers/groupchat';
 import { endCall, isCallActive } from './handlers/callSession';
@@ -82,6 +82,7 @@ export async function startBot(): Promise<void> {
       setLimitsChannel(botChannels.limits);
       setScreenshotsChannel(botChannels.screenshots);
       setDiscordGuild(guild);
+      setAgentChannelResolver((agentId: string) => botChannels?.agentChannels.get(agentId) || null);
       if (isTelephonyAvailable()) {
         setTelephonyChannels(botChannels.callLog, botChannels.groupchat);
         await initContacts();

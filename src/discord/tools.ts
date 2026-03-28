@@ -19,6 +19,7 @@ import {
 } from '../services/github';
 import { getRequiredReviewers } from './handlers/review';
 import { captureAndPostScreenshots } from './services/screenshots';
+import { mobileHarnessStart, mobileHarnessStep, mobileHarnessSnapshot, mobileHarnessStop } from './services/mobileHarness';
 import { getWebhook } from './services/webhooks';
 
 // ────────────────────────────────────────────
@@ -26,9 +27,14 @@ import { getWebhook } from './services/webhooks';
 // ────────────────────────────────────────────
 
 let discordGuild: Guild | null = null;
+let agentChannelResolver: ((agentId: string) => TextChannel | null) | null = null;
 
 export function setDiscordGuild(guild: Guild): void {
   discordGuild = guild;
+}
+
+export function setAgentChannelResolver(cb: (agentId: string) => TextChannel | null): void {
+  agentChannelResolver = cb;
 }
 
 /** Channels that must never be deleted by agents (canonical key form). */
@@ -580,7 +586,7 @@ export const REPO_TOOLS = [
   {
     name: 'capture_screenshots',
     description:
-      'Capture screenshots of the live app and post them to the #screenshots Discord channel. Uses headless Chromium sized to iPhone 17 Pro Max. Takes ~15-20 seconds. Use this to visually verify deployed changes, test UI, or generate visual documentation. Screenshots are posted automatically to Discord.',
+      'Capture screenshots of the live app and post them to Discord. Defaults to the invoking agent channel, or #screenshots if no agent channel is available. Uses headless Chromium sized to iPhone 17 Pro Max.',
     input_schema: {
       type: 'object' as const,
       properties: {
@@ -592,7 +598,106 @@ export const REPO_TOOLS = [
           type: 'string',
           description: 'Label for this screenshot batch (e.g. "after login fix", "new dashboard")',
         },
+        channel_name: {
+          type: 'string',
+          description: 'Optional Discord text channel name to post screenshots into (without #).',
+        },
       },
+      required: [],
+    },
+  },
+  {
+    name: 'mobile_harness_start',
+    description:
+      'Start an interactive iPhone 17 Pro Max web harness session for this agent. Opens a live page in headless mobile emulation and posts a snapshot to Discord.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        url: {
+          type: 'string',
+          description: 'App URL to open. Defaults to deployed ASAP app URL.',
+        },
+        label: {
+          type: 'string',
+          description: 'Snapshot label for the start state.',
+        },
+        channel_name: {
+          type: 'string',
+          description: 'Optional Discord text channel name for snapshots.',
+        },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'mobile_harness_step',
+    description:
+      'Perform one interactive action in the active mobile harness session, then post a fresh snapshot.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        action: {
+          type: 'string',
+          description: 'Action type: tap | type | wait | goto | key | back',
+        },
+        selector: {
+          type: 'string',
+          description: 'CSS selector used by tap/type actions.',
+        },
+        text: {
+          type: 'string',
+          description: 'Text payload for type action.',
+        },
+        ms: {
+          type: 'number',
+          description: 'Delay in milliseconds for wait action.',
+        },
+        url: {
+          type: 'string',
+          description: 'URL for goto action.',
+        },
+        key: {
+          type: 'string',
+          description: 'Keyboard key for key action (for example Enter, Tab, Escape).',
+        },
+        label: {
+          type: 'string',
+          description: 'Snapshot label for this step.',
+        },
+        channel_name: {
+          type: 'string',
+          description: 'Optional Discord text channel name for snapshots.',
+        },
+      },
+      required: ['action'],
+    },
+  },
+  {
+    name: 'mobile_harness_snapshot',
+    description:
+      'Post a snapshot from the active mobile harness session without taking any action.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        label: {
+          type: 'string',
+          description: 'Snapshot label.',
+        },
+        channel_name: {
+          type: 'string',
+          description: 'Optional Discord text channel name for snapshots.',
+        },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'mobile_harness_stop',
+    description:
+      'Close the active mobile harness session for this agent and free browser resources.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {},
       required: [],
     },
   },
@@ -860,14 +965,17 @@ export const REPO_TOOLS = [
 ] as const;
 
 /**
- * Lightweight tool subset for review/advisory agents (QA, security, UX, etc.).
- * These agents only need read-only access — cutting tool count from 40 to ~10
- * saves ~4,000–6,000 input tokens per request (critical for rate-limit compliance).
+ * Tool subset for review/advisory agents (QA, security, UX, etc.).
+ * Keeps codebase write operations locked down, while allowing operational testing:
+ * GCP inspect/deploy tools, screenshots, and mobile harness interactions.
  */
 const REVIEW_TOOL_NAMES = new Set([
   'read_file', 'search_files', 'list_directory', 'fetch_url',
   'db_query_readonly', 'db_schema', 'memory_read', 'memory_list',
   'run_tests', 'typecheck',
+  'capture_screenshots',
+  'mobile_harness_start', 'mobile_harness_step', 'mobile_harness_snapshot', 'mobile_harness_stop',
+  'gcp_deploy', 'gcp_set_env', 'gcp_get_env', 'gcp_list_revisions', 'gcp_rollback', 'gcp_secret_set', 'gcp_secret_list', 'gcp_build_status',
 ]);
 export const REVIEW_TOOLS = REPO_TOOLS.filter((t) => REVIEW_TOOL_NAMES.has(t.name));
 
@@ -910,7 +1018,8 @@ export const PROMPT_REVIEW_TOOLS: PromptTool[] = REVIEW_TOOLS.map(compactToolFor
 
 export async function executeTool(
   toolName: string,
-  input: Record<string, string>
+  input: Record<string, string>,
+  context?: { agentId?: string }
 ): Promise<string> {
   try {
     switch (toolName) {
@@ -968,8 +1077,42 @@ export async function executeTool(
       case 'capture_screenshots': {
         const url = input.url || process.env.FRONTEND_URL || 'https://asap-489910.australia-southeast1.run.app';
         const label = (input.label || 'tool-invoked').slice(0, 100);
-        await captureAndPostScreenshots(url, label);
-        return `Screenshots captured and posted to #screenshots channel. URL: ${url}`;
+        const target = await resolveDiscordTextChannel(input.channel_name, context?.agentId);
+        await captureAndPostScreenshots(url, label, { targetChannel: target, clearTargetChannel: false });
+        const destination = target ? `#${target.name}` : '#screenshots';
+        return `Screenshots captured and posted to ${destination}. URL: ${url}`;
+      }
+      case 'mobile_harness_start': {
+        const url = input.url || process.env.FRONTEND_URL || 'https://asap-489910.australia-southeast1.run.app';
+        const target = await resolveDiscordTextChannel(input.channel_name, context?.agentId);
+        const sessionId = context?.agentId || 'shared';
+        return await mobileHarnessStart(sessionId, url, target, input.label);
+      }
+      case 'mobile_harness_step': {
+        const target = await resolveDiscordTextChannel(input.channel_name, context?.agentId);
+        const sessionId = context?.agentId || 'shared';
+        return await mobileHarnessStep(
+          sessionId,
+          {
+            action: (input.action as any) || 'wait',
+            selector: input.selector,
+            text: input.text,
+            ms: input.ms ? Number(input.ms) : undefined,
+            url: input.url,
+            key: input.key,
+          },
+          target,
+          input.label
+        );
+      }
+      case 'mobile_harness_snapshot': {
+        const target = await resolveDiscordTextChannel(input.channel_name, context?.agentId);
+        const sessionId = context?.agentId || 'shared';
+        return await mobileHarnessSnapshot(sessionId, target, input.label);
+      }
+      case 'mobile_harness_stop': {
+        const sessionId = context?.agentId || 'shared';
+        return await mobileHarnessStop(sessionId);
       }
       // GCP infrastructure tools
       case 'gcp_deploy':
@@ -1444,6 +1587,25 @@ async function discordListChannels(): Promise<string> {
   }
 
   return lines.join('\n') || 'No channels found.';
+}
+
+async function resolveDiscordTextChannel(channelName?: string, agentId?: string): Promise<TextChannel | undefined> {
+  const guild = requireGuild();
+  await guild.channels.fetch();
+
+  if (channelName) {
+    const byName = guild.channels.cache.find(
+      (c) => c.type === ChannelType.GuildText && c.name.toLowerCase() === channelName.toLowerCase()
+    ) as TextChannel | undefined;
+    if (byName) return byName;
+  }
+
+  if (agentId && agentChannelResolver) {
+    const resolved = agentChannelResolver(agentId);
+    if (resolved) return resolved;
+  }
+
+  return undefined;
 }
 
 async function discordDeleteChannel(channelName: string, reason: string): Promise<string> {

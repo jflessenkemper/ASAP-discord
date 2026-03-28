@@ -101,20 +101,22 @@ function sanitizeLabel(label: string): string {
 
 export async function captureAndPostScreenshots(
   appUrl: string,
-  buildLabel?: string
+  buildLabel?: string,
+  options?: { targetChannel?: TextChannel; clearTargetChannel?: boolean }
 ): Promise<void> {
-  if (!screenshotsChannel) {
+  const targetChannel = options?.targetChannel || screenshotsChannel;
+  if (!targetChannel) {
     console.warn('Screenshots channel not configured — skipping capture');
     return;
   }
 
   if (!isAllowedUrl(appUrl)) {
-    await screenshotsChannel.send(`❌ Screenshot refused — URL not in allowlist: ${appUrl.slice(0, 100)}`);
+    await targetChannel.send(`❌ Screenshot refused — URL not in allowlist: ${appUrl.slice(0, 100)}`);
     return;
   }
 
   if (captureInProgress) {
-    await screenshotsChannel.send('⏳ Screenshot capture already in progress — skipping.');
+    await targetChannel.send('⏳ Screenshot capture already in progress — skipping.');
     return;
   }
 
@@ -130,10 +132,13 @@ export async function captureAndPostScreenshots(
   try {
     const label = sanitizeLabel(buildLabel || new Date().toISOString().slice(0, 19).replace('T', ' '));
 
-    // Clear old screenshots before posting new ones
-    await clearChannel(screenshotsChannel);
+    const shouldClear = options?.clearTargetChannel
+      ?? (Boolean(screenshotsChannel) && targetChannel.id === screenshotsChannel!.id);
+    if (shouldClear) {
+      await clearChannel(targetChannel);
+    }
 
-    await screenshotsChannel.send(`📸 **Build Screenshots** — ${label}\n🔗 ${appUrl}\nCapturing on iPhone 17 Pro Max (${VIEWPORT.width}×${VIEWPORT.height} @${VIEWPORT.deviceScaleFactor}x)...`);
+    await targetChannel.send(`📸 **Build Screenshots** — ${label}\n🔗 ${appUrl}\nCapturing on iPhone 17 Pro Max (${VIEWPORT.width}×${VIEWPORT.height} @${VIEWPORT.deviceScaleFactor}x)...`);
 
     browser = await puppeteer.launch({
       headless: true,
@@ -183,19 +188,19 @@ export async function captureAndPostScreenshots(
         );
       } catch (err) {
         console.error(`Screenshot error for ${screen.name}:`, err instanceof Error ? err.message : 'Unknown');
-        await screenshotsChannel.send(`⚠️ Could not capture ${screen.name}`);
+        await targetChannel.send(`⚠️ Could not capture ${screen.name}`);
       }
     }
 
     // Post all screenshots to Discord (max 10 per message)
     for (let i = 0; i < attachments.length; i += 10) {
-      await screenshotsChannel.send({ files: attachments.slice(i, i + 10) });
+      await targetChannel.send({ files: attachments.slice(i, i + 10) });
     }
 
-    await screenshotsChannel.send(`✅ Captured ${attachments.length}/${SCREENS.length} screens — ${appUrl}`);
+    await targetChannel.send(`✅ Captured ${attachments.length}/${SCREENS.length} screens — ${appUrl}`);
   } catch (err) {
     console.error('Screenshot capture error:', err instanceof Error ? err.message : 'Unknown');
-    await screenshotsChannel?.send(`❌ Screenshot capture failed: ${err instanceof Error ? err.message : 'Unknown'}`);
+    await targetChannel.send(`❌ Screenshot capture failed: ${err instanceof Error ? err.message : 'Unknown'}`);
   } finally {
     clearTimeout(timeout);
     captureInProgress = false;

@@ -311,7 +311,7 @@ GOVERNANCE:
 
   const toolsSection = isFullToolAgent
     ? `\nYou can use the available tools for code, infra, and Discord operations.`
-    : `\nYou can use the available read-only tools for analysis and verification.`;
+    : `\nYou can use analysis tools plus operational testing tools (GCP, screenshots, and mobile harness). Repository write tools remain restricted.`;
 
   const budgetWarning = remaining < 0.50 ? `\n⚠️ LOW BUDGET: $${remaining.toFixed(2)} remaining of $${limit.toFixed(2)} daily limit. Be extremely efficient — minimize tool calls, keep responses short.` : '';
 
@@ -429,6 +429,8 @@ TOKENS: ${tokenUsed.toLocaleString()} used / ${tokenLimit.toLocaleString()} dail
         'db_query',
         // Screenshots
         'capture_screenshots',
+        // Interactive mobile harness
+        'mobile_harness_start', 'mobile_harness_step', 'mobile_harness_snapshot', 'mobile_harness_stop',
       ]);
 
       // Separate into read-only (parallelizable) and write (sequential) batches
@@ -450,7 +452,11 @@ TOKENS: ${tokenUsed.toLocaleString()} used / ${tokenLimit.toLocaleString()} dail
       const processBlock = async (block: any) => {
         const toolStart = Date.now();
         totalToolCalls++;
-        const result = await executeTool(block.name, block.input as Record<string, string>);
+        const result = await executeTool(
+          block.name,
+          block.input as Record<string, string>,
+          { agentId: agent.id }
+        );
         if (agent.id === 'developer' && !options?.modelOverride && hasValidationFailure(block.name, result)) {
           sawValidationFailure = true;
         }
@@ -575,6 +581,16 @@ function formatToolSummary(toolName: string, input: Record<string, string>): str
       const count = Array.isArray(edits) ? edits.length : '?';
       return `Batch editing ${count} files`;
     }
+    case 'capture_screenshots':
+      return `Capturing app screenshots${input.channel_name ? ` to #${input.channel_name}` : ''}`;
+    case 'mobile_harness_start':
+      return `Starting mobile harness${input.url ? ` at ${input.url.slice(0, 60)}` : ''}`;
+    case 'mobile_harness_step':
+      return `Mobile harness step: ${input.action || 'wait'}`;
+    case 'mobile_harness_snapshot':
+      return `Capturing mobile harness snapshot`;
+    case 'mobile_harness_stop':
+      return `Stopping mobile harness session`;
     case 'gcp_deploy':
       return `Deploying to Cloud Run${input.tag ? ` (${input.tag})` : ''}`;
     case 'gcp_set_env':
