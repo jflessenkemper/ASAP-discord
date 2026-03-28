@@ -143,7 +143,9 @@ export interface ConversationMessage {
 }
 
 /** Max tool-use iterations before forcing a text response */
-const MAX_TOOL_ROUNDS = parseInt(process.env.MAX_TOOL_ROUNDS || '20', 10);
+const MAX_TOOL_ROUNDS = parseInt(process.env.MAX_TOOL_ROUNDS || '30', 10);
+const MAX_TOOL_ROUNDS_DEVELOPER = parseInt(process.env.MAX_TOOL_ROUNDS_DEVELOPER || '45', 10);
+const MAX_TOOL_ROUNDS_EXECUTIVE = parseInt(process.env.MAX_TOOL_ROUNDS_EXECUTIVE || '35', 10);
 /** Maximum history messages to send to Claude per request (excludes current user message) */
 const MAX_CONTEXT_MESSAGES = parseInt(process.env.MAX_CONTEXT_MESSAGES || '35', 10);
 /** Soft cap for history character volume sent to Claude per request */
@@ -257,6 +259,12 @@ export async function agentRespond(
   onToolUse?: (toolName: string, summary: string) => Promise<void>,
   options?: { modelOverride?: string; maxTokens?: number; signal?: AbortSignal }
 ): Promise<string> {
+    const maxToolRounds = agent.id === 'developer'
+      ? MAX_TOOL_ROUNDS_DEVELOPER
+      : agent.id === 'executive-assistant'
+        ? MAX_TOOL_ROUNDS_EXECUTIVE
+        : MAX_TOOL_ROUNDS;
+
   const anthropic = getClient();
 
   if (isCreditsExhaustedNow()) {
@@ -339,7 +347,7 @@ TOKENS: ${tokenUsed.toLocaleString()} used / ${tokenLimit.toLocaleString()} dail
   // Check for pre-abort before starting any work
   if (options?.signal?.aborted) return '';
 
-  for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
+  for (let round = 0; round < maxToolRounds; round++) {
     if (isClaudeOverLimit() || isBudgetExceeded()) {
       const reason = isBudgetExceeded() ? 'Daily dollar budget exceeded' : 'Daily token limit reached';
       logAgentEvent(agent.id, 'error', reason);
@@ -510,7 +518,7 @@ TOKENS: ${tokenUsed.toLocaleString()} used / ${tokenLimit.toLocaleString()} dail
     return finalText;
   }
 
-  logAgentEvent(agent.id, 'error', `Max tool iterations (${MAX_TOOL_ROUNDS}) after ${totalToolCalls} tool calls`, { durationMs: Date.now() - loopStart });
+  logAgentEvent(agent.id, 'error', `Max tool iterations (${maxToolRounds}) after ${totalToolCalls} tool calls`, { durationMs: Date.now() - loopStart });
   return 'Reached maximum tool iterations. Here is what I accomplished so far — please check the repository for changes.';
 }
 

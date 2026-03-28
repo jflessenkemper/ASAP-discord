@@ -18,6 +18,31 @@ const VOICE_SPEAKERS = new Set(['executive-assistant', 'developer']);
 const HEARTBEAT_INTERVAL = 2 * 60 * 1000;
 /** Max conversation history in a call */
 const MAX_CALL_HISTORY = 40;
+const VOICE_PREFLIGHT_TIMEOUT_MS = parseInt(process.env.VOICE_PREFLIGHT_TIMEOUT_MS || '15000', 10);
+
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  return new Promise<T>((resolve, reject) => {
+    timer = setTimeout(() => reject(new Error(`${label} timed out after ${timeoutMs}ms`)), timeoutMs);
+    promise
+      .then((value) => resolve(value))
+      .catch(reject)
+      .finally(() => {
+        if (timer) clearTimeout(timer);
+      });
+  });
+}
+
+function isVoiceInputAvailable(): { ok: boolean; reason?: string } {
+  if (isDeepgramAvailable()) return { ok: true };
+  if (!process.env.GEMINI_API_KEY) {
+    return { ok: false, reason: 'Deepgram is not configured and Gemini API key is missing.' };
+  }
+  if (isGeminiOverLimit()) {
+    return { ok: false, reason: 'Deepgram is not configured and Gemini transcription quota is exhausted.' };
+  }
+  return { ok: true };
+}
 
 /**
  * Split text into sentences for pipelined TTS playback.
@@ -111,6 +136,18 @@ export async function startCall(
     return;
   }
 
+  const inputReady = isVoiceInputAvailable();
+  if (!inputReady.ok) {
+    await sendAsAgent(
+      groupchat,
+      `⚠️ I can't join voice yet because listening is unavailable: ${inputReady.reason} ` +
+      `Configure Deepgram (preferred) or restore Gemini transcription before joining.`
+    );
+    return;
+  }
+
+  await sendAsAgent(groupchat, `📞 Connecting Riley to **${voiceChannel.name}** and running voice preflight...`);
+
   const connection = await joinVC(voiceChannel);
 
   activeSession = {
@@ -144,27 +181,31 @@ export async function startCall(
   const riley = getAgent('executive-assistant' as AgentId);
   const ace = getAgent('developer' as AgentId);
 
-  await sendAsAgent(
-    groupchat,
-    `📞 **Voice call started**\n` +
-      `Initiated by **${initiator.displayName}**\n` +
-      `${riley?.emoji || '📋'} **Riley** and ${ace?.emoji || '💻'} **Ace** are on the line.\n\n` +
-      `Speak in the **${voiceChannel.name}** voice channel. Say "leave" or ask Riley to end the call.`
-  );
-
   activeSession.transcript.push(
     `[${new Date().toLocaleTimeString()}] Call started by ${initiator.displayName}`
   );
 
   // Voice output self-test: fail fast with a clear operator hint instead of silent VC.
   try {
-    const checkAudio = await textToSpeech('Voice channel connected. Riley is ready.');
-    await speakInVC(checkAudio);
+    const checkAudio = await withTimeout(
+      textToSpeech('Voice channel connected. Riley is ready.'),
+      VOICE_PREFLIGHT_TIMEOUT_MS,
+      'TTS preflight'
+    );
+    await withTimeout(speakInVC(checkAudio), VOICE_PREFLIGHT_TIMEOUT_MS, 'Voice playback preflight');
     await postDiagnostic('Voice self-test passed at call start.', {
       level: 'info',
       source: 'callSession.startCall',
       detail: `Channel=${voiceChannel.name} Initiator=${initiator.displayName}`,
     });
+
+    await sendAsAgent(
+      groupchat,
+      `✅ **Voice call started**\n` +
+        `Initiated by **${initiator.displayName}**\n` +
+        `${riley?.emoji || '📋'} **Riley** and ${ace?.emoji || '💻'} **Ace** are on the line and listening now.\n\n` +
+        `Speak in **${voiceChannel.name}**. Say "leave" or ask Riley to end the call.`
+    );
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'Unknown error';
     console.error('Voice output self-test failed:', msg);
@@ -175,20 +216,14 @@ export async function startCall(
     });
     await sendAsAgent(
       groupchat,
-      `⚠️ Voice output check failed: ${msg}. ` +
-      `The bot can still type in call-log, but speaking is unavailable right now.`
+      `⚠️ Voice preflight failed: ${msg}. I am leaving voice so you are not stuck waiting on silence.`
     );
-  }
-
-  if (!isDeepgramAvailable() && isGeminiOverLimit()) {
-    await postDiagnostic('Voice transcription unavailable: Deepgram missing and Gemini over quota.', {
-      level: 'warn',
-      source: 'callSession.startCall',
-    });
-    await sendAsAgent(
-      groupchat,
-      '⚠️ Voice transcription is unavailable: Deepgram is not configured and Gemini quota is exhausted.'
-    );
+    leaveVC();
+    if (activeSession?.heartbeatTimer) {
+      clearInterval(activeSession.heartbeatTimer);
+    }
+    activeSession = null;
+    return;
   }
 
   // Listen to ALL members using best available STT (Deepgram real-time or Gemini batch)
