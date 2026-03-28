@@ -9,7 +9,7 @@ interface CheckResult {
 }
 
 const ANTHROPIC_MODELS = ['claude-sonnet-4-20250514', 'claude-opus-4-20250514'];
-const GEMINI_TEXT_MODEL = 'gemini-2.5-flash';
+const GEMINI_TEXT_MODEL = 'gemini-flash-latest';
 const GEMINI_TTS_MODEL = 'gemini-2.5-flash-preview-tts';
 let lockClient: PoolClient | null = null;
 
