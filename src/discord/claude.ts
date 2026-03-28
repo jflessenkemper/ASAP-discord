@@ -594,9 +594,9 @@ function formatToolSummary(toolName: string, input: Record<string, string>): str
     case 'memory_list':
       return `Listing memory files`;
     case 'db_query':
-      return `Running SQL: ${input.query?.slice(0, 80)}`;
+      return 'Running SQL query';
     case 'db_query_readonly':
-      return `Running read-only SQL: ${input.query?.slice(0, 80)}`;
+      return 'Running read-only SQL query';
     case 'db_schema':
       return `Inspecting schema${input.table ? `: ${input.table}` : ''}`;
     default:

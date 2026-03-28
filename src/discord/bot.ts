@@ -100,8 +100,29 @@ export async function startBot(): Promise<void> {
       });
 
       // Wire tool audit to #terminal channel — every tool invocation from every agent
+      let lastDbAuditPost = 0;
+      let suppressedDbAudits = 0;
+      const DB_AUDIT_POST_INTERVAL_MS = 30_000;
       setToolAuditCallback((agentName, toolName, summary) => {
         const firstName = agentName.split(' ')[0];
+        const isDbTool = toolName === 'db_query' || toolName === 'db_query_readonly';
+
+        if (isDbTool) {
+          const now = Date.now();
+          if (now - lastDbAuditPost < DB_AUDIT_POST_INTERVAL_MS) {
+            suppressedDbAudits++;
+            return;
+          }
+
+          const suppressedNote = suppressedDbAudits > 0
+            ? ` (+${suppressedDbAudits} db queries suppressed in last ${Math.round(DB_AUDIT_POST_INTERVAL_MS / 1000)}s)`
+            : '';
+          suppressedDbAudits = 0;
+          lastDbAuditPost = now;
+          botChannels!.terminal.send(`🧮 **${firstName}** → \`${toolName}\`${suppressedNote}`).catch(() => {});
+          return;
+        }
+
         botChannels!.terminal.send(`🔧 **${firstName}** → \`${toolName}\`: ${summary}`).catch(() => {});
       });
 
