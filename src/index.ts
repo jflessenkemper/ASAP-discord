@@ -25,7 +25,9 @@ import twilio from 'twilio';
 
 const app = express();
 const PORT = parseInt(process.env.PORT || '3001', 10);
-const DISCORD_BOT_ENABLED = process.env.DISCORD_BOT_ENABLED !== 'false';
+const IS_CLOUD_RUN = !!process.env.K_SERVICE || !!process.env.K_REVISION;
+// Discord voice requires UDP. Cloud Run is HTTP-only, so force-disable bot there.
+const DISCORD_BOT_ENABLED = !IS_CLOUD_RUN && process.env.DISCORD_BOT_ENABLED !== 'false';
 
 // Validate required production env vars
 if (process.env.NODE_ENV === 'production' && !process.env.FRONTEND_URL) {
@@ -260,7 +262,10 @@ const server = app.listen(PORT, () => {
       console.error('Discord bot startup error:', err instanceof Error ? err.message : 'Unknown');
     });
   } else {
-    console.log('Discord bot startup disabled by DISCORD_BOT_ENABLED=false');
+    const reason = IS_CLOUD_RUN
+      ? 'Cloud Run runtime detected (UDP unavailable for Discord voice)'
+      : 'DISCORD_BOT_ENABLED=false';
+    console.log(`Discord bot startup disabled: ${reason}`);
   }
 
   // Clean up expired sessions and 2FA codes every hour
