@@ -135,7 +135,8 @@ export async function sendAgentMessage(
   agent: AgentConfig,
   response: string
 ): Promise<void> {
-  const chunks = splitMessage(response, 1900);
+  const rendered = renderAgentMessage(response);
+  const chunks = splitMessage(rendered, 1900);
 
   try {
     const webhook = await getWebhook(channel);
@@ -146,7 +147,7 @@ export async function sendAgentMessage(
         avatarURL: agent.avatarUrl,
       });
     }
-    await mirrorAgentResponse(agent.name, channel.name, response);
+    await mirrorAgentResponse(agent.name, channel.name, rendered);
   } catch (err) {
     console.warn(`Webhook send failed for ${agent.name}, retrying with a fresh webhook:`, err instanceof Error ? err.message : 'Unknown');
     clearWebhookCache();
@@ -159,12 +160,26 @@ export async function sendAgentMessage(
           avatarURL: agent.avatarUrl,
         });
       }
-      await mirrorAgentResponse(agent.name, channel.name, response);
+      await mirrorAgentResponse(agent.name, channel.name, rendered);
       return;
     } catch (retryErr) {
       console.error(`Webhook retry failed for ${agent.name}:`, retryErr instanceof Error ? retryErr.message : 'Unknown');
     }
   }
+}
+
+function renderAgentMessage(raw: string): string {
+  const withoutActionTags = raw.replace(/\[ACTION:[^\]]+\]/g, '').trim();
+  if (!withoutActionTags) return '';
+
+  // Preserve code blocks verbatim; bold mentions only in normal prose.
+  const segments = withoutActionTags.split(/(```[\s\S]*?```)/g);
+  const formatted = segments.map((segment) => {
+    if (segment.startsWith('```') && segment.endsWith('```')) return segment;
+    return segment.replace(/(^|\s)@([a-z0-9-]{2,32})\b/gi, (_m, prefix, name) => `${prefix}**@${name}**`);
+  }).join('');
+
+  return formatted.trim();
 }
 
 /**
