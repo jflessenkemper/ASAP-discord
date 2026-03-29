@@ -9,7 +9,10 @@ const CAPTURE_TIMEOUT = 90_000;
 
 /** Allowed URL patterns for screenshot targets */
 const ALLOWED_URL_PATTERNS = [
-  /^https:\/\/asap-(?:489910|960788465571)[\w.-]*\.run\.app/,
+  // Support current and historical ASAP Cloud Run URL shapes:
+  // - asap-<id>.<region>.run.app
+  // - asap-<hash>.a.run.app
+  /^https:\/\/asap-[a-z0-9-]+(?:\.[a-z0-9-]+)*\.run\.app(?:[\/:?#]|$)/i,
   /^https?:\/\/localhost(:\d+)?/,
   /^https?:\/\/127\.0\.0\.1(:\d+)?/,
 ];
