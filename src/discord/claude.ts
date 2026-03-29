@@ -538,7 +538,7 @@ TOKENS: ${tokenUsed.toLocaleString()} used / ${tokenLimit.toLocaleString()} dail
   }
 
   logAgentEvent(agent.id, 'error', `Max tool iterations (${maxToolRounds}) after ${totalToolCalls} tool calls`, { durationMs: Date.now() - loopStart });
-  return 'Reached maximum tool iterations. Here is what I accomplished so far — please check the repository for changes.';
+  return 'I hit an internal tool-run safety limit for this pass. Here is what I accomplished so far — please check the repository for changes, then ask me to continue from the latest commit/state.';
 }
 
 function formatToolSummary(toolName: string, input: Record<string, string>): string {
