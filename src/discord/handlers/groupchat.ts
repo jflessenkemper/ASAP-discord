@@ -462,6 +462,9 @@ async function executeActions(
         console.warn('Webhook send failed for Riley action response:', err instanceof Error ? err.message : 'Unknown');
       }
     }
+
+    // Fallback keeps action visibility even if webhook provisioning is stale.
+    await groupchat.send(msg).catch(() => {});
   }
 
   for (const [, action, param] of actions) {
