@@ -310,8 +310,16 @@ async function processGroupchatMessage(
   const uniqueMentions = parseMentionedAgentIds(content);
 
   if (uniqueMentions.length > 0) {
-    // User explicitly @mentioned agents — route to them directly
-    await handleDirectedMessage(content, senderName, uniqueMentions, groupchat, signal);
+    // If user only mentions Riley, keep full Riley orchestration path so
+    // action tags, watchdog, and fire-and-forget behavior all run.
+    if (uniqueMentions.length === 1 && uniqueMentions[0] === 'executive-assistant') {
+      activeGoal = content;
+      markGoalProgress('⏳ Riley planning...');
+      await handleRileyMessage(content, senderName, message.member || undefined, groupchat, signal);
+    } else {
+      // User explicitly @mentioned non-Riley agents — route to them directly
+      await handleDirectedMessage(content, senderName, uniqueMentions, groupchat, signal);
+    }
   } else {
     // No @mentions — goes to Riley, she coordinates
     activeGoal = content;
