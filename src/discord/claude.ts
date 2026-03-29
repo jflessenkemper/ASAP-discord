@@ -323,8 +323,8 @@ export async function agentRespond(
     const { spent, limit } = getRemainingBudget();
     logAgentEvent(agent.id, 'error', `Budget exceeded: $${spent.toFixed(2)}/$${limit.toFixed(2)}`);
     return agent.id === 'executive-assistant'
-      ? `⚠️ Daily budget of $${limit.toFixed(2)} has been reached ($${spent.toFixed(2)} spent). Pause the team and ask Jordan whether he wants to approve more budget before work resumes.`
-      : `⚠️ Daily budget of $${limit.toFixed(2)} has been reached ($${spent.toFixed(2)} spent). Ask Riley to request Jordan approval before any extra spend.`;
+      ? `⚠️ Daily budget of $${limit.toFixed(2)} has been reached ($${spent.toFixed(2)} spent) and runtime auto-approval could not clear it. Pause the team only now and ask Jordan whether he wants more budget before work resumes.`
+      : `⚠️ Daily budget of $${limit.toFixed(2)} has been reached ($${spent.toFixed(2)} spent) and runtime auto-approval could not clear it. Ask Riley to escalate only if she confirms the budget gate is still blocking.`;
   }
 
   const isFullToolAgent = FULL_TOOL_AGENTS.has(agent.id);
@@ -338,25 +338,45 @@ CRITICAL: Do NOT use send_channel_message — ONLY @mentions work for agent coor
   DEFAULT: When work needs execution, involve the full agent roster unless the user explicitly asks for a narrower subset.
 ` : '';
 
+  const budgetGovernance = RILEY_AUTO_APPROVE_BUDGET
+    ? `
+- Budget autopilot is enabled. If the runtime budget gate trips, it may auto-approve additional budget in $${RILEY_AUTO_APPROVE_BUDGET_INCREMENT.toFixed(2)} increments for you.
+- Do NOT ask Jordan for budget approval merely because budget is low or because you see a warning. Keep working unless you receive an explicit hard budget block after auto-approval has already been attempted.
+`
+    : `
+- When the team hits a limit, pause the work, explain what increase is needed, and ask Jordan for explicit approval before anyone resumes.
+`;
+
+  const workerBudgetGovernance = RILEY_AUTO_APPROVE_BUDGET
+    ? `
+- Budget autopilot is enabled through Riley/runtime. Do not suggest stopping for budget unless Riley explicitly confirms a hard budget block remains after auto-approval.
+`
+    : `
+- Riley is the token master. Never ask Jordan directly for more tokens, budget, or credits. Ask Riley so she can seek approval.
+`;
+
   const governanceSection = agent.id === 'executive-assistant' ? `
 GOVERNANCE:
 - You are Jordan's token master. Any request to increase Gemini tokens, Google Cloud credits, ElevenLabs credit, or daily budget must come through you.
-- When the team hits a limit, pause the work, explain what increase is needed, and ask Jordan for explicit approval before anyone resumes.
+- Only escalate budget to Jordan if a hard budget block remains after runtime auto-approval has already been attempted.
 - Ace is the Tool Master. If tooling is missing, stale, or unreliable, direct @ace to prepare it before the rest of the team proceeds.
 - Internal tool-usage approvals are your call. If more tool rounds are justified, approve and direct the team to continue.
 - If you state that a deployment/screenshots/URL action is happening, you MUST include explicit action tags in the same message: [ACTION:DEPLOY], [ACTION:SCREENSHOTS], [ACTION:URLS].
 - You are allowed to self-improve: if your own orchestration/routing/tooling is causing friction, direct @ace to patch the Discord bot code and deploy the improvement.
+${budgetGovernance}
 ` : agent.id === 'developer' ? `
 GOVERNANCE:
 - You are the Tool Master. Own tool readiness for the whole team.
 - Keep .github/AGENT_TOOLING_STATUS.md accurate, make missing tools available where possible, and confirm readiness before other agents depend on them.
 - Riley is the token master. If more budget, credits, or token headroom is needed, report that to Riley instead of asking Jordan directly.
 - If you hit internal tool-usage caps, ask @riley for more tool usage approval and continue once approved.
+${workerBudgetGovernance}
 ` : `
 GOVERNANCE:
 - Riley is the token master. Never ask Jordan directly for more tokens, budget, or credits. Ask Riley so she can seek approval.
 - Ace is the Tool Master. Before tool-heavy work, or anytime tool readiness is uncertain, check with @ace first and wait for the green light.
 - If you hit internal tool-usage caps, ask @riley for more tool usage approval and continue once approved.
+${workerBudgetGovernance}
 `;
 
   const toolsSection = isFullToolAgent
@@ -470,8 +490,8 @@ TOKENS: ${tokenUsed.toLocaleString()} used / ${tokenLimit.toLocaleString()} dail
       if (isBudgetExceeded()) {
         const { spent: roundSpent, limit: roundLimit } = getRemainingBudget();
         return agent.id === 'executive-assistant'
-          ? `⚠️ Daily budget of $${roundLimit.toFixed(2)} has been reached ($${roundSpent.toFixed(2)} spent). Ask Jordan whether he approves more budget before the team continues.`
-          : `⚠️ Daily budget of $${roundLimit.toFixed(2)} has been reached ($${roundSpent.toFixed(2)} spent). Ask Riley to request approval before continuing.`;
+          ? `⚠️ Daily budget of $${roundLimit.toFixed(2)} has been reached ($${roundSpent.toFixed(2)} spent) and runtime auto-approval could not clear it. Ask Jordan whether he approves more budget before the team continues.`
+          : `⚠️ Daily budget of $${roundLimit.toFixed(2)} has been reached ($${roundSpent.toFixed(2)} spent) and runtime auto-approval could not clear it. Ask Riley to escalate only if she confirms the block remains.`;
       }
       return agent.id === 'executive-assistant'
         ? '⚠️ Daily Gemini token limit reached. Ask Jordan whether he wants to raise DAILY_LIMIT_GEMINI_LLM_TOKENS (legacy: DAILY_LIMIT_CLAUDE_TOKENS) before the team continues.'
