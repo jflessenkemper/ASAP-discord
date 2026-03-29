@@ -39,6 +39,110 @@ let activeAbortController: AbortController | null = null;
 let activeGoal: string | null = null;
 let goalStatus: string | null = null;
 
+// Goal stall auto-recovery: if Riley workflow goes quiet, nudge and continue automatically.
+const GOAL_STALL_TIMEOUT_MS = parseInt(process.env.GOAL_STALL_TIMEOUT_MS || '180000', 10);
+const GOAL_STALL_CHECK_INTERVAL_MS = parseInt(process.env.GOAL_STALL_CHECK_INTERVAL_MS || '30000', 10);
+const GOAL_STALL_MAX_RECOVERY_ATTEMPTS = parseInt(process.env.GOAL_STALL_MAX_RECOVERY_ATTEMPTS || '3', 10);
+let lastGoalProgressAt = Date.now();
+let goalRecoveryAttempts = 0;
+let goalWatchdog: ReturnType<typeof setInterval> | null = null;
+
+function markGoalProgress(status?: string): void {
+  lastGoalProgressAt = Date.now();
+  goalRecoveryAttempts = 0;
+  if (status) goalStatus = status;
+}
+
+function compactAuditField(value: string | undefined | null, maxLen = 80): string {
+  const normalized = (value || 'n/a').replace(/\s+/g, ' ').trim();
+  if (normalized.length <= maxLen) return normalized;
+  return `${normalized.slice(0, maxLen - 1)}…`;
+}
+
+async function sendAutopilotAudit(
+  groupchat: TextChannel,
+  event: string,
+  detail: string,
+  extra?: { action?: string; buildId?: string; attempt?: number }
+): Promise<void> {
+  const riley = getAgent('executive-assistant' as AgentId);
+  const goal = compactAuditField(activeGoal || 'none', 64);
+  const status = compactAuditField(goalStatus || 'n/a', 48);
+  const bits = [
+    `event=${event}`,
+    extra?.action ? `action=${compactAuditField(extra.action, 24)}` : null,
+    Number.isFinite(extra?.attempt) ? `attempt=${extra!.attempt}` : null,
+    extra?.buildId ? `build=${compactAuditField(extra.buildId, 24)}` : null,
+    `goal="${goal}"`,
+    `status="${status}"`,
+    `detail="${compactAuditField(detail, 120)}"`,
+  ].filter(Boolean);
+  const line = `AUTOPILOT_AUDIT ${bits.join(' ')}`;
+
+  if (!riley) {
+    await groupchat.send(line).catch(() => {});
+    return;
+  }
+
+  try {
+    const wh = await getWebhook(groupchat);
+    await wh.send({ content: line, username: `${riley.emoji} ${riley.name}`, avatarURL: riley.avatarUrl });
+  } catch {
+    await groupchat.send(line).catch(() => {});
+  }
+}
+
+function inferImplicitActionTags(text: string): string {
+  const tags = new Set<string>();
+  const normalized = text.toLowerCase();
+
+  if (/(build triggered|triggered build|deploying|deployment triggered|rolling out|release started)/i.test(normalized)) {
+    tags.add('[ACTION:DEPLOY]');
+  }
+  if (/(capturing screenshots|taking screenshots|screenshot capture|posting screenshots)/i.test(normalized)) {
+    tags.add('[ACTION:SCREENSHOTS]');
+  }
+  if (/(asap links|live url|app url|posting.*url|paste.*url|share.*url)/i.test(normalized)) {
+    tags.add('[ACTION:URLS]');
+  }
+  if (/(usage report|limits report|budget report|token report)/i.test(normalized)) {
+    tags.add('[ACTION:LIMITS]');
+  }
+
+  return [...tags].join('\n');
+}
+
+function ensureGoalWatchdog(groupchat: TextChannel): void {
+  if (goalWatchdog) return;
+
+  goalWatchdog = setInterval(() => {
+    if (!activeGoal) return;
+    if (activeAbortController) return;
+    if (Date.now() - lastGoalProgressAt < GOAL_STALL_TIMEOUT_MS) return;
+    if (goalRecoveryAttempts >= GOAL_STALL_MAX_RECOVERY_ATTEMPTS) return;
+
+    goalRecoveryAttempts += 1;
+    goalStatus = `⚠️ Auto-recovery nudge ${goalRecoveryAttempts}/${GOAL_STALL_MAX_RECOVERY_ATTEMPTS}`;
+    lastGoalProgressAt = Date.now();
+
+    sendAutopilotAudit(
+      groupchat,
+      'watchdog_recovery',
+      'Goal was stalled; sending system nudge to Riley for continuation and pending actions.',
+      { attempt: goalRecoveryAttempts }
+    ).catch(() => {});
+
+    handleRileyMessage(
+      `[System auto-recovery] This goal appears stalled: "${activeGoal}". Summarize current state in one short paragraph, execute any pending deploy/screenshots/urls actions now using explicit [ACTION:...] tags, and continue without waiting for user follow-up.`,
+      'System',
+      undefined,
+      groupchat
+    ).catch((err) => {
+      console.error('Goal watchdog recovery error:', err instanceof Error ? err.message : 'Unknown');
+    });
+  }, GOAL_STALL_CHECK_INTERVAL_MS);
+}
+
 // Dedicated channel for overnight decision queuing (set from bot.ts)
 let decisionsChannel: TextChannel | null = null;
 
@@ -142,6 +246,7 @@ export async function handleGroupchatMessage(
 ): Promise<void> {
   const content = message.content.trim();
   if (!content) return;
+  ensureGoalWatchdog(groupchat);
 
   // Interrupt any in-progress response — user has already moved on
   if (activeAbortController) {
@@ -172,6 +277,7 @@ async function processGroupchatMessage(
   signal?: AbortSignal
 ): Promise<void> {
   const senderName = message.member?.displayName || message.author.username;
+  markGoalProgress();
 
   const approvedAmount = parseBudgetApproval(content);
   if (approvedAmount !== null) {
@@ -188,7 +294,7 @@ async function processGroupchatMessage(
     }
 
     if (activeGoal) {
-      goalStatus = '▶️ Resuming after budget approval';
+      markGoalProgress('▶️ Resuming after budget approval');
       await handleRileyMessage(
         `Budget approval has been granted by ${senderName}. Resume the paused work on this goal: ${activeGoal}`,
         senderName,
@@ -208,6 +314,8 @@ async function processGroupchatMessage(
     await handleDirectedMessage(content, senderName, uniqueMentions, groupchat, signal);
   } else {
     // No @mentions — goes to Riley, she coordinates
+    activeGoal = content;
+    markGoalProgress('⏳ Riley planning...');
     await handleRileyMessage(content, senderName, message.member || undefined, groupchat, signal);
   }
 }
@@ -223,7 +331,7 @@ export async function handleGoalCommand(
 ): Promise<void> {
   const senderName = member.displayName || member.user.username;
   activeGoal = description;
-  goalStatus = '⏳ Planning...';
+  markGoalProgress('⏳ Planning...');
 
   await handleRileyMessage(description, senderName, member, groupchat);
 }
@@ -267,6 +375,7 @@ async function handleRileyMessage(
     const displayResponse = response.replace(/\[ACTION:[^\]]+\]/g, '').trim();
     if (displayResponse) {
       await sendAgentMessage(groupchat, riley, displayResponse);
+      markGoalProgress('🧭 Riley coordinating...');
     }
 
     appendToMemory('executive-assistant', [
@@ -280,8 +389,20 @@ async function handleRileyMessage(
 
     if (signal?.aborted) return;
 
-    // Execute any actions Riley triggered
-    await executeActions(response, member, groupchat);
+    // Execute explicit tags and implied actions when Riley says actions are underway but omits tags.
+    const implicitTags = inferImplicitActionTags(displayResponse);
+    const actionPayload = implicitTags ? `${response}\n${implicitTags}` : response;
+    if (implicitTags) {
+      await sendAgentMessage(groupchat, riley, `Autopilot: executing implied actions.\n${implicitTags}`);
+      await sendAutopilotAudit(
+        groupchat,
+        'implied_actions',
+        'Riley response implied operational actions without explicit tags; autopilot synthesized tags.',
+        { action: implicitTags.replace(/\s+/g, ',') }
+      );
+    }
+    await executeActions(actionPayload, member, groupchat);
+    markGoalProgress();
 
     // Check if Riley presented a decision (🛑)
     // Fire-and-forget: post to #decisions without blocking so Riley continues with stated assumption
@@ -295,6 +416,7 @@ async function handleRileyMessage(
 
     // Check if Riley directed Ace or other agents
     await handleAgentChain(response, groupchat, signal);
+    markGoalProgress('✅ Riley cycle completed');
   } catch (err) {
     const abortLike = String((err as any)?.name || '').includes('Abort') || String((err as any)?.message || '').toLowerCase().includes('abort');
     if (abortLike || signal?.aborted) return;
@@ -370,6 +492,11 @@ async function executeActions(
         case 'DEPLOY': {
           try {
             const { buildId, logUrl } = await triggerCloudBuild(param || 'latest');
+            markGoalProgress('🚀 Deploy triggered');
+            await sendAutopilotAudit(groupchat, 'action_executed', 'Cloud Build deployment was triggered.', {
+              action: 'DEPLOY',
+              buildId,
+            });
             await sendAsRiley(
               `🚀 **Build triggered**\nBuild ID: \`${buildId}\`\n[View logs](${logUrl})`
             );
@@ -392,6 +519,10 @@ async function executeActions(
           captureAndPostScreenshots(appUrl, param || 'manual').catch((err) => {
             sendAsRiley(`❌ Screenshot capture failed: ${err instanceof Error ? err.message : 'Unknown'}`).catch(() => {});
           });
+          markGoalProgress('📸 Screenshot capture started');
+          await sendAutopilotAudit(groupchat, 'action_executed', 'Screenshot capture workflow started.', {
+            action: 'SCREENSHOTS',
+          });
           await sendAsRiley('📸 Capturing screenshots...');
           break;
         }
@@ -399,6 +530,10 @@ async function executeActions(
           const appUrl = process.env.FRONTEND_URL || 'https://asap-489910.australia-southeast1.run.app';
           const projectId = process.env.GCS_PROJECT_ID || 'asap-489910';
           const region = process.env.CLOUD_RUN_REGION || 'australia-southeast1';
+          markGoalProgress('🔗 URLs posted');
+          await sendAutopilotAudit(groupchat, 'action_executed', 'ASAP links were posted.', {
+            action: 'URLS',
+          });
           await sendAsRiley(
             `🔗 **ASAP Links**\n\n` +
             `🌐 **App**: ${appUrl}\n` +
@@ -416,6 +551,7 @@ async function executeActions(
         case 'LIMITS': {
           await refreshLiveBillingData().catch(() => {});
           const report = getUsageReport();
+          markGoalProgress('📊 Usage report posted');
           await sendAsRiley(report);
           break;
         }
@@ -423,6 +559,7 @@ async function executeActions(
           clearHistory(groupchat.id);
           groupHistory.splice(0);
           clearMemory('groupchat');
+          markGoalProgress('🧹 Context cleared');
           await sendAsRiley('🧹 Conversation context cleared.');
           break;
         }
@@ -430,6 +567,7 @@ async function executeActions(
           if (param) {
             try {
               const result = await rollbackToRevision(param);
+              markGoalProgress('↩️ Rollback complete');
               await sendAsRiley(result);
             } catch (err) {
               await sendAsRiley(`❌ Rollback failed: ${err instanceof Error ? err.message : 'Unknown'}`);
@@ -561,6 +699,7 @@ async function handleAgentChain(
     ? [...DIRECTED_AGENT_IDS]
     : directedAgents;
   if (effectiveAgents.length === 0) return;
+  markGoalProgress('🧩 Coordinating specialist agents...');
 
   // If Ace was directed, he gets Riley's full plan
   const aceDirected = effectiveAgents.includes('developer');
@@ -592,7 +731,7 @@ async function handleAgentChain(
         documentToChannel('developer', aceResponse.slice(0, 300)).catch(() => {});
 
         groupHistory.push({ role: 'assistant', content: `[Ace]: ${aceResponse}` });
-        goalStatus = '💻 Ace implementing...';
+        markGoalProgress('💻 Ace implementing...');
 
         // Ace may direct sub-agents
         const aceSubDirectives = parseDirectives(aceResponse);
@@ -649,6 +788,7 @@ async function handleSubAgents(
     .filter((a): a is { id: string; agent: AgentConfig } => a.agent !== null && a.agent !== undefined);
 
   if (validAgents.length === 0) return { findings: [], errors: [] };
+  markGoalProgress('🛠️ Sub-agents running...');
 
   // Group agents by tier
   const tiers = new Map<number, typeof validAgents>();
@@ -724,6 +864,7 @@ async function handleSubAgents(
     }
   }
   persistGroupHistory();
+  markGoalProgress('📝 Sub-agent cycle completed');
   return { findings: priorFindings, errors: errorLines };
 }
 
@@ -738,6 +879,7 @@ async function handleDirectedMessage(
   signal?: AbortSignal
 ): Promise<void> {
   const contextMessage = `[${senderName}]: ${userMessage}`;
+  markGoalProgress('🎯 Direct specialist routing...');
   groupchat.sendTyping().catch(() => {});
 
   const validAgents = agentIds
@@ -785,6 +927,7 @@ async function handleDirectedMessage(
 
   groupHistory.push({ role: 'user', content: contextMessage });
   persistGroupHistory();
+  markGoalProgress('✅ Directed response completed');
 }
 
 /**
