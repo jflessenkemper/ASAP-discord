@@ -204,6 +204,15 @@ const GROUPCHAT_SUMMARY_ONLY = process.env.GROUPCHAT_SUMMARY_ONLY !== 'false';
 function summarizeForRiley(raw: string, maxChars = 420): string {
   const singleLine = raw.replace(/\s+/g, ' ').trim();
   if (singleLine.length <= maxChars) return singleLine;
+  const sentenceWindow = singleLine.slice(0, Math.min(singleLine.length, maxChars + 120));
+  const sentenceBreak = Math.max(
+    sentenceWindow.lastIndexOf('. '),
+    sentenceWindow.lastIndexOf('! '),
+    sentenceWindow.lastIndexOf('? ')
+  );
+  if (sentenceBreak >= Math.floor(maxChars * 0.65)) {
+    return `${sentenceWindow.slice(0, sentenceBreak + 1).trim()}…`;
+  }
   return `${singleLine.slice(0, maxChars - 1)}…`;
 }
 
@@ -693,7 +702,9 @@ function parseDirectives(text: string): string[] {
 function shouldFanOutAllAgents(rileyResponse: string): boolean {
   const text = rileyResponse.toLowerCase();
   if (text.includes('no action needed') || text.includes('for awareness only')) return false;
-  return /(implement|build|fix|review|audit|investigate|coordinate|test|deploy|ship|create|update|refactor)/i.test(rileyResponse);
+  if (/(all agents|full team|entire team|everyone|full roster)/i.test(rileyResponse)) return true;
+  if (/(end-to-end|ship this end to end|coordinate the full team|cross-functional|full project)/i.test(rileyResponse)) return true;
+  return false;
 }
 
 /**

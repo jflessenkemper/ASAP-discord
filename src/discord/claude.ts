@@ -147,6 +147,14 @@ function trimConversationHistory(conversationHistory: ConversationMessage[]): Co
   return merged;
 }
 
+function normalizeHistoryContentForModel(content: string): string {
+  return content
+    .replace(/^\[([^\]\r\n]{1,40})\]:\s*/u, '$1: ')
+    .replace(/^\[Decision response from ([^\]]+) in #decisions\]:\s*/u, 'Decision reply from $1: ')
+    .replace(/^\[Conversation Summary[^\]]*\]\s*/u, '[Conversation Summary] ')
+    .trim();
+}
+
 function truncateToolResult(result: string, maxChars = 3500): string {
   if (result.length <= maxChars) return result;
   const head = Math.floor(maxChars * 0.75);
@@ -335,7 +343,7 @@ export async function agentRespond(
 AGENT COORDINATION: Coordinate agents via @mentions in your response text. The system parses and routes automatically.
 @ace @max @sophie @kane @raj @elena @kai @jude @liv @harper @mia @leo
 CRITICAL: Do NOT use send_channel_message — ONLY @mentions work for agent coordination.
-  DEFAULT: When work needs execution, involve the full agent roster unless the user explicitly asks for a narrower subset.
+  DEFAULT: Involve the minimum necessary agent subset. Use the full roster only for explicitly cross-functional, full-project, or end-to-end requests.
 ` : '';
 
   const budgetGovernance = RILEY_AUTO_APPROVE_BUDGET
@@ -396,6 +404,8 @@ RULES: Max 320 words (code exempt). Speak like a real teammate, not a ticket tem
 AUTHORITY: Any human team member in Discord can request work and should get help. Do not ignore requests because they are not Jordan. Jordan approval is only required for budget/credit increases.
 When doing work, explain a bit more than before: what you're doing, why you're doing it, and what happened.
 Default format (lightweight, not rigid): 1) action taken, 2) key result, 3) immediate next step or blocker (if any).
+If the ask is simple (status check, direct answer, yes/no, one-step clarification), answer in 1-3 short sentences and skip the default status structure.
+If you are asking for a decision, stop after presenting the decision and options. Do not continue with an assumption unless the user explicitly told you to proceed by default.
 Use short paragraphs or bullets when helpful. Do not pad with fluff.
 Never dump long tool output. Summarize the important result only.
 Tooling: Ace owns tool readiness. Check .github/AGENT_TOOLING_STATUS.md first. If tooling looks stale or a required tool may not be ready, coordinate with @ace before relying on it.
@@ -407,7 +417,7 @@ TOKENS: ${tokenUsed.toLocaleString()} used / ${tokenLimit.toLocaleString()} dail
   const trimmedHistory = trimConversationHistory(conversationHistory);
   const history: Content[] = trimmedHistory.map((msg) => ({
     role: msg.role === 'assistant' ? 'model' : 'user',
-    parts: [{ text: msg.content }],
+    parts: [{ text: normalizeHistoryContentForModel(msg.content) }],
   }));
 
   const agentTools = toolsForAgent(agent.id);
