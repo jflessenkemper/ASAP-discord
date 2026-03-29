@@ -104,11 +104,18 @@ function summarizeForRiley(raw: string, maxChars = 420): string {
 }
 
 function parseBudgetApproval(text: string): number | undefined | null {
-  const normalized = text.toLowerCase();
-  const looksLikeApproval =
-    /(approve|approved|increase|raise|bump)/i.test(normalized) &&
-    /(budget|spend|limit|credits?)/i.test(normalized);
-  if (!looksLikeApproval) return null;
+  const normalized = text.toLowerCase().trim();
+
+  // Simple one-word / short confirmations — "yes", "yep", "yeah", "ok", "sure", "go", "continue", "resume", "proceed"
+  const simpleYes = /^(yes|yep|yeah|yup|ok|okay|sure|go|go ahead|continue|resume|proceed|approved?|keep going|carry on|do it|let'?s? go)$/i.test(normalized);
+  if (simpleYes) return undefined; // undefined → use default increment
+
+  // Must mention approval intent AND budget/spend subject, OR say standalone "approve"
+  const hasApprovalWord = /(approve|approved|increase|raise|bump|add|authorise|authorize)/i.test(normalized);
+  const hasBudgetWord = /(budget|spend|limit|credits?|more|extra|funds?)/i.test(normalized);
+  const standaloneApprove = /^approve[sd]?[!.]*$/i.test(normalized);
+
+  if (!standaloneApprove && !(hasApprovalWord && hasBudgetWord)) return null;
 
   const dollarMatch = text.match(/\$\s*(\d+(?:\.\d{1,2})?)/);
   if (dollarMatch) return parseFloat(dollarMatch[1]);

@@ -11,7 +11,7 @@ const DAILY_LIMITS = {
   /** Max ElevenLabs characters per day */
   elevenLabsChars: parseInt(process.env.DAILY_LIMIT_ELEVENLABS_CHARS || '10000', 10),
   /** Hard dollar budget — ALL agents stop when this is exceeded */
-  budgetUsd: parseFloat(process.env.DAILY_BUDGET_USD || '2.00'),
+  budgetUsd: parseFloat(process.env.DAILY_BUDGET_USD || '10.00'),
 };
 const DEFAULT_BUDGET_APPROVAL_INCREMENT_USD = parseFloat(process.env.BUDGET_APPROVAL_INCREMENT_USD || '5.00');
 const DASHBOARD_UPDATE_INTERVAL_MS = 5 * 60 * 1000;
