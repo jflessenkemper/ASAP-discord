@@ -97,6 +97,12 @@ function parseMentionedAgentIds(text: string, allowedIds?: Set<string>): string[
 // Riley posts a single consolidated summary to groupchat.
 const GROUPCHAT_SUMMARY_ONLY = process.env.GROUPCHAT_SUMMARY_ONLY !== 'false';
 
+function summarizeForRiley(raw: string, maxChars = 420): string {
+  const singleLine = raw.replace(/\s+/g, ' ').trim();
+  if (singleLine.length <= maxChars) return singleLine;
+  return `${singleLine.slice(0, maxChars - 1)}…`;
+}
+
 function parseBudgetApproval(text: string): number | undefined | null {
   const normalized = text.toLowerCase();
   const looksLikeApproval =
@@ -764,7 +770,7 @@ async function handleDirectedMessage(
       ]);
       documentToChannel(id, `Direct @mention from ${senderName}: ${response.slice(0, 200)}`).catch(() => {});
       groupHistory.push({ role: 'assistant', content: `[${agent.name.split(' ')[0]}]: ${response}` });
-      summaryLines.push(`${agent.name.split(' ')[0]}: ${response.slice(0, 180)}`);
+      summaryLines.push(`${agent.name.split(' ')[0]}: ${summarizeForRiley(response)}`);
     })
   );
 

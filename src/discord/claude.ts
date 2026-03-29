@@ -162,9 +162,9 @@ export interface ConversationMessage {
 }
 
 /** Max tool-use iterations before forcing a text response */
-const MAX_TOOL_ROUNDS = parseInt(process.env.MAX_TOOL_ROUNDS || '30', 10);
-const MAX_TOOL_ROUNDS_DEVELOPER = parseInt(process.env.MAX_TOOL_ROUNDS_DEVELOPER || '45', 10);
-const MAX_TOOL_ROUNDS_EXECUTIVE = parseInt(process.env.MAX_TOOL_ROUNDS_EXECUTIVE || '35', 10);
+const MAX_TOOL_ROUNDS = parseInt(process.env.MAX_TOOL_ROUNDS || '60', 10);
+const MAX_TOOL_ROUNDS_DEVELOPER = parseInt(process.env.MAX_TOOL_ROUNDS_DEVELOPER || '90', 10);
+const MAX_TOOL_ROUNDS_EXECUTIVE = parseInt(process.env.MAX_TOOL_ROUNDS_EXECUTIVE || '75', 10);
 /** Maximum history messages to send per request (excludes current user message) */
 const MAX_CONTEXT_MESSAGES = parseInt(process.env.MAX_CONTEXT_MESSAGES || '35', 10);
 /** Soft cap for history character volume sent per request */
