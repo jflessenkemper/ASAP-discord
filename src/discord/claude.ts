@@ -1,6 +1,6 @@
 import { GoogleGenerativeAI, Content, Part, FunctionDeclaration, Tool } from '@google/generative-ai';
 import { readFileSync } from 'fs';
-import { join } from 'path';
+import { extname, join } from 'path';
 import { AgentConfig } from './agents';
 import { REPO_TOOLS, REVIEW_TOOLS, executeTool, getToolAuditCallback } from './tools';
 import { recordClaudeUsage, isClaudeOverLimit, isBudgetExceeded, getRemainingBudget, getClaudeTokenStatus, approveAdditionalBudget } from './usage';
@@ -343,7 +343,7 @@ export async function agentRespond(
 AGENT COORDINATION: Coordinate agents via @mentions in your response text. The system parses and routes automatically.
 @ace @max @sophie @kane @raj @elena @kai @jude @liv @harper @mia @leo
 CRITICAL: Do NOT use send_channel_message — ONLY @mentions work for agent coordination.
-  DEFAULT: Involve the minimum necessary agent subset. Use the full roster only for explicitly cross-functional, full-project, or end-to-end requests.
+    DEFAULT: When work needs execution, involve the full agent roster unless the user explicitly asks for a narrower subset.
 ` : '';
 
   const budgetGovernance = RILEY_AUTO_APPROVE_BUDGET
@@ -409,6 +409,7 @@ If you are asking for a decision, stop after presenting the decision and options
 Use short paragraphs or bullets when helpful. Do not pad with fluff.
 Never dump long tool output. Summarize the important result only.
 Never start your visible reply with your own name, a role label, or bracketed speaker text such as "[Liv]:" or "Riley:".
+Describe your role and capabilities plainly. Never call yourself "supreme", say you have "absolute authority", or claim unrestricted control. Do not exaggerate authority, status, or trust relationships.
 Tooling: Ace owns tool readiness. Check .github/AGENT_TOOLING_STATUS.md first. If tooling looks stale or a required tool may not be ready, coordinate with @ace before relying on it.
 ${governanceSection}
 BUDGET: $${spent.toFixed(2)} spent / $${limit.toFixed(2)} daily limit ($${remaining.toFixed(2)} remaining). Each tool call costs tokens. Be efficient.${budgetWarning}
@@ -637,14 +638,82 @@ TOKENS: ${tokenUsed.toLocaleString()} used / ${tokenLimit.toLocaleString()} dail
     : 'I hit an internal tool-run safety limit for this pass. @riley please approve more tool usage if this work should continue, and I will resume from the latest repository state.';
 }
 
+function sanitizeForCodeBlock(text: string): string {
+  return String(text || '').replace(/```/g, "''' ");
+}
+
+function truncateCodeSnippet(text: string, maxLines = 16, maxChars = 900): string {
+  const normalized = sanitizeForCodeBlock(text).replace(/\r\n/g, '\n');
+  const clippedChars = normalized.length > maxChars
+    ? `${normalized.slice(0, maxChars - 1)}…`
+    : normalized;
+  const lines = clippedChars.split('\n');
+  if (lines.length <= maxLines) return clippedChars;
+  return `${lines.slice(0, maxLines).join('\n')}\n…`;
+}
+
+function codeFenceLanguage(filePath: string): string {
+  switch (extname(filePath).toLowerCase()) {
+    case '.ts':
+    case '.tsx':
+      return 'ts';
+    case '.js':
+    case '.jsx':
+    case '.mjs':
+    case '.cjs':
+      return 'js';
+    case '.json':
+      return 'json';
+    case '.sql':
+      return 'sql';
+    case '.md':
+      return 'md';
+    case '.css':
+      return 'css';
+    case '.html':
+      return 'html';
+    case '.sh':
+      return 'bash';
+    case '.yml':
+    case '.yaml':
+      return 'yaml';
+    case '.py':
+      return 'python';
+    default:
+      return '';
+  }
+}
+
+function renderCodeBlock(language: string, content: string): string {
+  const fence = '`'.repeat(3);
+  return `\n${fence}${language}\n${content}\n${fence}`;
+}
+
+function renderDiffBlock(oldString: string, newString: string): string {
+  const oldLines = truncateCodeSnippet(oldString, 8, 450).split('\n').map((line) => `- ${line}`);
+  const newLines = truncateCodeSnippet(newString, 8, 450).split('\n').map((line) => `+ ${line}`);
+  return renderCodeBlock('diff', [...oldLines, ...newLines].join('\n'));
+}
+
+function renderWriteBlock(filePath: string, content: string): string {
+  return renderCodeBlock(codeFenceLanguage(filePath), truncateCodeSnippet(content, 18, 1000));
+}
+
+function formatBatchEditSummary(edits: Array<{ path: string; old_string: string; new_string: string }>): string {
+  const visibleEdits = edits.slice(0, 2);
+  const blocks = visibleEdits.map((edit) => `Editing \`${edit.path}\`${renderDiffBlock(edit.old_string, edit.new_string)}`);
+  const remainder = edits.length > visibleEdits.length ? `\n(+${edits.length - visibleEdits.length} more edits)` : '';
+  return `Batch editing ${edits.length} file${edits.length === 1 ? '' : 's'}.${blocks.length ? `\n${blocks.join('\n')}` : ''}${remainder}`;
+}
+
 function formatToolSummary(toolName: string, input: Record<string, string>): string {
   switch (toolName) {
     case 'read_file':
       return `Reading \`${input.path}\` to gather implementation context`;
     case 'write_file':
-      return `Writing \`${input.path}\` with the requested changes`;
+      return `Writing \`${input.path}\` with the requested changes${renderWriteBlock(input.path, input.content || '')}`;
     case 'edit_file':
-      return `Editing \`${input.path}\` to implement or refine behavior`;
+      return `Editing \`${input.path}\` to implement or refine behavior${renderDiffBlock(input.old_string || '', input.new_string || '')}`;
     case 'search_files':
       return `Searching for \`${input.pattern}\`${input.include ? ` in ${input.include}` : ''} to locate relevant code paths`;
     case 'list_directory':
@@ -687,8 +756,7 @@ function formatToolSummary(toolName: string, input: Record<string, string>): str
       return `Running typecheck${input.target ? ` (${input.target})` : ''} to confirm compile-time correctness`;
     case 'batch_edit': {
       const edits = input.edits as any;
-      const count = Array.isArray(edits) ? edits.length : '?';
-      return `Batch editing ${count} files`;
+      return Array.isArray(edits) ? formatBatchEditSummary(edits) : 'Batch editing files';
     }
     case 'capture_screenshots':
       return `Capturing app screenshots${input.channel_name ? ` to #${input.channel_name}` : ''} for visual verification`;

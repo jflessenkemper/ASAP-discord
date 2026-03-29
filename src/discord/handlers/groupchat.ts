@@ -702,9 +702,8 @@ function parseDirectives(text: string): string[] {
 function shouldFanOutAllAgents(rileyResponse: string): boolean {
   const text = rileyResponse.toLowerCase();
   if (text.includes('no action needed') || text.includes('for awareness only')) return false;
-  if (/(all agents|full team|entire team|everyone|full roster)/i.test(rileyResponse)) return true;
-  if (/(end-to-end|ship this end to end|coordinate the full team|cross-functional|full project)/i.test(rileyResponse)) return true;
-  return false;
+  if (/(only|just)\s+@(ace|max|sophie|kane|raj|elena|kai|jude|liv|harper|mia|leo)\b/i.test(rileyResponse)) return false;
+  return true;
 }
 
 /**

@@ -21,6 +21,7 @@ import { getRequiredReviewers } from './handlers/review';
 import { captureAndPostScreenshots } from './services/screenshots';
 import { mobileHarnessStart, mobileHarnessStep, mobileHarnessSnapshot, mobileHarnessStop } from './services/mobileHarness';
 import { getWebhook } from './services/webhooks';
+import { getAgent, AgentId } from './agents';
 
 // ────────────────────────────────────────────
 // Discord guild reference — set from bot.ts
@@ -1159,7 +1160,7 @@ export async function executeTool(
       case 'set_channel_topic':
         return await discordSetTopic(input.channel_name, input.topic);
       case 'send_channel_message':
-        return await discordSendMessage(input.channel_name, input.message);
+        return await discordSendMessage(input.channel_name, input.message, undefined, context?.agentId);
       case 'clear_channel_messages':
         return await discordClearChannelMessages(input.channel_name, parseInt(input.limit, 10) || 500);
       case 'delete_category':
@@ -1787,13 +1788,17 @@ async function discordSetTopic(channelName: string, topic: string): Promise<stri
   return `Updated topic for #${channelName}`;
 }
 
-async function discordSendMessage(channelName: string, message: string, agentName?: string): Promise<string> {
+async function discordSendMessage(channelName: string, message: string, agentName?: string, agentId?: string): Promise<string> {
   const guild = requireGuild();
 
   const channel = guild.channels.cache.find(
     (c) => c.type === ChannelType.GuildText && c.name === channelName
   ) as TextChannel | undefined;
   if (!channel) return `Channel not found: #${channelName}`;
+
+  const agent = agentId ? getAgent(agentId as AgentId) : null;
+  const resolvedUsername = agentName || (agent ? `${agent.emoji} ${agent.name}` : 'ASAP Agent');
+  const resolvedAvatarUrl = agent?.avatarUrl;
 
   // Respect Discord's 2000 char limit
   const chunks = message.match(/.{1,2000}/gs) || [message];
@@ -1802,7 +1807,8 @@ async function discordSendMessage(channelName: string, message: string, agentNam
     for (const chunk of chunks) {
       await wh.send({
         content: chunk,
-        username: agentName || 'ASAP Agent',
+        username: resolvedUsername,
+        avatarURL: resolvedAvatarUrl,
       });
     }
   } catch {
