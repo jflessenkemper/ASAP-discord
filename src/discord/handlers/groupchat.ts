@@ -549,9 +549,10 @@ async function handleAgentChain(
   signal?: AbortSignal
 ): Promise<void> {
   const directedAgents = parseDirectives(rileyResponse);
-  const effectiveAgents = directedAgents.length > 0
-    ? directedAgents
-    : (RILEY_USE_ALL_AGENTS && shouldFanOutAllAgents(rileyResponse) ? [...DIRECTED_AGENT_IDS] : []);
+  const wantsFullTeam = RILEY_USE_ALL_AGENTS && shouldFanOutAllAgents(rileyResponse);
+  const effectiveAgents = wantsFullTeam
+    ? [...DIRECTED_AGENT_IDS]
+    : directedAgents;
   if (effectiveAgents.length === 0) return;
 
   // If Ace was directed, he gets Riley's full plan
