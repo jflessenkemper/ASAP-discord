@@ -172,8 +172,13 @@ function renderAgentMessage(raw: string): string {
   const withoutActionTags = raw.replace(/\[ACTION:[^\]]+\]/g, '').trim();
   if (!withoutActionTags) return '';
 
+  // Models may echo internal memory-style speaker labels (e.g. "[Liv]:").
+  // Remove a single leading label so Discord output stays natural.
+  const withoutSpeakerLabel = withoutActionTags.replace(/^\s*\[[^\]\r\n]{1,40}\]:\s*/u, '');
+  if (!withoutSpeakerLabel) return '';
+
   // Preserve code blocks verbatim; bold mentions only in normal prose.
-  const segments = withoutActionTags.split(/(```[\s\S]*?```)/g);
+  const segments = withoutSpeakerLabel.split(/(```[\s\S]*?```)/g);
   const formatted = segments.map((segment) => {
     if (segment.startsWith('```') && segment.endsWith('```')) return segment;
     return segment.replace(/(^|\s)@([a-z0-9-]{2,32})\b/gi, (_m, prefix, name) => `${prefix}**@${name}**`);
