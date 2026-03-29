@@ -17,7 +17,7 @@ const locationLimiter = rateLimit({
 router.post('/', requireAuth, locationLimiter, async (req: AuthRequest, res: Response) => {
   try {
     const { userId, userType } = req.auth!;
-    const { latitude, longitude } = req.body;
+    const { latitude, longitude, privacyPolicyVersion, consentGiven } = req.body;
 
     if (typeof latitude !== 'number' || typeof longitude !== 'number') {
       res.status(400).json({ error: 'latitude and longitude are required' });
@@ -29,15 +29,21 @@ router.post('/', requireAuth, locationLimiter, async (req: AuthRequest, res: Res
       return;
     }
 
+    const consentUpdateQuery = consentGiven
+      ? 'location_consent_at = NOW(), privacy_policy_version = $4'
+      : 'privacy_policy_version = $4';
+
+    const queryParams = [latitude, longitude, userId, privacyPolicyVersion || '1.0'];
+
     if (userType === 'client') {
       await pool.query(
-        'UPDATE clients SET latitude = $1, longitude = $2, last_location_update = NOW() WHERE id = $3',
-        [latitude, longitude, userId]
+        `UPDATE clients SET latitude = $1, longitude = $2, last_location_update = NOW(), ${consentUpdateQuery} WHERE id = $3`,
+        queryParams
       );
     } else if (userType === 'employee') {
       await pool.query(
-        'UPDATE employees SET latitude = $1, longitude = $2, last_location_update = NOW() WHERE id = $3',
-        [latitude, longitude, userId]
+        `UPDATE employees SET latitude = $1, longitude = $2, last_location_update = NOW(), ${consentUpdateQuery} WHERE id = $3`,
+        queryParams
       );
     } else {
       res.status(400).json({ error: 'Invalid user type' });
