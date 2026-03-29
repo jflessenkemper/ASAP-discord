@@ -278,13 +278,20 @@ export async function agentRespond(
   conversationHistory: ConversationMessage[],
   userMessage: string,
   onToolUse?: (toolName: string, summary: string) => Promise<void>,
-  options?: { modelOverride?: string; maxTokens?: number; signal?: AbortSignal }
+  options?: {
+    modelOverride?: string;
+    maxTokens?: number;
+    signal?: AbortSignal;
+    toolRoundBoost?: number;
+    rileyAutoToolApprovalUsed?: boolean;
+  }
 ): Promise<string> {
-  const maxToolRounds = agent.id === 'developer'
+  const baseToolRounds = agent.id === 'developer'
     ? MAX_TOOL_ROUNDS_DEVELOPER
     : agent.id === 'executive-assistant'
       ? MAX_TOOL_ROUNDS_EXECUTIVE
       : MAX_TOOL_ROUNDS;
+  const maxToolRounds = baseToolRounds + Math.max(0, options?.toolRoundBoost || 0);
 
   if (isCreditsExhaustedNow()) {
     return agent.id === 'executive-assistant'
@@ -309,6 +316,7 @@ export async function agentRespond(
 AGENT COORDINATION: Coordinate agents via @mentions in your response text. The system parses and routes automatically.
 @ace @max @sophie @kane @raj @elena @kai @jude @liv @harper @mia @leo
 CRITICAL: Do NOT use send_channel_message — ONLY @mentions work for agent coordination.
+  DEFAULT: When work needs execution, involve the full agent roster unless the user explicitly asks for a narrower subset.
 ` : '';
 
   const governanceSection = agent.id === 'executive-assistant' ? `
@@ -316,15 +324,18 @@ GOVERNANCE:
 - You are Jordan's token master. Any request to increase Gemini tokens, Google Cloud credits, ElevenLabs credit, or daily budget must come through you.
 - When the team hits a limit, pause the work, explain what increase is needed, and ask Jordan for explicit approval before anyone resumes.
 - Ace is the Tool Master. If tooling is missing, stale, or unreliable, direct @ace to prepare it before the rest of the team proceeds.
+- Internal tool-usage approvals are your call. If more tool rounds are justified, approve and direct the team to continue.
 ` : agent.id === 'developer' ? `
 GOVERNANCE:
 - You are the Tool Master. Own tool readiness for the whole team.
 - Keep .github/AGENT_TOOLING_STATUS.md accurate, make missing tools available where possible, and confirm readiness before other agents depend on them.
 - Riley is the token master. If more budget, credits, or token headroom is needed, report that to Riley instead of asking Jordan directly.
+- If you hit internal tool-usage caps, ask @riley for more tool usage approval and continue once approved.
 ` : `
 GOVERNANCE:
 - Riley is the token master. Never ask Jordan directly for more tokens, budget, or credits. Ask Riley so she can seek approval.
 - Ace is the Tool Master. Before tool-heavy work, or anytime tool readiness is uncertain, check with @ace first and wait for the green light.
+- If you hit internal tool-usage caps, ask @riley for more tool usage approval and continue once approved.
 `;
 
   const toolsSection = isFullToolAgent
@@ -537,8 +548,26 @@ TOKENS: ${tokenUsed.toLocaleString()} used / ${tokenLimit.toLocaleString()} dail
     }
   }
 
+  if (agent.id === 'executive-assistant' && !options?.rileyAutoToolApprovalUsed) {
+    const extension = Math.max(20, Math.ceil(baseToolRounds * 0.5));
+    logAgentEvent(agent.id, 'response', `Riley approved extra tool usage (+${extension} rounds)`);
+    return agentRespond(
+      agent,
+      conversationHistory,
+      `${userMessage}\n\n[System note: Riley approved additional tool usage for this run (+${extension} rounds). Continue and finish.]`,
+      onToolUse,
+      {
+        ...options,
+        toolRoundBoost: extension,
+        rileyAutoToolApprovalUsed: true,
+      }
+    );
+  }
+
   logAgentEvent(agent.id, 'error', `Max tool iterations (${maxToolRounds}) after ${totalToolCalls} tool calls`, { durationMs: Date.now() - loopStart });
-  return 'I hit an internal tool-run safety limit for this pass. Here is what I accomplished so far — please check the repository for changes, then ask me to continue from the latest commit/state.';
+  return agent.id === 'executive-assistant'
+    ? 'I hit an internal tool-run safety limit for this pass. I can approve another pass if it is justified. Here is what I accomplished so far — check the repository and I can continue from the latest state.'
+    : 'I hit an internal tool-run safety limit for this pass. @riley please approve more tool usage if this work should continue, and I will resume from the latest repository state.';
 }
 
 function formatToolSummary(toolName: string, input: Record<string, string>): string {

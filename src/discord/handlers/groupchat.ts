@@ -528,8 +528,16 @@ const DIRECTED_AGENT_IDS = new Set<string>([
   'ios-engineer', 'android-engineer',
 ]);
 
+const RILEY_USE_ALL_AGENTS = process.env.RILEY_USE_ALL_AGENTS !== 'false';
+
 function parseDirectives(text: string): string[] {
   return parseMentionedAgentIds(text, DIRECTED_AGENT_IDS);
+}
+
+function shouldFanOutAllAgents(rileyResponse: string): boolean {
+  const text = rileyResponse.toLowerCase();
+  if (text.includes('no action needed') || text.includes('for awareness only')) return false;
+  return /(implement|build|fix|review|audit|investigate|coordinate|test|deploy|ship|create|update|refactor)/i.test(rileyResponse);
 }
 
 /**
@@ -541,11 +549,14 @@ async function handleAgentChain(
   signal?: AbortSignal
 ): Promise<void> {
   const directedAgents = parseDirectives(rileyResponse);
-  if (directedAgents.length === 0) return;
+  const effectiveAgents = directedAgents.length > 0
+    ? directedAgents
+    : (RILEY_USE_ALL_AGENTS && shouldFanOutAllAgents(rileyResponse) ? [...DIRECTED_AGENT_IDS] : []);
+  if (effectiveAgents.length === 0) return;
 
   // If Ace was directed, he gets Riley's full plan
-  const aceDirected = directedAgents.includes('developer');
-  const otherDirected = directedAgents.filter((id) => id !== 'developer');
+  const aceDirected = effectiveAgents.includes('developer');
+  const otherDirected = effectiveAgents.filter((id) => id !== 'developer');
   const summaryLines: string[] = [];
   const errorLines: string[] = [];
 
