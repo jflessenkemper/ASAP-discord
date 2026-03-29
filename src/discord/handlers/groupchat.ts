@@ -558,9 +558,6 @@ async function handleAgentChain(
   // If Ace was directed, he gets Riley's full plan
   const aceDirected = effectiveAgents.includes('developer');
   const otherDirected = effectiveAgents.filter((id) => id !== 'developer');
-  const summaryLines: string[] = [];
-  const errorLines: string[] = [];
-
   if (aceDirected) {
     const ace = getAgent('developer' as AgentId);
     if (ace) {
@@ -578,13 +575,14 @@ async function handleAgentChain(
         if (signal?.aborted) return;
 
         await sendAgentMessage(aceChannel, ace, aceResponse);
+        if (GROUPCHAT_SUMMARY_ONLY && aceChannel.id !== groupchat.id) {
+          await sendAgentMessage(groupchat, ace, summarizeForRiley(aceResponse));
+        }
         appendToMemory('developer', [
           { role: 'user', content: `[Riley directed]: ${rileyResponse.slice(0, 1000)}` },
           { role: 'assistant', content: `[Ace]: ${aceResponse}` },
         ]);
         documentToChannel('developer', aceResponse.slice(0, 300)).catch(() => {});
-
-        summaryLines.push(`Ace: ${aceResponse.slice(0, 180)}`);
 
         groupHistory.push({ role: 'assistant', content: `[Ace]: ${aceResponse}` });
         goalStatus = '💻 Ace implementing...';
@@ -592,20 +590,15 @@ async function handleAgentChain(
         // Ace may direct sub-agents
         const aceSubDirectives = parseDirectives(aceResponse);
         if (aceSubDirectives.length > 0) {
-          const sub = await handleSubAgents(aceSubDirectives, aceResponse, groupchat, signal);
-          summaryLines.push(...sub.findings);
-          errorLines.push(...sub.errors);
+          await handleSubAgents(aceSubDirectives, aceResponse, groupchat, signal);
         }
       } catch (err) {
         console.error('Ace error:', err instanceof Error ? err.message : 'Unknown');
-        errorLines.push('Ace: error');
-        if (!GROUPCHAT_SUMMARY_ONLY) {
-          try {
-            const wh = await getWebhook(groupchat);
-            await wh.send({ content: `⚠️ Ace had an error.`, username: `${ace.emoji} ${ace.name}`, avatarURL: ace.avatarUrl });
-          } catch (webhookErr) {
-            console.warn('Webhook error notification failed for Ace:', webhookErr instanceof Error ? webhookErr.message : 'Unknown');
-          }
+        try {
+          const wh = await getWebhook(groupchat);
+          await wh.send({ content: `⚠️ Ace had an error.`, username: `${ace.emoji} ${ace.name}`, avatarURL: ace.avatarUrl });
+        } catch (webhookErr) {
+          console.warn('Webhook error notification failed for Ace:', webhookErr instanceof Error ? webhookErr.message : 'Unknown');
         }
       }
     }
@@ -613,24 +606,7 @@ async function handleAgentChain(
 
   // Handle other agents Riley directed directly (not through Ace)
   if (otherDirected.length > 0) {
-    const sub = await handleSubAgents(otherDirected, rileyResponse, groupchat, signal);
-    summaryLines.push(...sub.findings);
-    errorLines.push(...sub.errors);
-  }
-
-  if (GROUPCHAT_SUMMARY_ONLY && (summaryLines.length > 0 || errorLines.length > 0)) {
-    const riley = getAgent('executive-assistant' as AgentId);
-    if (riley) {
-      const summary =
-        `Quick update from the team.\n\n` +
-        (summaryLines.length > 0
-          ? `What came back:\n${summaryLines.slice(0, 12).map((s) => `- ${s}`).join('\n')}`
-          : 'What came back:\n- No agent findings returned yet.') +
-        (errorLines.length > 0
-          ? `\n\nA couple blockers showed up:\n${errorLines.slice(0, 8).map((e) => `- ${e}`).join('\n')}`
-          : '');
-      await sendAgentMessage(groupchat, riley, summary);
-    }
+    await handleSubAgents(otherDirected, rileyResponse, groupchat, signal);
   }
 }
 
@@ -702,6 +678,9 @@ async function handleSubAgents(
 
         const outChannel = GROUPCHAT_SUMMARY_ONLY ? getAgentWorkChannel(id, groupchat) : groupchat;
         await sendAgentMessage(outChannel, agent, agentResponse);
+        if (GROUPCHAT_SUMMARY_ONLY && outChannel.id !== groupchat.id) {
+          await sendAgentMessage(groupchat, agent, summarizeForRiley(agentResponse));
+        }
         appendToMemory(id, [
           { role: 'user', content: `[Groupchat directive]: ${directiveContext.slice(0, 500)}` },
           { role: 'assistant', content: `[${agent.name}]: ${agentResponse}` },
@@ -728,13 +707,11 @@ async function handleSubAgents(
       if (tierResults[i].status === 'rejected') {
         const { agent } = tierAgents[i];
         errorLines.push(`${agent.name.split(' ')[0]}: error`);
-        if (!GROUPCHAT_SUMMARY_ONLY) {
-          try {
-            const wh = await getWebhook(groupchat);
-            await wh.send({ content: `⚠️ ${agent.name.split(' ')[0]} had an error.`, username: `${agent.emoji} ${agent.name}`, avatarURL: agent.avatarUrl });
-          } catch (webhookErr) {
-            console.warn(`Webhook error notification failed for ${agent.name}:`, webhookErr instanceof Error ? webhookErr.message : 'Unknown');
-          }
+        try {
+          const wh = await getWebhook(groupchat);
+          await wh.send({ content: `⚠️ ${agent.name.split(' ')[0]} had an error.`, username: `${agent.emoji} ${agent.name}`, avatarURL: agent.avatarUrl });
+        } catch (webhookErr) {
+          console.warn(`Webhook error notification failed for ${agent.name}:`, webhookErr instanceof Error ? webhookErr.message : 'Unknown');
         }
       }
     }
@@ -760,9 +737,6 @@ async function handleDirectedMessage(
     .map((id) => ({ id, agent: getAgent(id as AgentId) }))
     .filter((a): a is { id: string; agent: AgentConfig } => a.agent !== null && a.agent !== undefined);
 
-  const summaryLines: string[] = [];
-  const errorLines: string[] = [];
-
   const results = await Promise.allSettled(
     validAgents.map(async ({ id, agent }) => {
       if (signal?.aborted) return;
@@ -776,13 +750,15 @@ async function handleDirectedMessage(
 
       const outChannel = GROUPCHAT_SUMMARY_ONLY ? getAgentWorkChannel(id, groupchat) : groupchat;
       await sendAgentMessage(outChannel, agent, response);
+      if (GROUPCHAT_SUMMARY_ONLY && outChannel.id !== groupchat.id) {
+        await sendAgentMessage(groupchat, agent, summarizeForRiley(response));
+      }
       appendToMemory(id, [
         { role: 'user', content: contextMessage },
         { role: 'assistant', content: `[${agent.name}]: ${response}` },
       ]);
       documentToChannel(id, `Direct @mention from ${senderName}: ${response.slice(0, 200)}`).catch(() => {});
       groupHistory.push({ role: 'assistant', content: `[${agent.name.split(' ')[0]}]: ${response}` });
-      summaryLines.push(`${agent.name.split(' ')[0]}: ${summarizeForRiley(response)}`);
     })
   );
 
@@ -791,31 +767,12 @@ async function handleDirectedMessage(
     if (results[i].status === 'rejected') {
       const { agent } = validAgents[i];
       console.error(`${agent.name} error:`, (results[i] as PromiseRejectedResult).reason);
-      errorLines.push(`${agent.name.split(' ')[0]}: error`);
-      if (!GROUPCHAT_SUMMARY_ONLY) {
-        try {
-          const wh = await getWebhook(groupchat);
-          await wh.send({ content: `⚠️ ${agent.name.split(' ')[0]} had an error.`, username: `${agent.emoji} ${agent.name}`, avatarURL: agent.avatarUrl });
-        } catch (webhookErr) {
-          console.warn(`Webhook error notification failed for ${agent.name}:`, webhookErr instanceof Error ? webhookErr.message : 'Unknown');
-        }
+      try {
+        const wh = await getWebhook(groupchat);
+        await wh.send({ content: `⚠️ ${agent.name.split(' ')[0]} had an error.`, username: `${agent.emoji} ${agent.name}`, avatarURL: agent.avatarUrl });
+      } catch (webhookErr) {
+        console.warn(`Webhook error notification failed for ${agent.name}:`, webhookErr instanceof Error ? webhookErr.message : 'Unknown');
       }
-    }
-  }
-
-  if (GROUPCHAT_SUMMARY_ONLY) {
-    const riley = getAgent('executive-assistant' as AgentId);
-    if (riley) {
-      const summary =
-        `Quick update from the people you tagged.\n\n` +
-        `What they said:\n${(summaryLines.length > 0 ? summaryLines : ['No agent findings returned yet.'])
-          .slice(0, 12)
-          .map((s) => `- ${s}`)
-          .join('\n')}` +
-        (errorLines.length > 0
-          ? `\n\nA couple blockers showed up:\n${errorLines.slice(0, 8).map((e) => `- ${e}`).join('\n')}`
-          : '');
-      await sendAgentMessage(groupchat, riley, summary);
     }
   }
 
