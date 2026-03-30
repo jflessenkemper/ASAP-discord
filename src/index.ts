@@ -1,5 +1,6 @@
 import 'dotenv/config';
 import express from 'express';
+import { existsSync } from 'fs';
 import path from 'path';
 import cors from 'cors';
 import helmet from 'helmet';
@@ -256,11 +257,19 @@ app.use((err: Error, _req: express.Request, res: express.Response, next: express
 
 // Serve Expo web build in production
 const clientDir = path.join(__dirname, '..', '..', 'dist');
-app.use(express.static(clientDir));
-// SPA fallback: any non-API route serves index.html
-app.get(/^\/(?!api\/).*/, (_req, res) => {
-  res.sendFile(path.join(clientDir, 'index.html'));
-});
+const clientIndexPath = path.join(clientDir, 'index.html');
+if (existsSync(clientIndexPath)) {
+  app.use(express.static(clientDir));
+  // SPA fallback: any non-API route serves index.html
+  app.get(/^\/(?!api\/).*/, (_req, res) => {
+    res.sendFile(clientIndexPath);
+  });
+} else {
+  console.warn(`Web client build missing at ${clientIndexPath}; serving API/bot only on this host.`);
+  app.get(/^\/(?!api\/).*/, (_req, res) => {
+    res.status(503).type('text/plain').send('Web client build is not available on this host.');
+  });
+}
 
 // Graceful shutdown
 let cleanupInterval: ReturnType<typeof setInterval>;

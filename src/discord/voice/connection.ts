@@ -73,6 +73,13 @@ export function leaveVC(): void {
  * Uses event-based completion instead of blocking entersState.
  */
 export async function speakInVC(audioBuffer: Buffer): Promise<void> {
+  return speakInVCWithOptions(audioBuffer);
+}
+
+export async function speakInVCWithOptions(
+  audioBuffer: Buffer,
+  options?: { signal?: AbortSignal }
+): Promise<void> {
   if (!currentConnection || !audioPlayer) {
     throw new Error('Not connected to a voice channel');
   }
@@ -93,6 +100,7 @@ export async function speakInVC(audioBuffer: Buffer): Promise<void> {
       return;
     }
     let sawPlaying = false;
+    let aborted = false;
 
     const onPlaying = () => {
       sawPlaying = true;
@@ -102,7 +110,11 @@ export async function speakInVC(audioBuffer: Buffer): Promise<void> {
       // Ignore idle transitions before playback actually starts.
       if (!sawPlaying) return;
       cleanup();
-      resolve();
+      if (aborted) {
+        reject(new Error('Playback aborted'));
+      } else {
+        resolve();
+      }
     };
     const onError = (err: Error) => {
       cleanup();
@@ -121,14 +133,37 @@ export async function speakInVC(audioBuffer: Buffer): Promise<void> {
       player.off(AudioPlayerStatus.Playing, onPlaying);
       player.off(AudioPlayerStatus.Idle, onIdle);
       player.off('error', onError);
+      options?.signal?.removeEventListener('abort', onAbort);
       clearTimeout(timeout);
+    };
+
+    const onAbort = () => {
+      aborted = true;
+      stopVCPlayback();
     };
 
     player.on(AudioPlayerStatus.Playing, onPlaying);
     player.on(AudioPlayerStatus.Idle, onIdle);
     player.on('error', onError);
+    if (options?.signal) {
+      if (options.signal.aborted) {
+        onAbort();
+      } else {
+        options.signal.addEventListener('abort', onAbort, { once: true });
+      }
+    }
     player.play(resource);
   });
+}
+
+/** Immediately stop the current VC playback, if any. */
+export function stopVCPlayback(): void {
+  if (!audioPlayer) return;
+  try {
+    audioPlayer.stop(true);
+  } catch {
+    // best-effort
+  }
 }
 
 export function getConnection(): VoiceConnection | null {

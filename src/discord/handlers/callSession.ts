@@ -2,7 +2,7 @@ import { TextChannel, VoiceChannel, GuildMember } from 'discord.js';
 import { getAgent, AgentId } from '../agents';
 import { agentRespond, ConversationMessage, summarizeCall } from '../claude';
 import { textToSpeech } from '../voice/tts';
-import { joinVC, leaveVC, speakInVC, listenToAllMembersSmart, getConnection, VoiceTranscription } from '../voice/connection';
+import { joinVC, leaveVC, speakInVC, speakInVCWithOptions, stopVCPlayback, listenToAllMembersSmart, getConnection, VoiceTranscription } from '../voice/connection';
 import { appendToMemory, getMemoryContext } from '../memory';
 import { documentToChannel } from './documentation';
 import { isGeminiOverLimit } from '../usage';
@@ -64,13 +64,15 @@ function splitSentences(text: string): string[] {
  * Pipeline TTS + playback: while sentence N plays, sentence N+1's TTS generates.
  * Falls back to full-buffer TTS if only one sentence.
  */
-async function speakPipelined(text: string, voice: string): Promise<void> {
+async function speakPipelined(text: string, voice: string, signal?: AbortSignal): Promise<void> {
   const sentences = splitSentences(text.slice(0, 500));
   if (sentences.length === 0) return;
 
   if (sentences.length === 1) {
+    if (signal?.aborted) return;
     const audio = await textToSpeech(sentences[0], voice);
-    if (activeSession?.active && audio) await speakInVC(audio);
+    if (signal?.aborted) return;
+    if (activeSession?.active && audio) await speakInVCWithOptions(audio, { signal });
     return;
   }
 
@@ -78,15 +80,16 @@ async function speakPipelined(text: string, voice: string): Promise<void> {
   let nextTts: Promise<Buffer> = textToSpeech(sentences[0], voice);
 
   for (let i = 0; i < sentences.length; i++) {
+    if (signal?.aborted) break;
     const audio = await nextTts;
-    if (!activeSession?.active) break;
+    if (!activeSession?.active || signal?.aborted) break;
 
     // Prefetch next sentence's TTS while this one plays
     if (i + 1 < sentences.length) {
       nextTts = textToSpeech(sentences[i + 1], voice);
     }
 
-    await speakInVC(audio);
+    await speakInVCWithOptions(audio, { signal });
   }
 }
 
@@ -101,9 +104,30 @@ export interface CallSession {
   callLog: TextChannel;
   processingQueue: Promise<void>;
   heartbeatTimer: ReturnType<typeof setInterval> | null;
+  currentAbortController: AbortController | null;
+  currentTurnId: number;
+  outputActive: boolean;
+  lastInterruptAt: number;
 }
 
 let activeSession: CallSession | null = null;
+
+function interruptActiveVoiceTurn(reason: string): void {
+  if (!activeSession?.active) return;
+  const now = Date.now();
+  if (now - activeSession.lastInterruptAt < 300) return;
+  activeSession.lastInterruptAt = now;
+
+  activeSession.currentAbortController?.abort();
+  activeSession.currentAbortController = null;
+  activeSession.outputActive = false;
+  stopVCPlayback();
+  postDiagnostic('Voice turn interrupted.', {
+    level: 'info',
+    source: 'callSession.interrupt',
+    detail: reason,
+  }).catch(() => {});
+}
 
 async function sendAsAgent(channel: TextChannel, content: string, agentId: AgentId = 'executive-assistant'): Promise<void> {
   const agent = getAgent(agentId);
@@ -163,6 +187,10 @@ export async function startCall(
     callLog,
     processingQueue: Promise.resolve(),
     heartbeatTimer: null,
+    currentAbortController: null,
+    currentTurnId: 0,
+    outputActive: false,
+    lastInterruptAt: 0,
   };
 
   // Heartbeat — detect disconnected voice channel
@@ -240,6 +268,18 @@ export async function startCall(
     }
   });
   activeSession.unsubscribers.push(unsub);
+
+  const onSpeakingStart = (userId: string) => {
+    if (!activeSession?.active) return;
+    const member = voiceChannel.members.get(userId);
+    if (!member || member.user.bot) return;
+    if (!activeSession.outputActive && !activeSession.currentAbortController) return;
+    interruptActiveVoiceTurn(`speech-start:${member.displayName}`);
+  };
+  connection.receiver.speaking.on('start', onSpeakingStart);
+  activeSession.unsubscribers.push(() => {
+    connection.receiver.speaking.off('start', onSpeakingStart);
+  });
 }
 
 /**
@@ -250,6 +290,10 @@ export async function endCall(): Promise<void> {
 
   const session = activeSession;
   session.active = false;
+  session.currentAbortController?.abort();
+  session.currentAbortController = null;
+  session.outputActive = false;
+  stopVCPlayback();
 
   // Stop heartbeat
   if (session.heartbeatTimer) {
@@ -307,23 +351,38 @@ async function handleVoiceInput(transcription: VoiceTranscription): Promise<void
 
   const session = activeSession;
   const userText = transcription.text;
+  const turnId = session.currentTurnId + 1;
+  const abortController = new AbortController();
+  const { signal } = abortController;
 
-  // Log to transcript
-  const langTag = transcription.language && transcription.language !== 'en'
-    ? ` [${transcription.language}]` : '';
-  session.transcript.push(
-    `[${transcription.timestamp.toLocaleTimeString()}] ${transcription.username}${langTag}: ${userText}`
-  );
+  session.currentAbortController?.abort();
+  session.currentAbortController = abortController;
+  session.currentTurnId = turnId;
+  session.outputActive = false;
 
-  // Post the transcription to call log
-  await session.callLog.send(`🎤 **${transcription.username}**: ${userText}`);
-  await mirrorVoiceTranscript(transcription.username, userText, transcription.language);
+  const isCurrentTurn = () =>
+    activeSession?.active === true &&
+    activeSession.currentTurnId === turnId &&
+    !signal.aborted;
 
-  const riley = getAgent('executive-assistant' as AgentId);
+  try {
+    // Log to transcript
+    const langTag = transcription.language && transcription.language !== 'en'
+      ? ` [${transcription.language}]` : '';
+    session.transcript.push(
+      `[${transcription.timestamp.toLocaleTimeString()}] ${transcription.username}${langTag}: ${userText}`
+    );
 
-  if (riley) {
-    // Riley (EA) processes the input first and decides who should respond
-    try {
+    // Post the transcription to call log
+    await session.callLog.send(`🎤 **${transcription.username}**: ${userText}`);
+    await mirrorVoiceTranscript(transcription.username, userText, transcription.language);
+    if (!isCurrentTurn()) return;
+
+    const riley = getAgent('executive-assistant' as AgentId);
+
+    if (riley) {
+      // Riley (EA) processes the input first and decides who should respond
+      try {
       const rileyMemory = getMemoryContext('executive-assistant');
       const langHint = transcription.language && transcription.language !== 'en'
         ? `\n\nIMPORTANT: The speaker is using ${transcription.language === 'zh' ? 'Mandarin Chinese' : transcription.language}. Respond in the SAME language they spoke in. The TTS system supports multilingual output.`
@@ -345,18 +404,22 @@ Keep your spoken response brief — you're in a voice call, not a text chat.${la
       // Play a soft ascending chime the instant the LLM call starts so the user
       // immediately hears "I heard you, I'm thinking" — same UX as Grok/ChatGPT.
       // Runs concurrently with agentRespond (~750 ms vs 1-2 s LLM) → zero latency cost.
-      const chimePromise = speakInVC(getThinkingChime())
+      const chimePromise = speakInVCWithOptions(getThinkingChime(), { signal })
         .then(() => recordThinkingChimePlayed())
         .catch((err) => console.warn('[VOICE] Thinking chime failed:', err instanceof Error ? err.message : String(err)));
 
       const response = await agentRespond(
         riley,
         [...rileyMemory, ...session.conversationHistory],
-        rileyContext
+        rileyContext,
+        undefined,
+        { signal }
       );
+      if (!isCurrentTurn() || !response.trim()) return;
 
       // Chime is usually already done by now, but wait before starting TTS
       await chimePromise;
+      if (!isCurrentTurn()) return;
 
       session.conversationHistory.push({
         role: 'user',
@@ -375,19 +438,27 @@ Keep your spoken response brief — you're in a voice call, not a text chat.${la
         { role: 'user', content: `[Voice from ${transcription.username}]: ${userText}` },
         { role: 'assistant', content: `[Riley]: ${response}` },
       ]);
+      if (!isCurrentTurn()) return;
 
       // Pipelined TTS — split into sentences, play first while generating next
       try {
-        await speakPipelined(response, riley.voice);
+        session.outputActive = true;
+        await speakPipelined(response, riley.voice, signal);
       } catch (ttsErr) {
+        if (!isCurrentTurn()) return;
         console.error('TTS error for Riley:', ttsErr instanceof Error ? ttsErr.message : 'Unknown');
-              await postDiagnostic('Riley TTS playback failed during call.', {
-                level: 'error',
-                source: 'callSession.handleVoiceInput',
-                detail: ttsErr instanceof Error ? ttsErr.message : 'Unknown',
-              });
+        await postDiagnostic('Riley TTS playback failed during call.', {
+          level: 'error',
+          source: 'callSession.handleVoiceInput',
+          detail: ttsErr instanceof Error ? ttsErr.message : 'Unknown',
+        });
         sendAsAgent(session.groupchat, '⚠️ Voice playback unavailable — check call-log for Riley\'s response.').catch(() => {});
+      } finally {
+        if (session.currentTurnId === turnId) {
+          session.outputActive = false;
+        }
       }
+      if (!isCurrentTurn()) return;
 
       // Check if Riley directed Ace
       const directedAgents = parseDirectedAgents(response);
@@ -401,8 +472,11 @@ Keep your spoken response brief — you're in a voice call, not a text chat.${la
             const aceResponse = await agentRespond(
               ace,
               [...aceMemory, ...session.conversationHistory],
-              `[Riley directed you in voice call]: ${response}\n\n[Original voice from ${transcription.username}]: ${userText}`
+              `[Riley directed you in voice call]: ${response}\n\n[Original voice from ${transcription.username}]: ${userText}`,
+              undefined,
+              { signal }
             );
+            if (!isCurrentTurn() || !aceResponse.trim()) return;
 
             session.conversationHistory.push({
               role: 'assistant',
@@ -427,8 +501,10 @@ Keep your spoken response brief — you're in a voice call, not a text chat.${la
 
             // Pipelined TTS — split into sentences, play first while generating next
             try {
-              await speakPipelined(aceResponse, ace.voice);
+              session.outputActive = true;
+              await speakPipelined(aceResponse, ace.voice, signal);
             } catch (ttsErr) {
+              if (!isCurrentTurn()) return;
               console.error('TTS error for Ace:', ttsErr instanceof Error ? ttsErr.message : 'Unknown');
               await postDiagnostic('Ace TTS playback failed during call.', {
                 level: 'error',
@@ -436,12 +512,18 @@ Keep your spoken response brief — you're in a voice call, not a text chat.${la
                 detail: ttsErr instanceof Error ? ttsErr.message : 'Unknown',
               });
               sendAsAgent(session.groupchat, '⚠️ Voice playback unavailable — check call-log for Ace\'s response.').catch(() => {});
+            } finally {
+              if (session.currentTurnId === turnId) {
+                session.outputActive = false;
+              }
             }
           } catch (err) {
+            if (!isCurrentTurn()) return;
             console.error('Ace voice response error:', err instanceof Error ? err.message : 'Unknown');
           }
         }
       }
+      if (!isCurrentTurn()) return;
 
       // Other sub-agents don't speak in VC — they work in text only
       const otherAgents = directedAgents.filter((id) => !VOICE_SPEAKERS.has(id));
@@ -454,8 +536,11 @@ Keep your spoken response brief — you're in a voice call, not a text chat.${la
           const agentResponse = await agentRespond(
             agent,
             [...agentMemory, ...session.conversationHistory],
-            `[Riley directed you during voice call]: ${response}\n[Original from ${transcription.username}]: ${userText}`
+            `[Riley directed you during voice call]: ${response}\n[Original from ${transcription.username}]: ${userText}`,
+            undefined,
+            { signal }
           );
+          if (!isCurrentTurn() || !agentResponse.trim()) return;
           await sendAsAgent(session.groupchat, agentResponse.slice(0, 1900), agentId as AgentId);
           await mirrorAgentResponse(agent.name, 'groupchat', agentResponse);
           appendToMemory(agentId, [
@@ -464,15 +549,23 @@ Keep your spoken response brief — you're in a voice call, not a text chat.${la
           ]);
           await documentToChannel(agentId, `Responded in text during VC: ${agentResponse.slice(0, 300)}`);
         } catch (err) {
+          if (!isCurrentTurn()) return;
           console.error(`${agent.name} text response error:`, err instanceof Error ? err.message : 'Unknown');
         }
       }
-    } catch (err) {
-      console.error('Riley voice error:', err instanceof Error ? err.message : 'Unknown');
-      await sendAsAgent(session.groupchat, '⚠️ Riley had an error processing voice input.');
+      } catch (err) {
+        if (!isCurrentTurn()) return;
+        console.error('Riley voice error:', err instanceof Error ? err.message : 'Unknown');
+        await sendAsAgent(session.groupchat, '⚠️ Riley had an error processing voice input.');
+      }
+    } else {
+      await sendAsAgent(session.groupchat, '⚠️ Riley is unavailable. Voice input not processed.');
     }
-  } else {
-    await sendAsAgent(session.groupchat, '⚠️ Riley is unavailable. Voice input not processed.');
+  } finally {
+    if (session.currentTurnId === turnId) {
+      session.currentAbortController = null;
+      session.outputActive = false;
+    }
   }
 }
 

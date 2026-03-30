@@ -110,6 +110,11 @@ function toGeminiTools(tools: AnyTool[]): Tool[] {
 
 let client: GoogleGenerativeAI | null = null;
 
+type ResponseCacheEntry = { value: string; ts: number };
+const responseCache = new Map<string, ResponseCacheEntry>();
+const RESPONSE_CACHE_TTL_MS = parseInt(process.env.RESPONSE_CACHE_TTL_MS || '120000', 10);
+const RESPONSE_CACHE_MAX_ENTRIES = parseInt(process.env.RESPONSE_CACHE_MAX_ENTRIES || '128', 10);
+
 function getClient(): GoogleGenerativeAI {
   if (!client) {
     client = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || '');
@@ -169,6 +174,47 @@ function truncateToolResult(result: string, maxChars = 3500): string {
 
 function getProjectContextForAgent(agentId: string): string {
   return FULL_TOOL_AGENTS.has(agentId) ? PROJECT_CONTEXT : PROJECT_CONTEXT_LIGHT;
+}
+
+function isCacheablePrompt(agentId: string, userMessage: string, history: ConversationMessage[]): boolean {
+  if (FULL_TOOL_AGENTS.has(agentId)) return false;
+  if (userMessage.length > 120) return false;
+  if (history.length > 6) return false;
+  if (/\b(status|latest|current|deploy|build|screenshot|usage|budget|review|fix|run|test|voice|call|log|today|now)\b/i.test(userMessage)) {
+    return false;
+  }
+  if (/```|\n/.test(userMessage)) return false;
+  return true;
+}
+
+function makeResponseCacheKey(agentId: string, userMessage: string, history: ConversationMessage[]): string {
+  const normalizedMessage = userMessage.replace(/\s+/g, ' ').trim().toLowerCase();
+  const normalizedHistory = history
+    .slice(-2)
+    .map((msg) => `${msg.role}:${normalizeHistoryContentForModel(msg.content).slice(0, 120)}`)
+    .join('|');
+  return `${agentId}::${normalizedMessage}::${normalizedHistory}`;
+}
+
+function getCachedResponse(key: string): string | null {
+  const entry = responseCache.get(key);
+  if (!entry) return null;
+  if (Date.now() - entry.ts > RESPONSE_CACHE_TTL_MS) {
+    responseCache.delete(key);
+    return null;
+  }
+  responseCache.delete(key);
+  responseCache.set(key, entry);
+  return entry.value;
+}
+
+function setCachedResponse(key: string, value: string): void {
+  responseCache.set(key, { value, ts: Date.now() });
+  while (responseCache.size > RESPONSE_CACHE_MAX_ENTRIES) {
+    const oldest = responseCache.keys().next().value;
+    if (!oldest) break;
+    responseCache.delete(oldest);
+  }
 }
 
 export interface ConversationMessage {
@@ -335,6 +381,16 @@ export async function agentRespond(
     rileyAutoToolApprovalUsed?: boolean;
   }
 ): Promise<string> {
+  const cacheEligible = isCacheablePrompt(agent.id, userMessage, conversationHistory);
+  const cacheKey = cacheEligible ? makeResponseCacheKey(agent.id, userMessage, conversationHistory) : null;
+  if (cacheKey) {
+    const cached = getCachedResponse(cacheKey);
+    if (cached) {
+      logAgentEvent(agent.id, 'response', `cache-hit response="${cached.slice(0, 200)}"`);
+      return cached;
+    }
+  }
+
   const baseToolRounds = agent.id === 'developer'
     ? MAX_TOOL_ROUNDS_DEVELOPER
     : agent.id === 'executive-assistant'
@@ -568,6 +624,9 @@ TOKENS: ${tokenUsed.toLocaleString()} used / ${tokenLimit.toLocaleString()} dail
         response.response.usageMetadata?.candidatesTokenCount || 0,
       );
       const finalText = response.response.text() || 'Done.';
+      if (cacheKey && totalToolCalls === 0 && finalText.length <= 500) {
+        setCachedResponse(cacheKey, finalText);
+      }
       recordAgentResponse(agent.id, Date.now() - loopStart);
       logAgentEvent(agent.id, 'response', `${totalToolCalls} tools, response="${finalText.slice(0, 300)}"`, {
         durationMs: Date.now() - loopStart,

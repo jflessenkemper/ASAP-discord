@@ -14,6 +14,8 @@ const channelAbortControllers = new Map<string, AbortController>();
 const pendingThinkingMessages = new Map<string, Message>();
 
 const MAX_HISTORY = 20; // Keep last 20 messages for context
+const PROGRESSIVE_REVEAL_STEP_CHARS = parseInt(process.env.PROGRESSIVE_REVEAL_STEP_CHARS || '320', 10);
+const PROGRESSIVE_REVEAL_STEP_MS = parseInt(process.env.PROGRESSIVE_REVEAL_STEP_MS || '90', 10);
 
 /**
  * Handle a message in an individual agent channel.
@@ -173,12 +175,16 @@ export async function sendAgentMessage(
 
   try {
     const webhook = await getWebhook(channel);
-    for (const chunk of chunks) {
-      await webhook.send({
-        content: chunk,
-        username: `${agent.emoji} ${agent.name}`,
-        avatarURL: agent.avatarUrl,
-      });
+    if (shouldProgressivelyReveal(rendered)) {
+      await sendProgressiveWebhookMessage(webhook, agent, rendered);
+    } else {
+      for (const chunk of chunks) {
+        await webhook.send({
+          content: chunk,
+          username: `${agent.emoji} ${agent.name}`,
+          avatarURL: agent.avatarUrl,
+        });
+      }
     }
     await mirrorAgentResponse(agent.name, channel.name, rendered);
   } catch (err) {
@@ -198,6 +204,42 @@ export async function sendAgentMessage(
     } catch (retryErr) {
       console.error(`Webhook retry failed for ${agent.name}:`, retryErr instanceof Error ? retryErr.message : 'Unknown');
     }
+  }
+}
+
+function shouldProgressivelyReveal(rendered: string): boolean {
+  if (!rendered) return false;
+  if (rendered.length < 260 || rendered.length > 1800) return false;
+  if (rendered.includes('```')) return false;
+  return true;
+}
+
+async function sendProgressiveWebhookMessage(
+  webhook: Awaited<ReturnType<typeof getWebhook>>,
+  agent: AgentConfig,
+  rendered: string
+): Promise<void> {
+  const initialChars = Math.min(180, rendered.length);
+  const initialContent = initialChars < rendered.length
+    ? `${rendered.slice(0, initialChars)}…`
+    : rendered;
+
+  const sent = await webhook.send({
+    content: initialContent,
+    username: `${agent.emoji} ${agent.name}`,
+    avatarURL: agent.avatarUrl,
+  });
+
+  if (typeof (sent as { edit?: unknown }).edit !== 'function') return;
+
+  let visible = initialChars;
+  while (visible < rendered.length) {
+    await new Promise((resolve) => setTimeout(resolve, PROGRESSIVE_REVEAL_STEP_MS));
+    visible = Math.min(rendered.length, visible + PROGRESSIVE_REVEAL_STEP_CHARS);
+    const nextContent = visible < rendered.length
+      ? `${rendered.slice(0, visible)}…`
+      : rendered;
+    await (sent as Message).edit(nextContent).catch(() => {});
   }
 }
 

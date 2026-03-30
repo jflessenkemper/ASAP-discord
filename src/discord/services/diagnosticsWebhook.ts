@@ -5,6 +5,7 @@ interface DiagnosticExtra {
 }
 
 const MAX_DISCORD_CONTENT = 1900;
+let diagnosticsWebhookDisabledReason: string | null = null;
 
 function diagnosticsVerbose(): boolean {
   return String(process.env.DIAGNOSTIC_WEBHOOK_VERBOSE || '').toLowerCase() === 'true';
@@ -13,7 +14,7 @@ function diagnosticsVerbose(): boolean {
 /** Post operational diagnostics to an external Discord webhook, if configured. */
 export async function postDiagnostic(message: string, extra?: DiagnosticExtra): Promise<void> {
   const url = process.env.DISCORD_DIAGNOSTIC_WEBHOOK_URL;
-  if (!url) return;
+  if (!url || diagnosticsWebhookDisabledReason) return;
 
   const level = extra?.level || 'info';
   const levelIcon = level === 'error' ? '🚨' : level === 'warn' ? '⚠️' : 'ℹ️';
@@ -38,6 +39,11 @@ export async function postDiagnostic(message: string, extra?: DiagnosticExtra): 
       if (!res.ok) {
         const body = await res.text().catch(() => '');
         console.warn(`Diagnostic webhook failed: ${res.status} ${truncate(body, 200)}`);
+        if (res.status === 401 || res.status === 404 || res.status === 410) {
+          diagnosticsWebhookDisabledReason = `disabled after webhook returned ${res.status}`;
+          console.warn(`Diagnostic webhook disabled for process lifetime: ${diagnosticsWebhookDisabledReason}`);
+          return;
+        }
       }
     }
   } catch (err) {
