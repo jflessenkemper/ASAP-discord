@@ -203,6 +203,55 @@ export function approveAdditionalBudget(amountUsd?: number): { added: number; li
   };
 }
 
+/**
+ * Permanently raise (or lower) the daily hard budget cap at runtime.
+ * The new value is active immediately for all subsequent agent calls.
+ * If persist=true the change is also written to the server .env file so it
+ * survives bot restarts.
+ */
+export function setDailyBudgetLimit(
+  newLimitUsd: number,
+  persist = true,
+): { previous: number; current: number; spent: number; remaining: number } {
+  const previous = DAILY_LIMITS.budgetUsd;
+  if (!Number.isFinite(newLimitUsd) || newLimitUsd < 0) {
+    throw new Error(`Invalid budget limit: ${newLimitUsd}`);
+  }
+  // Apply immediately in-process
+  DAILY_LIMITS.budgetUsd = newLimitUsd;
+  // Reset approvedBudgetUsd — the new limit already incorporates any desired headroom
+  usage.approvedBudgetUsd = 0;
+  markUsageDirty();
+
+  if (persist) {
+    try {
+      // Locate the .env file relative to this module's compiled location
+      const path = require('path');
+      const fs = require('fs');
+      const envPath = path.resolve(__dirname, '../../.env');
+      if (fs.existsSync(envPath)) {
+        let contents = fs.readFileSync(envPath, 'utf8');
+        if (/^DAILY_BUDGET_USD=/m.test(contents)) {
+          contents = contents.replace(/^DAILY_BUDGET_USD=.*/m, `DAILY_BUDGET_USD=${newLimitUsd.toFixed(2)}`);
+        } else {
+          contents += `\nDAILY_BUDGET_USD=${newLimitUsd.toFixed(2)}\n`;
+        }
+        fs.writeFileSync(envPath, contents, 'utf8');
+      }
+    } catch {
+      // Non-fatal — in-process change already applied
+    }
+  }
+
+  const spent = effectiveTotalSpendForBudget();
+  return {
+    previous,
+    current: DAILY_LIMITS.budgetUsd,
+    spent,
+    remaining: Math.max(0, DAILY_LIMITS.budgetUsd - spent),
+  };
+}
+
 /** Get Claude token status so agents can self-regulate tool usage */
 export function getClaudeTokenStatus(): { used: number; remaining: number; limit: number } {
   resetIfNewDay();

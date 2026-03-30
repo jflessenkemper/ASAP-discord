@@ -22,6 +22,7 @@ import { captureAndPostScreenshots } from './services/screenshots';
 import { mobileHarnessStart, mobileHarnessStep, mobileHarnessSnapshot, mobileHarnessStop } from './services/mobileHarness';
 import { getWebhook } from './services/webhooks';
 import { getAgent, AgentId } from './agents';
+import { setDailyBudgetLimit } from './usage';
 
 // ────────────────────────────────────────────
 // Discord guild reference — set from bot.ts
@@ -916,6 +917,26 @@ export const REPO_TOOLS = [
       required: [],
     },
   },
+  // ── Budget Management ──
+  {
+    name: 'set_daily_budget',
+    description:
+      'Set the daily Gemini/AI spend cap (in USD) for ALL agents. Call this when agents are being blocked by the budget gate or when Jordan has authorised a higher limit. The new limit takes effect immediately (no restart needed) and is persisted to the .env file so it survives restarts. Riley is the primary user of this tool — use it proactively rather than letting agents stall.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        limit_usd: {
+          type: 'number',
+          description: 'New daily hard budget cap in USD (e.g. 150 for $150/day). Must be ≥ 0.',
+        },
+        reason: {
+          type: 'string',
+          description: 'Brief reason for the change, e.g. "Jordan approved $150 limit for today\'s sprint".',
+        },
+      },
+      required: ['limit_usd'],
+    },
+  },
   // ── Web Access ──
   {
     name: 'fetch_url',
@@ -1077,6 +1098,7 @@ const REVIEW_TOOL_NAMES = new Set([
   'mobile_harness_start', 'mobile_harness_step', 'mobile_harness_snapshot', 'mobile_harness_stop',
   'gcp_deploy', 'gcp_set_env', 'gcp_get_env', 'gcp_list_revisions', 'gcp_rollback', 'gcp_secret_set', 'gcp_secret_list', 'gcp_build_status',
   'gcp_logs_query', 'gcp_run_describe', 'gcp_storage_ls', 'gcp_artifact_list', 'gcp_sql_describe', 'gcp_project_info',
+  'set_daily_budget',
 ]);
 export const REVIEW_TOOLS = REPO_TOOLS.filter((t) => REVIEW_TOOL_NAMES.has(t.name));
 
@@ -1246,6 +1268,16 @@ export async function executeTool(
         return await gcpVmSsh(input.command);
       case 'gcp_project_info':
         return await gcpProjectInfo();
+      // Budget management
+      case 'set_daily_budget': {
+        const limitUsd = Number(input.limit_usd);
+        if (!Number.isFinite(limitUsd) || limitUsd < 0) {
+          return `❌ Invalid budget limit: ${input.limit_usd}. Must be a non-negative number.`;
+        }
+        const result = setDailyBudgetLimit(limitUsd, true);
+        const reason = input.reason ? ` Reason: ${input.reason}` : '';
+        return `✅ Daily budget updated: $${result.previous.toFixed(2)} → $${result.current.toFixed(2)}/day.${reason}\nSpent today: $${result.spent.toFixed(4)} | Remaining: $${result.remaining.toFixed(2)}\nChange is effective immediately and persisted to .env.`;
+      }
       // Web access
       case 'fetch_url':
         return await fetchUrl(input.url, input.method, input.headers, input.body);
