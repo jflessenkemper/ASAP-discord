@@ -136,12 +136,13 @@ function createLiveSpeechStreamer(
   turnId: number
 ): {
   onPartialText: (partialText: string) => Promise<void>;
-  finalize: (finalText: string) => Promise<void>;
+  finalize: (finalText: string) => Promise<boolean>;
 } {
   let spokenUntil = 0;
   let latestText = '';
   let speakQueue = Promise.resolve();
   let lastSpokenNormalized = '';
+  let spokeAny = false;
 
   const normalizeSegment = (segment: string) =>
     segment.toLowerCase().replace(/\s+/g, ' ').replace(/[^a-z0-9\s]/g, '').trim();
@@ -160,6 +161,7 @@ function createLiveSpeechStreamer(
           activeSession.outputActive = true;
           activeSession.outputStartedAt = Date.now();
         }
+        spokeAny = true;
         await speakPipelined(toSpeak, voice, signal);
       })
       .catch(() => {
@@ -195,6 +197,7 @@ function createLiveSpeechStreamer(
         activeSession.outputActive = false;
         activeSession.outputStartedAt = 0;
       }
+      return spokeAny;
     },
   };
 }
@@ -335,7 +338,7 @@ export async function startCall(
   // Voice output self-test: fail fast with a clear operator hint instead of silent VC.
   try {
     const checkAudio = await withTimeout(
-      textToSpeech('Voice channel connected. Riley is ready.'),
+      textToSpeech(`Hello ${initiator.displayName}.`),
       VOICE_PREFLIGHT_TIMEOUT_MS,
       'TTS preflight'
     );
@@ -566,7 +569,10 @@ Keep your spoken response very brief (normally 1-3 short sentences) — you're i
 
       // Live partial speech: speak sentence chunks as they form, then flush tail.
       try {
-        await rileyStreamer.finalize(response);
+        const rileySpoke = await rileyStreamer.finalize(response);
+        if (!rileySpoke && isCurrentTurn() && !signal.aborted) {
+          await speakPipelined(response, riley.voice, signal);
+        }
       } catch (ttsErr) {
         if (!isCurrentTurn()) return;
         console.error('TTS error for Riley:', ttsErr instanceof Error ? ttsErr.message : 'Unknown');
@@ -626,7 +632,10 @@ Keep your spoken response very brief (normally 1-3 short sentences) — you're i
               await documentToChannel('developer', `Responded in voice call: ${aceResponse.slice(0, 300)}`);
 
               try {
-                await aceStreamer.finalize(aceResponse);
+                const aceSpoke = await aceStreamer.finalize(aceResponse);
+                if (!aceSpoke && isCurrentTurn() && !signal.aborted) {
+                  await speakPipelined(aceResponse, ace.voice, signal);
+                }
               } catch (ttsErr) {
                 if (!isCurrentTurn()) return;
                 if (isAbortLikeError(ttsErr)) return;
