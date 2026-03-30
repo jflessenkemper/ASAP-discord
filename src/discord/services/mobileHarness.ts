@@ -2,7 +2,7 @@ import puppeteer, { Browser, Page } from 'puppeteer';
 import { AttachmentBuilder, TextChannel } from 'discord.js';
 
 const VIEWPORT = { width: 440, height: 956, deviceScaleFactor: 3 };
-const NAV_TIMEOUT = 15_000;
+const NAV_TIMEOUT = 30_000;
 
 const ALLOWED_URL_PATTERNS = [
   // Accept both regional and hashed Cloud Run hostnames used by ASAP.
