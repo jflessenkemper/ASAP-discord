@@ -11,8 +11,8 @@ import { postDiagnostic, mirrorAgentResponse, mirrorVoiceTranscript } from '../s
 import { getWebhook } from '../services/webhooks';
 import { recordVoiceCallStart, recordVoiceCallEnd } from '../metrics';
 
-/** Only Riley (EA) and Ace (Developer) speak in voice calls */
-const VOICE_SPEAKERS = new Set(['executive-assistant', 'developer']);
+/** Only Riley (EA) speaks in voice calls */
+const VOICE_SPEAKERS = new Set(['executive-assistant']);
 
 /** Heartbeat interval to detect stale connections (every 2 minutes) */
 const HEARTBEAT_INTERVAL = 2 * 60 * 1000;
@@ -22,8 +22,8 @@ const VOICE_PREFLIGHT_TIMEOUT_MS = parseInt(process.env.VOICE_PREFLIGHT_TIMEOUT_
 const VOICE_MAX_TOKENS_RILEY = parseInt(process.env.VOICE_MAX_TOKENS_RILEY || '220', 10);
 const VOICE_MAX_TOKENS_ACE = parseInt(process.env.VOICE_MAX_TOKENS_ACE || '260', 10);
 const VOICE_MAX_TOKENS_SPECIALIST = parseInt(process.env.VOICE_MAX_TOKENS_SPECIALIST || '220', 10);
-const VOICE_STREAM_PARTIAL_MIN_CHARS = parseInt(process.env.VOICE_STREAM_PARTIAL_MIN_CHARS || '70', 10);
-const VOICE_STREAM_FORCE_CHARS = parseInt(process.env.VOICE_STREAM_FORCE_CHARS || '160', 10);
+const VOICE_STREAM_PARTIAL_MIN_CHARS = parseInt(process.env.VOICE_STREAM_PARTIAL_MIN_CHARS || '24', 10);
+const VOICE_STREAM_FORCE_CHARS = parseInt(process.env.VOICE_STREAM_FORCE_CHARS || '90', 10);
 const VOICE_INTERRUPT_MIN_OUTPUT_ACTIVE_MS = parseInt(process.env.VOICE_INTERRUPT_MIN_OUTPUT_ACTIVE_MS || '350', 10);
 
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
@@ -595,7 +595,6 @@ Keep your spoken response very brief (normally 1-3 short sentences) — you're i
           work.push((async () => {
             try {
               const aceMemory = getMemoryContext('developer');
-              const aceStreamer = createLiveSpeechStreamer(ace.voice, signal, isCurrentTurn, turnId);
               const aceResponse = await agentRespond(
                 ace,
                 [...aceMemory, ...session.conversationHistory],
@@ -604,9 +603,6 @@ Keep your spoken response very brief (normally 1-3 short sentences) — you're i
                 {
                   signal,
                   maxTokens: VOICE_MAX_TOKENS_ACE,
-                  onPartialText: async (partialText) => {
-                    await aceStreamer.onPartialText(partialText);
-                  },
                 }
               );
               if (!isCurrentTurn() || !aceResponse.trim()) return;
@@ -630,23 +626,6 @@ Keep your spoken response very brief (normally 1-3 short sentences) — you're i
                 { role: 'assistant', content: `[Ace]: ${aceResponse}` },
               ]);
               await documentToChannel('developer', `Responded in voice call: ${aceResponse.slice(0, 300)}`);
-
-              try {
-                const aceSpoke = await aceStreamer.finalize(aceResponse);
-                if (!aceSpoke && isCurrentTurn() && !signal.aborted) {
-                  await speakPipelined(aceResponse, ace.voice, signal);
-                }
-              } catch (ttsErr) {
-                if (!isCurrentTurn()) return;
-                if (isAbortLikeError(ttsErr)) return;
-                console.error('TTS error for Ace:', ttsErr instanceof Error ? ttsErr.message : 'Unknown');
-                await postDiagnostic('Ace TTS playback failed during call.', {
-                  level: 'error',
-                  source: 'callSession.handleVoiceInput',
-                  detail: ttsErr instanceof Error ? ttsErr.message : 'Unknown',
-                });
-                sendAsAgent(session.groupchat, '⚠️ Voice playback unavailable — check call-log for Ace\'s response.').catch(() => {});
-              }
             } catch (err) {
               if (!isCurrentTurn()) return;
               if (isAbortLikeError(err)) return;
