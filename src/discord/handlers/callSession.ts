@@ -1,4 +1,5 @@
 import { TextChannel, VoiceChannel, GuildMember } from 'discord.js';
+import { VoiceConnectionStatus } from '@discordjs/voice';
 import { getAgent, AgentId } from '../agents';
 import { agentRespond, ConversationMessage, summarizeCall } from '../claude';
 import { textToSpeech } from '../voice/tts';
@@ -15,7 +16,8 @@ import { recordVoiceCallStart, recordVoiceCallEnd } from '../metrics';
 const VOICE_SPEAKERS = new Set(['executive-assistant']);
 
 /** Heartbeat interval to detect stale connections (every 2 minutes) */
-const HEARTBEAT_INTERVAL = 2 * 60 * 1000;
+const HEARTBEAT_INTERVAL = 20 * 1000;
+const VOICE_DISCONNECT_GRACE_MS = 45 * 1000;
 /** Max conversation history in a call */
 const MAX_CALL_HISTORY = 40;
 const VOICE_PREFLIGHT_TIMEOUT_MS = parseInt(process.env.VOICE_PREFLIGHT_TIMEOUT_MS || '15000', 10);
@@ -217,6 +219,7 @@ export interface CallSession {
   outputActive: boolean;
   outputStartedAt: number;
   lastInterruptAt: number;
+  disconnectedSince: number | null;
 }
 
 let activeSession: CallSession | null = null;
@@ -311,6 +314,7 @@ export async function startCall(
     outputActive: false,
     outputStartedAt: 0,
     lastInterruptAt: 0,
+    disconnectedSince: null,
   };
 
   // Heartbeat — detect disconnected voice channel
@@ -318,10 +322,31 @@ export async function startCall(
     if (!activeSession?.active) return;
     try {
       const conn = getConnection();
-      if (!conn || conn.state.status === 'destroyed' || conn.state.status === 'disconnected') {
-        console.warn('Voice connection lost — ending call');
+      if (!conn || conn.state.status === VoiceConnectionStatus.Destroyed) {
+        console.warn('Voice connection destroyed — ending call');
         endCall().catch((err) => console.error('Heartbeat endCall error:', err instanceof Error ? err.message : 'Unknown'));
+        return;
       }
+
+      if (conn.state.status === VoiceConnectionStatus.Disconnected) {
+        if (!activeSession.disconnectedSince) {
+          activeSession.disconnectedSince = Date.now();
+          console.warn('Voice connection temporarily disconnected — waiting for recovery');
+          return;
+        }
+
+        const disconnectedForMs = Date.now() - activeSession.disconnectedSince;
+        if (disconnectedForMs < VOICE_DISCONNECT_GRACE_MS) {
+          return;
+        }
+
+        console.warn(`Voice disconnected for ${Math.round(disconnectedForMs / 1000)}s — ending call`);
+        endCall().catch((err) => console.error('Heartbeat endCall error:', err instanceof Error ? err.message : 'Unknown'));
+        return;
+      }
+
+      // Any non-disconnected state means the connection recovered.
+      activeSession.disconnectedSince = null;
     } catch (err) {
       console.error('Heartbeat error:', err instanceof Error ? err.message : 'Unknown');
     }
