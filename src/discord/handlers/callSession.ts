@@ -208,7 +208,6 @@ export interface CallSession {
   voiceChannel: VoiceChannel;
   groupchat: TextChannel;
   callLog: TextChannel;
-  processingQueue: Promise<void>;
   heartbeatTimer: ReturnType<typeof setInterval> | null;
   currentAbortController: AbortController | null;
   currentTurnId: number;
@@ -218,6 +217,15 @@ export interface CallSession {
 }
 
 let activeSession: CallSession | null = null;
+
+function isAbortLikeError(err: unknown): boolean {
+  if (!err) return false;
+  const anyErr = err as { name?: string; code?: string; message?: string };
+  const code = String(anyErr.code || '');
+  const name = String(anyErr.name || '');
+  const msg = String(anyErr.message || err).toLowerCase();
+  return code === 'ABORT_ERR' || name === 'AbortError' || msg.includes('aborted') || msg.includes('playback aborted');
+}
 
 function interruptActiveVoiceTurn(reason: string): void {
   if (!activeSession?.active) return;
@@ -294,7 +302,6 @@ export async function startCall(
     voiceChannel,
     groupchat,
     callLog,
-    processingQueue: Promise.resolve(),
     heartbeatTimer: null,
     currentAbortController: null,
     currentTurnId: 0,
@@ -369,13 +376,14 @@ export async function startCall(
 
   // Listen to ALL members using best available STT (Deepgram real-time or Gemini batch)
   const unsub = listenToAllMembersSmart(connection, voiceChannel, (transcription) => {
-    if (activeSession) {
-      activeSession.processingQueue = activeSession.processingQueue.then(() =>
-        handleVoiceInput(transcription)
-      ).catch((err) => {
+    if (!activeSession?.active) return;
+    // Do not serialize turns through a single queue. New input should preempt
+    // old work immediately (handleVoiceInput aborts any in-flight turn first).
+    void handleVoiceInput(transcription).catch((err) => {
+      if (!isAbortLikeError(err)) {
         console.error('Voice processing error:', err instanceof Error ? err.message : 'Unknown');
-      });
-    }
+      }
+    });
   });
   activeSession.unsubscribers.push(unsub);
 
@@ -571,103 +579,112 @@ Keep your spoken response very brief (normally 1-3 short sentences) — you're i
       }
       if (!isCurrentTurn()) return;
 
-      // Check if Riley directed Ace
+      // Check which agents Riley directed.
       const directedAgents = parseDirectedAgents(response);
-      const aceDirected = directedAgents.includes('developer');
+      const work: Array<Promise<void>> = [];
 
-      if (aceDirected) {
+      if (directedAgents.includes('developer')) {
         const ace = getAgent('developer' as AgentId);
         if (ace && session.active) {
-          try {
-            const aceMemory = getMemoryContext('developer');
-            const aceStreamer = createLiveSpeechStreamer(ace.voice, signal, isCurrentTurn, turnId);
-            const aceResponse = await agentRespond(
-              ace,
-              [...aceMemory, ...session.conversationHistory],
-              `[Riley directed you in voice call]: ${response}\n\n[Original voice from ${transcription.username}]: ${userText}`,
-              undefined,
-              {
-                signal,
-                maxTokens: VOICE_MAX_TOKENS_ACE,
-                onPartialText: async (partialText) => {
-                  await aceStreamer.onPartialText(partialText);
-                },
-              }
-            );
-            if (!isCurrentTurn() || !aceResponse.trim()) return;
-
-            session.conversationHistory.push({
-              role: 'assistant',
-              content: `[Ace]: ${aceResponse}`,
-            });
-
-            if (session.conversationHistory.length > MAX_CALL_HISTORY) {
-              session.conversationHistory.splice(0, session.conversationHistory.length - MAX_CALL_HISTORY);
-            }
-            session.transcript.push(
-              `[${new Date().toLocaleTimeString()}] Ace (Developer): ${aceResponse}`
-            );
-
-            // Send text to call-log
-            await session.callLog.send(`${ace.emoji} **Ace**: ${aceResponse.slice(0, 1900)}`);
-            await mirrorAgentResponse(ace.name, 'call-log', aceResponse);
-            appendToMemory('developer', [
-              { role: 'user', content: `[Directed by Riley for voice call]: ${userText.slice(0, 500)}` },
-              { role: 'assistant', content: `[Ace]: ${aceResponse}` },
-            ]);
-            await documentToChannel('developer', `Responded in voice call: ${aceResponse.slice(0, 300)}`);
-
-            // Live partial speech: speak sentence chunks as they form, then flush tail.
+          work.push((async () => {
             try {
-              await aceStreamer.finalize(aceResponse);
-            } catch (ttsErr) {
-              if (!isCurrentTurn()) return;
-              console.error('TTS error for Ace:', ttsErr instanceof Error ? ttsErr.message : 'Unknown');
-              await postDiagnostic('Ace TTS playback failed during call.', {
-                level: 'error',
-                source: 'callSession.handleVoiceInput',
-                detail: ttsErr instanceof Error ? ttsErr.message : 'Unknown',
+              const aceMemory = getMemoryContext('developer');
+              const aceStreamer = createLiveSpeechStreamer(ace.voice, signal, isCurrentTurn, turnId);
+              const aceResponse = await agentRespond(
+                ace,
+                [...aceMemory, ...session.conversationHistory],
+                `[Riley directed you in voice call]: ${response}\n\n[Original voice from ${transcription.username}]: ${userText}`,
+                undefined,
+                {
+                  signal,
+                  maxTokens: VOICE_MAX_TOKENS_ACE,
+                  onPartialText: async (partialText) => {
+                    await aceStreamer.onPartialText(partialText);
+                  },
+                }
+              );
+              if (!isCurrentTurn() || !aceResponse.trim()) return;
+
+              session.conversationHistory.push({
+                role: 'assistant',
+                content: `[Ace]: ${aceResponse}`,
               });
-              sendAsAgent(session.groupchat, '⚠️ Voice playback unavailable — check call-log for Ace\'s response.').catch(() => {});
+
+              if (session.conversationHistory.length > MAX_CALL_HISTORY) {
+                session.conversationHistory.splice(0, session.conversationHistory.length - MAX_CALL_HISTORY);
+              }
+              session.transcript.push(
+                `[${new Date().toLocaleTimeString()}] Ace (Developer): ${aceResponse}`
+              );
+
+              await session.callLog.send(`${ace.emoji} **Ace**: ${aceResponse.slice(0, 1900)}`);
+              await mirrorAgentResponse(ace.name, 'call-log', aceResponse);
+              appendToMemory('developer', [
+                { role: 'user', content: `[Directed by Riley for voice call]: ${userText.slice(0, 500)}` },
+                { role: 'assistant', content: `[Ace]: ${aceResponse}` },
+              ]);
+              await documentToChannel('developer', `Responded in voice call: ${aceResponse.slice(0, 300)}`);
+
+              try {
+                await aceStreamer.finalize(aceResponse);
+              } catch (ttsErr) {
+                if (!isCurrentTurn()) return;
+                if (isAbortLikeError(ttsErr)) return;
+                console.error('TTS error for Ace:', ttsErr instanceof Error ? ttsErr.message : 'Unknown');
+                await postDiagnostic('Ace TTS playback failed during call.', {
+                  level: 'error',
+                  source: 'callSession.handleVoiceInput',
+                  detail: ttsErr instanceof Error ? ttsErr.message : 'Unknown',
+                });
+                sendAsAgent(session.groupchat, '⚠️ Voice playback unavailable — check call-log for Ace\'s response.').catch(() => {});
+              }
+            } catch (err) {
+              if (!isCurrentTurn()) return;
+              if (isAbortLikeError(err)) return;
+              console.error('Ace voice response error:', err instanceof Error ? err.message : 'Unknown');
             }
-          } catch (err) {
-            if (!isCurrentTurn()) return;
-            console.error('Ace voice response error:', err instanceof Error ? err.message : 'Unknown');
-          }
+          })());
         }
       }
-      if (!isCurrentTurn()) return;
 
-      // Other sub-agents don't speak in VC — they work in text only
+      // Other sub-agents don't speak in VC — they work in text only.
       const otherAgents = directedAgents.filter((id) => !VOICE_SPEAKERS.has(id));
       for (const agentId of otherAgents) {
         const agent = getAgent(agentId as AgentId);
         if (!agent) continue;
 
-        const agentMemory = getMemoryContext(agentId);
-        try {
-          const agentResponse = await agentRespond(
-            agent,
-            [...agentMemory, ...session.conversationHistory],
-            `[Riley directed you during voice call]: ${response}\n[Original from ${transcription.username}]: ${userText}`,
-            undefined,
-            { signal, maxTokens: VOICE_MAX_TOKENS_SPECIALIST }
-          );
-          if (!isCurrentTurn() || !agentResponse.trim()) return;
-          await sendAsAgent(session.groupchat, agentResponse.slice(0, 1900), agentId as AgentId);
-          await mirrorAgentResponse(agent.name, 'groupchat', agentResponse);
-          appendToMemory(agentId, [
-            { role: 'user', content: `[Voice call directive]: ${userText.slice(0, 500)}` },
-            { role: 'assistant', content: `[${agent.name}]: ${agentResponse}` },
-          ]);
-          await documentToChannel(agentId, `Responded in text during VC: ${agentResponse.slice(0, 300)}`);
-        } catch (err) {
-          if (!isCurrentTurn()) return;
-          console.error(`${agent.name} text response error:`, err instanceof Error ? err.message : 'Unknown');
-        }
+        work.push((async () => {
+          const agentMemory = getMemoryContext(agentId);
+          try {
+            const agentResponse = await agentRespond(
+              agent,
+              [...agentMemory, ...session.conversationHistory],
+              `[Riley directed you during voice call]: ${response}\n[Original from ${transcription.username}]: ${userText}`,
+              undefined,
+              { signal, maxTokens: VOICE_MAX_TOKENS_SPECIALIST }
+            );
+            if (!isCurrentTurn() || !agentResponse.trim()) return;
+            await sendAsAgent(session.groupchat, agentResponse.slice(0, 1900), agentId as AgentId);
+            await mirrorAgentResponse(agent.name, 'groupchat', agentResponse);
+            appendToMemory(agentId, [
+              { role: 'user', content: `[Voice call directive]: ${userText.slice(0, 500)}` },
+              { role: 'assistant', content: `[${agent.name}]: ${agentResponse}` },
+            ]);
+            await documentToChannel(agentId, `Responded in text during VC: ${agentResponse.slice(0, 300)}`);
+          } catch (err) {
+            if (!isCurrentTurn()) return;
+            if (isAbortLikeError(err)) return;
+            console.error(`${agent.name} text response error:`, err instanceof Error ? err.message : 'Unknown');
+          }
+        })());
+      }
+
+      if (work.length > 0) {
+        await Promise.allSettled(work);
       }
       } catch (err) {
         if (!isCurrentTurn()) return;
+        if (isAbortLikeError(err)) return;
         console.error('Riley voice error:', err instanceof Error ? err.message : 'Unknown');
         await sendAsAgent(session.groupchat, '⚠️ Riley had an error processing voice input.');
       }
