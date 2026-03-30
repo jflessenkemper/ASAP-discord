@@ -9,8 +9,7 @@ import { isGeminiOverLimit } from '../usage';
 import { isDeepgramAvailable } from '../voice/deepgram';
 import { postDiagnostic, mirrorAgentResponse, mirrorVoiceTranscript } from '../services/diagnosticsWebhook';
 import { getWebhook } from '../services/webhooks';
-import { getThinkingChime } from '../voice/thinkingSound';
-import { recordVoiceCallStart, recordVoiceCallEnd, recordThinkingChimePlayed } from '../metrics';
+import { recordVoiceCallStart, recordVoiceCallEnd } from '../metrics';
 
 /** Only Riley (EA) and Ace (Developer) speak in voice calls */
 const VOICE_SPEAKERS = new Set(['executive-assistant', 'developer']);
@@ -521,13 +520,6 @@ IMPORTANT: In your response, if you want Ace to implement something, say "@ace".
 
 Keep your spoken response very brief (normally 1-3 short sentences) — you're in a voice call, not a text chat.${langHint}`;
 
-      // ── Thinking chime ────────────────────────────────────────────────────
-      // Play a soft ascending chime the instant the LLM call starts so the user
-      // immediately hears "I heard you, I'm thinking" — same UX as Grok/ChatGPT.
-      // Runs concurrently with agentRespond (~750 ms vs 1-2 s LLM) → zero latency cost.
-      const chimePromise = speakInVCWithOptions(getThinkingChime(), { signal })
-        .then(() => recordThinkingChimePlayed())
-        .catch((err) => console.warn('[VOICE] Thinking chime failed:', err instanceof Error ? err.message : String(err)));
       const rileyStreamer = createLiveSpeechStreamer(riley.voice, signal, isCurrentTurn, turnId);
 
       const response = await agentRespond(
@@ -544,10 +536,6 @@ Keep your spoken response very brief (normally 1-3 short sentences) — you're i
         }
       );
       if (!isCurrentTurn() || !response.trim()) return;
-
-      // Chime is usually already done by now, but wait before starting TTS
-      await chimePromise;
-      if (!isCurrentTurn()) return;
 
       session.conversationHistory.push({
         role: 'user',
