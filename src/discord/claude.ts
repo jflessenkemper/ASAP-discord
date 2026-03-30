@@ -376,7 +376,8 @@ async function sendMessageWithOptionalStream(
   onPartialText?: (partialText: string) => Promise<void>
 ): Promise<any> {
   const requestOptions = signal ? { signal } : undefined;
-  if (!onPartialText || typeof chat?.sendMessageStream !== 'function') {
+  const canStreamText = typeof payload === 'string';
+  if (!onPartialText || !canStreamText || typeof chat?.sendMessageStream !== 'function') {
     return chat.sendMessage(payload, requestOptions);
   }
 

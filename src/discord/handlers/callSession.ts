@@ -23,6 +23,8 @@ const VOICE_PREFLIGHT_TIMEOUT_MS = parseInt(process.env.VOICE_PREFLIGHT_TIMEOUT_
 const VOICE_MAX_TOKENS_RILEY = parseInt(process.env.VOICE_MAX_TOKENS_RILEY || '220', 10);
 const VOICE_MAX_TOKENS_ACE = parseInt(process.env.VOICE_MAX_TOKENS_ACE || '260', 10);
 const VOICE_MAX_TOKENS_SPECIALIST = parseInt(process.env.VOICE_MAX_TOKENS_SPECIALIST || '220', 10);
+const VOICE_STREAM_PARTIAL_MIN_CHARS = parseInt(process.env.VOICE_STREAM_PARTIAL_MIN_CHARS || '70', 10);
+const VOICE_STREAM_FORCE_CHARS = parseInt(process.env.VOICE_STREAM_FORCE_CHARS || '160', 10);
 
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | null = null;
@@ -94,6 +96,94 @@ async function speakPipelined(text: string, voice: string, signal?: AbortSignal)
 
     await speakInVCWithOptions(audio, { signal });
   }
+}
+
+function findSpeechBoundaryIndex(text: string, start: number, force: boolean): number {
+  if (start >= text.length) return start;
+  const remaining = text.slice(start);
+
+  let boundary = -1;
+  const sentenceRe = /[.!?]+(?:\s+|$)|\n+/g;
+  let match: RegExpExecArray | null;
+  while ((match = sentenceRe.exec(remaining)) !== null) {
+    boundary = start + match.index + match[0].length;
+  }
+
+  if (boundary < 0 && remaining.length >= VOICE_STREAM_FORCE_CHARS) {
+    const softRe = /[,;:](?:\s+|$)/g;
+    while ((match = softRe.exec(remaining)) !== null) {
+      boundary = start + match.index + match[0].length;
+    }
+    if (boundary < 0) {
+      boundary = Math.min(text.length, start + VOICE_STREAM_FORCE_CHARS);
+    }
+  }
+
+  if (force && boundary < 0) {
+    boundary = text.length;
+  }
+
+  return boundary < 0 ? start : Math.min(text.length, boundary);
+}
+
+function createLiveSpeechStreamer(
+  voice: string,
+  signal: AbortSignal,
+  isCurrentTurn: () => boolean,
+  turnId: number
+): {
+  onPartialText: (partialText: string) => Promise<void>;
+  finalize: (finalText: string) => Promise<void>;
+} {
+  let spokenUntil = 0;
+  let latestText = '';
+  let speakQueue = Promise.resolve();
+
+  const enqueue = (segment: string) => {
+    const toSpeak = segment.trim();
+    if (!toSpeak) return;
+    speakQueue = speakQueue
+      .then(async () => {
+        if (!isCurrentTurn() || signal.aborted) return;
+        if (activeSession?.currentTurnId === turnId) {
+          activeSession.outputActive = true;
+        }
+        await speakPipelined(toSpeak, voice, signal);
+      })
+      .catch(() => {
+        // Best-effort: interruption/cleanup paths can cancel queued speech.
+      });
+  };
+
+  return {
+    onPartialText: async (partialText: string) => {
+      if (!isCurrentTurn() || signal.aborted) return;
+      if (!partialText || partialText.length <= spokenUntil) return;
+      latestText = partialText;
+
+      const boundary = findSpeechBoundaryIndex(latestText, spokenUntil, false);
+      if (boundary <= spokenUntil) return;
+
+      const candidate = latestText.slice(spokenUntil, boundary).trim();
+      if (candidate.length < VOICE_STREAM_PARTIAL_MIN_CHARS) return;
+      spokenUntil = boundary;
+      enqueue(candidate);
+    },
+    finalize: async (finalText: string) => {
+      latestText = finalText || latestText;
+      const boundary = findSpeechBoundaryIndex(latestText, spokenUntil, true);
+      if (boundary > spokenUntil) {
+        const tail = latestText.slice(spokenUntil, boundary).trim();
+        spokenUntil = boundary;
+        enqueue(tail);
+      }
+
+      await speakQueue;
+      if (activeSession?.currentTurnId === turnId) {
+        activeSession.outputActive = false;
+      }
+    },
+  };
 }
 
 export interface CallSession {
@@ -410,13 +500,20 @@ Keep your spoken response very brief (normally 1-3 short sentences) — you're i
       const chimePromise = speakInVCWithOptions(getThinkingChime(), { signal })
         .then(() => recordThinkingChimePlayed())
         .catch((err) => console.warn('[VOICE] Thinking chime failed:', err instanceof Error ? err.message : String(err)));
+      const rileyStreamer = createLiveSpeechStreamer(riley.voice, signal, isCurrentTurn, turnId);
 
       const response = await agentRespond(
         riley,
         [...rileyMemory, ...session.conversationHistory],
         rileyContext,
         undefined,
-        { signal, maxTokens: VOICE_MAX_TOKENS_RILEY }
+        {
+          signal,
+          maxTokens: VOICE_MAX_TOKENS_RILEY,
+          onPartialText: async (partialText) => {
+            await rileyStreamer.onPartialText(partialText);
+          },
+        }
       );
       if (!isCurrentTurn() || !response.trim()) return;
 
@@ -443,10 +540,9 @@ Keep your spoken response very brief (normally 1-3 short sentences) — you're i
       ]);
       if (!isCurrentTurn()) return;
 
-      // Pipelined TTS — split into sentences, play first while generating next
+      // Live partial speech: speak sentence chunks as they form, then flush tail.
       try {
-        session.outputActive = true;
-        await speakPipelined(response, riley.voice, signal);
+        await rileyStreamer.finalize(response);
       } catch (ttsErr) {
         if (!isCurrentTurn()) return;
         console.error('TTS error for Riley:', ttsErr instanceof Error ? ttsErr.message : 'Unknown');
@@ -456,10 +552,6 @@ Keep your spoken response very brief (normally 1-3 short sentences) — you're i
           detail: ttsErr instanceof Error ? ttsErr.message : 'Unknown',
         });
         sendAsAgent(session.groupchat, '⚠️ Voice playback unavailable — check call-log for Riley\'s response.').catch(() => {});
-      } finally {
-        if (session.currentTurnId === turnId) {
-          session.outputActive = false;
-        }
       }
       if (!isCurrentTurn()) return;
 
@@ -472,12 +564,19 @@ Keep your spoken response very brief (normally 1-3 short sentences) — you're i
         if (ace && session.active) {
           try {
             const aceMemory = getMemoryContext('developer');
+            const aceStreamer = createLiveSpeechStreamer(ace.voice, signal, isCurrentTurn, turnId);
             const aceResponse = await agentRespond(
               ace,
               [...aceMemory, ...session.conversationHistory],
               `[Riley directed you in voice call]: ${response}\n\n[Original voice from ${transcription.username}]: ${userText}`,
               undefined,
-              { signal, maxTokens: VOICE_MAX_TOKENS_ACE }
+              {
+                signal,
+                maxTokens: VOICE_MAX_TOKENS_ACE,
+                onPartialText: async (partialText) => {
+                  await aceStreamer.onPartialText(partialText);
+                },
+              }
             );
             if (!isCurrentTurn() || !aceResponse.trim()) return;
 
@@ -502,10 +601,9 @@ Keep your spoken response very brief (normally 1-3 short sentences) — you're i
             ]);
             await documentToChannel('developer', `Responded in voice call: ${aceResponse.slice(0, 300)}`);
 
-            // Pipelined TTS — split into sentences, play first while generating next
+            // Live partial speech: speak sentence chunks as they form, then flush tail.
             try {
-              session.outputActive = true;
-              await speakPipelined(aceResponse, ace.voice, signal);
+              await aceStreamer.finalize(aceResponse);
             } catch (ttsErr) {
               if (!isCurrentTurn()) return;
               console.error('TTS error for Ace:', ttsErr instanceof Error ? ttsErr.message : 'Unknown');
@@ -515,10 +613,6 @@ Keep your spoken response very brief (normally 1-3 short sentences) — you're i
                 detail: ttsErr instanceof Error ? ttsErr.message : 'Unknown',
               });
               sendAsAgent(session.groupchat, '⚠️ Voice playback unavailable — check call-log for Ace\'s response.').catch(() => {});
-            } finally {
-              if (session.currentTurnId === turnId) {
-                session.outputActive = false;
-              }
             }
           } catch (err) {
             if (!isCurrentTurn()) return;
