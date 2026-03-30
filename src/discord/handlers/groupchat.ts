@@ -34,6 +34,9 @@ let messageQueue: Promise<void> = Promise.resolve();
 
 // Tracks in-flight message processing so a new message can interrupt it
 let activeAbortController: AbortController | null = null;
+let activeThinkingMessage: Message | null = null;
+const MAX_PARALLEL_SUBAGENTS = parseInt(process.env.MAX_PARALLEL_SUBAGENTS || '2', 10);
+const SUBAGENT_MAX_TOKENS = parseInt(process.env.SUBAGENT_MAX_TOKENS || '1800', 10);
 
 // Active goal tracking for /status
 let activeGoal: string | null = null;
@@ -161,6 +164,49 @@ function startTypingLoop(channel: TextChannel): () => void {
   return () => clearInterval(interval);
 }
 
+async function setThinkingMessage(channel: TextChannel, agent: AgentConfig, content = 'Thinking…'): Promise<void> {
+  if (activeThinkingMessage) {
+    await activeThinkingMessage.delete().catch(() => {});
+    activeThinkingMessage = null;
+  }
+  try {
+    const webhook = await getWebhook(channel);
+    activeThinkingMessage = await webhook.send({
+      content,
+      username: `${agent.emoji} ${agent.name}`,
+      avatarURL: agent.avatarUrl,
+    });
+  } catch {
+    activeThinkingMessage = null;
+  }
+}
+
+async function clearThinkingMessage(): Promise<void> {
+  if (!activeThinkingMessage) return;
+  await activeThinkingMessage.delete().catch(() => {});
+  activeThinkingMessage = null;
+}
+
+async function runLimited<T>(items: Array<() => Promise<T>>, concurrency: number): Promise<PromiseSettledResult<T>[]> {
+  const results: PromiseSettledResult<T>[] = new Array(items.length);
+  let index = 0;
+
+  async function worker(): Promise<void> {
+    while (index < items.length) {
+      const current = index++;
+      try {
+        results[current] = { status: 'fulfilled', value: await items[current]() };
+      } catch (err) {
+        results[current] = { status: 'rejected', reason: err };
+      }
+    }
+  }
+
+  const workers = Array.from({ length: Math.max(1, Math.min(concurrency, items.length)) }, () => worker());
+  await Promise.all(workers);
+  return results;
+}
+
 /** Map casual name mentions back to agent IDs */
 const NAME_TO_ID: Record<string, string> = {
   qa: 'qa', max: 'qa',
@@ -262,6 +308,7 @@ export async function handleGroupchatMessage(
     activeAbortController.abort();
     activeAbortController = null;
   }
+  clearThinkingMessage().catch(() => {});
 
   const controller = new AbortController();
   activeAbortController = controller;
@@ -378,6 +425,7 @@ async function handleRileyMessage(
   let stopTyping: () => void = () => {};
   try {
     stopTyping = startTypingLoop(groupchat);
+    await setThinkingMessage(groupchat, riley);
 
     const rileyMemory = getMemoryContext('executive-assistant');
     const contextMessage = `[${senderName}]: ${userMessage}`;
@@ -387,6 +435,7 @@ async function handleRileyMessage(
     }, { signal });
 
     if (signal?.aborted) return;
+    await clearThinkingMessage();
 
     // Strip action tags before displaying to user
     const displayResponse = response.replace(/\[ACTION:[^\]]+\]/g, '').trim();
@@ -451,6 +500,7 @@ async function handleRileyMessage(
       await groupchat.send(`⚠️ Riley encountered an error:\n\`\`\`${short}\`\`\``);
     }
   } finally {
+    await clearThinkingMessage().catch(() => {});
     stopTyping();
   }
 }
@@ -832,15 +882,15 @@ async function handleSubAgents(
     const priorContext = priorFindings.length > 0
       ? `\n\n**Prior agent findings (use these to inform your work):**\n${priorFindings.join('\n')}` : '';
 
-    const tierResults = await Promise.allSettled(
-      tierAgents.map(async ({ id, agent }) => {
+    const tierResults = await runLimited(
+      tierAgents.map(({ id, agent }) => async () => {
         if (signal?.aborted) return;
         documentToChannel(id, `📥 Received task from groupchat. Working...`).catch(() => {});
         const agentMemory = getMemoryContext(id, 10);
         const agentContext = `[Directive from groupchat]: ${directiveContext}${priorContext}\n\nDo your job. Be concise in your response — max 200 words. Report what you found or did.`;
         const agentResponse = await agentRespond(agent, [...agentMemory, ...groupHistory], agentContext, async (_toolName, summary) => {
           documentToChannel(id, `🔧 ${summary}`).catch(() => {});
-        }, { maxTokens: 4096, signal });
+        }, { maxTokens: SUBAGENT_MAX_TOKENS, signal });
 
         if (signal?.aborted) return;
 
@@ -856,7 +906,8 @@ async function handleSubAgents(
         documentToChannel(id, `✅ ${agentResponse.slice(0, 300)}`).catch(() => {});
         groupHistory.push({ role: 'assistant', content: `[${agent.name.split(' ')[0]}]: ${agentResponse}` });
         return `[${agent.name.split(' ')[0]}]: ${agentResponse.slice(0, 500)}`;
-      })
+      }),
+      MAX_PARALLEL_SUBAGENTS
     );
 
     // Collect findings from this tier for the next tier
@@ -907,14 +958,14 @@ async function handleDirectedMessage(
     .map((id) => ({ id, agent: getAgent(id as AgentId) }))
     .filter((a): a is { id: string; agent: AgentConfig } => a.agent !== null && a.agent !== undefined);
 
-  const results = await Promise.allSettled(
-    validAgents.map(async ({ id, agent }) => {
+  const results = await runLimited(
+    validAgents.map(({ id, agent }) => async () => {
       if (signal?.aborted) return;
       const agentMemory = getMemoryContext(id, 10);
       const response = await agentRespond(agent, [...agentMemory, ...groupHistory], contextMessage, async (_toolName, summary) => {
         const outChannel = GROUPCHAT_SUMMARY_ONLY ? getAgentWorkChannel(id, groupchat) : groupchat;
         sendToolNotification(outChannel, agent, summary).catch(() => {});
-      }, { maxTokens: 4096, signal });
+      }, { maxTokens: SUBAGENT_MAX_TOKENS, signal });
 
       if (signal?.aborted) return;
 
@@ -929,7 +980,8 @@ async function handleDirectedMessage(
       ]);
       documentToChannel(id, `Direct @mention from ${senderName}: ${response.slice(0, 200)}`).catch(() => {});
       groupHistory.push({ role: 'assistant', content: `[${agent.name.split(' ')[0]}]: ${response}` });
-    })
+    }),
+    MAX_PARALLEL_SUBAGENTS
   );
 
   // Report errors

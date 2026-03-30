@@ -11,6 +11,7 @@ const conversationHistories = new Map<string, ConversationMessage[]>();
 const channelQueues = new Map<string, Promise<void>>();
 // Per-channel abort controller so a new message can interrupt in-flight generation
 const channelAbortControllers = new Map<string, AbortController>();
+const pendingThinkingMessages = new Map<string, Message>();
 
 const MAX_HISTORY = 20; // Keep last 20 messages for context
 
@@ -27,6 +28,11 @@ export async function handleAgentMessage(
   // Interrupt any in-flight response in this channel so the agent listens to the latest message
   const prevController = channelAbortControllers.get(channelId);
   if (prevController) prevController.abort();
+  const pending = pendingThinkingMessages.get(channelId);
+  if (pending) {
+    pending.delete().catch(() => {});
+    pendingThinkingMessages.delete(channelId);
+  }
   const controller = new AbortController();
   channelAbortControllers.set(channelId, controller);
 
@@ -56,6 +62,20 @@ async function handleAgentMessageInner(
   // Show typing indicator
   const channel = message.channel as TextChannel;
   await channel.sendTyping();
+
+  // Visible immediate feedback while the LLM is thinking.
+  let pendingThinking: Message | null = null;
+  try {
+    const wh = await getWebhook(channel);
+    pendingThinking = await wh.send({
+      content: 'Thinking…',
+      username: `${agent.emoji} ${agent.name}`,
+      avatarURL: agent.avatarUrl,
+    });
+    pendingThinkingMessages.set(channelId, pendingThinking);
+  } catch {
+    // Non-fatal: typing indicator already sent.
+  }
 
   // Get or create conversation history, seeded with persistent memory
   let history = conversationHistories.get(channelId);
@@ -98,6 +118,10 @@ async function handleAgentMessageInner(
 
     // Split response if over Discord's 2000 char limit
     if (signal?.aborted) return;
+    if (pendingThinking) {
+      pendingThinking.delete().catch(() => {});
+      pendingThinkingMessages.delete(channelId);
+    }
     await sendAgentMessage(channel, agent, response);
   } catch (err) {
     const abortLike = String((err as any)?.name || '').includes('Abort') || String((err as any)?.message || '').toLowerCase().includes('abort');
@@ -106,6 +130,10 @@ async function handleAgentMessageInner(
     console.error(`Agent ${agent.name} error:`, errMsg);
     const short = errMsg.length > 200 ? errMsg.slice(0, 200) + '…' : errMsg;
     try {
+      if (pendingThinking) {
+        pendingThinking.delete().catch(() => {});
+        pendingThinkingMessages.delete(channelId);
+      }
       const wh = await getWebhook(channel);
       await wh.send({
         content: `⚠️ ${agent.name} encountered an error:\n\`\`\`${short}\`\`\``,
@@ -114,6 +142,11 @@ async function handleAgentMessageInner(
       });
     } catch (webhookErr) {
       console.warn(`Webhook error notification failed for ${agent.name}:`, webhookErr instanceof Error ? webhookErr.message : 'Unknown');
+    }
+  } finally {
+    if (signal?.aborted && pendingThinking) {
+      pendingThinking.delete().catch(() => {});
+      pendingThinkingMessages.delete(channelId);
     }
   }
 }

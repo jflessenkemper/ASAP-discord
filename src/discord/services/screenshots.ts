@@ -19,6 +19,9 @@ const ALLOWED_URL_PATTERNS = [
 
 /** Concurrency guard — only one capture at a time */
 let captureInProgress = false;
+let browserPool: Browser | null = null;
+let browserPoolTimer: ReturnType<typeof setTimeout> | null = null;
+const BROWSER_POOL_IDLE_MS = parseInt(process.env.SCREENSHOT_BROWSER_POOL_IDLE_MS || '180000', 10);
 
 /** All screens/states to capture */
 const SCREENS: Array<{ name: string; action?: (page: Page) => Promise<void>; waitFor?: string }> = [
@@ -53,6 +56,36 @@ let screenshotsChannel: TextChannel | null = null;
 
 export function setScreenshotsChannel(channel: TextChannel): void {
   screenshotsChannel = channel;
+}
+
+async function getPooledBrowser(): Promise<Browser> {
+  if (browserPool) {
+    if (browserPoolTimer) clearTimeout(browserPoolTimer);
+    browserPoolTimer = null;
+    return browserPool;
+  }
+
+  browserPool = await puppeteer.launch({
+    headless: true,
+    executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
+    args: [
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--disable-dev-shm-usage',
+      '--disable-gpu',
+    ],
+  });
+  return browserPool;
+}
+
+function scheduleBrowserPoolClose(): void {
+  if (browserPoolTimer) clearTimeout(browserPoolTimer);
+  browserPoolTimer = setTimeout(() => {
+    if (!browserPool) return;
+    browserPool.close().catch(() => {});
+    browserPool = null;
+    browserPoolTimer = null;
+  }, BROWSER_POOL_IDLE_MS);
 }
 
 /**
@@ -143,12 +176,12 @@ export async function captureAndPostScreenshots(
   }
 
   captureInProgress = true;
-  let browser: Browser | null = null;
+  let page: Page | null = null;
 
   // Overall timeout to prevent hanging forever
   const timeout = setTimeout(() => {
-    if (browser) browser.close().catch(() => {});
-    browser = null;
+    if (page) page.close().catch(() => {});
+    page = null;
   }, CAPTURE_TIMEOUT);
 
   try {
@@ -162,18 +195,8 @@ export async function captureAndPostScreenshots(
 
     await targetChannel.send(`📸 **Build Screenshots** — ${label}\n🔗 ${appUrl}\nCapturing on iPhone 17 Pro Max (${VIEWPORT.width}×${VIEWPORT.height} @${VIEWPORT.deviceScaleFactor}x)...`);
 
-    browser = await puppeteer.launch({
-      headless: true,
-      executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
-      args: [
-        '--no-sandbox',
-        '--disable-setuid-sandbox',
-        '--disable-dev-shm-usage',
-        '--disable-gpu',
-      ],
-    });
-
-    const page = await browser.newPage();
+    const browser = await getPooledBrowser();
+    page = await browser.newPage();
     await page.setViewport(VIEWPORT);
 
     // Set mobile user agent
@@ -226,8 +249,9 @@ export async function captureAndPostScreenshots(
   } finally {
     clearTimeout(timeout);
     captureInProgress = false;
-    if (browser) {
-      await browser.close().catch(() => {});
+    if (page) {
+      await page.close().catch(() => {});
     }
+    scheduleBrowserPoolClose();
   }
 }

@@ -3,6 +3,39 @@ import { recordElevenLabsUsage, isElevenLabsOverLimit } from '../usage';
 
 let client: ElevenLabsClient | null = null;
 
+type CacheEntry = { buffer: Buffer; ts: number };
+const ttsCache = new Map<string, CacheEntry>();
+const TTS_CACHE_MAX_ENTRIES = parseInt(process.env.TTS_CACHE_MAX_ENTRIES || '64', 10);
+const TTS_CACHE_TTL_MS = parseInt(process.env.TTS_CACHE_TTL_MS || '900000', 10); // 15 min
+
+function getCacheKey(text: string, voiceName: string): string {
+  return `${voiceName}::${text.trim()}`;
+}
+
+function getCachedTts(text: string, voiceName: string): Buffer | null {
+  const key = getCacheKey(text, voiceName);
+  const entry = ttsCache.get(key);
+  if (!entry) return null;
+  if (Date.now() - entry.ts > TTS_CACHE_TTL_MS) {
+    ttsCache.delete(key);
+    return null;
+  }
+  // Touch for simple LRU-ish behaviour.
+  ttsCache.delete(key);
+  ttsCache.set(key, entry);
+  return Buffer.from(entry.buffer);
+}
+
+function setCachedTts(text: string, voiceName: string, buffer: Buffer): void {
+  const key = getCacheKey(text, voiceName);
+  ttsCache.set(key, { buffer: Buffer.from(buffer), ts: Date.now() });
+  while (ttsCache.size > TTS_CACHE_MAX_ENTRIES) {
+    const oldestKey = ttsCache.keys().next().value;
+    if (!oldestKey) break;
+    ttsCache.delete(oldestKey);
+  }
+}
+
 function getClient(): ElevenLabsClient {
   if (!client) {
     const apiKey = process.env.ELEVENLABS_API_KEY;
@@ -72,6 +105,12 @@ export async function elevenLabsTTS(
     throw new Error('Daily ElevenLabs character limit reached');
   }
 
+  // Cache short phrases only; long dynamic responses are rarely reused.
+  if (text.length <= 160) {
+    const cached = getCachedTts(text, voiceName);
+    if (cached) return cached;
+  }
+
   const el = getClient();
   const voiceId = VOICE_ID_MAP[voiceName] || VOICE_ID_MAP[voiceName.toLowerCase()] || DEFAULT_VOICE_ID;
 
@@ -94,6 +133,9 @@ export async function elevenLabsTTS(
   }
 
   const buffer = Buffer.concat(chunks);
+  if (text.length <= 160 && buffer.length > 0) {
+    setCachedTts(text, voiceName, buffer);
+  }
   recordElevenLabsUsage(text.length);
   return buffer;
 }
