@@ -1,6 +1,7 @@
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import { recordGeminiUsage, isGeminiOverLimit } from '../usage';
 import { elevenLabsTTS, isElevenLabsAvailable } from './elevenlabs';
+import { recordTtsError, recordTtsLatency, recordTranscriptionLatency } from '../metrics';
 
 const genAI = process.env.GEMINI_API_KEY
   ? new GoogleGenerativeAI(process.env.GEMINI_API_KEY)
@@ -12,6 +13,7 @@ const genAI = process.env.GEMINI_API_KEY
  * Pre-filters silence to avoid wasting Gemini API calls.
  */
 export async function transcribeVoice(audioBuffer: Buffer): Promise<string> {
+    const startedAt = Date.now();
   if (!genAI) throw new Error('Gemini API key not configured');
 
   // Client-side silence detection — skip silent audio before calling Gemini
@@ -38,6 +40,7 @@ export async function transcribeVoice(audioBuffer: Buffer): Promise<string> {
   ]);
 
   const text = result.response.text().trim();
+  recordTranscriptionLatency('gemini', Date.now() - startedAt);
   recordGeminiUsage();
   if (!text || text === '[silence]') return '';
   return text;
@@ -53,13 +56,32 @@ export async function textToSpeech(
   text: string,
   voiceName: string = 'Kore'
 ): Promise<Buffer> {
+  const startedAt = Date.now();
   // Prefer ElevenLabs for significantly lower latency
   if (isElevenLabsAvailable()) {
-    return elevenLabsTTS(text, voiceName);
+    try {
+      const audio = await elevenLabsTTS(text, voiceName);
+      recordTtsLatency('elevenlabs', Date.now() - startedAt);
+      return audio;
+    } catch (err) {
+      recordTtsError('elevenlabs', 'runtime_error');
+      console.warn(
+        '[TTS] ElevenLabs failed, falling back to Gemini:',
+        err instanceof Error ? err.message : String(err)
+      );
+      // Fall through to Gemini below
+    }
   }
 
-  // Fallback to Gemini TTS
-  return geminiTTS(text, voiceName);
+  // Gemini TTS fallback (also used when ElevenLabs is not configured)
+  try {
+    const audio = await geminiTTS(text, voiceName);
+    recordTtsLatency('gemini', Date.now() - startedAt);
+    return audio;
+  } catch (err) {
+    recordTtsError('gemini', 'runtime_error');
+    throw err;
+  }
 }
 
 /**

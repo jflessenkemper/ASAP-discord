@@ -18,6 +18,7 @@ import { isDeepgramAvailable, startLiveTranscription, DeepgramLiveSession } from
 
 let currentConnection: VoiceConnection | null = null;
 let audioPlayer: AudioPlayer | null = null;
+let isCleaningUp = false;
 
 /**
  * Join a voice channel and return the connection.
@@ -47,13 +48,22 @@ export async function joinVC(channel: VoiceBasedChannel): Promise<VoiceConnectio
  * Leave the voice channel.
  */
 export function leaveVC(): void {
-  if (audioPlayer) {
-    audioPlayer.stop();
-    audioPlayer = null;
+  if (isCleaningUp) {
+    console.warn('[VOICE] leaveVC called while cleanup is already in progress — skipping duplicate call');
+    return;
   }
-  if (currentConnection) {
-    currentConnection.destroy();
-    currentConnection = null;
+  isCleaningUp = true;
+  try {
+    if (audioPlayer) {
+      try { audioPlayer.stop(); } catch { /* best-effort — player may already be stopping */ }
+      audioPlayer = null;
+    }
+    if (currentConnection) {
+      try { currentConnection.destroy(); } catch { /* best-effort — connection may already be destroyed */ }
+      currentConnection = null;
+    }
+  } finally {
+    isCleaningUp = false;
   }
 }
 
@@ -123,6 +133,11 @@ export async function speakInVC(audioBuffer: Buffer): Promise<void> {
 
 export function getConnection(): VoiceConnection | null {
   return currentConnection;
+}
+
+/** Returns true if a voice connection is active and not currently being torn down. */
+export function isVoiceActive(): boolean {
+  return currentConnection !== null && !isCleaningUp;
 }
 
 export function getPlayer(): AudioPlayer | null {

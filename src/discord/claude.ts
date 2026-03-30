@@ -5,6 +5,7 @@ import { AgentConfig } from './agents';
 import { REPO_TOOLS, REVIEW_TOOLS, executeTool, getToolAuditCallback } from './tools';
 import { recordClaudeUsage, isClaudeOverLimit, isBudgetExceeded, getRemainingBudget, getClaudeTokenStatus, approveAdditionalBudget } from './usage';
 import { logAgentEvent } from './activityLog';
+import { recordAgentResponse, recordRateLimitHit } from './metrics';
 
 // Load project context once at startup — shared by all agents
 let PROJECT_CONTEXT = '';
@@ -266,9 +267,15 @@ async function withRetry<T>(fn: () => Promise<T>, retries = 3, delayMs = 2000): 
 
       let delay: number;
       if (status === 429) {
-        delay = 60_000;
-        rateLimitedUntil = Math.max(rateLimitedUntil, Date.now() + delay);
-        console.warn(`429 rate limited — global pause for ${Math.ceil(delay / 1000)}s (retry ${i + 1}/${retries})`);
+        recordRateLimitHit();
+        // Add ±10s of random jitter so concurrent requests that all hit 429
+        // simultaneously don't all resume at the exact same moment and
+        // immediately trigger another burst.
+        const jitter = Math.floor(Math.random() * 20_000) - 10_000; // ±10 s
+        delay = 60_000 + jitter;
+        // Global gate uses the upper bound (no jitter) so it's conservative
+        rateLimitedUntil = Math.max(rateLimitedUntil, Date.now() + 65_000);
+        console.warn(`429 rate limited — pausing ${Math.ceil(delay / 1000)}s (±jitter, retry ${i + 1}/${retries})`);
         logAgentEvent('system', 'rate_limit', `429 — pausing ${Math.ceil(delay / 1000)}s`);
       } else {
         delay = delayMs * Math.pow(2, i);
@@ -529,6 +536,7 @@ TOKENS: ${tokenUsed.toLocaleString()} used / ${tokenLimit.toLocaleString()} dail
         response.response.usageMetadata?.candidatesTokenCount || 0,
       );
       const finalText = response.response.text() || 'Done.';
+      recordAgentResponse(agent.id, Date.now() - loopStart);
       logAgentEvent(agent.id, 'response', `${totalToolCalls} tools, response="${finalText.slice(0, 300)}"`, {
         durationMs: Date.now() - loopStart,
         tokensIn: response.response.usageMetadata?.promptTokenCount,

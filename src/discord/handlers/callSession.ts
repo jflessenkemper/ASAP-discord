@@ -1,15 +1,16 @@
 import { TextChannel, VoiceChannel, GuildMember } from 'discord.js';
-import { VoiceConnection } from '@discordjs/voice';
-import { getAgents, getAgent, AgentConfig, AgentId } from '../agents';
+import { getAgent, AgentId } from '../agents';
 import { agentRespond, ConversationMessage, summarizeCall } from '../claude';
 import { textToSpeech } from '../voice/tts';
-import { joinVC, leaveVC, speakInVC, listenToUser, listenToAllMembers, listenToAllMembersSmart, getConnection, VoiceTranscription } from '../voice/connection';
+import { joinVC, leaveVC, speakInVC, listenToAllMembersSmart, getConnection, VoiceTranscription } from '../voice/connection';
 import { appendToMemory, getMemoryContext } from '../memory';
 import { documentToChannel } from './documentation';
 import { isGeminiOverLimit } from '../usage';
 import { isDeepgramAvailable } from '../voice/deepgram';
 import { postDiagnostic, mirrorAgentResponse, mirrorVoiceTranscript } from '../services/diagnosticsWebhook';
 import { getWebhook } from '../services/webhooks';
+import { getThinkingChime } from '../voice/thinkingSound';
+import { recordVoiceCallStart, recordVoiceCallEnd, recordThinkingChimePlayed } from '../metrics';
 
 /** Only Riley (EA) and Ace (Developer) speak in voice calls */
 const VOICE_SPEAKERS = new Set(['executive-assistant', 'developer']);
@@ -52,7 +53,7 @@ function splitSentences(text: string): string[] {
   // Handle URLs, decimals, abbreviations, and code by using a more careful pattern.
   // First, protect URLs and common abbreviations from splitting.
   const placeholder = '\x00';
-  let protected_ = text
+  const protected_ = text
     .replace(/https?:\/\/[^\s]+/g, (m) => m.replace(/\./g, placeholder))
     .replace(/\b(Mr|Mrs|Ms|Dr|Jr|Sr|St|vs|etc|e\.g|i\.e)\./gi, (m) => m.replace('.', placeholder));
   const raw = protected_.match(/[^.!?\n]+[.!?]+[\s]?|[^.!?\n]+$/g) || [text];
@@ -149,6 +150,7 @@ export async function startCall(
   await sendAsAgent(groupchat, `📞 Connecting Riley to **${voiceChannel.name}** and running voice preflight...`);
 
   const connection = await joinVC(voiceChannel);
+  recordVoiceCallStart();
 
   activeSession = {
     active: true,
@@ -219,6 +221,7 @@ export async function startCall(
       `⚠️ Voice preflight failed: ${msg}. I am leaving voice so you are not stuck waiting on silence.`
     );
     leaveVC();
+    recordVoiceCallEnd();
     if (activeSession?.heartbeatTimer) {
       clearInterval(activeSession.heartbeatTimer);
     }
@@ -262,6 +265,7 @@ export async function endCall(): Promise<void> {
   session.transcript.push(`[${new Date().toLocaleTimeString()}] Call ended`);
 
   // Leave voice channel
+    recordVoiceCallEnd();
   leaveVC();
 
   // Post transcript to call-log
@@ -337,20 +341,28 @@ IMPORTANT: In your response, if you want Ace to implement something, say "@ace".
 
 Keep your spoken response brief — you're in a voice call, not a text chat.${langHint}`;
 
+      // ── Thinking chime ────────────────────────────────────────────────────
+      // Play a soft ascending chime the instant the LLM call starts so the user
+      // immediately hears "I heard you, I'm thinking" — same UX as Grok/ChatGPT.
+      // Runs concurrently with agentRespond (~750 ms vs 1-2 s LLM) → zero latency cost.
+      const chimePromise = speakInVC(getThinkingChime())
+        .then(() => recordThinkingChimePlayed())
+        .catch((err) => console.warn('[VOICE] Thinking chime failed:', err instanceof Error ? err.message : String(err)));
+
       const response = await agentRespond(
         riley,
         [...rileyMemory, ...session.conversationHistory],
         rileyContext
       );
 
+      // Chime is usually already done by now, but wait before starting TTS
+      await chimePromise;
+
       session.conversationHistory.push({
         role: 'user',
         content: `[Voice from ${transcription.username}]: ${userText}`,
       });
-      session.conversationHistory.push({
-        role: 'assistant',
-        content: `[Riley]: ${response}`,
-      });
+      session.conversationHistory.push({ role: 'assistant', content: `[Riley]: ${response}` });
 
       session.transcript.push(
         `[${new Date().toLocaleTimeString()}] Riley (EA): ${response}`
@@ -400,7 +412,6 @@ Keep your spoken response brief — you're in a voice call, not a text chat.${la
             if (session.conversationHistory.length > MAX_CALL_HISTORY) {
               session.conversationHistory.splice(0, session.conversationHistory.length - MAX_CALL_HISTORY);
             }
-
             session.transcript.push(
               `[${new Date().toLocaleTimeString()}] Ace (Developer): ${aceResponse}`
             );

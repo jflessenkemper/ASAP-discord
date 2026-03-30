@@ -22,6 +22,9 @@ import { captureAndPostScreenshots } from './discord/services/screenshots';
 import { getBotChannels } from './discord/bot';
 import { getInboundTwiML, attachTelephonyWebSocket, isTelephonyAvailable } from './discord/services/telephony';
 import twilio from 'twilio';
+import { getMetricsText, PROMETHEUS_CONTENT_TYPE } from './discord/metrics';
+import { updateGeminiSpend } from './discord/metrics';
+import { getRemainingBudget } from './discord/usage';
 
 const app = express();
 const PORT = parseInt(process.env.PORT || '3001', 10);
@@ -68,6 +71,19 @@ app.use(cookieParser());
 // Health check
 app.get('/api/health', (_req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
+});
+
+// Prometheus metrics endpoint — protected by the same AGENT_LOG_SECRET
+// so it is not publicly accessible without a key.
+app.get('/api/metrics', (req, res) => {
+  const secret = process.env.AGENT_LOG_SECRET || 'asap-debug';
+  if (req.query.key !== secret) {
+    res.status(401).type('text/plain').send('Unauthorized. Use ?key=YOUR_SECRET');
+    return;
+  }
+  const { spent } = getRemainingBudget();
+  updateGeminiSpend(spent);
+  res.set('Content-Type', PROMETHEUS_CONTENT_TYPE).send(getMetricsText());
 });
 
 // Agent activity log — read recent agent events for debugging
@@ -232,7 +248,8 @@ app.use('/api/*', (_req, res) => {
 });
 
 // Global error handler
-app.use((err: Error, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+app.use((err: Error, _req: express.Request, res: express.Response, next: express.NextFunction) => {
+  void next;
   console.error('Unhandled error:', err.message);
   res.status(500).json({ error: 'Internal server error' });
 });
