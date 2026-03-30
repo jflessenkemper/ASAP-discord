@@ -245,6 +245,8 @@ const QUEUE_RELEASE_DELAY_RATE_LIMIT_MS = parseInt(process.env.QUEUE_RELEASE_DEL
 /** Lower default output tokens for faster first responses. */
 const DEFAULT_MAX_OUTPUT_TOKENS = parseInt(process.env.DEFAULT_MAX_OUTPUT_TOKENS || '1000', 10);
 const DEFAULT_MAX_OUTPUT_TOKENS_DEVELOPER = parseInt(process.env.DEFAULT_MAX_OUTPUT_TOKENS_DEVELOPER || '2000', 10);
+const DISABLE_GEMINI_QUOTA_FUSE = process.env.DISABLE_GEMINI_QUOTA_FUSE === 'true';
+const GEMINI_QUOTA_FUSE_MS = parseInt(process.env.GEMINI_QUOTA_FUSE_MS || '3600000', 10);
 let activeClaude = 0;
 const claudeQueue: Array<() => void> = [];
 
@@ -277,7 +279,16 @@ function isGeminiQuotaError(err: any): boolean {
 }
 
 function isCreditsExhaustedNow(): boolean {
+  if (DISABLE_GEMINI_QUOTA_FUSE) return false;
   return creditsExhaustedUntil > Date.now();
+}
+
+function triggerGeminiQuotaFuse(): void {
+  if (DISABLE_GEMINI_QUOTA_FUSE) {
+    creditsExhaustedUntil = 0;
+    return;
+  }
+  creditsExhaustedUntil = Date.now() + GEMINI_QUOTA_FUSE_MS;
 }
 
 async function waitForRateLimit(): Promise<void> {
@@ -593,11 +604,15 @@ TOKENS: ${tokenUsed.toLocaleString()} used / ${tokenLimit.toLocaleString()} dail
       return '';
     }
     if (isGeminiQuotaError(err)) {
-      creditsExhaustedUntil = Date.now() + 60 * 60 * 1000;
+      triggerGeminiQuotaFuse();
       logAgentEvent(agent.id, 'error', 'Gemini quota exhausted');
       return agent.id === 'executive-assistant'
-        ? '⚠️ Gemini quota is exhausted. Pause the team and ask Jordan to top up Google Cloud billing.'
-        : '⚠️ Gemini quota is exhausted right now. Ask Riley to request Jordan approval for more credits before continuing.';
+        ? (DISABLE_GEMINI_QUOTA_FUSE
+            ? '⚠️ Gemini rejected that request. The local quota pause is disabled, so the team can keep trying, but upstream Google limits may still reject individual requests.'
+            : '⚠️ Gemini quota is exhausted. Pause the team and ask Jordan to top up Google Cloud billing.')
+        : (DISABLE_GEMINI_QUOTA_FUSE
+            ? '⚠️ Gemini rejected that request, but the local quota pause is disabled. Retry or continue with other work.'
+            : '⚠️ Gemini quota is exhausted right now. Ask Riley to request Jordan approval for more credits before continuing.');
     }
     throw err;
   }
@@ -746,11 +761,15 @@ TOKENS: ${tokenUsed.toLocaleString()} used / ${tokenLimit.toLocaleString()} dail
         return '';
       }
       if (isGeminiQuotaError(err)) {
-        creditsExhaustedUntil = Date.now() + 60 * 60 * 1000;
+        triggerGeminiQuotaFuse();
         logAgentEvent(agent.id, 'error', 'Gemini quota exhausted mid-loop');
         return agent.id === 'executive-assistant'
-          ? '⚠️ Gemini quota is exhausted. Pause the team and ask Jordan to top up Google Cloud billing.'
-          : '⚠️ Gemini quota is exhausted right now. Ask Riley to request Jordan approval for more credits before continuing.';
+          ? (DISABLE_GEMINI_QUOTA_FUSE
+              ? '⚠️ Gemini rejected that request mid-run. The local quota pause is disabled, so the team can keep trying, but upstream Google limits may still reject individual requests.'
+              : '⚠️ Gemini quota is exhausted. Pause the team and ask Jordan to top up Google Cloud billing.')
+          : (DISABLE_GEMINI_QUOTA_FUSE
+              ? '⚠️ Gemini rejected that request mid-run, but the local quota pause is disabled. Retry or continue with other work.'
+              : '⚠️ Gemini quota is exhausted right now. Ask Riley to request Jordan approval for more credits before continuing.');
       }
       throw err;
     }
