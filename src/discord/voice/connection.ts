@@ -360,6 +360,8 @@ export function listenToUserDeepgram(
   let destroyed = false;
   let dgSession: DeepgramLiveSession | null = null;
   let fallbackUnsub: (() => void) | null = null;
+  let currentSubscription: Readable | null = null;
+  let currentDecoder: Transform | null = null;
 
   const receiver = connection.receiver;
 
@@ -402,13 +404,33 @@ export function listenToUserDeepgram(
     }
     dgSession = session;
 
+    function cleanupReceiveChain(): void {
+      try {
+        currentSubscription?.destroy();
+      } catch {
+        // best-effort
+      }
+      try {
+        currentDecoder?.destroy();
+      } catch {
+        // best-effort
+      }
+      currentSubscription = null;
+      currentDecoder = null;
+    }
+
     // Subscribe to user's audio and pipe it to Deepgram
     function subscribe() {
       if (destroyed) return;
 
+      cleanupReceiveChain();
+
       const subscription = receiver.subscribe(member.id, {
-        end: { behavior: EndBehaviorType.AfterSilence, duration: 1500 },
+        // AfterInactivity is more resilient than AfterSilence for some clients
+        // that send sparse/non-standard silence packets.
+        end: { behavior: EndBehaviorType.AfterInactivity, duration: 2000 },
       });
+      currentSubscription = subscription;
 
       // Decode Opus frames → PCM before sending to Deepgram (expects linear16)
       let decoder: Transform;
@@ -418,6 +440,7 @@ export function listenToUserDeepgram(
         console.error(`Opus decoder error for ${member.displayName}:`, err instanceof Error ? err.message : 'Unknown');
         return;
       }
+      currentDecoder = decoder;
       subscription.pipe(decoder);
 
       decoder.on('data', (chunk: Buffer) => {
@@ -427,12 +450,20 @@ export function listenToUserDeepgram(
       });
 
       decoder.on('end', () => {
-        if (!destroyed) subscribe(); // Re-subscribe for next utterance
+        if (!destroyed) {
+          setTimeout(() => {
+            if (!destroyed) subscribe();
+          }, 120);
+        }
       });
 
       decoder.on('error', (err: Error) => {
         console.error(`Deepgram decoder error for ${member.displayName}:`, err.message);
-        if (!destroyed) subscribe();
+        if (!destroyed) {
+          setTimeout(() => {
+            if (!destroyed) subscribe();
+          }, 250);
+        }
       });
 
       // When Opus subscription ends, also end the decoder
@@ -456,6 +487,16 @@ export function listenToUserDeepgram(
 
   return () => {
     destroyed = true;
+    try {
+      currentSubscription?.destroy();
+    } catch {
+      // best-effort
+    }
+    try {
+      currentDecoder?.destroy();
+    } catch {
+      // best-effort
+    }
     dgSession?.close();
     fallbackUnsub?.();
   };

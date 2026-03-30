@@ -34,19 +34,12 @@ export async function startLiveTranscription(
 ): Promise<DeepgramLiveSession> {
   const client = getClient();
 
-  // Latency knobs: lower values generally yield faster end-of-utterance
-  // detection at the cost of possibly earlier cutoffs in noisy channels.
-  const endpointingMs = parseInt(process.env.DEEPGRAM_ENDPOINTING_MS || '300', 10);
-  const utteranceEndMs = parseInt(process.env.DEEPGRAM_UTTERANCE_END_MS || '1200', 10);
-
   const connection: LiveClient = client.listen.live({
     model: 'nova-3',
     language: 'multi',            // Auto-detect language (English, Mandarin, etc.)
     smart_format: true,
     punctuate: true,
     interim_results: false,       // Only final results — no flicker
-    endpointing: endpointingMs,
-    utterance_end_ms: utteranceEndMs,
     encoding: 'linear16',          // Discord receiver decodes to PCM s16le
     sample_rate: 48000,           // Discord PCM sample rate
     channels: 2,                  // Discord stereo
@@ -62,7 +55,8 @@ export async function startLiveTranscription(
   });
 
   connection.on(LiveTranscriptionEvents.Error, (err: any) => {
-    console.error('Deepgram error:', err?.message || err);
+    const detail = err?.message || err?.error || err;
+    console.error('Deepgram error:', detail);
     onError?.(err instanceof Error ? err : new Error(String(err)));
   });
 

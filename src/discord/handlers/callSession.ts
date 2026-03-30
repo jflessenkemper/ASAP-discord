@@ -226,6 +226,7 @@ function interruptActiveVoiceTurn(reason: string): void {
   if (now - activeSession.lastInterruptAt < 300) return;
   activeSession.lastInterruptAt = now;
 
+  console.log(`[VOICE] Barge-in interrupt: ${reason}`);
   activeSession.currentAbortController?.abort();
   activeSession.currentAbortController = null;
   activeSession.outputActive = false;
@@ -383,8 +384,12 @@ export async function startCall(
     if (!activeSession?.active) return;
     const member = voiceChannel.members.get(userId);
     if (!member || member.user.bot) return;
-    if (!activeSession.outputActive && !activeSession.currentAbortController) return;
-    if (activeSession.outputActive && activeSession.outputStartedAt > 0) {
+    // Only barge-in when Riley is actively playing TTS audio — not during the
+    // thinking/LLM phase. Interrupting the LLM call while the user waits for a
+    // response would silently abort it, creating the symptom of "chime plays but
+    // Riley never responds".
+    if (!activeSession.outputActive) return;
+    if (activeSession.outputStartedAt > 0) {
       const activeForMs = Date.now() - activeSession.outputStartedAt;
       if (activeForMs < VOICE_INTERRUPT_MIN_OUTPUT_ACTIVE_MS) return;
     }
