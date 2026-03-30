@@ -15,7 +15,18 @@ const pendingThinkingMessages = new Map<string, Message>();
 
 const MAX_HISTORY = 20; // Keep last 20 messages for context
 const PROGRESSIVE_REVEAL_STEP_CHARS = parseInt(process.env.PROGRESSIVE_REVEAL_STEP_CHARS || '320', 10);
-const PROGRESSIVE_REVEAL_STEP_MS = parseInt(process.env.PROGRESSIVE_REVEAL_STEP_MS || '90', 10);
+const PROGRESSIVE_REVEAL_STEP_MS = parseInt(process.env.PROGRESSIVE_REVEAL_STEP_MS || '60', 10);
+const TEXT_MAX_TOKENS_SIMPLE = parseInt(process.env.TEXT_MAX_TOKENS_SIMPLE || '700', 10);
+const TEXT_MAX_TOKENS_STANDARD = parseInt(process.env.TEXT_MAX_TOKENS_STANDARD || '1100', 10);
+const TEXT_MAX_TOKENS_DEVELOPER = parseInt(process.env.TEXT_MAX_TOKENS_DEVELOPER || '1700', 10);
+
+function estimateTextMaxTokens(agent: AgentConfig, userMessage: string): number {
+  const trimmed = userMessage.trim();
+  const simple = trimmed.length <= 180 && /^(ok|yes|no|status|why|what|how|help|fix|run|test|show|give)\b/i.test(trimmed);
+  if (simple) return TEXT_MAX_TOKENS_SIMPLE;
+  if (agent.id === 'developer') return TEXT_MAX_TOKENS_DEVELOPER;
+  return TEXT_MAX_TOKENS_STANDARD;
+}
 
 /**
  * Handle a message in an individual agent channel.
@@ -87,6 +98,7 @@ async function handleAgentMessageInner(
   }
 
   try {
+    const maxTokens = estimateTextMaxTokens(agent, userMessage);
     const response = await agentRespond(agent, history, userMessage, async (toolName, summary) => {
       if (signal?.aborted) return;
       try {
@@ -99,7 +111,7 @@ async function handleAgentMessageInner(
       } catch (err) {
         console.warn(`Webhook tool notification failed for ${agent.name}:`, err instanceof Error ? err.message : 'Unknown');
       }
-      }, { signal });
+      }, { signal, maxTokens });
 
       if (signal?.aborted) return;
 

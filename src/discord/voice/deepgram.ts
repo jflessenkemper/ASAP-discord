@@ -36,8 +36,8 @@ export async function startLiveTranscription(
 
   // Latency knobs: lower values generally yield faster end-of-utterance
   // detection at the cost of possibly earlier cutoffs in noisy channels.
-  const endpointingMs = parseInt(process.env.DEEPGRAM_ENDPOINTING_MS || '350', 10);
-  const utteranceEndMs = parseInt(process.env.DEEPGRAM_UTTERANCE_END_MS || '900', 10);
+  const endpointingMs = parseInt(process.env.DEEPGRAM_ENDPOINTING_MS || '250', 10);
+  const utteranceEndMs = parseInt(process.env.DEEPGRAM_UTTERANCE_END_MS || '700', 10);
 
   const connection: LiveClient = client.listen.live({
     model: 'nova-3',

@@ -20,6 +20,9 @@ const HEARTBEAT_INTERVAL = 2 * 60 * 1000;
 /** Max conversation history in a call */
 const MAX_CALL_HISTORY = 40;
 const VOICE_PREFLIGHT_TIMEOUT_MS = parseInt(process.env.VOICE_PREFLIGHT_TIMEOUT_MS || '15000', 10);
+const VOICE_MAX_TOKENS_RILEY = parseInt(process.env.VOICE_MAX_TOKENS_RILEY || '220', 10);
+const VOICE_MAX_TOKENS_ACE = parseInt(process.env.VOICE_MAX_TOKENS_ACE || '260', 10);
+const VOICE_MAX_TOKENS_SPECIALIST = parseInt(process.env.VOICE_MAX_TOKENS_SPECIALIST || '220', 10);
 
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | null = null;
@@ -398,7 +401,7 @@ You are in a voice call. ${transcription.username} just spoke. Your job:
 
 IMPORTANT: In your response, if you want Ace to implement something, say "@ace". For other agents, @mention them — they'll respond in text only (e.g., "@kane for security review"). Only you and Ace speak in voice. Other agents work via text.
 
-Keep your spoken response brief — you're in a voice call, not a text chat.${langHint}`;
+Keep your spoken response very brief (normally 1-3 short sentences) — you're in a voice call, not a text chat.${langHint}`;
 
       // ── Thinking chime ────────────────────────────────────────────────────
       // Play a soft ascending chime the instant the LLM call starts so the user
@@ -413,7 +416,7 @@ Keep your spoken response brief — you're in a voice call, not a text chat.${la
         [...rileyMemory, ...session.conversationHistory],
         rileyContext,
         undefined,
-        { signal }
+        { signal, maxTokens: VOICE_MAX_TOKENS_RILEY }
       );
       if (!isCurrentTurn() || !response.trim()) return;
 
@@ -474,7 +477,7 @@ Keep your spoken response brief — you're in a voice call, not a text chat.${la
               [...aceMemory, ...session.conversationHistory],
               `[Riley directed you in voice call]: ${response}\n\n[Original voice from ${transcription.username}]: ${userText}`,
               undefined,
-              { signal }
+              { signal, maxTokens: VOICE_MAX_TOKENS_ACE }
             );
             if (!isCurrentTurn() || !aceResponse.trim()) return;
 
@@ -538,7 +541,7 @@ Keep your spoken response brief — you're in a voice call, not a text chat.${la
             [...agentMemory, ...session.conversationHistory],
             `[Riley directed you during voice call]: ${response}\n[Original from ${transcription.username}]: ${userText}`,
             undefined,
-            { signal }
+            { signal, maxTokens: VOICE_MAX_TOKENS_SPECIALIST }
           );
           if (!isCurrentTurn() || !agentResponse.trim()) return;
           await sendAsAgent(session.groupchat, agentResponse.slice(0, 1900), agentId as AgentId);
