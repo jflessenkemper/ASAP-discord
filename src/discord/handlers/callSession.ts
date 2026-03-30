@@ -25,6 +25,7 @@ const VOICE_MAX_TOKENS_ACE = parseInt(process.env.VOICE_MAX_TOKENS_ACE || '260',
 const VOICE_MAX_TOKENS_SPECIALIST = parseInt(process.env.VOICE_MAX_TOKENS_SPECIALIST || '220', 10);
 const VOICE_STREAM_PARTIAL_MIN_CHARS = parseInt(process.env.VOICE_STREAM_PARTIAL_MIN_CHARS || '70', 10);
 const VOICE_STREAM_FORCE_CHARS = parseInt(process.env.VOICE_STREAM_FORCE_CHARS || '160', 10);
+const VOICE_INTERRUPT_MIN_OUTPUT_ACTIVE_MS = parseInt(process.env.VOICE_INTERRUPT_MIN_OUTPUT_ACTIVE_MS || '350', 10);
 
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | null = null;
@@ -115,7 +116,10 @@ function findSpeechBoundaryIndex(text: string, start: number, force: boolean): n
       boundary = start + match.index + match[0].length;
     }
     if (boundary < 0) {
-      boundary = Math.min(text.length, start + VOICE_STREAM_FORCE_CHARS);
+      const target = Math.min(text.length, start + VOICE_STREAM_FORCE_CHARS);
+      const window = text.slice(start, target);
+      const lastSpace = window.lastIndexOf(' ');
+      boundary = lastSpace > 40 ? start + lastSpace + 1 : target;
     }
   }
 
@@ -138,15 +142,24 @@ function createLiveSpeechStreamer(
   let spokenUntil = 0;
   let latestText = '';
   let speakQueue = Promise.resolve();
+  let lastSpokenNormalized = '';
+
+  const normalizeSegment = (segment: string) =>
+    segment.toLowerCase().replace(/\s+/g, ' ').replace(/[^a-z0-9\s]/g, '').trim();
 
   const enqueue = (segment: string) => {
     const toSpeak = segment.trim();
     if (!toSpeak) return;
+    const normalized = normalizeSegment(toSpeak);
+    if (!normalized) return;
+    if (lastSpokenNormalized.endsWith(normalized) || normalized.endsWith(lastSpokenNormalized)) return;
+    lastSpokenNormalized = normalized;
     speakQueue = speakQueue
       .then(async () => {
         if (!isCurrentTurn() || signal.aborted) return;
         if (activeSession?.currentTurnId === turnId) {
           activeSession.outputActive = true;
+          activeSession.outputStartedAt = Date.now();
         }
         await speakPipelined(toSpeak, voice, signal);
       })
@@ -181,6 +194,7 @@ function createLiveSpeechStreamer(
       await speakQueue;
       if (activeSession?.currentTurnId === turnId) {
         activeSession.outputActive = false;
+        activeSession.outputStartedAt = 0;
       }
     },
   };
@@ -200,6 +214,7 @@ export interface CallSession {
   currentAbortController: AbortController | null;
   currentTurnId: number;
   outputActive: boolean;
+  outputStartedAt: number;
   lastInterruptAt: number;
 }
 
@@ -214,6 +229,7 @@ function interruptActiveVoiceTurn(reason: string): void {
   activeSession.currentAbortController?.abort();
   activeSession.currentAbortController = null;
   activeSession.outputActive = false;
+  activeSession.outputStartedAt = 0;
   stopVCPlayback();
   postDiagnostic('Voice turn interrupted.', {
     level: 'info',
@@ -283,6 +299,7 @@ export async function startCall(
     currentAbortController: null,
     currentTurnId: 0,
     outputActive: false,
+    outputStartedAt: 0,
     lastInterruptAt: 0,
   };
 
@@ -367,6 +384,10 @@ export async function startCall(
     const member = voiceChannel.members.get(userId);
     if (!member || member.user.bot) return;
     if (!activeSession.outputActive && !activeSession.currentAbortController) return;
+    if (activeSession.outputActive && activeSession.outputStartedAt > 0) {
+      const activeForMs = Date.now() - activeSession.outputStartedAt;
+      if (activeForMs < VOICE_INTERRUPT_MIN_OUTPUT_ACTIVE_MS) return;
+    }
     interruptActiveVoiceTurn(`speech-start:${member.displayName}`);
   };
   connection.receiver.speaking.on('start', onSpeakingStart);
@@ -386,6 +407,7 @@ export async function endCall(): Promise<void> {
   session.currentAbortController?.abort();
   session.currentAbortController = null;
   session.outputActive = false;
+  session.outputStartedAt = 0;
   stopVCPlayback();
 
   // Stop heartbeat
@@ -452,6 +474,7 @@ async function handleVoiceInput(transcription: VoiceTranscription): Promise<void
   session.currentAbortController = abortController;
   session.currentTurnId = turnId;
   session.outputActive = false;
+  session.outputStartedAt = 0;
 
   const isCurrentTurn = () =>
     activeSession?.active === true &&
@@ -662,6 +685,7 @@ Keep your spoken response very brief (normally 1-3 short sentences) — you're i
     if (session.currentTurnId === turnId) {
       session.currentAbortController = null;
       session.outputActive = false;
+      session.outputStartedAt = 0;
     }
   }
 }

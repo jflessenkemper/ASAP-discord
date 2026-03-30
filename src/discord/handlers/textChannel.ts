@@ -21,6 +21,7 @@ const TEXT_MAX_TOKENS_STANDARD = parseInt(process.env.TEXT_MAX_TOKENS_STANDARD |
 const TEXT_MAX_TOKENS_DEVELOPER = parseInt(process.env.TEXT_MAX_TOKENS_DEVELOPER || '1700', 10);
 const STREAM_EDIT_THROTTLE_MS = parseInt(process.env.STREAM_EDIT_THROTTLE_MS || '80', 10);
 const STREAM_MAX_PREVIEW_CHARS = parseInt(process.env.STREAM_MAX_PREVIEW_CHARS || '1800', 10);
+const STREAM_EDIT_MIN_CHAR_DELTA = parseInt(process.env.STREAM_EDIT_MIN_CHAR_DELTA || '35', 10);
 
 function estimateTextMaxTokens(agent: AgentConfig, userMessage: string): number {
   const trimmed = userMessage.trim();
@@ -103,6 +104,7 @@ async function handleAgentMessageInner(
     const maxTokens = estimateTextMaxTokens(agent, userMessage);
     let streamedPreviewShown = false;
     let lastStreamEditAt = 0;
+    let lastRenderedLength = 0;
 
     const updateStreamPreview = async (partialText: string, force = false): Promise<void> => {
       if (signal?.aborted || !pendingThinking) return;
@@ -113,9 +115,11 @@ async function handleAgentMessageInner(
         : rendered;
       const now = Date.now();
       if (!force && now - lastStreamEditAt < STREAM_EDIT_THROTTLE_MS) return;
+      if (!force && Math.abs(clipped.length - lastRenderedLength) < STREAM_EDIT_MIN_CHAR_DELTA) return;
       lastStreamEditAt = now;
       await pendingThinking.edit(clipped).catch(() => {});
       streamedPreviewShown = true;
+      lastRenderedLength = clipped.length;
     };
 
     const response = await agentRespond(agent, history, userMessage, async (toolName, summary) => {
