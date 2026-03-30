@@ -19,6 +19,8 @@ const PROGRESSIVE_REVEAL_STEP_MS = parseInt(process.env.PROGRESSIVE_REVEAL_STEP_
 const TEXT_MAX_TOKENS_SIMPLE = parseInt(process.env.TEXT_MAX_TOKENS_SIMPLE || '700', 10);
 const TEXT_MAX_TOKENS_STANDARD = parseInt(process.env.TEXT_MAX_TOKENS_STANDARD || '1100', 10);
 const TEXT_MAX_TOKENS_DEVELOPER = parseInt(process.env.TEXT_MAX_TOKENS_DEVELOPER || '1700', 10);
+const STREAM_EDIT_THROTTLE_MS = parseInt(process.env.STREAM_EDIT_THROTTLE_MS || '80', 10);
+const STREAM_MAX_PREVIEW_CHARS = parseInt(process.env.STREAM_MAX_PREVIEW_CHARS || '1800', 10);
 
 function estimateTextMaxTokens(agent: AgentConfig, userMessage: string): number {
   const trimmed = userMessage.trim();
@@ -99,6 +101,23 @@ async function handleAgentMessageInner(
 
   try {
     const maxTokens = estimateTextMaxTokens(agent, userMessage);
+    let streamedPreviewShown = false;
+    let lastStreamEditAt = 0;
+
+    const updateStreamPreview = async (partialText: string, force = false): Promise<void> => {
+      if (signal?.aborted || !pendingThinking) return;
+      const rendered = renderAgentMessage(partialText).trim();
+      if (!rendered) return;
+      const clipped = rendered.length > STREAM_MAX_PREVIEW_CHARS
+        ? `${rendered.slice(0, STREAM_MAX_PREVIEW_CHARS - 1)}…`
+        : rendered;
+      const now = Date.now();
+      if (!force && now - lastStreamEditAt < STREAM_EDIT_THROTTLE_MS) return;
+      lastStreamEditAt = now;
+      await pendingThinking.edit(clipped).catch(() => {});
+      streamedPreviewShown = true;
+    };
+
     const response = await agentRespond(agent, history, userMessage, async (toolName, summary) => {
       if (signal?.aborted) return;
       try {
@@ -111,7 +130,13 @@ async function handleAgentMessageInner(
       } catch (err) {
         console.warn(`Webhook tool notification failed for ${agent.name}:`, err instanceof Error ? err.message : 'Unknown');
       }
-      }, { signal, maxTokens });
+      }, {
+        signal,
+        maxTokens,
+        onPartialText: async (partialText) => {
+          await updateStreamPreview(partialText);
+        },
+      });
 
       if (signal?.aborted) return;
 
@@ -132,6 +157,20 @@ async function handleAgentMessageInner(
 
     // Split response if over Discord's 2000 char limit
     if (signal?.aborted) return;
+    const renderedResponse = renderAgentMessage(response);
+    const canFinalizeInPlace =
+      !!pendingThinking &&
+      streamedPreviewShown &&
+      renderedResponse.length > 0 &&
+      renderedResponse.length <= 1900;
+
+    if (canFinalizeInPlace && pendingThinking) {
+      await updateStreamPreview(renderedResponse, true);
+      pendingThinkingMessages.delete(channelId);
+      await mirrorAgentResponse(agent.name, channel.name, renderedResponse);
+      return;
+    }
+
     if (pendingThinking) {
       pendingThinking.delete().catch(() => {});
       pendingThinkingMessages.delete(channelId);

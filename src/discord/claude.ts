@@ -361,6 +361,45 @@ async function withRetry<T>(fn: () => Promise<T>, retries = 3, delayMs = 2000): 
   throw new Error('Unreachable');
 }
 
+function mergeStreamedText(previous: string, incoming: string): string {
+  if (!incoming) return previous;
+  if (!previous) return incoming;
+  if (incoming.startsWith(previous)) return incoming;
+  if (previous.endsWith(incoming)) return previous;
+  return previous + incoming;
+}
+
+async function sendMessageWithOptionalStream(
+  chat: any,
+  payload: string | Part[],
+  signal?: AbortSignal,
+  onPartialText?: (partialText: string) => Promise<void>
+): Promise<any> {
+  const requestOptions = signal ? { signal } : undefined;
+  if (!onPartialText || typeof chat?.sendMessageStream !== 'function') {
+    return chat.sendMessage(payload, requestOptions);
+  }
+
+  const streamResult = await chat.sendMessageStream(payload, requestOptions);
+  let accumulated = '';
+
+  for await (const chunk of streamResult.stream) {
+    if (signal?.aborted) break;
+    let text = '';
+    try {
+      text = typeof chunk?.text === 'function' ? String(chunk.text() || '') : '';
+    } catch {
+      text = '';
+    }
+    if (!text) continue;
+    accumulated = mergeStreamedText(accumulated, text);
+    await onPartialText(accumulated);
+  }
+
+  const finalResponse = await streamResult.response;
+  return { response: finalResponse };
+}
+
 /**
  * Send a message to Claude as a specific agent and get a response.
  * The agent has access to repo tools (read, write, search, execute) and will
@@ -377,6 +416,7 @@ export async function agentRespond(
     modelOverride?: string;
     maxTokens?: number;
     signal?: AbortSignal;
+    onPartialText?: (partialText: string) => Promise<void>;
     toolRoundBoost?: number;
     rileyAutoToolApprovalUsed?: boolean;
   }
@@ -544,7 +584,7 @@ TOKENS: ${tokenUsed.toLocaleString()} used / ${tokenLimit.toLocaleString()} dail
   let response;
   try {
     response = await withConcurrencyLimit(() =>
-      withRetry(() => chat.sendMessage(userMessage, options?.signal ? { signal: options.signal } : undefined))
+      withRetry(() => sendMessageWithOptionalStream(chat, userMessage, options?.signal, options?.onPartialText))
     );
   } catch (err: any) {
     if (isAbortError(err)) {
@@ -615,9 +655,9 @@ TOKENS: ${tokenUsed.toLocaleString()} used / ${tokenLimit.toLocaleString()} dail
       return '';
     }
 
-    const functionCalls = response.response.functionCalls();
+    const functionCalls = (response.response.functionCalls() || []) as Array<{ name: string; args: object }>;
 
-    if (!functionCalls || functionCalls.length === 0) {
+    if (functionCalls.length === 0) {
       // No tool calls — final text response
       recordClaudeUsage(
         response.response.usageMetadata?.promptTokenCount || 0,
@@ -697,7 +737,7 @@ TOKENS: ${tokenUsed.toLocaleString()} used / ${tokenLimit.toLocaleString()} dail
     // Send tool results back
     try {
       response = await withConcurrencyLimit(() =>
-        withRetry(() => chat.sendMessage(functionResponses, options?.signal ? { signal: options.signal } : undefined))
+        withRetry(() => sendMessageWithOptionalStream(chat, functionResponses, options?.signal, options?.onPartialText))
       );
     } catch (err: any) {
       if (isAbortError(err)) {
