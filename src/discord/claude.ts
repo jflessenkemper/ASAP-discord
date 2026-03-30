@@ -1,4 +1,5 @@
 import { GoogleGenerativeAI, Content, Part, FunctionDeclaration, Tool } from '@google/generative-ai';
+import { GoogleAuth } from 'google-auth-library';
 import { readFileSync } from 'fs';
 import { extname, join } from 'path';
 import { AgentConfig } from './agents';
@@ -108,6 +109,173 @@ function toGeminiTools(tools: AnyTool[]): Tool[] {
 }
 
 let client: GoogleGenerativeAI | null = null;
+let vertexAuth: GoogleAuth | null = null;
+let vertexTokenCache: { token: string; expiresAtMs: number } | null = null;
+
+const USE_VERTEX_AI = process.env.GEMINI_USE_VERTEX_AI === 'true';
+const VERTEX_PROJECT_ID = process.env.VERTEX_PROJECT_ID || process.env.GOOGLE_CLOUD_PROJECT || process.env.GCLOUD_PROJECT || '';
+const VERTEX_LOCATION = process.env.VERTEX_LOCATION || 'us-central1';
+
+type ModelResponseLike = {
+  usageMetadata?: { promptTokenCount?: number; candidatesTokenCount?: number };
+  text: () => string;
+  functionCalls: () => Array<{ name: string; args: object }>;
+};
+
+type ModelResultLike = { response: ModelResponseLike };
+
+type ChatLike = {
+  sendMessage: (payload: string | Part[], requestOptions?: { signal?: AbortSignal }) => Promise<ModelResultLike>;
+  sendMessageStream?: (payload: string | Part[], requestOptions?: { signal?: AbortSignal }) => Promise<any>;
+  getHistory: () => Promise<Content[]>;
+};
+
+type ModelLike = {
+  startChat: (options: { history: Content[] }) => ChatLike;
+  generateContent: (payload: string, requestOptions?: { signal?: AbortSignal }) => Promise<ModelResultLike>;
+};
+
+function cloneHistory(history: Content[]): Content[] {
+  return JSON.parse(JSON.stringify(history || []));
+}
+
+function asVertexSystemInstruction(systemInstruction?: string): { parts: Array<{ text: string }> } | undefined {
+  if (!systemInstruction) return undefined;
+  return { parts: [{ text: systemInstruction }] };
+}
+
+function userContentFromPayload(payload: string | Part[]): Content {
+  if (typeof payload === 'string') {
+    return { role: 'user', parts: [{ text: payload }] } as Content;
+  }
+  return { role: 'user', parts: payload as any } as Content;
+}
+
+function makeVertexError(status: number, bodyText: string): Error & { status: number; statusCode: number } {
+  const err = new Error(`Vertex Gemini error: HTTP ${status} ${bodyText.slice(0, 400)}`) as Error & { status: number; statusCode: number };
+  err.status = status;
+  err.statusCode = status;
+  return err;
+}
+
+async function getVertexAccessToken(): Promise<string> {
+  const now = Date.now();
+  if (vertexTokenCache && vertexTokenCache.expiresAtMs - now > 60_000) {
+    return vertexTokenCache.token;
+  }
+
+  if (!vertexAuth) {
+    vertexAuth = new GoogleAuth({ scopes: ['https://www.googleapis.com/auth/cloud-platform'] });
+  }
+
+  const authClient = await vertexAuth.getClient();
+  const accessToken = await authClient.getAccessToken();
+  const token = typeof accessToken === 'string' ? accessToken : accessToken?.token;
+  if (!token) {
+    throw new Error('Vertex auth failed: could not obtain access token');
+  }
+
+  vertexTokenCache = {
+    token,
+    // Conservative cache window; refreshed frequently enough for long-running bot process.
+    expiresAtMs: now + 45 * 60_000,
+  };
+
+  return token;
+}
+
+async function callVertexGenerateContent(
+  modelName: string,
+  body: Record<string, any>,
+  signal?: AbortSignal,
+): Promise<any> {
+  if (!VERTEX_PROJECT_ID) {
+    throw new Error('Vertex AI is enabled but VERTEX_PROJECT_ID (or GOOGLE_CLOUD_PROJECT) is not set');
+  }
+
+  const token = await getVertexAccessToken();
+  const endpoint = `https://${VERTEX_LOCATION}-aiplatform.googleapis.com/v1/projects/${VERTEX_PROJECT_ID}/locations/${VERTEX_LOCATION}/publishers/google/models/${encodeURIComponent(modelName)}:generateContent`;
+  const res = await fetch(endpoint, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(body),
+    signal,
+  });
+
+  if (!res.ok) {
+    const bodyText = await res.text();
+    throw makeVertexError(res.status, bodyText);
+  }
+
+  return res.json();
+}
+
+function makeResponseLikeFromVertex(raw: any): ModelResponseLike {
+  const firstCandidate = raw?.candidates?.[0] || {};
+  const parts: any[] = firstCandidate?.content?.parts || [];
+
+  const response: ModelResponseLike = {
+    usageMetadata: raw?.usageMetadata || {},
+    text: () => parts.filter((part) => typeof part?.text === 'string').map((part) => String(part.text)).join(''),
+    functionCalls: () =>
+      parts
+        .filter((part) => part?.functionCall?.name)
+        .map((part) => ({
+          name: String(part.functionCall.name),
+          args: (part.functionCall.args || {}) as object,
+        })),
+  };
+  (response as any).__raw = raw;
+  return response;
+}
+
+function createVertexModel(modelName: string, options: { systemInstruction?: string; tools?: Tool[]; generationConfig?: Record<string, any> }): ModelLike {
+  const invoke = async (contents: Content[], signal?: AbortSignal): Promise<ModelResultLike> => {
+    const raw = await callVertexGenerateContent(
+      modelName,
+      {
+        contents,
+        tools: options.tools,
+        systemInstruction: asVertexSystemInstruction(options.systemInstruction),
+        generationConfig: options.generationConfig,
+      },
+      signal,
+    );
+    return { response: makeResponseLikeFromVertex(raw) };
+  };
+
+  return {
+    startChat: ({ history }) => {
+      let workingHistory = cloneHistory(history || []);
+      return {
+        sendMessage: async (payload, requestOptions) => {
+          const userContent = userContentFromPayload(payload);
+          const requestContents = [...workingHistory, userContent];
+          const result = await invoke(requestContents, requestOptions?.signal);
+
+          workingHistory = [...requestContents];
+          const candidateParts = (result.response as any)?.__raw?.candidates?.[0]?.content?.parts;
+          const candidateContent = (candidateParts && candidateParts.length)
+            ? ({ role: 'model', parts: candidateParts } as Content)
+            : null;
+
+          if (candidateContent) {
+            workingHistory.push(candidateContent);
+          }
+
+          return result;
+        },
+        getHistory: async () => cloneHistory(workingHistory),
+      };
+    },
+    generateContent: async (payload: string, requestOptions?: { signal?: AbortSignal }) => {
+      return invoke([{ role: 'user', parts: [{ text: payload }] } as Content], requestOptions?.signal);
+    },
+  };
+}
 
 type ResponseCacheEntry = { value: string; ts: number };
 const responseCache = new Map<string, ResponseCacheEntry>();
@@ -119,6 +287,20 @@ function getClient(): GoogleGenerativeAI {
     client = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || '');
   }
   return client;
+}
+
+function createModel(modelName: string, options: { systemInstruction?: string; tools?: Tool[]; generationConfig?: Record<string, any> }): ModelLike {
+  if (USE_VERTEX_AI) {
+    return createVertexModel(modelName, options);
+  }
+
+  const genAI = getClient();
+  return genAI.getGenerativeModel({
+    model: modelName,
+    systemInstruction: options.systemInstruction,
+    tools: options.tools,
+    generationConfig: options.generationConfig,
+  }) as unknown as ModelLike;
 }
 
 function trimConversationHistory(conversationHistory: ConversationMessage[]): ConversationMessage[] {
@@ -658,12 +840,10 @@ TOKENS: ${tokenUsed.toLocaleString()} used / ${tokenLimit.toLocaleString()} dail
 
   if (options?.signal?.aborted) return '';
 
-  const genAI = getClient();
   const loopStart = Date.now();
   let totalToolCalls = 0;
 
-  const makeModel = (modelName: string) => genAI.getGenerativeModel({
-    model: modelName,
+  const makeModel = (modelName: string) => createModel(modelName, {
     systemInstruction: systemPrompt,
     tools: geminiTools,
     generationConfig: { maxOutputTokens: estimateMaxOutputTokens(agent.id, userMessage, options?.maxTokens) },
@@ -1069,14 +1249,14 @@ export async function summarizeCall(
     return '⚠️ Daily token limit reached — cannot generate summary.';
   }
 
-  const genAI = getClient();
-  const model = genAI.getGenerativeModel({
-    model: GEMINI_FLASH,
+  const model = createModel(GEMINI_FLASH, {
     systemInstruction: 'You are a concise meeting summarizer. Produce a clear summary with key points, decisions, and action items. Format for Discord markdown. Keep under 1900 characters.',
   });
 
-  const result = await model.generateContent(
-    `Summarize this voice call between ${participants.join(', ')}:\n\n${transcript.join('\n')}`
+  const result = await withConcurrencyLimit(GEMINI_FLASH, () =>
+    withRetry(() => model.generateContent(
+      `Summarize this voice call between ${participants.join(', ')}:\n\n${transcript.join('\n')}`
+    ))
   );
 
   recordClaudeUsage(
@@ -1135,9 +1315,7 @@ Create a condensed summary. Prioritize:
 
 Keep the summary under 700 words. Use bullet points. Drop small talk and redundant exchanges.`;
 
-  const genAI = getClient();
-  const model = genAI.getGenerativeModel({
-    model: GEMINI_FLASH,
+  const model = createModel(GEMINI_FLASH, {
     systemInstruction: 'You are a conversation compressor. Produce structured, information-dense summaries that preserve all actionable context while discarding noise. Output only the summary — no meta-commentary.',
   });
 
