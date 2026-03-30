@@ -15,7 +15,7 @@ try {
   console.warn('PROJECT_CONTEXT.md not found — agents will lack project context');
 }
 
-const PROJECT_CONTEXT_MAX_CHARS = parseInt(process.env.PROJECT_CONTEXT_MAX_CHARS || '4500', 10);
+const PROJECT_CONTEXT_MAX_CHARS = parseInt(process.env.PROJECT_CONTEXT_MAX_CHARS || '3000', 10);
 if (PROJECT_CONTEXT.length > PROJECT_CONTEXT_MAX_CHARS) {
   PROJECT_CONTEXT = PROJECT_CONTEXT.slice(0, PROJECT_CONTEXT_MAX_CHARS) + '\n\n[Project context truncated for token efficiency]';
 }
@@ -191,6 +191,14 @@ const MAX_CONTEXT_CHARS = parseInt(process.env.MAX_CONTEXT_CHARS || '16000', 10)
 const TOOL_LOOP_TIMEOUT = parseInt(process.env.TOOL_LOOP_TIMEOUT_MS || '0', 10);
 /** Max concurrent Gemini requests */
 const MAX_CONCURRENT = 5;
+/** Base queue release delay between parallel requests (lower = faster) */
+const QUEUE_RELEASE_DELAY_MS = parseInt(process.env.QUEUE_RELEASE_DELAY_MS || '250', 10);
+/** Additional delay when we are inside/just after a 429 window */
+const QUEUE_RELEASE_DELAY_RATE_LIMIT_MS = parseInt(process.env.QUEUE_RELEASE_DELAY_RATE_LIMIT_MS || '3000', 10);
+
+/** Lower default output tokens for faster first responses. */
+const DEFAULT_MAX_OUTPUT_TOKENS = parseInt(process.env.DEFAULT_MAX_OUTPUT_TOKENS || '1400', 10);
+const DEFAULT_MAX_OUTPUT_TOKENS_DEVELOPER = parseInt(process.env.DEFAULT_MAX_OUTPUT_TOKENS_DEVELOPER || '2600', 10);
 let activeClaude = 0;
 const claudeQueue: Array<() => void> = [];
 
@@ -246,11 +254,31 @@ async function withConcurrencyLimit<T>(fn: () => Promise<T>): Promise<T> {
     return await fn();
   } finally {
     activeClaude--;
-    // Stagger releases: 3-second delay before the next queued request starts.
-    // This prevents token-burst spikes that trigger 429s on the 30k/min limit.
+    // Adaptive stagger: keep queue fast under normal load, but slow down
+    // substantially while the global rate-limit gate is active.
+    const now = Date.now();
+    const inRateLimitWindow = rateLimitedUntil > now;
+    const releaseDelay = inRateLimitWindow ? QUEUE_RELEASE_DELAY_RATE_LIMIT_MS : QUEUE_RELEASE_DELAY_MS;
     const next = claudeQueue.shift();
-    if (next) setTimeout(next, 3000);
+    if (next) setTimeout(next, releaseDelay);
   }
+}
+
+function estimateMaxOutputTokens(agentId: string, userMessage: string, explicit?: number): number {
+  if (explicit && explicit > 0) return explicit;
+
+  const base = agentId === 'developer'
+    ? DEFAULT_MAX_OUTPUT_TOKENS_DEVELOPER
+    : DEFAULT_MAX_OUTPUT_TOKENS;
+
+  // Fast-path: short user asks usually don't need large output budgets.
+  const shortPrompt = userMessage.length <= 180;
+  const appearsSimple = /^(ok|yes|no|status|ping|why|what|how|help|fix|run|test)\b/i.test(userMessage.trim());
+  if (shortPrompt || appearsSimple) {
+    return Math.min(base, 900);
+  }
+
+  return base;
 }
 
 async function withRetry<T>(fn: () => Promise<T>, retries = 3, delayMs = 2000): Promise<T> {
@@ -407,13 +435,17 @@ ${getProjectContextForAgent(agent.id)}
 </project_context>
 
 You are "${agent.name}" responding in Discord.${rileyCoordination}
-RULES: Max 320 words (code exempt). Speak like a real teammate, not a ticket template. Lead with the useful part.${toolsSection}
+RULES: Max 220 words (code exempt). Speak like a real teammate, not a ticket template. Lead with the useful part.${toolsSection}
 AUTHORITY: Any human team member in Discord can request work and should get help. Do not ignore requests because they are not Jordan. Jordan approval is only required for budget/credit increases.
 When doing work, explain a bit more than before: what you're doing, why you're doing it, and what happened.
 Default format (lightweight, not rigid): 1) action taken, 2) key result, 3) immediate next step or blocker (if any).
 If the ask is simple (status check, direct answer, yes/no, one-step clarification), answer in 1-3 short sentences and skip the default status structure.
 If you are asking for a decision, stop after presenting the decision and options. Do not continue with an assumption unless the user explicitly told you to proceed by default.
 Use short paragraphs or bullets when helpful. Do not pad with fluff.
+Formatting for Discord readability:
+- Do not use Markdown headings (#, ##, etc.).
+- Avoid excessive bolding. Only bold critical labels or exact decisions.
+- Keep one visual style per message (plain text + simple bullets is preferred).
 Never dump long tool output. Summarize the important result only.
 Never start your visible reply with your own name, a role label, or bracketed speaker text such as "[Liv]:" or "Riley:".
 Describe your role and capabilities plainly. Never call yourself "supreme", say you have "absolute authority", or claim unrestricted control. Do not exaggerate authority, status, or trust relationships.
@@ -446,7 +478,7 @@ TOKENS: ${tokenUsed.toLocaleString()} used / ${tokenLimit.toLocaleString()} dail
     model: modelName,
     systemInstruction: systemPrompt,
     tools: geminiTools,
-    generationConfig: { maxOutputTokens: options?.maxTokens || 8192 },
+    generationConfig: { maxOutputTokens: estimateMaxOutputTokens(agent.id, userMessage, options?.maxTokens) },
   });
 
   let model = makeModel(currentModelName);

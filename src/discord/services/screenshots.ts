@@ -3,7 +3,7 @@ import { TextChannel, AttachmentBuilder, Collection, Message } from 'discord.js'
 
 /** iPhone 17 Pro Max approximate viewport (6.9" display, 3x retina → logical pixels) */
 const VIEWPORT = { width: 440, height: 956, deviceScaleFactor: 3 };
-const NAV_TIMEOUT = 15_000;
+const NAV_TIMEOUT = parseInt(process.env.SCREENSHOT_NAV_TIMEOUT_MS || '30000', 10);
 /** Overall timeout for the entire capture operation (90 seconds) */
 const CAPTURE_TIMEOUT = 90_000;
 
@@ -53,6 +53,25 @@ let screenshotsChannel: TextChannel | null = null;
 
 export function setScreenshotsChannel(channel: TextChannel): void {
   screenshotsChannel = channel;
+}
+
+/**
+ * Navigation helper tuned for SPAs/websocket apps where networkidle can hang.
+ * First attempt: domcontentloaded (fast + resilient).
+ * Retry: load with extended timeout if the first attempt times out.
+ */
+async function navigateForScreenshot(page: Page, url: string): Promise<void> {
+  try {
+    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (!msg.toLowerCase().includes('timeout')) throw err;
+    // Retry once with a slightly longer timeout and full load event.
+    await page.goto(url, { waitUntil: 'load', timeout: NAV_TIMEOUT + 15000 });
+  }
+
+  // Optional short network idle wait; do not fail the capture if it never idles.
+  await page.waitForNetworkIdle({ idleTime: 1200, timeout: 5000 }).catch(() => {});
 }
 
 /**
@@ -162,8 +181,8 @@ export async function captureAndPostScreenshots(
       'Mozilla/5.0 (iPhone; CPU iPhone OS 19_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/19.0 Mobile/15E148 Safari/604.1'
     );
 
-    // Navigate to the app
-    await page.goto(appUrl, { waitUntil: 'networkidle2', timeout: NAV_TIMEOUT });
+    // Navigate with timeout-tolerant SPA strategy
+    await navigateForScreenshot(page, appUrl);
     await new Promise((r) => setTimeout(r, 3000)); // Let initial animations/3D settle
 
     const attachments: AttachmentBuilder[] = [];

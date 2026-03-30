@@ -177,11 +177,24 @@ function renderAgentMessage(raw: string): string {
   const withoutSpeakerLabel = withoutActionTags.replace(/^\s*\[[^\]\r\n]{1,40}\]:\s*/u, '');
   if (!withoutSpeakerLabel) return '';
 
+  // Reduce visual noise: strip markdown heading prefixes that make chat feel
+  // disjointed (e.g. "## Next Steps"), while keeping the line content.
+  const withoutHeadings = withoutSpeakerLabel
+    .replace(/^\s{0,3}#{1,6}\s+/gm, '')
+    .replace(/^\s{0,3}>\s?/gm, '')
+    .trim();
+  if (!withoutHeadings) return '';
+
   // Preserve code blocks verbatim; bold mentions only in normal prose.
-  const segments = withoutSpeakerLabel.split(/(```[\s\S]*?```)/g);
+  const segments = withoutHeadings.split(/(```[\s\S]*?```)/g);
   const formatted = segments.map((segment) => {
     if (segment.startsWith('```') && segment.endsWith('```')) return segment;
-    return segment.replace(/(^|\s)@([a-z0-9-]{2,32})\b/gi, (_m, prefix, name) => `${prefix}**@${name}**`);
+    const noHeavyBold = segment
+      // Keep @mentions bold, but demote other bold emphasis to plain text.
+      .replace(/\*\*(?!@)([^*\n]{1,120})\*\*/g, '$1')
+      // Collapse excessive blank space.
+      .replace(/\n{3,}/g, '\n\n');
+    return noHeavyBold.replace(/(^|\s)@([a-z0-9-]{2,32})\b/gi, (_m, prefix, name) => `${prefix}**@${name}**`);
   }).join('');
 
   return formatted.trim();
