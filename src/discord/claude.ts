@@ -22,10 +22,9 @@ if (PROJECT_CONTEXT.length > PROJECT_CONTEXT_MAX_CHARS) {
 const PROJECT_CONTEXT_LIGHT_MAX_CHARS = parseInt(process.env.PROJECT_CONTEXT_LIGHT_MAX_CHARS || '1200', 10);
 const PROJECT_CONTEXT_LIGHT = PROJECT_CONTEXT.slice(0, PROJECT_CONTEXT_LIGHT_MAX_CHARS);
 
-// Gemini model identifiers
-// Use flash-latest because this key intermittently caps specific fixed model IDs.
-const GEMINI_FLASH = 'gemini-flash-latest';
-const GEMINI_PRO = 'gemini-2.5-pro';
+// Gemini model identifiers (env-overridable for fast runtime switching).
+const GEMINI_FLASH = process.env.GEMINI_FLASH_MODEL || 'gemini-flash-latest';
+const GEMINI_PRO = process.env.GEMINI_PRO_MODEL || 'gemini-2.5-pro';
 
 /**
  * High-stakes prompts for Ace where Pro quality is worth the cost.
@@ -235,12 +234,17 @@ const MAX_CONTEXT_CHARS = parseInt(process.env.MAX_CONTEXT_CHARS || '16000', 10)
  * Set to 0 (default) to disable wall-clock timeout so agents can run as long as needed.
  */
 const TOOL_LOOP_TIMEOUT = parseInt(process.env.TOOL_LOOP_TIMEOUT_MS || '0', 10);
-/** Max concurrent Gemini requests */
-const MAX_CONCURRENT = 5;
+/** Max concurrent Gemini requests (global and per-model caps) */
+const MAX_CONCURRENT = parseInt(process.env.GEMINI_MAX_CONCURRENT || '5', 10);
+const MAX_CONCURRENT_FLASH = parseInt(process.env.GEMINI_MAX_CONCURRENT_FLASH || '4', 10);
+const MAX_CONCURRENT_PRO = parseInt(process.env.GEMINI_MAX_CONCURRENT_PRO || '1', 10);
 /** Base queue release delay between parallel requests (lower = faster) */
 const QUEUE_RELEASE_DELAY_MS = parseInt(process.env.QUEUE_RELEASE_DELAY_MS || '120', 10);
 /** Additional delay when we are inside/just after a 429 window */
 const QUEUE_RELEASE_DELAY_RATE_LIMIT_MS = parseInt(process.env.QUEUE_RELEASE_DELAY_RATE_LIMIT_MS || '3000', 10);
+/** Minimum delay between sends per model to avoid bursty RPM spikes */
+const MODEL_PACE_FLASH_MS = parseInt(process.env.GEMINI_MODEL_PACE_FLASH_MS || '180', 10);
+const MODEL_PACE_PRO_MS = parseInt(process.env.GEMINI_MODEL_PACE_PRO_MS || '700', 10);
 
 /** Lower default output tokens for faster first responses. */
 const DEFAULT_MAX_OUTPUT_TOKENS = parseInt(process.env.DEFAULT_MAX_OUTPUT_TOKENS || '1000', 10);
@@ -249,6 +253,9 @@ const DISABLE_GEMINI_QUOTA_FUSE = process.env.DISABLE_GEMINI_QUOTA_FUSE === 'tru
 const GEMINI_QUOTA_FUSE_MS = parseInt(process.env.GEMINI_QUOTA_FUSE_MS || '3600000', 10);
 let activeClaude = 0;
 const claudeQueue: Array<() => void> = [];
+const activeByModel = new Map<string, number>();
+const modelQueues = new Map<string, Array<() => void>>();
+const modelNextAllowedAt = new Map<string, number>();
 
 /**
  * Global rate-limit gate — when ANY request gets 429'd, ALL requests
@@ -300,24 +307,97 @@ async function waitForRateLimit(): Promise<void> {
   }
 }
 
-async function withConcurrencyLimit<T>(fn: () => Promise<T>): Promise<T> {
+function normalizeModelKey(modelName: string): string {
+  return String(modelName || '').trim().toLowerCase();
+}
+
+function getModelConcurrencyCap(modelName: string): number {
+  const key = normalizeModelKey(modelName);
+  return key.includes('pro') ? MAX_CONCURRENT_PRO : MAX_CONCURRENT_FLASH;
+}
+
+function getModelPaceMs(modelName: string): number {
+  const key = normalizeModelKey(modelName);
+  return key.includes('pro') ? MODEL_PACE_PRO_MS : MODEL_PACE_FLASH_MS;
+}
+
+function getModelQueue(modelKey: string): Array<() => void> {
+  const existing = modelQueues.get(modelKey);
+  if (existing) return existing;
+  const created: Array<() => void> = [];
+  modelQueues.set(modelKey, created);
+  return created;
+}
+
+async function waitForModelPace(modelName: string): Promise<void> {
+  const modelKey = normalizeModelKey(modelName);
+  const now = Date.now();
+  const nextAllowed = modelNextAllowedAt.get(modelKey) || 0;
+  if (nextAllowed > now) {
+    await new Promise((resolve) => setTimeout(resolve, nextAllowed - now));
+  }
+}
+
+function releaseNextQueued(modelKey: string): void {
+  const releaseDelay = rateLimitedUntil > Date.now()
+    ? QUEUE_RELEASE_DELAY_RATE_LIMIT_MS
+    : QUEUE_RELEASE_DELAY_MS;
+
+  // Prefer waking requests waiting on the same model first.
+  const sameQueue = getModelQueue(modelKey);
+  const same = sameQueue.shift();
+  if (same) {
+    setTimeout(same, releaseDelay);
+    return;
+  }
+
+  // Fall back to global queue, then any other model queue.
+  const globalNext = claudeQueue.shift();
+  if (globalNext) {
+    setTimeout(globalNext, releaseDelay);
+    return;
+  }
+
+  for (const queue of modelQueues.values()) {
+    const next = queue.shift();
+    if (next) {
+      setTimeout(next, releaseDelay);
+      return;
+    }
+  }
+}
+
+async function withConcurrencyLimit<T>(modelName: string, fn: () => Promise<T>): Promise<T> {
+  const modelKey = normalizeModelKey(modelName);
+  const modelCap = getModelConcurrencyCap(modelName);
+
   await waitForRateLimit();
-  while (activeClaude >= MAX_CONCURRENT) {
-    await new Promise<void>((resolve) => claudeQueue.push(resolve));
+  while (activeClaude >= MAX_CONCURRENT || (activeByModel.get(modelKey) || 0) >= modelCap) {
+    if (activeClaude >= MAX_CONCURRENT) {
+      await new Promise<void>((resolve) => claudeQueue.push(resolve));
+    } else {
+      await new Promise<void>((resolve) => getModelQueue(modelKey).push(resolve));
+    }
     await waitForRateLimit();
   }
+
+  await waitForModelPace(modelName);
+
   activeClaude++;
+  activeByModel.set(modelKey, (activeByModel.get(modelKey) || 0) + 1);
+
   try {
     return await fn();
   } finally {
     activeClaude--;
-    // Adaptive stagger: keep queue fast under normal load, but slow down
-    // substantially while the global rate-limit gate is active.
-    const now = Date.now();
-    const inRateLimitWindow = rateLimitedUntil > now;
-    const releaseDelay = inRateLimitWindow ? QUEUE_RELEASE_DELAY_RATE_LIMIT_MS : QUEUE_RELEASE_DELAY_MS;
-    const next = claudeQueue.shift();
-    if (next) setTimeout(next, releaseDelay);
+    const remainingModel = Math.max(0, (activeByModel.get(modelKey) || 0) - 1);
+    if (remainingModel === 0) {
+      activeByModel.delete(modelKey);
+    } else {
+      activeByModel.set(modelKey, remainingModel);
+    }
+    modelNextAllowedAt.set(modelKey, Date.now() + getModelPaceMs(modelName));
+    releaseNextQueued(modelKey);
   }
 }
 
@@ -595,7 +675,7 @@ TOKENS: ${tokenUsed.toLocaleString()} used / ${tokenLimit.toLocaleString()} dail
   // Send initial user message
   let response;
   try {
-    response = await withConcurrencyLimit(() =>
+    response = await withConcurrencyLimit(currentModelName, () =>
       withRetry(() => sendMessageWithOptionalStream(chat, userMessage, options?.signal, options?.onPartialText))
     );
   } catch (err: any) {
@@ -752,7 +832,7 @@ TOKENS: ${tokenUsed.toLocaleString()} used / ${tokenLimit.toLocaleString()} dail
 
     // Send tool results back
     try {
-      response = await withConcurrencyLimit(() =>
+      response = await withConcurrencyLimit(currentModelName, () =>
         withRetry(() => sendMessageWithOptionalStream(chat, functionResponses, options?.signal, options?.onPartialText))
       );
     } catch (err: any) {
@@ -1061,7 +1141,7 @@ Keep the summary under 700 words. Use bullet points. Drop small talk and redunda
     systemInstruction: 'You are a conversation compressor. Produce structured, information-dense summaries that preserve all actionable context while discarding noise. Output only the summary — no meta-commentary.',
   });
 
-  const result = await withConcurrencyLimit(() =>
+  const result = await withConcurrencyLimit(GEMINI_FLASH, () =>
     withRetry(() => model.generateContent(prompt))
   );
 
