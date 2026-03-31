@@ -199,11 +199,6 @@ function createLiveSpeechStreamer(
     speakQueue = speakQueue
       .then(async () => {
         if (!isCurrentTurn() || signal.aborted) return;
-        if (activeSession?.currentTurnId === turnId && activeSession.pendingBargeIn) {
-          activeSession.pendingBargeIn = false;
-          interruptActiveVoiceTurn('queued-barge-in');
-          return;
-        }
         if (activeSession?.currentTurnId === turnId) {
           activeSession.outputActive = true;
           activeSession.outputStartedAt = Date.now();
@@ -498,10 +493,7 @@ export async function startCall(
     // thinking/LLM phase. Interrupting the LLM call while the user waits for a
     // response would silently abort it, creating the symptom of "chime plays but
     // Riley never responds".
-    if (!activeSession.outputActive) {
-      activeSession.pendingBargeIn = true;
-      return;
-    }
+    if (!activeSession.outputActive) return;
     if (activeSession.outputStartedAt > 0) {
       const activeForMs = Date.now() - activeSession.outputStartedAt;
       if (activeForMs < VOICE_INTERRUPT_MIN_OUTPUT_ACTIVE_MS) return;
