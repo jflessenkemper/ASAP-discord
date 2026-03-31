@@ -186,6 +186,10 @@ export interface VoiceTranscription {
   timestamp: Date;
   /** Detected language code from Deepgram (e.g. 'en', 'zh') */
   language?: string;
+  /** Approximate end-to-end STT latency for this utterance. */
+  sttLatencyMs?: number;
+  /** STT provider used for this transcript. */
+  sttProvider?: 'deepgram' | 'gemini';
 }
 
 /** Max consecutive resubscribes before giving up (prevents infinite loop on broken streams) */
@@ -247,6 +251,7 @@ export function listenToUser(
 
     const chunks: Buffer[] = [];
     let totalSize = 0;
+    const utteranceStartAt = Date.now();
 
     decoder.on('data', (chunk: Buffer) => {
       totalSize += chunk.length;
@@ -270,6 +275,8 @@ export function listenToUser(
                 username: member.displayName,
                 text,
                 timestamp: new Date(),
+                sttLatencyMs: Date.now() - utteranceStartAt,
+                sttProvider: 'gemini',
               });
             }
           } catch (err) {
@@ -368,6 +375,8 @@ export function listenToUserDeepgram(
   let currentDecoder: Transform | null = null;
   let deepgramRetryAttempts = 0;
   let retryTimer: ReturnType<typeof setTimeout> | null = null;
+  let utteranceStartAt: number | null = null;
+  let firstTranscriptPending = false;
 
   const receiver = connection.receiver;
 
@@ -428,12 +437,18 @@ export function listenToUserDeepgram(
     startLiveTranscription(
       (text, detectedLanguage) => {
         if (!destroyed && text.trim()) {
+          const sttLatencyMs = firstTranscriptPending && utteranceStartAt
+            ? Date.now() - utteranceStartAt
+            : undefined;
+          firstTranscriptPending = false;
           onTranscription({
             userId: member.id,
             username: member.displayName,
             text: text.trim(),
             timestamp: new Date(),
             language: detectedLanguage,
+            sttLatencyMs,
+            sttProvider: 'deepgram',
           });
         }
       },
@@ -461,6 +476,8 @@ export function listenToUserDeepgram(
           end: { behavior: EndBehaviorType.AfterInactivity, duration: 2000 },
         });
         currentSubscription = subscription;
+        utteranceStartAt = Date.now();
+        firstTranscriptPending = true;
 
         // Decode Opus frames → PCM before sending to Deepgram (expects linear16)
         let decoder: Transform;

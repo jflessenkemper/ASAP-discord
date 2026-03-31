@@ -29,6 +29,20 @@ const VOICE_STREAM_FORCE_CHARS = parseInt(process.env.VOICE_STREAM_FORCE_CHARS |
 const VOICE_INTERRUPT_MIN_OUTPUT_ACTIVE_MS = parseInt(process.env.VOICE_INTERRUPT_MIN_OUTPUT_ACTIVE_MS || '1000', 10);
 const VOICE_MIN_INPUT_CHARS = parseInt(process.env.VOICE_MIN_INPUT_CHARS || '3', 10);
 const VOICE_DUPLICATE_WINDOW_MS = parseInt(process.env.VOICE_DUPLICATE_WINDOW_MS || '1200', 10);
+const VOICE_STAGE_LOGS_ENABLED = process.env.VOICE_STAGE_LOGS_ENABLED !== 'false';
+
+let voiceErrorChannel: TextChannel | null = null;
+
+export function setVoiceErrorChannel(channel: TextChannel | null): void {
+  voiceErrorChannel = channel;
+}
+
+async function postVoiceStageLog(stage: string, detail: string, level: 'info' | 'warn' | 'error' = 'info'): Promise<void> {
+  if (!VOICE_STAGE_LOGS_ENABLED || !voiceErrorChannel) return;
+  const icon = level === 'error' ? '🚨' : level === 'warn' ? '⚠️' : 'ℹ️';
+  const line = `${icon} [voice:${stage}] ${detail}`;
+  await voiceErrorChannel.send(line.slice(0, 1900)).catch(() => {});
+}
 
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | null = null;
@@ -292,6 +306,7 @@ export async function startCall(
   callLog: TextChannel,
   initiator: GuildMember
 ): Promise<void> {
+  const callStartMs = Date.now();
   if (activeSession?.active) {
     await sendAsAgent(groupchat, '⚠️ A call is already in progress. Say `LEAVE` to end it first.');
     return;
@@ -309,7 +324,12 @@ export async function startCall(
 
   await sendAsAgent(groupchat, `📞 Connecting Riley to **${voiceChannel.name}** and running voice preflight...`);
 
+  const joinStartMs = Date.now();
   const connection = await joinVC(voiceChannel);
+  await postVoiceStageLog(
+    'join_vc',
+    `channel=${voiceChannel.name} join_ms=${Date.now() - joinStartMs} initiator=${initiator.displayName}`
+  );
   recordVoiceCallStart();
 
   activeSession = {
@@ -342,6 +362,7 @@ export async function startCall(
       const conn = getConnection();
       if (!conn || conn.state.status === VoiceConnectionStatus.Destroyed) {
         console.warn('Voice connection destroyed — ending call');
+        void postVoiceStageLog('connection_destroyed', `channel=${voiceChannel.name}`, 'error');
         endCall().catch((err) => console.error('Heartbeat endCall error:', err instanceof Error ? err.message : 'Unknown'));
         return;
       }
@@ -350,6 +371,7 @@ export async function startCall(
         if (!activeSession.disconnectedSince) {
           activeSession.disconnectedSince = Date.now();
           console.warn('Voice connection temporarily disconnected — waiting for recovery');
+          void postVoiceStageLog('connection_disconnected', `channel=${voiceChannel.name}`, 'warn');
           sendAsAgent(groupchat, '⚠️ Voice connection interrupted — reconnecting for up to 45 seconds.').catch(() => {});
           return;
         }
@@ -360,6 +382,7 @@ export async function startCall(
         }
 
         console.warn(`Voice disconnected for ${Math.round(disconnectedForMs / 1000)}s — ending call`);
+        void postVoiceStageLog('connection_timeout', `disconnected_ms=${disconnectedForMs}`, 'error');
         endCall().catch((err) => console.error('Heartbeat endCall error:', err instanceof Error ? err.message : 'Unknown'));
         return;
       }
@@ -367,6 +390,7 @@ export async function startCall(
       // Any non-disconnected state means the connection recovered.
       if (activeSession.disconnectedSince) {
         sendAsAgent(groupchat, '✅ Voice reconnected.').catch(() => {});
+        void postVoiceStageLog('connection_recovered', `channel=${voiceChannel.name}`);
       }
       activeSession.disconnectedSince = null;
     } catch (err) {
@@ -382,6 +406,7 @@ export async function startCall(
   );
 
   // Voice output self-test: fail fast with a clear operator hint instead of silent VC.
+  const preflightStartMs = Date.now();
   try {
     const checkAudio = await withTimeout(
       textToSpeech(`Hello ${initiator.displayName}.`),
@@ -394,6 +419,7 @@ export async function startCall(
       source: 'callSession.startCall',
       detail: `Channel=${voiceChannel.name} Initiator=${initiator.displayName}`,
     });
+    await postVoiceStageLog('preflight_ok', `tts_playback_ms=${Date.now() - preflightStartMs}`);
 
     const sttNote = isDeepgramAvailable()
       ? ''
@@ -408,6 +434,7 @@ export async function startCall(
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'Unknown error';
     console.error('Voice output self-test failed:', msg);
+    await postVoiceStageLog('preflight_failed', `ms=${Date.now() - preflightStartMs} error=${msg}`, 'error');
     await postDiagnostic('Voice self-test failed.', {
       level: 'error',
       source: 'callSession.startCall',
@@ -426,6 +453,7 @@ export async function startCall(
     return;
   }
 
+  await postVoiceStageLog('call_started', `channel=${voiceChannel.name} total_startup_ms=${Date.now() - callStartMs}`);
   // Listen to ALL members using best available STT (Deepgram real-time or Gemini batch)
   const unsub = listenToAllMembersSmart(connection, voiceChannel, (transcription) => {
     if (!activeSession?.active) return;
@@ -501,6 +529,8 @@ export async function endCall(): Promise<void> {
 
   const transcriptText = session.transcript.join('\n');
 
+  await postVoiceStageLog('call_ended', `duration_min=${duration}`);
+
   await session.callLog.send(
     `📋 **Call Log — ${session.startTime.toLocaleDateString()} ${session.startTime.toLocaleTimeString()}**\n` +
       `Duration: ${duration} minutes\n\n` +
@@ -561,6 +591,7 @@ async function handleVoiceInput(transcription: VoiceTranscription): Promise<void
   session.outputActive = false;
   session.outputStartedAt = 0;
   session.turnStartedAt = Date.now();
+  const turnStartMs = session.turnStartedAt;
 
   const isCurrentTurn = () =>
     activeSession?.active === true &&
@@ -568,6 +599,11 @@ async function handleVoiceInput(transcription: VoiceTranscription): Promise<void
     !signal.aborted;
 
   try {
+    await postVoiceStageLog(
+      'stt_received',
+      `turn=${turnId} user=${transcription.username} provider=${transcription.sttProvider || 'unknown'} stt_ms=${transcription.sttLatencyMs ?? -1} chars=${userText.length}`
+    );
+
     // Log to transcript
     const langTag = transcription.language && transcription.language !== 'en'
       ? ` [${transcription.language}]` : '';
@@ -606,6 +642,7 @@ Keep your spoken response very brief (normally 1-3 short sentences) — you're i
 
       const rileyStreamer = createLiveSpeechStreamer(riley.voice, signal, isCurrentTurn, turnId, transcription.language);
 
+      const rileyLlmStartMs = Date.now();
       const response = await agentRespond(
         riley,
         [...rileyMemory, ...session.conversationHistory],
@@ -618,6 +655,10 @@ Keep your spoken response very brief (normally 1-3 short sentences) — you're i
             await rileyStreamer.onPartialText(partialText);
           },
         }
+      );
+      await postVoiceStageLog(
+        'riley_llm',
+        `turn=${turnId} llm_ms=${Date.now() - rileyLlmStartMs} response_chars=${response.length}`
       );
       if (!isCurrentTurn() || !response.trim()) return;
 
@@ -642,13 +683,20 @@ Keep your spoken response very brief (normally 1-3 short sentences) — you're i
 
       // Live partial speech: speak sentence chunks as they form, then flush tail.
       try {
+        const rileyTtsStartMs = Date.now();
         const rileySpoke = await rileyStreamer.finalize(response);
         if (!rileySpoke && isCurrentTurn() && !signal.aborted) {
           await speakPipelined(response, riley.voice, signal, transcription.language);
         }
+        await postVoiceStageLog('riley_tts', `turn=${turnId} tts_play_ms=${Date.now() - rileyTtsStartMs}`);
       } catch (ttsErr) {
         if (!isCurrentTurn()) return;
         console.error('TTS error for Riley:', ttsErr instanceof Error ? ttsErr.message : 'Unknown');
+        await postVoiceStageLog(
+          'riley_tts_failed',
+          `turn=${turnId} error=${ttsErr instanceof Error ? ttsErr.message : 'Unknown'}`,
+          'error'
+        );
         await postDiagnostic('Riley TTS playback failed during call.', {
           level: 'error',
           source: 'callSession.handleVoiceInput',
@@ -747,6 +795,7 @@ Keep your spoken response very brief (normally 1-3 short sentences) — you're i
         if (!isCurrentTurn()) return;
         if (isAbortLikeError(err)) return;
         console.error('Riley voice error:', err instanceof Error ? err.message : 'Unknown');
+        await postVoiceStageLog('riley_turn_failed', `turn=${turnId} error=${err instanceof Error ? err.message : 'Unknown'}`, 'error');
         await sendAsAgent(session.groupchat, '⚠️ Riley had an error processing voice input.');
       }
     } else {
@@ -756,6 +805,7 @@ Keep your spoken response very brief (normally 1-3 short sentences) — you're i
     if (session.currentTurnId === turnId) {
       if (!signal.aborted && session.turnStartedAt > 0) {
         console.log(`[VOICE] turn ${turnId} completed in ${Date.now() - session.turnStartedAt}ms`);
+        await postVoiceStageLog('turn_total', `turn=${turnId} total_ms=${Date.now() - turnStartMs}`);
       }
       session.currentAbortController = null;
       session.outputActive = false;

@@ -12,6 +12,7 @@ import { autoReviewPR } from './handlers/review';
 import { handleGroupchatMessage } from './handlers/groupchat';
 import { setDecisionsChannel, handleDecisionReply } from './handlers/groupchat';
 import { endCall, isCallActive } from './handlers/callSession';
+import { setVoiceErrorChannel } from './handlers/callSession';
 import { setBotChannels } from './handlers/documentation';
 import { unregisterCommands } from './commands';
 import { setGitHubChannel } from './handlers/github';
@@ -82,6 +83,7 @@ export async function startBot(): Promise<void> {
       setGitHubChannel(botChannels.github);
       setLimitsChannel(botChannels.limits);
       setScreenshotsChannel(botChannels.screenshots);
+      setVoiceErrorChannel(botChannels.voiceErrors);
       setDiscordGuild(guild);
       setAgentChannelResolver((agentId: string) => botChannels?.agentChannels.get(agentId) || null);
       setDecisionsChannel(botChannels.decisions);

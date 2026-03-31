@@ -27,6 +27,7 @@ const OPS_CHANNELS = {
   screenshots: '📸-screenshots',
   url: '🔗-url',
   terminal: '💻-terminal',
+  voiceErrors: '🧯-voice-errors',
 } as const;
 
 const LEGACY_ACCIDENTAL_CHANNELS = new Set([
@@ -63,6 +64,7 @@ export interface BotChannels {
   screenshots: TextChannel;
   url: TextChannel;
   terminal: TextChannel;
+  voiceErrors: TextChannel;
   voiceChannel: VoiceChannel;
 }
 
@@ -296,6 +298,13 @@ export async function setupChannels(guild: Guild): Promise<BotChannels> {
     `💻 **Agent Terminal**\n\nReal-time log of every tool invocation by any agent.\nFile reads, writes, edits, searches, git ops, commands, and more.`
   );
 
+  const voiceErrors = await ensureText(
+    OPS_CHANNELS.voiceErrors,
+    catOps,
+    '🧯 Voice runtime errors and per-stage latency logs (ms) for live debugging',
+    `🧯 **Voice Runtime Logs**\n\nLive voice pipeline telemetry and failures.\nStages include STT, Riley LLM, TTS/playback, sub-agent fan-out, and total turn latency.`
+  );
+
   // ── Clean up old agent channels without emoji prefix ──
   const agentIds = [...agents.keys()]; // e.g. 'qa', 'developer', 'lawyer'
   for (const oldName of agentIds) {
@@ -335,7 +344,7 @@ export async function setupChannels(guild: Guild): Promise<BotChannels> {
   }
 
   // ── Pre-create webhooks for all text channels (parallel) ──
-  const allTextChannels = [groupchat, decisions, github, callLog, limits, screenshots, url, terminal, ...agentChannels.values()];
+  const allTextChannels = [groupchat, decisions, github, callLog, limits, screenshots, url, terminal, voiceErrors, ...agentChannels.values()];
   console.log('🔗 Pre-creating webhooks for all channels...');
   const webhookResults = await Promise.allSettled(
     allTextChannels.map((channel) => getWebhook(channel))
@@ -350,7 +359,7 @@ export async function setupChannels(guild: Guild): Promise<BotChannels> {
   const botId = guild.client.user?.id;
   if (botId) {
     // decisions channel needs bot permissions (AddReactions for option embeds)
-    const opsChannels = [decisions, github, callLog, limits, screenshots, url, terminal];
+    const opsChannels = [decisions, github, callLog, limits, screenshots, url, terminal, voiceErrors];
     const restricted = allTextChannels.filter((channel) => !opsChannels.some((ops) => ops.id === channel.id));
     for (const ch of restricted) {
       try {
@@ -388,5 +397,5 @@ export async function setupChannels(guild: Guild): Promise<BotChannels> {
     console.log(`🔒 Restricted raw bot posting in ${restricted.length} non-Operations channel(s)`);
   }
 
-  return { agentChannels, groupchat, decisions, github, callLog, limits, screenshots, url, terminal, voiceChannel };
+  return { agentChannels, groupchat, decisions, github, callLog, limits, screenshots, url, terminal, voiceErrors, voiceChannel };
 }
