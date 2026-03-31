@@ -44,9 +44,12 @@ let messageQueue: Promise<void> = Promise.resolve();
 let activeAbortController: AbortController | null = null;
 let activeThinkingMessage: Message | null = null;
 let activeGoalThreadId: string | null = null;
+let activeGoalThreadArchiveTimer: ReturnType<typeof setTimeout> | null = null;
+let activeGoalSequence = 0;
 let claudeNotificationsBoundChannelId: string | null = null;
 const MAX_PARALLEL_SUBAGENTS = parseInt(process.env.MAX_PARALLEL_SUBAGENTS || '2', 10);
 const SUBAGENT_MAX_TOKENS = parseInt(process.env.SUBAGENT_MAX_TOKENS || '1800', 10);
+const GOAL_THREAD_AUTO_ARCHIVE_DELAY_MS = parseInt(process.env.GOAL_THREAD_AUTO_ARCHIVE_DELAY_MS || '180000', 10);
 
 // Active goal tracking for /status
 let activeGoal: string | null = null;
@@ -63,6 +66,10 @@ let goalWatchdog: ReturnType<typeof setInterval> | null = null;
 function markGoalProgress(status?: string): void {
   lastGoalProgressAt = Date.now();
   goalRecoveryAttempts = 0;
+  if (activeGoalThreadArchiveTimer) {
+    clearTimeout(activeGoalThreadArchiveTimer);
+    activeGoalThreadArchiveTimer = null;
+  }
   if (status) goalStatus = status;
 }
 
@@ -299,12 +306,43 @@ function sanitizeThreadName(input: string): string {
     .slice(0, 72);
 }
 
+function buildGoalThreadName(senderName: string, content: string): string {
+  activeGoalSequence = (activeGoalSequence + 1) % 10000;
+  const goalId = activeGoalSequence.toString().padStart(4, '0');
+  const sender = sanitizeThreadName(senderName).replace(/\s+/g, '-').toLowerCase() || 'user';
+  const preview = sanitizeThreadName(content).split(' ').slice(0, 8).join(' ');
+  return sanitizeThreadName(`goal-${goalId} ${sender} ${preview}`) || `goal-${goalId}`;
+}
+
+function scheduleGoalWorkspaceArchive(groupchat: TextChannel, reason: string): void {
+  if (!activeGoalThreadId) return;
+  const threadId = activeGoalThreadId;
+  if (activeGoalThreadArchiveTimer) clearTimeout(activeGoalThreadArchiveTimer);
+
+  activeGoalThreadArchiveTimer = setTimeout(async () => {
+    try {
+      const thread = groupchat.threads.cache.get(threadId) || await groupchat.threads.fetch(threadId).catch(() => null);
+      if (!thread || thread.archived) return;
+      await sendWebhookMessage(thread, {
+        content: `✅ Work complete. Auto-archiving this thread (${reason}).`,
+        username: '📋 Riley (Executive Assistant)',
+      }).catch(() => {});
+      await thread.setArchived(true, reason).catch(() => {});
+    } finally {
+      if (activeGoalThreadId === threadId) activeGoalThreadId = null;
+      activeGoal = null;
+      goalStatus = null;
+      activeGoalThreadArchiveTimer = null;
+    }
+  }, Math.max(30000, GOAL_THREAD_AUTO_ARCHIVE_DELAY_MS));
+}
+
 async function ensureGoalWorkspace(groupchat: TextChannel, senderName: string, content: string): Promise<WebhookCapableChannel> {
   const existing = activeGoalThreadId ? groupchat.threads.cache.get(activeGoalThreadId) : null;
   if (existing && !existing.archived) return existing;
 
   const thread = await groupchat.threads.create({
-    name: sanitizeThreadName(`${senderName} ${content}`) || `goal-${Date.now()}`,
+    name: buildGoalThreadName(senderName, content),
     autoArchiveDuration: ThreadAutoArchiveDuration.OneDay,
     reason: 'ASAP goal workspace',
   });
@@ -685,6 +723,7 @@ async function handleRileyMessage(
     // Check if Riley directed Ace or other agents
     await handleAgentChain(response, groupchat, workspaceChannel, signal);
     markGoalProgress('✅ Riley cycle completed');
+    scheduleGoalWorkspaceArchive(groupchat, 'Riley cycle completed');
   } catch (err) {
     const abortLike = String((err as any)?.name || '').includes('Abort') || String((err as any)?.message || '').toLowerCase().includes('abort');
     if (abortLike || signal?.aborted) return;
@@ -1212,6 +1251,7 @@ async function handleDirectedMessage(
   groupHistory.push({ role: 'user', content: contextMessage });
   persistGroupHistory();
   markGoalProgress('✅ Directed response completed');
+  scheduleGoalWorkspaceArchive(groupchat, 'Directed response completed');
 }
 
 /**
