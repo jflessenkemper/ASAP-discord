@@ -420,6 +420,7 @@ const TOOL_LOOP_TIMEOUT = parseInt(process.env.TOOL_LOOP_TIMEOUT_MS || '0', 10);
 const MAX_CONCURRENT = parseInt(process.env.GEMINI_MAX_CONCURRENT || '5', 10);
 const MAX_CONCURRENT_FLASH = parseInt(process.env.GEMINI_MAX_CONCURRENT_FLASH || '4', 10);
 const MAX_CONCURRENT_PRO = parseInt(process.env.GEMINI_MAX_CONCURRENT_PRO || '1', 10);
+const RESERVED_FLASH_PRIORITY_SLOTS = parseInt(process.env.GEMINI_RESERVED_FLASH_PRIORITY_SLOTS || '1', 10);
 /** Base queue release delay between parallel requests (lower = faster) */
 const QUEUE_RELEASE_DELAY_MS = parseInt(process.env.QUEUE_RELEASE_DELAY_MS || '120', 10);
 /** Additional delay when we are inside/just after a 429 window */
@@ -427,6 +428,7 @@ const QUEUE_RELEASE_DELAY_RATE_LIMIT_MS = parseInt(process.env.QUEUE_RELEASE_DEL
 /** Minimum delay between sends per model to avoid bursty RPM spikes */
 const MODEL_PACE_FLASH_MS = parseInt(process.env.GEMINI_MODEL_PACE_FLASH_MS || '180', 10);
 const MODEL_PACE_PRO_MS = parseInt(process.env.GEMINI_MODEL_PACE_PRO_MS || '700', 10);
+const MODEL_PACE_FLASH_PRIORITY_MS = parseInt(process.env.GEMINI_MODEL_PACE_FLASH_PRIORITY_MS || '0', 10);
 
 /** Lower default output tokens for faster first responses. */
 const DEFAULT_MAX_OUTPUT_TOKENS = parseInt(process.env.DEFAULT_MAX_OUTPUT_TOKENS || '1000', 10);
@@ -437,6 +439,8 @@ let activeClaude = 0;
 const claudeQueue: Array<() => void> = [];
 const activeByModel = new Map<string, number>();
 const modelQueues = new Map<string, Array<() => void>>();
+const priorityClaudeQueue: Array<() => void> = [];
+const priorityModelQueues = new Map<string, Array<() => void>>();
 const modelNextAllowedAt = new Map<string, number>();
 let rateLimitNotifyCallback: ((message: string) => void | Promise<void>) | null = null;
 let quotaFuseNotifyCallback: ((message: string) => void | Promise<void>) | null = null;
@@ -534,6 +538,11 @@ function getModelPaceMs(modelName: string): number {
   return key.includes('pro') ? MODEL_PACE_PRO_MS : MODEL_PACE_FLASH_MS;
 }
 
+function getPriorityModelPaceMs(modelName: string): number {
+  const key = normalizeModelKey(modelName);
+  return key.includes('pro') ? MODEL_PACE_PRO_MS : MODEL_PACE_FLASH_PRIORITY_MS;
+}
+
 function getModelQueue(modelKey: string): Array<() => void> {
   const existing = modelQueues.get(modelKey);
   if (existing) return existing;
@@ -542,7 +551,15 @@ function getModelQueue(modelKey: string): Array<() => void> {
   return created;
 }
 
-async function waitForModelPace(modelName: string): Promise<void> {
+function getPriorityModelQueue(modelKey: string): Array<() => void> {
+  const existing = priorityModelQueues.get(modelKey);
+  if (existing) return existing;
+  const created: Array<() => void> = [];
+  priorityModelQueues.set(modelKey, created);
+  return created;
+}
+
+async function waitForModelPace(modelName: string, priority = false): Promise<void> {
   const modelKey = normalizeModelKey(modelName);
   const now = Date.now();
   const nextAllowed = modelNextAllowedAt.get(modelKey) || 0;
@@ -555,6 +572,19 @@ function releaseNextQueued(modelKey: string): void {
   const releaseDelay = rateLimitedUntil > Date.now()
     ? QUEUE_RELEASE_DELAY_RATE_LIMIT_MS
     : QUEUE_RELEASE_DELAY_MS;
+
+  const samePriorityQueue = getPriorityModelQueue(modelKey);
+  const samePriority = samePriorityQueue.shift();
+  if (samePriority) {
+    setTimeout(samePriority, releaseDelay);
+    return;
+  }
+
+  const globalPriorityNext = priorityClaudeQueue.shift();
+  if (globalPriorityNext) {
+    setTimeout(globalPriorityNext, releaseDelay);
+    return;
+  }
 
   // Prefer waking requests waiting on the same model first.
   const sameQueue = getModelQueue(modelKey);
@@ -580,21 +610,25 @@ function releaseNextQueued(modelKey: string): void {
   }
 }
 
-async function withConcurrencyLimit<T>(modelName: string, fn: () => Promise<T>): Promise<T> {
+async function withConcurrencyLimit<T>(modelName: string, fn: () => Promise<T>, priority = false): Promise<T> {
   const modelKey = normalizeModelKey(modelName);
   const modelCap = getModelConcurrencyCap(modelName);
+  const isFlash = !modelKey.includes('pro');
+  const reservedSlots = priority || !isFlash ? 0 : Math.max(0, RESERVED_FLASH_PRIORITY_SLOTS);
+  const effectiveGlobalCap = Math.max(1, MAX_CONCURRENT - reservedSlots);
+  const effectiveModelCap = Math.max(1, modelCap - reservedSlots);
 
   await waitForRateLimit();
-  while (activeClaude >= MAX_CONCURRENT || (activeByModel.get(modelKey) || 0) >= modelCap) {
-    if (activeClaude >= MAX_CONCURRENT) {
-      await new Promise<void>((resolve) => claudeQueue.push(resolve));
+  while (activeClaude >= effectiveGlobalCap || (activeByModel.get(modelKey) || 0) >= effectiveModelCap) {
+    if (activeClaude >= effectiveGlobalCap) {
+      await new Promise<void>((resolve) => (priority ? priorityClaudeQueue : claudeQueue).push(resolve));
     } else {
-      await new Promise<void>((resolve) => getModelQueue(modelKey).push(resolve));
+      await new Promise<void>((resolve) => (priority ? getPriorityModelQueue(modelKey) : getModelQueue(modelKey)).push(resolve));
     }
     await waitForRateLimit();
   }
 
-  await waitForModelPace(modelName);
+  await waitForModelPace(modelName, priority);
 
   activeClaude++;
   activeByModel.set(modelKey, (activeByModel.get(modelKey) || 0) + 1);
@@ -609,7 +643,7 @@ async function withConcurrencyLimit<T>(modelName: string, fn: () => Promise<T>):
     } else {
       activeByModel.set(modelKey, remainingModel);
     }
-    modelNextAllowedAt.set(modelKey, Date.now() + getModelPaceMs(modelName));
+    modelNextAllowedAt.set(modelKey, Date.now() + (priority ? getPriorityModelPaceMs(modelName) : getModelPaceMs(modelName)));
     releaseNextQueued(modelKey);
   }
 }
@@ -725,9 +759,11 @@ export async function agentRespond(
     toolRoundBoost?: number;
     rileyAutoToolApprovalUsed?: boolean;
     disableTools?: boolean;
+    priority?: 'normal' | 'voice';
   }
 ): Promise<string> {
   const cacheEligible = isCacheablePrompt(agent.id, userMessage, conversationHistory);
+  const isPriority = options?.priority === 'voice';
   const cacheKey = cacheEligible ? makeResponseCacheKey(agent.id, userMessage, conversationHistory) : null;
   if (cacheKey) {
     const cached = getCachedResponse(cacheKey);
@@ -891,7 +927,7 @@ TOKENS: ${tokenUsed.toLocaleString()} used / ${tokenLimit.toLocaleString()} dail
   try {
     response = await withConcurrencyLimit(currentModelName, () =>
       withRetry(() => sendMessageWithOptionalStream(chat, userMessage, options?.signal, options?.onPartialText))
-    );
+    , isPriority);
   } catch (err: any) {
     if (isAbortError(err)) {
       logAgentEvent(agent.id, 'error', 'Request interrupted by user', { durationMs: Date.now() - loopStart });
@@ -1048,7 +1084,7 @@ TOKENS: ${tokenUsed.toLocaleString()} used / ${tokenLimit.toLocaleString()} dail
     try {
       response = await withConcurrencyLimit(currentModelName, () =>
         withRetry(() => sendMessageWithOptionalStream(chat, functionResponses, options?.signal, options?.onPartialText))
-      );
+      , isPriority);
     } catch (err: any) {
       if (isAbortError(err)) {
         logAgentEvent(agent.id, 'error', 'Request interrupted by user', { durationMs: Date.now() - loopStart });

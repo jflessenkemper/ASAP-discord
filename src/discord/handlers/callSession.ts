@@ -21,7 +21,7 @@ const VOICE_DISCONNECT_GRACE_MS = 45 * 1000;
 /** Max conversation history in a call */
 const MAX_CALL_HISTORY = 40;
 const VOICE_PREFLIGHT_TIMEOUT_MS = parseInt(process.env.VOICE_PREFLIGHT_TIMEOUT_MS || '15000', 10);
-const VOICE_MAX_TOKENS_RILEY = parseInt(process.env.VOICE_MAX_TOKENS_RILEY || '240', 10);
+const VOICE_MAX_TOKENS_RILEY = parseInt(process.env.VOICE_MAX_TOKENS_RILEY || '320', 10);
 const VOICE_MAX_TOKENS_ACE = parseInt(process.env.VOICE_MAX_TOKENS_ACE || '260', 10);
 const VOICE_MAX_TOKENS_SPECIALIST = parseInt(process.env.VOICE_MAX_TOKENS_SPECIALIST || '220', 10);
 const VOICE_STREAM_PARTIAL_MIN_CHARS = parseInt(process.env.VOICE_STREAM_PARTIAL_MIN_CHARS || '24', 10);
@@ -30,8 +30,8 @@ const VOICE_INTERRUPT_MIN_OUTPUT_ACTIVE_MS = parseInt(process.env.VOICE_INTERRUP
 const VOICE_MIN_INPUT_CHARS = parseInt(process.env.VOICE_MIN_INPUT_CHARS || '3', 10);
 const VOICE_DUPLICATE_WINDOW_MS = parseInt(process.env.VOICE_DUPLICATE_WINDOW_MS || '1200', 10);
 const VOICE_STAGE_LOGS_ENABLED = process.env.VOICE_STAGE_LOGS_ENABLED !== 'false';
-const VOICE_HISTORY_MAX_MESSAGES = parseInt(process.env.VOICE_HISTORY_MAX_MESSAGES || '10', 10);
-const VOICE_MEMORY_MAX_MESSAGES = parseInt(process.env.VOICE_MEMORY_MAX_MESSAGES || '6', 10);
+const VOICE_HISTORY_MAX_MESSAGES = parseInt(process.env.VOICE_HISTORY_MAX_MESSAGES || '16', 10);
+const VOICE_MEMORY_MAX_MESSAGES = parseInt(process.env.VOICE_MEMORY_MAX_MESSAGES || '10', 10);
 
 let voiceErrorChannel: TextChannel | null = null;
 
@@ -671,6 +671,7 @@ IMPORTANT: End on a complete sentence, never a fragment.${langHint}`;
           signal,
           maxTokens: VOICE_MAX_TOKENS_RILEY,
           disableTools: true,
+          priority: 'voice',
           onPartialText: async (partialText) => {
             await rileyStreamer.onPartialText(partialText);
           },
