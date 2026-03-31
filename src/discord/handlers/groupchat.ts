@@ -146,14 +146,15 @@ function ensureClaudeNotifications(groupchat: TextChannel): void {
 function inferImplicitActionTags(text: string): string {
   const tags = new Set<string>();
   const normalized = text.toLowerCase();
+  const allowInfraActions = process.env.RILEY_ALLOW_IMPLICIT_INFRA_ACTIONS === 'true';
 
-  if (/(build triggered|triggered build|deploying|deployment triggered|rolling out|release started)/i.test(normalized)) {
+  if (allowInfraActions && /(build triggered|triggered build|deploying|deployment triggered|rolling out|release started)/i.test(normalized)) {
     tags.add('[ACTION:DEPLOY]');
   }
   if (/(capturing screenshots|taking screenshots|screenshot capture|posting screenshots)/i.test(normalized)) {
     tags.add('[ACTION:SCREENSHOTS]');
   }
-  if (/(asap links|live url|app url|posting.*url|paste.*url|share.*url)/i.test(normalized)) {
+  if (allowInfraActions && /(asap links|live url|app url|posting.*url|paste.*url|share.*url)/i.test(normalized)) {
     tags.add('[ACTION:URLS]');
   }
   if (/(usage report|limits report|budget report|token report)/i.test(normalized)) {

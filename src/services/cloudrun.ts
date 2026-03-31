@@ -100,6 +100,7 @@ export async function getCurrentRevision(): Promise<string> {
 export async function triggerCloudBuild(commitSha: string): Promise<{ buildId: string; logUrl: string }> {
   const client = await getAuth().getClient();
   const REPO_NAME = process.env.CLOUD_BUILD_REPO || 'asap';
+  void commitSha;
 
   const buildConfig = {
     source: {
@@ -108,9 +109,6 @@ export async function triggerCloudBuild(commitSha: string): Promise<{ buildId: s
         repoName: REPO_NAME,
         branchName: 'main',
       },
-    },
-    substitutions: {
-      COMMIT_SHA: commitSha,
     },
   };
 
