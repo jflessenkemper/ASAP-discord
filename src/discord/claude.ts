@@ -724,6 +724,7 @@ export async function agentRespond(
     onPartialText?: (partialText: string) => Promise<void>;
     toolRoundBoost?: number;
     rileyAutoToolApprovalUsed?: boolean;
+    disableTools?: boolean;
   }
 ): Promise<string> {
   const cacheEligible = isCacheablePrompt(agent.id, userMessage, conversationHistory);
@@ -864,7 +865,7 @@ TOKENS: ${tokenUsed.toLocaleString()} used / ${tokenLimit.toLocaleString()} dail
     parts: [{ text: normalizeHistoryContentForModel(msg.content) }],
   }));
 
-  const agentTools = toolsForAgent(agent.id);
+  const agentTools = options?.disableTools ? [] : toolsForAgent(agent.id);
   const geminiTools = toGeminiTools(agentTools);
   let currentModelName = options?.modelOverride || modelForAgent(agent.id, userMessage);
   let escalatedToPro = currentModelName === GEMINI_PRO;

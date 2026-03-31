@@ -30,6 +30,8 @@ const VOICE_INTERRUPT_MIN_OUTPUT_ACTIVE_MS = parseInt(process.env.VOICE_INTERRUP
 const VOICE_MIN_INPUT_CHARS = parseInt(process.env.VOICE_MIN_INPUT_CHARS || '3', 10);
 const VOICE_DUPLICATE_WINDOW_MS = parseInt(process.env.VOICE_DUPLICATE_WINDOW_MS || '1200', 10);
 const VOICE_STAGE_LOGS_ENABLED = process.env.VOICE_STAGE_LOGS_ENABLED !== 'false';
+const VOICE_HISTORY_MAX_MESSAGES = parseInt(process.env.VOICE_HISTORY_MAX_MESSAGES || '10', 10);
+const VOICE_MEMORY_MAX_MESSAGES = parseInt(process.env.VOICE_MEMORY_MAX_MESSAGES || '6', 10);
 
 let voiceErrorChannel: TextChannel | null = null;
 
@@ -636,7 +638,8 @@ async function handleVoiceInput(transcription: VoiceTranscription): Promise<void
     if (riley) {
       // Riley (EA) processes the input first and decides who should respond
       try {
-      const rileyMemory = getMemoryContext('executive-assistant');
+      const rileyMemory = getMemoryContext('executive-assistant').slice(-VOICE_MEMORY_MAX_MESSAGES);
+      const recentVoiceHistory = session.conversationHistory.slice(-VOICE_HISTORY_MAX_MESSAGES);
       const langHint = transcription.language && transcription.language !== 'en'
         ? `\n\nIMPORTANT: The speaker is using ${transcription.language === 'zh' ? 'Mandarin Chinese' : transcription.language}. Respond in the SAME language they spoke in. The TTS system supports multilingual output.`
         : '';
@@ -661,12 +664,13 @@ IMPORTANT: End on a complete sentence, never a fragment.${langHint}`;
       const rileyLlmStartMs = Date.now();
       const responseRaw = await agentRespond(
         riley,
-        [...rileyMemory, ...session.conversationHistory],
+        [...rileyMemory, ...recentVoiceHistory],
         rileyContext,
         undefined,
         {
           signal,
           maxTokens: VOICE_MAX_TOKENS_RILEY,
+          disableTools: true,
           onPartialText: async (partialText) => {
             await rileyStreamer.onPartialText(partialText);
           },
@@ -733,10 +737,10 @@ IMPORTANT: End on a complete sentence, never a fragment.${langHint}`;
         if (ace && session.active) {
           work.push((async () => {
             try {
-              const aceMemory = getMemoryContext('developer');
+              const aceMemory = getMemoryContext('developer').slice(-VOICE_MEMORY_MAX_MESSAGES);
               const aceResponse = await agentRespond(
                 ace,
-                [...aceMemory, ...session.conversationHistory],
+                [...aceMemory, ...session.conversationHistory.slice(-VOICE_HISTORY_MAX_MESSAGES)],
                 `[Riley directed you in voice call]: ${response}\n\n[Original voice from ${transcription.username}]: ${userText}`,
                 undefined,
                 {
@@ -781,11 +785,11 @@ IMPORTANT: End on a complete sentence, never a fragment.${langHint}`;
         if (!agent) continue;
 
         work.push((async () => {
-          const agentMemory = getMemoryContext(agentId);
+          const agentMemory = getMemoryContext(agentId).slice(-VOICE_MEMORY_MAX_MESSAGES);
           try {
             const agentResponse = await agentRespond(
               agent,
-              [...agentMemory, ...session.conversationHistory],
+              [...agentMemory, ...session.conversationHistory.slice(-VOICE_HISTORY_MAX_MESSAGES)],
               `[Riley directed you during voice call]: ${response}\n[Original from ${transcription.username}]: ${userText}`,
               undefined,
               { signal, maxTokens: VOICE_MAX_TOKENS_SPECIALIST }
