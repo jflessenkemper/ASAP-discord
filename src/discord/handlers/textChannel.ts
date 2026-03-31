@@ -285,7 +285,7 @@ function shouldProgressivelyReveal(rendered: string): boolean {
   if (!rendered) return false;
   if (rendered.length < 260 || rendered.length > 1800) return false;
   if (rendered.includes('```')) return false;
-  return true;
+    return false;
 }
 
 async function sendProgressiveWebhookMessage(

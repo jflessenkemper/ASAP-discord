@@ -38,12 +38,14 @@ export async function postDiagnostic(message: string, extra?: DiagnosticExtra): 
 
       if (!res.ok) {
         const body = await res.text().catch(() => '');
-        console.warn(`Diagnostic webhook failed: ${res.status} ${truncate(body, 200)}`);
         if (res.status === 401 || res.status === 404 || res.status === 410) {
           diagnosticsWebhookDisabledReason = `disabled after webhook returned ${res.status}`;
-          console.warn(`Diagnostic webhook disabled for process lifetime: ${diagnosticsWebhookDisabledReason}`);
+          if (diagnosticsVerbose()) {
+            console.warn(`Diagnostic webhook disabled for process lifetime: ${diagnosticsWebhookDisabledReason}`);
+          }
           return;
         }
+        console.warn(`Diagnostic webhook failed: ${res.status} ${truncate(body, 200)}`);
       }
     }
   } catch (err) {
