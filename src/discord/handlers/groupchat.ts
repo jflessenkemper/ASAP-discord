@@ -44,12 +44,10 @@ let messageQueue: Promise<void> = Promise.resolve();
 let activeAbortController: AbortController | null = null;
 let activeThinkingMessage: Message | null = null;
 let activeGoalThreadId: string | null = null;
-let activeGoalThreadArchiveTimer: ReturnType<typeof setTimeout> | null = null;
 let activeGoalSequence = 0;
 let claudeNotificationsBoundChannelId: string | null = null;
 const MAX_PARALLEL_SUBAGENTS = parseInt(process.env.MAX_PARALLEL_SUBAGENTS || '2', 10);
 const SUBAGENT_MAX_TOKENS = parseInt(process.env.SUBAGENT_MAX_TOKENS || '1800', 10);
-const GOAL_THREAD_AUTO_ARCHIVE_DELAY_MS = parseInt(process.env.GOAL_THREAD_AUTO_ARCHIVE_DELAY_MS || '180000', 10);
 
 // Active goal tracking for /status
 let activeGoal: string | null = null;
@@ -66,10 +64,6 @@ let goalWatchdog: ReturnType<typeof setInterval> | null = null;
 function markGoalProgress(status?: string): void {
   lastGoalProgressAt = Date.now();
   goalRecoveryAttempts = 0;
-  if (activeGoalThreadArchiveTimer) {
-    clearTimeout(activeGoalThreadArchiveTimer);
-    activeGoalThreadArchiveTimer = null;
-  }
   if (status) goalStatus = status;
 }
 
@@ -314,27 +308,29 @@ function buildGoalThreadName(senderName: string, content: string): string {
   return sanitizeThreadName(`goal-${goalId} ${sender} ${preview}`) || `goal-${goalId}`;
 }
 
-function scheduleGoalWorkspaceArchive(groupchat: TextChannel, reason: string): void {
-  if (!activeGoalThreadId) return;
-  const threadId = activeGoalThreadId;
-  if (activeGoalThreadArchiveTimer) clearTimeout(activeGoalThreadArchiveTimer);
+async function closeGoalWorkspace(
+  groupchat: TextChannel,
+  workspaceChannel: WebhookCapableChannel,
+  reason: string
+): Promise<void> {
+  let thread: any = null;
+  if ('setArchived' in workspaceChannel) {
+    thread = workspaceChannel;
+  } else if (activeGoalThreadId) {
+    thread = groupchat.threads.cache.get(activeGoalThreadId) || await groupchat.threads.fetch(activeGoalThreadId).catch(() => null);
+  }
 
-  activeGoalThreadArchiveTimer = setTimeout(async () => {
-    try {
-      const thread = groupchat.threads.cache.get(threadId) || await groupchat.threads.fetch(threadId).catch(() => null);
-      if (!thread || thread.archived) return;
-      await sendWebhookMessage(thread, {
-        content: `✅ Work complete. Auto-archiving this thread (${reason}).`,
-        username: '📋 Riley (Executive Assistant)',
-      }).catch(() => {});
-      await thread.setArchived(true, reason).catch(() => {});
-    } finally {
-      if (activeGoalThreadId === threadId) activeGoalThreadId = null;
-      activeGoal = null;
-      goalStatus = null;
-      activeGoalThreadArchiveTimer = null;
-    }
-  }, Math.max(30000, GOAL_THREAD_AUTO_ARCHIVE_DELAY_MS));
+  if (thread && !thread.archived) {
+    await sendWebhookMessage(thread, {
+      content: `✅ Task complete. Closing this workspace thread (${reason}).`,
+      username: '📋 Riley (Executive Assistant)',
+    }).catch(() => {});
+    await thread.setArchived(true, reason).catch(() => {});
+  }
+
+  activeGoalThreadId = null;
+  activeGoal = null;
+  goalStatus = '✅ Completed';
 }
 
 async function ensureGoalWorkspace(groupchat: TextChannel, senderName: string, content: string): Promise<WebhookCapableChannel> {
@@ -668,7 +664,8 @@ async function handleRileyMessage(
       ? '\n\n[Language detected: Mandarin Chinese. Please reply in Mandarin Chinese (简体中文).]'
       : '';
     const mentionGuide = `\n\n[Discord role mentions: ${coordinationGuide}. Prefer these exact mentions when delegating work.]`;
-    const contextMessageWithLang = `${textLangHint ? `${contextMessage}${textLangHint}` : contextMessage}${mentionGuide}`;
+    const threadCloseGuide = `\n\n[Thread workflow: keep this workspace thread open while work is in progress. When the task is fully complete and no more follow-up is required, include [ACTION:CLOSE_THREAD].]`;
+    const contextMessageWithLang = `${textLangHint ? `${contextMessage}${textLangHint}` : contextMessage}${mentionGuide}${threadCloseGuide}`;
 
     const response = await agentRespond(riley, [...rileyMemory, ...groupHistory], contextMessageWithLang, async (_toolName, summary) => {
       sendToolNotification(workspaceChannel, riley, summary).catch(() => {});
@@ -723,7 +720,6 @@ async function handleRileyMessage(
     // Check if Riley directed Ace or other agents
     await handleAgentChain(response, groupchat, workspaceChannel, signal);
     markGoalProgress('✅ Riley cycle completed');
-    scheduleGoalWorkspaceArchive(groupchat, 'Riley cycle completed');
   } catch (err) {
     const abortLike = String((err as any)?.name || '').includes('Abort') || String((err as any)?.message || '').toLowerCase().includes('abort');
     if (abortLike || signal?.aborted) return;
@@ -928,6 +924,11 @@ async function executeActions(
             .map((a) => `${a.emoji} **${a.name}**`)
             .join('\n');
           await sendAsRiley(`**ASAP Agent Team**\n\n${list}`);
+          break;
+        }
+        case 'CLOSE_THREAD': {
+          await sendAsRiley('🧵 Closing this workspace thread now that the task is complete.');
+          await closeGoalWorkspace(groupchat, workspaceChannel, 'Closed by Riley action');
           break;
         }
         case 'CALL': {
@@ -1251,7 +1252,6 @@ async function handleDirectedMessage(
   groupHistory.push({ role: 'user', content: contextMessage });
   persistGroupHistory();
   markGoalProgress('✅ Directed response completed');
-  scheduleGoalWorkspaceArchive(groupchat, 'Directed response completed');
 }
 
 /**
