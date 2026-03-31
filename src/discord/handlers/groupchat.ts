@@ -1,6 +1,6 @@
 import { Message, TextChannel, GuildMember, EmbedBuilder } from 'discord.js';
 import { getAgents, getAgent, AgentConfig, AgentId } from '../agents';
-import { agentRespond, ConversationMessage } from '../claude';
+import { agentRespond, ConversationMessage, setQuotaFuseNotifyCallback, setRateLimitNotifyCallback } from '../claude';
 import { appendToMemory, getMemoryContext, loadMemory, saveMemory, clearMemory, compressMemory } from '../memory';
 import { documentToChannel } from './documentation';
 import { sendAgentMessage, clearHistory } from './textChannel';
@@ -35,6 +35,7 @@ let messageQueue: Promise<void> = Promise.resolve();
 // Tracks in-flight message processing so a new message can interrupt it
 let activeAbortController: AbortController | null = null;
 let activeThinkingMessage: Message | null = null;
+let claudeNotificationsBoundChannelId: string | null = null;
 const MAX_PARALLEL_SUBAGENTS = parseInt(process.env.MAX_PARALLEL_SUBAGENTS || '2', 10);
 const SUBAGENT_MAX_TOKENS = parseInt(process.env.SUBAGENT_MAX_TOKENS || '1800', 10);
 
@@ -95,6 +96,36 @@ async function sendAutopilotAudit(
   }
 }
 
+function ensureClaudeNotifications(groupchat: TextChannel): void {
+  if (claudeNotificationsBoundChannelId === groupchat.id) return;
+  claudeNotificationsBoundChannelId = groupchat.id;
+
+  const sendSystemNotice = (content: string) => {
+    const riley = getAgent('executive-assistant' as AgentId);
+    const send = async () => {
+      if (riley) {
+        try {
+          const wh = await getWebhook(groupchat);
+          await wh.send({
+            content,
+            username: `${riley.emoji} ${riley.name}`,
+            avatarURL: riley.avatarUrl,
+          });
+          return;
+        } catch {
+          // fall through
+        }
+      }
+      await groupchat.send(content).catch(() => {});
+    };
+
+    void send();
+  };
+
+  setRateLimitNotifyCallback(sendSystemNotice);
+  setQuotaFuseNotifyCallback(sendSystemNotice);
+}
+
 function inferImplicitActionTags(text: string): string {
   const tags = new Set<string>();
   const normalized = text.toLowerCase();
@@ -118,15 +149,38 @@ function inferImplicitActionTags(text: string): string {
   return [...tags].join('\n');
 }
 
-function parseCleanupTargetCount(param?: string): number {
-  if (!param) return 25;
-  const match = param.match(/\d+/);
-  const parsed = match ? parseInt(match[0], 10) : 25;
-  if (!Number.isFinite(parsed)) return 25;
-  return Math.max(1, Math.min(100, parsed));
+function parseCleanupOptions(param?: string): {
+  requestedCount: number;
+  targetCount: number;
+  maxAgeMs: number | null;
+  descriptor: string;
+} {
+  if (!param) {
+    return { requestedCount: 25, targetCount: 25, maxAgeMs: null, descriptor: 'latest messages' };
+  }
+
+  const [countPart, windowPart] = param.split(':').map((part) => part.trim()).filter(Boolean);
+  const parsedCount = parseInt((countPart || '25').match(/\d+/)?.[0] || '25', 10);
+  const requestedCount = Number.isFinite(parsedCount) ? Math.max(1, parsedCount) : 25;
+  const targetCount = Math.min(50, requestedCount);
+
+  let maxAgeMs: number | null = null;
+  let descriptor = 'latest messages';
+  if (windowPart) {
+    const match = windowPart.match(/^(\d+)([mh])$/i);
+    if (match) {
+      const amount = parseInt(match[1], 10);
+      maxAgeMs = match[2].toLowerCase() === 'h'
+        ? amount * 60 * 60 * 1000
+        : amount * 60 * 1000;
+      descriptor = `last ${amount}${match[2].toLowerCase()}`;
+    }
+  }
+
+  return { requestedCount, targetCount, maxAgeMs, descriptor };
 }
 
-async function cleanupGroupchatNoise(groupchat: TextChannel, targetCount: number): Promise<number> {
+async function cleanupGroupchatNoise(groupchat: TextChannel, targetCount: number, maxAgeMs: number | null): Promise<number> {
   const fetchLimit = Math.max(40, Math.min(100, targetCount * 4));
   const recent = await groupchat.messages.fetch({ limit: fetchLimit });
   const now = Date.now();
@@ -136,6 +190,7 @@ async function cleanupGroupchatNoise(groupchat: TextChannel, targetCount: number
   const deletable = [...recent.values()].filter((msg) => {
     if (!msg.deletable || msg.pinned) return false;
     if (now - msg.createdTimestamp > TWO_WEEKS_MS) return false;
+    if (maxAgeMs !== null && now - msg.createdTimestamp > maxAgeMs) return false;
 
     const byBot = !!botId && msg.author?.id === botId;
     const byWebhook = !!msg.webhookId;
@@ -347,6 +402,7 @@ export async function handleGroupchatMessage(
 ): Promise<void> {
   const content = message.content.trim();
   if (!content) return;
+  ensureClaudeNotifications(groupchat);
   ensureGoalWatchdog(groupchat);
 
   // Interrupt any in-progress response — user has already moved on
@@ -672,14 +728,17 @@ async function executeActions(
           break;
         }
         case 'CLEANUP': {
-          const target = parseCleanupTargetCount(param);
+          const options = parseCleanupOptions(param);
           try {
-            const removed = await cleanupGroupchatNoise(groupchat, target);
+            const removed = await cleanupGroupchatNoise(groupchat, options.targetCount, options.maxAgeMs);
             markGoalProgress('🧽 Groupchat cleanup complete');
-            await sendAutopilotAudit(groupchat, 'action_executed', `Cleaned up ${removed} noisy groupchat messages.`, {
-              action: `CLEANUP:${target}`,
+            await sendAutopilotAudit(groupchat, 'action_executed', `Cleaned up ${removed} noisy groupchat messages from ${options.descriptor}. Requested by ${member?.displayName || 'system'}.`, {
+              action: `CLEANUP:${options.targetCount}`,
             });
-            await sendAsRiley(`🧽 Cleaned up ${removed} noisy messages in groupchat.`);
+            const clipped = options.requestedCount > options.targetCount
+              ? ` Requested ${options.requestedCount}, capped at ${options.targetCount} for safety.`
+              : '';
+            await sendAsRiley(`🧽 Cleaned up ${removed} noisy messages in groupchat from ${options.descriptor}.${clipped}`);
           } catch (err) {
             await sendAsRiley(`❌ Groupchat cleanup failed: ${err instanceof Error ? err.message : 'Unknown'}`);
           }

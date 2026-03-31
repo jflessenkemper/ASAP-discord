@@ -192,6 +192,8 @@ export interface VoiceTranscription {
 const MAX_RESUBSCRIBES = 500;
 /** Max audio buffer size (5 MB) — reject oversized buffers */
 const MAX_AUDIO_BUFFER = 5 * 1024 * 1024;
+const VOICE_MIN_AUDIO_BYTES = parseInt(process.env.VOICE_MIN_AUDIO_BYTES || '48000', 10);
+const MAX_DEEPGRAM_SESSION_RETRIES = parseInt(process.env.MAX_DEEPGRAM_SESSION_RETRIES || '3', 10);
 
 /**
  * Create a prism-media Opus decoder that converts Opus frames from the Discord
@@ -259,7 +261,7 @@ export function listenToUser(
       if (chunks.length > 0 && totalSize <= MAX_AUDIO_BUFFER) {
         const audioBuffer = Buffer.concat(chunks);
         // Need at least ~0.5s of PCM audio at 48kHz stereo (192 KB/s)
-        if (audioBuffer.length >= 48000) {
+        if (audioBuffer.length >= VOICE_MIN_AUDIO_BYTES) {
           try {
             const text = await transcribeVoice(audioBuffer);
             if (text && !destroyed) {
@@ -273,6 +275,8 @@ export function listenToUser(
           } catch (err) {
             console.error('Voice transcription error:', err instanceof Error ? err.message : 'Unknown');
           }
+        } else {
+          console.debug(`Skipped short voice buffer for ${member.displayName}: ${audioBuffer.length} bytes < ${VOICE_MIN_AUDIO_BYTES}`);
         }
       } else if (totalSize > MAX_AUDIO_BUFFER) {
         console.warn(`Audio buffer exceeded ${MAX_AUDIO_BUFFER} bytes for ${member.displayName} — skipped`);
@@ -362,131 +366,158 @@ export function listenToUserDeepgram(
   let fallbackUnsub: (() => void) | null = null;
   let currentSubscription: Readable | null = null;
   let currentDecoder: Transform | null = null;
+  let deepgramRetryAttempts = 0;
+  let retryTimer: ReturnType<typeof setTimeout> | null = null;
 
   const receiver = connection.receiver;
 
+  function cleanupReceiveChain(): void {
+    try {
+      currentSubscription?.destroy();
+    } catch {
+      // best-effort
+    }
+    try {
+      currentDecoder?.destroy();
+    } catch {
+      // best-effort
+    }
+    currentSubscription = null;
+    currentDecoder = null;
+  }
+
+  function fallbackToGemini(reason: string): void {
+    if (destroyed || fallbackUnsub) return;
+    console.warn(`Deepgram unavailable for ${member.displayName} — ${reason}. Falling back to Gemini batch STT`);
+    cleanupReceiveChain();
+    dgSession?.close();
+    dgSession = null;
+    fallbackUnsub = listenToUser(connection, member, onTranscription);
+  }
+
+  function scheduleDeepgramRetry(reason: string): void {
+    if (destroyed || fallbackUnsub) return;
+    if (deepgramRetryAttempts >= MAX_DEEPGRAM_SESSION_RETRIES) {
+      fallbackToGemini(reason);
+      return;
+    }
+
+    const delayMs = 1000 * Math.pow(2, deepgramRetryAttempts);
+    deepgramRetryAttempts += 1;
+    cleanupReceiveChain();
+    dgSession?.close();
+    dgSession = null;
+    console.warn(`Retrying Deepgram for ${member.displayName} in ${delayMs}ms (${deepgramRetryAttempts}/${MAX_DEEPGRAM_SESSION_RETRIES}) — ${reason}`);
+    if (retryTimer) clearTimeout(retryTimer);
+    retryTimer = setTimeout(() => {
+      retryTimer = null;
+      if (!destroyed && !fallbackUnsub) {
+        startSession();
+      }
+    }, delayMs);
+  }
+
+  function startSession(): void {
+    startLiveTranscription(
+      (text, detectedLanguage) => {
+        if (!destroyed && text.trim()) {
+          onTranscription({
+            userId: member.id,
+            username: member.displayName,
+            text: text.trim(),
+            timestamp: new Date(),
+            language: detectedLanguage,
+          });
+        }
+      },
+      (err) => {
+        console.error(`Deepgram error for ${member.displayName}:`, err.message);
+        scheduleDeepgramRetry(err.message);
+      }
+    ).then((session) => {
+      if (destroyed || fallbackUnsub) {
+        session.close();
+        return;
+      }
+      dgSession = session;
+      deepgramRetryAttempts = 0;
+
+      // Subscribe to user's audio and pipe it to Deepgram
+      function subscribe() {
+        if (destroyed) return;
+
+        cleanupReceiveChain();
+
+        const subscription = receiver.subscribe(member.id, {
+          // AfterInactivity is more resilient than AfterSilence for some clients
+          // that send sparse/non-standard silence packets.
+          end: { behavior: EndBehaviorType.AfterInactivity, duration: 2000 },
+        });
+        currentSubscription = subscription;
+
+        // Decode Opus frames → PCM before sending to Deepgram (expects linear16)
+        let decoder: Transform;
+        try {
+          decoder = createOpusDecoder();
+        } catch (err) {
+          console.error(`Opus decoder error for ${member.displayName}:`, err instanceof Error ? err.message : 'Unknown');
+          return;
+        }
+        currentDecoder = decoder;
+        subscription.pipe(decoder);
+
+        decoder.on('data', (chunk: Buffer) => {
+          if (!destroyed && dgSession) {
+            dgSession.send(chunk);
+          }
+        });
+
+        decoder.on('end', () => {
+          if (!destroyed) {
+            setTimeout(() => {
+              if (!destroyed) subscribe();
+            }, 120);
+          }
+        });
+
+        decoder.on('error', (err: Error) => {
+          console.error(`Deepgram decoder error for ${member.displayName}:`, err.message);
+          if (!destroyed) {
+            setTimeout(() => {
+              if (!destroyed) subscribe();
+            }, 250);
+          }
+        });
+
+        // When Opus subscription ends, also end the decoder
+        subscription.on('end', () => { decoder.end(); });
+        subscription.on('error', (err: Error) => {
+          console.error(`Deepgram voice subscription error for ${member.displayName}:`, err.message);
+          decoder.end();
+        });
+      }
+
+      subscribe();
+    }).catch((err) => {
+      console.error(`Failed to start Deepgram for ${member.displayName}:`, err instanceof Error ? err.message : 'Unknown');
+      scheduleDeepgramRetry(err instanceof Error ? err.message : 'startup failure');
+    });
+  }
+
   // Start Deepgram session with timeout fallback
   const dgTimeout = setTimeout(() => {
-    if (!dgSession && !destroyed) {
-      console.warn(`Deepgram session start timed out for ${member.displayName} — falling back to Gemini batch STT`);
-      // Fall back to Gemini listener instead of going silent
-      fallbackUnsub = listenToUser(connection, member, onTranscription);
+    if (!dgSession && !destroyed && !fallbackUnsub) {
+      fallbackToGemini('session start timed out');
     }
   }, 10_000);
 
-  startLiveTranscription(
-    (text, detectedLanguage) => {
-      if (!destroyed && text.trim()) {
-        onTranscription({
-          userId: member.id,
-          username: member.displayName,
-          text: text.trim(),
-          timestamp: new Date(),
-          language: detectedLanguage,
-        });
-      }
-    },
-    (err) => {
-      console.error(`Deepgram error for ${member.displayName}:`, err.message);
-      // On runtime error, fall back to Gemini if not already
-      if (!destroyed && !fallbackUnsub) {
-        console.warn(`Deepgram runtime error — falling back to Gemini for ${member.displayName}`);
-        dgSession = null;
-        fallbackUnsub = listenToUser(connection, member, onTranscription);
-      }
-    }
-  ).then((session) => {
-    clearTimeout(dgTimeout);
-    if (destroyed || fallbackUnsub) {
-      // Already fell back to Gemini or was cleaned up
-      session.close();
-      return;
-    }
-    dgSession = session;
-
-    function cleanupReceiveChain(): void {
-      try {
-        currentSubscription?.destroy();
-      } catch {
-        // best-effort
-      }
-      try {
-        currentDecoder?.destroy();
-      } catch {
-        // best-effort
-      }
-      currentSubscription = null;
-      currentDecoder = null;
-    }
-
-    // Subscribe to user's audio and pipe it to Deepgram
-    function subscribe() {
-      if (destroyed) return;
-
-      cleanupReceiveChain();
-
-      const subscription = receiver.subscribe(member.id, {
-        // AfterInactivity is more resilient than AfterSilence for some clients
-        // that send sparse/non-standard silence packets.
-        end: { behavior: EndBehaviorType.AfterInactivity, duration: 2000 },
-      });
-      currentSubscription = subscription;
-
-      // Decode Opus frames → PCM before sending to Deepgram (expects linear16)
-      let decoder: Transform;
-      try {
-        decoder = createOpusDecoder();
-      } catch (err) {
-        console.error(`Opus decoder error for ${member.displayName}:`, err instanceof Error ? err.message : 'Unknown');
-        return;
-      }
-      currentDecoder = decoder;
-      subscription.pipe(decoder);
-
-      decoder.on('data', (chunk: Buffer) => {
-        if (!destroyed && dgSession) {
-          dgSession.send(chunk);
-        }
-      });
-
-      decoder.on('end', () => {
-        if (!destroyed) {
-          setTimeout(() => {
-            if (!destroyed) subscribe();
-          }, 120);
-        }
-      });
-
-      decoder.on('error', (err: Error) => {
-        console.error(`Deepgram decoder error for ${member.displayName}:`, err.message);
-        if (!destroyed) {
-          setTimeout(() => {
-            if (!destroyed) subscribe();
-          }, 250);
-        }
-      });
-
-      // When Opus subscription ends, also end the decoder
-      subscription.on('end', () => { decoder.end(); });
-      subscription.on('error', (err: Error) => {
-        console.error(`Deepgram voice subscription error for ${member.displayName}:`, err.message);
-        decoder.end();
-      });
-    }
-
-    subscribe();
-  }).catch((err) => {
-    clearTimeout(dgTimeout);
-    console.error(`Failed to start Deepgram for ${member.displayName}:`, err instanceof Error ? err.message : 'Unknown');
-    // Fall back to Gemini
-    if (!destroyed && !fallbackUnsub) {
-      console.warn(`Deepgram connection failed — falling back to Gemini for ${member.displayName}`);
-      fallbackUnsub = listenToUser(connection, member, onTranscription);
-    }
-  });
+  startSession();
 
   return () => {
     destroyed = true;
+    if (retryTimer) clearTimeout(retryTimer);
+    clearTimeout(dgTimeout);
+    cleanupReceiveChain();
     try {
       currentSubscription?.destroy();
     } catch {

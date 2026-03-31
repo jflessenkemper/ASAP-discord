@@ -23,6 +23,23 @@ const STREAM_EDIT_THROTTLE_MS = parseInt(process.env.STREAM_EDIT_THROTTLE_MS || 
 const STREAM_MAX_PREVIEW_CHARS = parseInt(process.env.STREAM_MAX_PREVIEW_CHARS || '1800', 10);
 const STREAM_EDIT_MIN_CHAR_DELTA = parseInt(process.env.STREAM_EDIT_MIN_CHAR_DELTA || '35', 10);
 
+function classifyAgentError(err: unknown): string {
+  const message = String((err as any)?.message || err || '').toLowerCase();
+  const status = (err as any)?.status || (err as any)?.statusCode;
+  if (status === 429 || message.includes('rate limit')) {
+    return 'Gemini API is busy right now. Please retry in a moment.';
+  }
+  if (
+    message.includes('quota') ||
+    message.includes('resource_exhausted') ||
+    message.includes('billing') ||
+    message.includes('credits before continuing')
+  ) {
+    return 'Gemini quota is exhausted right now. Riley needs to restore credits before this can continue.';
+  }
+  return 'An internal error interrupted the response.';
+}
+
 function estimateTextMaxTokens(agent: AgentConfig, userMessage: string): number {
   const trimmed = userMessage.trim();
   const simple = trimmed.length <= 180 && /^(ok|yes|no|status|why|what|how|help|fix|run|test|show|give)\b/i.test(trimmed);
@@ -184,6 +201,7 @@ async function handleAgentMessageInner(
     const abortLike = String((err as any)?.name || '').includes('Abort') || String((err as any)?.message || '').toLowerCase().includes('abort');
     if (abortLike || signal?.aborted) return;
     const errMsg = err instanceof Error ? err.message : String(err);
+    const userFacing = classifyAgentError(err);
     console.error(`Agent ${agent.name} error:`, errMsg);
     const short = errMsg.length > 200 ? errMsg.slice(0, 200) + '…' : errMsg;
     try {
@@ -193,7 +211,7 @@ async function handleAgentMessageInner(
       }
       const wh = await getWebhook(channel);
       await wh.send({
-        content: `⚠️ ${agent.name} encountered an error:\n\`\`\`${short}\`\`\``,
+        content: `⚠️ ${agent.name}: ${userFacing}\n\`\`\`${short}\`\`\``,
         username: `${agent.emoji} ${agent.name}`,
         avatarURL: agent.avatarUrl,
       });

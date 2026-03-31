@@ -26,9 +26,9 @@ const VOICE_MAX_TOKENS_ACE = parseInt(process.env.VOICE_MAX_TOKENS_ACE || '260',
 const VOICE_MAX_TOKENS_SPECIALIST = parseInt(process.env.VOICE_MAX_TOKENS_SPECIALIST || '220', 10);
 const VOICE_STREAM_PARTIAL_MIN_CHARS = parseInt(process.env.VOICE_STREAM_PARTIAL_MIN_CHARS || '24', 10);
 const VOICE_STREAM_FORCE_CHARS = parseInt(process.env.VOICE_STREAM_FORCE_CHARS || '90', 10);
-const VOICE_INTERRUPT_MIN_OUTPUT_ACTIVE_MS = parseInt(process.env.VOICE_INTERRUPT_MIN_OUTPUT_ACTIVE_MS || '350', 10);
+const VOICE_INTERRUPT_MIN_OUTPUT_ACTIVE_MS = parseInt(process.env.VOICE_INTERRUPT_MIN_OUTPUT_ACTIVE_MS || '1000', 10);
 const VOICE_MIN_INPUT_CHARS = parseInt(process.env.VOICE_MIN_INPUT_CHARS || '3', 10);
-const VOICE_DUPLICATE_WINDOW_MS = parseInt(process.env.VOICE_DUPLICATE_WINDOW_MS || '2500', 10);
+const VOICE_DUPLICATE_WINDOW_MS = parseInt(process.env.VOICE_DUPLICATE_WINDOW_MS || '1200', 10);
 
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | null = null;
@@ -161,6 +161,11 @@ function createLiveSpeechStreamer(
     speakQueue = speakQueue
       .then(async () => {
         if (!isCurrentTurn() || signal.aborted) return;
+        if (activeSession?.currentTurnId === turnId && activeSession.pendingBargeIn) {
+          activeSession.pendingBargeIn = false;
+          interruptActiveVoiceTurn('queued-barge-in');
+          return;
+        }
         if (activeSession?.currentTurnId === turnId) {
           activeSession.outputActive = true;
           activeSession.outputStartedAt = Date.now();
@@ -224,6 +229,9 @@ export interface CallSession {
   disconnectedSince: number | null;
   lastInputFingerprint: string;
   lastInputAt: number;
+  lastDuplicateNoticeAt: number;
+  pendingBargeIn: boolean;
+  turnStartedAt: number;
 }
 
 let activeSession: CallSession | null = null;
@@ -321,6 +329,9 @@ export async function startCall(
     disconnectedSince: null,
     lastInputFingerprint: '',
     lastInputAt: 0,
+    lastDuplicateNoticeAt: 0,
+    pendingBargeIn: false,
+    turnStartedAt: 0,
   };
 
   // Heartbeat — detect disconnected voice channel
@@ -338,6 +349,7 @@ export async function startCall(
         if (!activeSession.disconnectedSince) {
           activeSession.disconnectedSince = Date.now();
           console.warn('Voice connection temporarily disconnected — waiting for recovery');
+          sendAsAgent(groupchat, '⚠️ Voice connection interrupted — reconnecting for up to 45 seconds.').catch(() => {});
           return;
         }
 
@@ -352,6 +364,9 @@ export async function startCall(
       }
 
       // Any non-disconnected state means the connection recovered.
+      if (activeSession.disconnectedSince) {
+        sendAsAgent(groupchat, '✅ Voice reconnected.').catch(() => {});
+      }
       activeSession.disconnectedSince = null;
     } catch (err) {
       console.error('Heartbeat error:', err instanceof Error ? err.message : 'Unknown');
@@ -428,7 +443,10 @@ export async function startCall(
     // thinking/LLM phase. Interrupting the LLM call while the user waits for a
     // response would silently abort it, creating the symptom of "chime plays but
     // Riley never responds".
-    if (!activeSession.outputActive) return;
+    if (!activeSession.outputActive) {
+      activeSession.pendingBargeIn = true;
+      return;
+    }
     if (activeSession.outputStartedAt > 0) {
       const activeForMs = Date.now() - activeSession.outputStartedAt;
       if (activeForMs < VOICE_INTERRUPT_MIN_OUTPUT_ACTIVE_MS) return;
@@ -516,14 +534,18 @@ async function handleVoiceInput(transcription: VoiceTranscription): Promise<void
   const fingerprint = userText
     .toLowerCase()
     .replace(/\s+/g, ' ')
-    .replace(/[^a-z0-9\s]/g, '')
     .trim();
   if (!fingerprint) return;
   if (fingerprint === session.lastInputFingerprint && Date.now() - session.lastInputAt < VOICE_DUPLICATE_WINDOW_MS) {
+    if (Date.now() - session.lastDuplicateNoticeAt > VOICE_DUPLICATE_WINDOW_MS) {
+      session.lastDuplicateNoticeAt = Date.now();
+      session.callLog.send('🟡 I heard that already — waiting for a new utterance.').catch(() => {});
+    }
     return;
   }
   session.lastInputFingerprint = fingerprint;
   session.lastInputAt = Date.now();
+  session.pendingBargeIn = false;
 
   const turnId = session.currentTurnId + 1;
   const abortController = new AbortController();
@@ -534,6 +556,7 @@ async function handleVoiceInput(transcription: VoiceTranscription): Promise<void
   session.currentTurnId = turnId;
   session.outputActive = false;
   session.outputStartedAt = 0;
+  session.turnStartedAt = Date.now();
 
   const isCurrentTurn = () =>
     activeSession?.active === true &&
@@ -727,9 +750,13 @@ Keep your spoken response very brief (normally 1-3 short sentences) — you're i
     }
   } finally {
     if (session.currentTurnId === turnId) {
+      if (!signal.aborted && session.turnStartedAt > 0) {
+        console.log(`[VOICE] turn ${turnId} completed in ${Date.now() - session.turnStartedAt}ms`);
+      }
       session.currentAbortController = null;
       session.outputActive = false;
       session.outputStartedAt = 0;
+      session.turnStartedAt = 0;
     }
   }
 }

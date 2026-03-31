@@ -33,6 +33,8 @@ export async function startLiveTranscription(
   onError?: (err: Error) => void
 ): Promise<DeepgramLiveSession> {
   const client = getClient();
+  let closedExplicitly = false;
+  let errorReported = false;
 
   const connection: LiveClient = client.listen.live({
     model: 'nova-3',
@@ -57,11 +59,14 @@ export async function startLiveTranscription(
   connection.on(LiveTranscriptionEvents.Error, (err: any) => {
     const detail = err?.message || err?.error || err;
     console.error('Deepgram error:', detail);
+    errorReported = true;
     onError?.(err instanceof Error ? err : new Error(String(err)));
   });
 
   connection.on(LiveTranscriptionEvents.Close, () => {
-    // Connection closed
+    if (!closedExplicitly && !errorReported) {
+      onError?.(new Error('Deepgram connection closed unexpectedly'));
+    }
   });
 
   return {
@@ -71,6 +76,7 @@ export async function startLiveTranscription(
       }
     },
     close: () => {
+      closedExplicitly = true;
       connection.requestClose();
     },
   };

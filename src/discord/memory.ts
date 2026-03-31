@@ -1,4 +1,5 @@
 import { ConversationMessage } from './claude';
+import { logAgentEvent } from './activityLog';
 import pool from '../db/pool';
 
 /**
@@ -17,9 +18,9 @@ import pool from '../db/pool';
 const MAX_MESSAGES = 1000;
 
 /** Number of raw messages before triggering compression */
-const COMPRESS_THRESHOLD = 60;
+const COMPRESS_THRESHOLD = 80;
 /** Number of recent messages to keep verbatim after compression */
-const KEEP_RECENT = 20;
+const KEEP_RECENT = 30;
 
 /** In-memory cache — primary read source for fast synchronous access */
 const memoryCache = new Map<string, ConversationMessage[]>();
@@ -201,6 +202,11 @@ export async function compressMemory(agentId: string): Promise<void> {
     // Lazy import to avoid circular dependency
     const { summarizeConversation } = await import('./claude');
     const newSummary = await summarizeConversation(existingSummary, contextToSummarize, agentId);
+    if (newSummary.trim().length < 30) {
+      console.warn(`Compression summary too short for ${agentId}; keeping verbatim history`);
+      logAgentEvent(agentId, 'response', 'Skipped compression because generated summary was too short');
+      return;
+    }
 
     // Preserve any messages that arrived during compression
     const currentHistory = loadMemory(agentId);
@@ -211,8 +217,10 @@ export async function compressMemory(agentId: string): Promise<void> {
     currentHistory.length = 0;
     currentHistory.push(...preserved);
     saveMemory(agentId, currentHistory);
+    logAgentEvent(agentId, 'response', `Compressed ${snapshotLen} messages down to ${preserved.length} raw messages plus summary`);
     console.log(`Compressed memory for ${agentId}: ${snapshotLen} → ${preserved.length} messages + summary`);
   } catch (err) {
+    logAgentEvent(agentId, 'error', `Memory compression failed: ${err instanceof Error ? err.message : 'Unknown'}`);
     console.error(`Memory compression failed for ${agentId}:`, err instanceof Error ? err.message : 'Unknown');
   } finally {
     compressionInProgress.delete(agentId);

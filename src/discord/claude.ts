@@ -432,12 +432,16 @@ const MODEL_PACE_PRO_MS = parseInt(process.env.GEMINI_MODEL_PACE_PRO_MS || '700'
 const DEFAULT_MAX_OUTPUT_TOKENS = parseInt(process.env.DEFAULT_MAX_OUTPUT_TOKENS || '1000', 10);
 const DEFAULT_MAX_OUTPUT_TOKENS_DEVELOPER = parseInt(process.env.DEFAULT_MAX_OUTPUT_TOKENS_DEVELOPER || '2000', 10);
 const DISABLE_GEMINI_QUOTA_FUSE = process.env.DISABLE_GEMINI_QUOTA_FUSE === 'true';
-const GEMINI_QUOTA_FUSE_MS = parseInt(process.env.GEMINI_QUOTA_FUSE_MS || '3600000', 10);
+const GEMINI_QUOTA_FUSE_MS = parseInt(process.env.GEMINI_QUOTA_FUSE_MS || '300000', 10);
 let activeClaude = 0;
 const claudeQueue: Array<() => void> = [];
 const activeByModel = new Map<string, number>();
 const modelQueues = new Map<string, Array<() => void>>();
 const modelNextAllowedAt = new Map<string, number>();
+let rateLimitNotifyCallback: ((message: string) => void | Promise<void>) | null = null;
+let quotaFuseNotifyCallback: ((message: string) => void | Promise<void>) | null = null;
+let lastRateLimitNotificationAt = 0;
+let lastQuotaFuseNotificationAt = 0;
 
 /**
  * Global rate-limit gate — when ANY request gets 429'd, ALL requests
@@ -446,6 +450,23 @@ const modelNextAllowedAt = new Map<string, number>();
  */
 let rateLimitedUntil = 0;
 let creditsExhaustedUntil = 0;
+
+function formatRecoveryTime(timestamp: number): string {
+  return new Date(timestamp).toLocaleTimeString('en-AU', {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  });
+}
+
+export function setRateLimitNotifyCallback(callback: ((message: string) => void | Promise<void>) | null): void {
+  rateLimitNotifyCallback = callback;
+}
+
+export function setQuotaFuseNotifyCallback(callback: ((message: string) => void | Promise<void>) | null): void {
+  quotaFuseNotifyCallback = callback;
+}
 
 function isAbortError(err: any): boolean {
   const code = String(err?.code || '');
@@ -478,6 +499,12 @@ function triggerGeminiQuotaFuse(): void {
     return;
   }
   creditsExhaustedUntil = Date.now() + GEMINI_QUOTA_FUSE_MS;
+  if (quotaFuseNotifyCallback && Date.now() - lastQuotaFuseNotificationAt > 10_000) {
+    lastQuotaFuseNotificationAt = Date.now();
+    void quotaFuseNotifyCallback(
+      `⚠️ Gemini quota is exhausted. Automatic retries resume at ${formatRecoveryTime(creditsExhaustedUntil)}.`
+    );
+  }
 }
 
 async function waitForRateLimit(): Promise<void> {
@@ -485,6 +512,10 @@ async function waitForRateLimit(): Promise<void> {
   if (rateLimitedUntil > now) {
     const waitMs = rateLimitedUntil - now;
     console.warn(`Rate-limited: pausing all Claude requests for ${Math.ceil(waitMs / 1000)}s`);
+    if (rateLimitNotifyCallback && waitMs > 2000 && now - lastRateLimitNotificationAt > 10_000) {
+      lastRateLimitNotificationAt = now;
+      void rateLimitNotifyCallback(`⏳ Gemini API is busy — retrying in ${Math.ceil(waitMs / 1000)} seconds.`);
+    }
     await new Promise((r) => setTimeout(r, waitMs));
   }
 }
@@ -714,9 +745,10 @@ export async function agentRespond(
   let autoBudgetPassesUsed = 0;
 
   if (isCreditsExhaustedNow()) {
+    const recoveryTime = formatRecoveryTime(creditsExhaustedUntil);
     return agent.id === 'executive-assistant'
-      ? '⚠️ Gemini quota is exhausted right now. Pause the team and ask Jordan to check Google Cloud billing before more work continues.'
-      : '⚠️ Gemini quota is exhausted right now. Ask Riley to request Jordan approval for more credits before continuing.';
+      ? `⚠️ Gemini quota is exhausted right now. Automatic retries resume at ${recoveryTime}. Pause the team and ask Jordan to check Google Cloud billing before more work continues.`
+      : `⚠️ Gemini quota is exhausted right now. Automatic retries resume at ${recoveryTime}. Ask Riley to request Jordan approval for more credits before continuing.`;
   }
 
   // Hard budget gate — auto-extend when enabled, else stop.
@@ -870,10 +902,10 @@ TOKENS: ${tokenUsed.toLocaleString()} used / ${tokenLimit.toLocaleString()} dail
       return agent.id === 'executive-assistant'
         ? (DISABLE_GEMINI_QUOTA_FUSE
             ? '⚠️ Gemini rejected that request. The local quota pause is disabled, so the team can keep trying, but upstream Google limits may still reject individual requests.'
-            : '⚠️ Gemini quota is exhausted. Pause the team and ask Jordan to top up Google Cloud billing.')
+            : `⚠️ Gemini quota is exhausted. Automatic retries resume at ${formatRecoveryTime(creditsExhaustedUntil)}. Pause the team and ask Jordan to top up Google Cloud billing.`)
         : (DISABLE_GEMINI_QUOTA_FUSE
             ? '⚠️ Gemini rejected that request, but the local quota pause is disabled. Retry or continue with other work.'
-            : '⚠️ Gemini quota is exhausted right now. Ask Riley to request Jordan approval for more credits before continuing.');
+            : `⚠️ Gemini quota is exhausted right now. Automatic retries resume at ${formatRecoveryTime(creditsExhaustedUntil)}. Ask Riley to request Jordan approval for more credits before continuing.`);
     }
     throw err;
   }
