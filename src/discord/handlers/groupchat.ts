@@ -93,6 +93,13 @@ async function sendAutopilotAudit(
   ].filter(Boolean);
   const line = `AUTOPILOT_AUDIT ${bits.join(' ')}`;
 
+  // Keep audit trail in logs, but avoid posting noisy diagnostics in chat by default.
+  console.log(line);
+
+  if (process.env.AUTOPILOT_AUDIT_PUBLIC !== 'true') {
+    return;
+  }
+
   if (!riley) {
     await groupchat.send(line).catch(() => {});
     return;
