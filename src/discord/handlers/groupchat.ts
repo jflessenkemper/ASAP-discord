@@ -334,20 +334,31 @@ async function closeGoalWorkspace(
 }
 
 async function ensureGoalWorkspace(groupchat: TextChannel, senderName: string, content: string): Promise<WebhookCapableChannel> {
-  const existing = activeGoalThreadId ? groupchat.threads.cache.get(activeGoalThreadId) : null;
-  if (existing && !existing.archived) return existing;
+  if (activeGoalThreadId) {
+    const existing = groupchat.threads.cache.get(activeGoalThreadId)
+      || await groupchat.threads.fetch(activeGoalThreadId).catch(() => null);
+    if (existing && !existing.archived) return existing;
+    activeGoalThreadId = null;
+  }
 
+  const threadName = buildGoalThreadName(senderName, content);
   const thread = await groupchat.threads.create({
-    name: buildGoalThreadName(senderName, content),
+    name: threadName,
     autoArchiveDuration: ThreadAutoArchiveDuration.OneDay,
-    reason: 'ASAP goal workspace',
+    reason: `Goal workspace for ${senderName}`,
   });
+
   activeGoalThreadId = thread.id;
-  await sendWebhookMessage(thread, {
-    content: `Working thread for: ${content.slice(0, 400)}`,
-    username: '📋 Riley (Executive Assistant)',
-  }).catch(() => {});
-  await groupchat.send(`🧵 Created workspace thread for this request: <#${thread.id}>`).catch(() => {});
+
+  const riley = getAgent('executive-assistant' as AgentId);
+  if (riley) {
+    await sendWebhookMessage(thread, {
+      content: `🧵 Workspace created for: ${content.slice(0, 300)}`,
+      username: `${riley.emoji} ${riley.name}`,
+      avatarURL: riley.avatarUrl,
+    }).catch(() => {});
+  }
+
   return thread;
 }
 
@@ -636,11 +647,12 @@ async function handleRileyMessage(
 
   const riley = getAgent('executive-assistant' as AgentId);
   if (!riley) return;
+  const rileyWorkChannel = getAgentWorkChannel('executive-assistant', groupchat);
 
   let stopTyping: () => void = () => {};
   try {
-    stopTyping = startTypingLoop(workspaceChannel);
-    await setThinkingMessage(workspaceChannel, riley);
+    stopTyping = startTypingLoop(rileyWorkChannel);
+    await setThinkingMessage(rileyWorkChannel, riley);
 
     const rileyMemory = getMemoryContext('executive-assistant');
     const contextMessage = `[${senderName}]: ${userMessage}`;
@@ -668,7 +680,7 @@ async function handleRileyMessage(
     const contextMessageWithLang = `${textLangHint ? `${contextMessage}${textLangHint}` : contextMessage}${mentionGuide}${threadCloseGuide}`;
 
     const response = await agentRespond(riley, [...rileyMemory, ...groupHistory], contextMessageWithLang, async (_toolName, summary) => {
-      sendToolNotification(workspaceChannel, riley, summary).catch(() => {});
+      sendToolNotification(rileyWorkChannel, riley, summary).catch(() => {});
     }, { signal });
 
     if (signal?.aborted) return;
@@ -676,10 +688,7 @@ async function handleRileyMessage(
 
     // Strip action tags before displaying to user
     const displayResponse = response.replace(/\[ACTION:[^\]]+\]/g, '').trim();
-    if (displayResponse) {
-      await sendAgentMessage(workspaceChannel, riley, displayResponse);
-      markGoalProgress('🧭 Riley coordinating...');
-    }
+    markGoalProgress('🧭 Riley coordinating...');
 
     appendToMemory('executive-assistant', [
       { role: 'user', content: contextMessage },
@@ -696,7 +705,7 @@ async function handleRileyMessage(
     const implicitTags = inferImplicitActionTags(displayResponse);
     const actionPayload = implicitTags ? `${response}\n${implicitTags}` : response;
     if (implicitTags) {
-      await sendAgentMessage(workspaceChannel, riley, `Autopilot: executing implied actions.\n${implicitTags}`);
+      await sendAgentMessage(rileyWorkChannel, riley, `Autopilot: executing implied actions.\n${implicitTags}`);
       await sendAutopilotAudit(
         groupchat,
         'implied_actions',
@@ -719,6 +728,12 @@ async function handleRileyMessage(
 
     // Check if Riley directed Ace or other agents
     await handleAgentChain(response, groupchat, workspaceChannel, signal);
+
+    // Post final Riley summary in the workspace thread after delegated work completes.
+    if (!signal?.aborted && displayResponse) {
+      await sendAgentMessage(workspaceChannel, riley, displayResponse);
+    }
+
     markGoalProgress('✅ Riley cycle completed');
   } catch (err) {
     const abortLike = String((err as any)?.name || '').includes('Abort') || String((err as any)?.message || '').toLowerCase().includes('abort');
@@ -1047,7 +1062,7 @@ async function handleAgentChain(
     if (ace) {
       try {
         if (signal?.aborted) return;
-        const aceChannel = GROUPCHAT_SUMMARY_ONLY ? workspaceChannel : groupchat;
+        const aceChannel = getAgentWorkChannel('developer', groupchat);
         aceChannel.sendTyping().catch(() => {});
         const aceContext = `[Riley directed you]: ${rileyResponse}\n\nImplement what Riley asked. Use repo tools. If you need a sub-agent's help, use the exact Discord mentions from this guide: ${buildAgentMentionGuide(['security-auditor', 'api-reviewer', 'dba', 'performance', 'devops', 'copywriter', 'lawyer', 'qa', 'ux-reviewer', 'ios-engineer', 'android-engineer'])}. Report back concisely when done.`;
 
@@ -1155,7 +1170,7 @@ async function handleSubAgents(
         if (signal?.aborted) return;
         documentToChannel(id, `📥 Received task from groupchat. Working...`).catch(() => {});
         const agentContext = `[Directive from groupchat]: ${directiveContext}${priorContext}\n\nDo your job. Be concise in your response — max 200 words. Report what you found or did.`;
-        const outChannel = workspaceChannel;
+        const outChannel = getAgentWorkChannel(id, groupchat);
         const agentResponse = await dispatchToAgent(id as AgentId, agentContext, outChannel, {
           maxTokens: SUBAGENT_MAX_TOKENS,
           memoryWindow: 10,
@@ -1187,7 +1202,7 @@ async function handleSubAgents(
         const { agent } = tierAgents[i];
         errorLines.push(`${agent.name.split(' ')[0]}: error`);
         try {
-          const wh = await getWebhook(workspaceChannel);
+          const wh = await getWebhook(getAgentWorkChannel(tierAgents[i].id, groupchat));
           await wh.send({ content: `⚠️ ${agent.name.split(' ')[0]} had an error.`, username: `${agent.emoji} ${agent.name}`, avatarURL: agent.avatarUrl });
         } catch (webhookErr) {
           console.warn(`Webhook error notification failed for ${agent.name}:`, webhookErr instanceof Error ? webhookErr.message : 'Unknown');
@@ -1222,7 +1237,7 @@ async function handleDirectedMessage(
   const results = await runLimited(
     validAgents.map(({ id, agent }) => async () => {
       if (signal?.aborted) return;
-      const outChannel = workspaceChannel;
+      const outChannel = getAgentWorkChannel(id, groupchat);
       await dispatchToAgent(id as AgentId, contextMessage, outChannel, {
         maxTokens: SUBAGENT_MAX_TOKENS,
         memoryWindow: 10,
@@ -1241,7 +1256,7 @@ async function handleDirectedMessage(
       const { agent } = validAgents[i];
       console.error(`${agent.name} error:`, (results[i] as PromiseRejectedResult).reason);
       try {
-        const wh = await getWebhook(workspaceChannel);
+        const wh = await getWebhook(getAgentWorkChannel(validAgents[i].id, groupchat));
         await wh.send({ content: `⚠️ ${agent.name.split(' ')[0]} had an error.`, username: `${agent.emoji} ${agent.name}`, avatarURL: agent.avatarUrl });
       } catch (webhookErr) {
         console.warn(`Webhook error notification failed for ${agent.name}:`, webhookErr instanceof Error ? webhookErr.message : 'Unknown');
