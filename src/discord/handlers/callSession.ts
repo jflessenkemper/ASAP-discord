@@ -127,7 +127,7 @@ function findSpeechBoundaryIndex(text: string, start: number, force: boolean): n
     boundary = start + match.index + match[0].length;
   }
 
-  if (boundary < 0 && remaining.length >= VOICE_STREAM_FORCE_CHARS) {
+  if (force && boundary < 0 && remaining.length >= VOICE_STREAM_FORCE_CHARS) {
     const softRe = /[,;:](?:\s+|$)/g;
     while ((match = softRe.exec(remaining)) !== null) {
       boundary = start + match.index + match[0].length;
