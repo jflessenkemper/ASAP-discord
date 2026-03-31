@@ -2,6 +2,7 @@ import { ElevenLabsClient } from 'elevenlabs';
 import { recordElevenLabsUsage, isElevenLabsOverLimit } from '../usage';
 
 let client: ElevenLabsClient | null = null;
+const warmedVoicePhraseSets = new Set<string>();
 
 type CacheEntry = { buffer: Buffer; ts: number };
 const ttsCache = new Map<string, CacheEntry>();
@@ -152,6 +153,27 @@ export async function elevenLabsTTS(
   }
   recordElevenLabsUsage(text.length);
   return buffer;
+}
+
+export async function primeElevenLabsVoiceCache(
+  voiceName: string,
+  phrases: string[],
+  language?: string
+): Promise<void> {
+  if (!isElevenLabsAvailable()) return;
+  const normalizedPhrases = phrases.map((phrase) => phrase.trim()).filter((phrase) => phrase.length >= 2);
+  if (normalizedPhrases.length === 0) return;
+
+  const warmKey = `${voiceName}::${language || 'default'}::${normalizedPhrases.join('|')}`;
+  if (warmedVoicePhraseSets.has(warmKey)) return;
+  warmedVoicePhraseSets.add(warmKey);
+
+  await Promise.allSettled(
+    normalizedPhrases.map(async (phrase) => {
+      if (getCachedTts(phrase, voiceName)) return;
+      await elevenLabsTTS(phrase, voiceName, language);
+    })
+  );
 }
 
 /**

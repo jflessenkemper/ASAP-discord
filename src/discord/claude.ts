@@ -130,6 +130,11 @@ type ChatLike = {
   getHistory: () => Promise<Content[]>;
 };
 
+export interface ReusableAgentChatSession {
+  chat: ChatLike | null;
+  modelName: string | null;
+}
+
 type ModelLike = {
   startChat: (options: { history: Content[] }) => ChatLike;
   generateContent: (payload: string, requestOptions?: { signal?: AbortSignal }) => Promise<ModelResultLike>;
@@ -760,6 +765,7 @@ export async function agentRespond(
     rileyAutoToolApprovalUsed?: boolean;
     disableTools?: boolean;
     priority?: 'normal' | 'voice';
+    chatSession?: ReusableAgentChatSession;
   }
 ): Promise<string> {
   const cacheEligible = isCacheablePrompt(agent.id, userMessage, conversationHistory);
@@ -894,8 +900,9 @@ ${governanceSection}
 BUDGET: $${spent.toFixed(2)} spent / $${limit.toFixed(2)} daily limit ($${remaining.toFixed(2)} remaining). Each tool call costs tokens. Be efficient.${budgetWarning}
 TOKENS: ${tokenUsed.toLocaleString()} used / ${tokenLimit.toLocaleString()} daily limit (${tokenRemaining.toLocaleString()} remaining). If remaining is low, reduce tool calls and avoid broad scans.`;
 
-  // Convert conversation history to Gemini Content format
-  const trimmedHistory = trimConversationHistory(conversationHistory);
+  // Convert conversation history to Gemini Content format.
+  // Reused chat sessions already carry prior turns, so skip rebuilding history.
+  const trimmedHistory = options?.chatSession?.chat ? [] : trimConversationHistory(conversationHistory);
   const history: Content[] = trimmedHistory.map((msg) => ({
     role: msg.role === 'assistant' ? 'model' : 'user',
     parts: [{ text: normalizeHistoryContentForModel(msg.content) }],
@@ -903,7 +910,7 @@ TOKENS: ${tokenUsed.toLocaleString()} used / ${tokenLimit.toLocaleString()} dail
 
   const agentTools = options?.disableTools ? [] : toolsForAgent(agent.id);
   const geminiTools = toGeminiTools(agentTools);
-  let currentModelName = options?.modelOverride || modelForAgent(agent.id, userMessage);
+  let currentModelName = options?.modelOverride || options?.chatSession?.modelName || modelForAgent(agent.id, userMessage);
   let escalatedToPro = currentModelName === GEMINI_PRO;
 
   logAgentEvent(agent.id, 'invoke', `model=${currentModelName}, context=${trimmedHistory.length} msgs, prompt="${userMessage.slice(0, 200)}"`);
@@ -919,8 +926,12 @@ TOKENS: ${tokenUsed.toLocaleString()} used / ${tokenLimit.toLocaleString()} dail
     generationConfig: { maxOutputTokens: estimateMaxOutputTokens(agent.id, userMessage, options?.maxTokens) },
   });
 
-  let model = makeModel(currentModelName);
-  let chat = model.startChat({ history });
+  let model = options?.chatSession?.chat ? null : makeModel(currentModelName);
+  let chat = options?.chatSession?.chat || model!.startChat({ history });
+  if (options?.chatSession && !options.chatSession.chat) {
+    options.chatSession.chat = chat;
+    options.chatSession.modelName = currentModelName;
+  }
 
   // Send initial user message
   let response;
@@ -1078,6 +1089,10 @@ TOKENS: ${tokenUsed.toLocaleString()} used / ${tokenLimit.toLocaleString()} dail
       const accumulatedHistory = await chat.getHistory();
       model = makeModel(GEMINI_PRO);
       chat = model.startChat({ history: accumulatedHistory });
+      if (options?.chatSession) {
+        options.chatSession.chat = chat;
+        options.chatSession.modelName = currentModelName;
+      }
     }
 
     // Send tool results back

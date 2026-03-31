@@ -1,8 +1,9 @@
 import { TextChannel, VoiceChannel, GuildMember } from 'discord.js';
 import { VoiceConnectionStatus } from '@discordjs/voice';
 import { getAgent, AgentId } from '../agents';
-import { agentRespond, ConversationMessage, summarizeCall } from '../claude';
+import { agentRespond, ConversationMessage, summarizeCall, ReusableAgentChatSession } from '../claude';
 import { textToSpeech } from '../voice/tts';
+import { primeElevenLabsVoiceCache } from '../voice/elevenlabs';
 import { joinVC, leaveVC, speakInVC, speakInVCWithOptions, stopVCPlayback, listenToAllMembersSmart, getConnection, VoiceTranscription } from '../voice/connection';
 import { appendToMemory, getMemoryContext } from '../memory';
 import { documentToChannel } from './documentation';
@@ -32,6 +33,7 @@ const VOICE_DUPLICATE_WINDOW_MS = parseInt(process.env.VOICE_DUPLICATE_WINDOW_MS
 const VOICE_STAGE_LOGS_ENABLED = process.env.VOICE_STAGE_LOGS_ENABLED !== 'false';
 const VOICE_HISTORY_MAX_MESSAGES = parseInt(process.env.VOICE_HISTORY_MAX_MESSAGES || '16', 10);
 const VOICE_MEMORY_MAX_MESSAGES = parseInt(process.env.VOICE_MEMORY_MAX_MESSAGES || '10', 10);
+const RILEY_WARM_PHRASES = ['One moment.', 'Let me check.', 'I am on it.', 'Here is what I found.', 'Done.'];
 
 let voiceErrorChannel: TextChannel | null = null;
 
@@ -89,7 +91,13 @@ function splitSentences(text: string): string[] {
  * Pipeline TTS + playback: while sentence N plays, sentence N+1's TTS generates.
  * Falls back to full-buffer TTS if only one sentence.
  */
-async function speakPipelined(text: string, voice: string, signal?: AbortSignal, language?: string): Promise<void> {
+async function speakPipelined(
+  text: string,
+  voice: string,
+  signal?: AbortSignal,
+  language?: string,
+  onPlaybackStart?: () => void
+): Promise<void> {
   const sentences = splitSentences(text.slice(0, 500));
   if (sentences.length === 0) return;
 
@@ -97,7 +105,7 @@ async function speakPipelined(text: string, voice: string, signal?: AbortSignal,
     if (signal?.aborted) return;
     const audio = await textToSpeech(sentences[0], voice, language);
     if (signal?.aborted) return;
-    if (activeSession?.active && audio) await speakInVCWithOptions(audio, { signal });
+    if (activeSession?.active && audio) await speakInVCWithOptions(audio, { signal, onPlaybackStart });
     return;
   }
 
@@ -114,7 +122,7 @@ async function speakPipelined(text: string, voice: string, signal?: AbortSignal,
       nextTts = textToSpeech(sentences[i + 1], voice, language);
     }
 
-    await speakInVCWithOptions(audio, { signal });
+    await speakInVCWithOptions(audio, { signal, onPlaybackStart });
   }
 }
 
@@ -177,7 +185,8 @@ function createLiveSpeechStreamer(
   signal: AbortSignal,
   isCurrentTurn: () => boolean,
   turnId: number,
-  language?: string
+  language?: string,
+  onPlaybackStart?: () => void
 ): {
   onPartialText: (partialText: string) => Promise<void>;
   finalize: (finalText: string) => Promise<boolean>;
@@ -206,7 +215,7 @@ function createLiveSpeechStreamer(
           activeSession.outputStartedAt = Date.now();
         }
         spokeAny = true;
-        await speakPipelined(toSpeak, voice, signal, language);
+        await speakPipelined(toSpeak, voice, signal, language, onPlaybackStart);
       })
       .catch(() => {
         // Best-effort: interruption/cleanup paths can cancel queued speech.
@@ -251,6 +260,7 @@ export interface CallSession {
   startTime: Date;
   transcript: string[];
   conversationHistory: ConversationMessage[];
+  rileyChatSession: ReusableAgentChatSession;
   unsubscribers: Array<() => void>;
   voiceChannel: VoiceChannel;
   groupchat: TextChannel;
@@ -357,6 +367,7 @@ export async function startCall(
     startTime: new Date(),
     transcript: [],
     conversationHistory: [],
+    rileyChatSession: { chat: null, modelName: null },
     unsubscribers: [],
     voiceChannel,
     groupchat,
@@ -474,17 +485,27 @@ export async function startCall(
   }
 
   await postVoiceStageLog('call_started', `channel=${voiceChannel.name} total_startup_ms=${Date.now() - callStartMs}`);
+  if (riley) {
+    primeElevenLabsVoiceCache(riley.voice, RILEY_WARM_PHRASES).catch(() => {});
+  }
   // Listen to ALL members using best available STT (Deepgram real-time or Gemini batch)
-  const unsub = listenToAllMembersSmart(connection, voiceChannel, (transcription) => {
-    if (!activeSession?.active) return;
-    // Do not serialize turns through a single queue. New input should preempt
-    // old work immediately (handleVoiceInput aborts any in-flight turn first).
-    void handleVoiceInput(transcription).catch((err) => {
-      if (!isAbortLikeError(err)) {
-        console.error('Voice processing error:', err instanceof Error ? err.message : 'Unknown');
-      }
-    });
-  });
+  const unsub = listenToAllMembersSmart(
+    connection,
+    voiceChannel,
+    (transcription) => {
+      if (!activeSession?.active) return;
+      // Do not serialize turns through a single queue. New input should preempt
+      // old work immediately (handleVoiceInput aborts any in-flight turn first).
+      void handleVoiceInput(transcription).catch((err) => {
+        if (!isAbortLikeError(err)) {
+          console.error('Voice processing error:', err instanceof Error ? err.message : 'Unknown');
+        }
+      });
+    },
+    (member) => {
+      void postVoiceStageLog('speech_detected', `user=${member.displayName}`);
+    }
+  );
   activeSession.unsubscribers.push(unsub);
 
   const onSpeakingStart = (userId: string) => {
@@ -615,9 +636,12 @@ async function handleVoiceInput(transcription: VoiceTranscription): Promise<void
     activeSession.currentTurnId === turnId &&
     !signal.aborted;
 
+  let firstTokenLogged = false;
+  let firstAudioLogged = false;
+
   try {
     await postVoiceStageLog(
-      'stt_received',
+      'stt_final',
       `turn=${turnId} user=${transcription.username} provider=${transcription.sttProvider || 'unknown'} stt_ms=${transcription.sttLatencyMs ?? -1} chars=${userText.length}`
     );
 
@@ -659,7 +683,18 @@ IMPORTANT: Only you speak in voice. If you direct Ace or any other agent, they r
 Keep your spoken response very brief (normally 1-3 short sentences) — you're in a voice call, not a text chat.
 IMPORTANT: End on a complete sentence, never a fragment.${langHint}`;
 
-      const rileyStreamer = createLiveSpeechStreamer(riley.voice, signal, isCurrentTurn, turnId, transcription.language);
+      const rileyStreamer = createLiveSpeechStreamer(
+        riley.voice,
+        signal,
+        isCurrentTurn,
+        turnId,
+        transcription.language,
+        () => {
+          if (firstAudioLogged) return;
+          firstAudioLogged = true;
+          void postVoiceStageLog('riley_first_audio', `turn=${turnId} audio_ms=${Date.now() - turnStartMs}`);
+        }
+      );
 
       const rileyLlmStartMs = Date.now();
       const responseRaw = await agentRespond(
@@ -672,7 +707,12 @@ IMPORTANT: End on a complete sentence, never a fragment.${langHint}`;
           maxTokens: VOICE_MAX_TOKENS_RILEY,
           disableTools: true,
           priority: 'voice',
+          chatSession: session.rileyChatSession,
           onPartialText: async (partialText) => {
+            if (!firstTokenLogged && partialText.trim()) {
+              firstTokenLogged = true;
+              await postVoiceStageLog('riley_first_token', `turn=${turnId} token_ms=${Date.now() - turnStartMs}`);
+            }
             await rileyStreamer.onPartialText(partialText);
           },
         }
@@ -709,7 +749,17 @@ IMPORTANT: End on a complete sentence, never a fragment.${langHint}`;
         const rileyTtsStartMs = Date.now();
         const rileySpoke = await rileyStreamer.finalize(response);
         if (!rileySpoke && isCurrentTurn() && !signal.aborted) {
-          await speakPipelined(response, riley.voice, signal, transcription.language);
+          await speakPipelined(
+            response,
+            riley.voice,
+            signal,
+            transcription.language,
+            () => {
+              if (firstAudioLogged) return;
+              firstAudioLogged = true;
+              void postVoiceStageLog('riley_first_audio', `turn=${turnId} audio_ms=${Date.now() - turnStartMs}`);
+            }
+          );
         }
         await postVoiceStageLog('riley_tts', `turn=${turnId} tts_play_ms=${Date.now() - rileyTtsStartMs}`);
       } catch (ttsErr) {

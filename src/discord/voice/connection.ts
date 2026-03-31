@@ -78,7 +78,7 @@ export async function speakInVC(audioBuffer: Buffer): Promise<void> {
 
 export async function speakInVCWithOptions(
   audioBuffer: Buffer,
-  options?: { signal?: AbortSignal }
+  options?: { signal?: AbortSignal; onPlaybackStart?: () => void }
 ): Promise<void> {
   if (!currentConnection || !audioPlayer) {
     throw new Error('Not connected to a voice channel');
@@ -105,6 +105,7 @@ export async function speakInVCWithOptions(
     const onPlaying = () => {
       sawPlaying = true;
       console.log('VC playback: started');
+      options?.onPlaybackStart?.();
     };
     const onIdle = () => {
       // Ignore idle transitions before playback actually starts.
@@ -221,7 +222,8 @@ function createOpusDecoder(): Transform {
 export function listenToUser(
   connection: VoiceConnection,
   member: GuildMember,
-  onTranscription: (transcription: VoiceTranscription) => void
+  onTranscription: (transcription: VoiceTranscription) => void,
+  onSpeechStart?: (member: GuildMember) => void
 ): () => void {
   let destroyed = false;
   let resubscribeCount = 0;
@@ -252,10 +254,15 @@ export function listenToUser(
     const chunks: Buffer[] = [];
     let totalSize = 0;
     let utteranceStartAt: number | null = null;
+    let speechStartNotified = false;
 
     decoder.on('data', (chunk: Buffer) => {
       if (utteranceStartAt === null) {
         utteranceStartAt = Date.now();
+      }
+      if (!speechStartNotified) {
+        speechStartNotified = true;
+        onSpeechStart?.(member);
       }
       totalSize += chunk.length;
       if (totalSize <= MAX_AUDIO_BUFFER) {
@@ -324,7 +331,8 @@ export function listenToUser(
 export function listenToAllMembers(
   connection: VoiceConnection,
   voiceChannel: VoiceBasedChannel,
-  onTranscription: (transcription: VoiceTranscription) => void
+  onTranscription: (transcription: VoiceTranscription) => void,
+  onSpeechStart?: (member: GuildMember) => void
 ): () => void {
   const unsubscribers: Array<() => void> = [];
   const listeningUserIds = new Set<string>();
@@ -334,7 +342,7 @@ export function listenToAllMembers(
   for (const [, member] of voiceChannel.members) {
     if (member.user.bot) continue;
     listeningUserIds.add(member.id);
-    const unsub = listenToUser(connection, member, onTranscription);
+    const unsub = listenToUser(connection, member, onTranscription, onSpeechStart);
     unsubscribers.push(unsub);
   }
 
@@ -344,7 +352,7 @@ export function listenToAllMembers(
     const member = voiceChannel.members.get(userId);
     if (!member || member.user.bot) return;
     listeningUserIds.add(userId);
-    const unsub = listenToUser(connection, member, onTranscription);
+    const unsub = listenToUser(connection, member, onTranscription, onSpeechStart);
     unsubscribers.push(unsub);
   };
   connection.receiver.speaking.on('start', onSpeaking);
@@ -369,7 +377,8 @@ export function listenToAllMembers(
 export function listenToUserDeepgram(
   connection: VoiceConnection,
   member: GuildMember,
-  onTranscription: (transcription: VoiceTranscription) => void
+  onTranscription: (transcription: VoiceTranscription) => void,
+  onSpeechStart?: (member: GuildMember) => void
 ): () => void {
   let destroyed = false;
   let dgSession: DeepgramLiveSession | null = null;
@@ -493,9 +502,15 @@ export function listenToUserDeepgram(
         currentDecoder = decoder;
         subscription.pipe(decoder);
 
+        let speechStartNotified = false;
+
         decoder.on('data', (chunk: Buffer) => {
           if (utteranceStartAt === null) {
             utteranceStartAt = Date.now();
+          }
+          if (!speechStartNotified) {
+            speechStartNotified = true;
+            onSpeechStart?.(member);
           }
           if (!destroyed && dgSession) {
             dgSession.send(chunk);
@@ -570,17 +585,18 @@ export function listenToUserDeepgram(
 export function listenToAllMembersSmart(
   connection: VoiceConnection,
   voiceChannel: VoiceBasedChannel,
-  onTranscription: (transcription: VoiceTranscription) => void
+  onTranscription: (transcription: VoiceTranscription) => void,
+  onSpeechStart?: (member: GuildMember) => void
 ): () => void {
   // Use Deepgram if available for real-time streaming
   if (isDeepgramAvailable()) {
     console.log('Using Deepgram real-time STT for voice transcription');
-    return listenToAllMembersDeepgram(connection, voiceChannel, onTranscription);
+    return listenToAllMembersDeepgram(connection, voiceChannel, onTranscription, onSpeechStart);
   }
 
   // Fall back to batch Gemini transcription
   console.log('Using Gemini batch STT for voice transcription (Deepgram not configured)');
-  return listenToAllMembers(connection, voiceChannel, onTranscription);
+  return listenToAllMembers(connection, voiceChannel, onTranscription, onSpeechStart);
 }
 
 /**
@@ -589,7 +605,8 @@ export function listenToAllMembersSmart(
 function listenToAllMembersDeepgram(
   connection: VoiceConnection,
   voiceChannel: VoiceBasedChannel,
-  onTranscription: (transcription: VoiceTranscription) => void
+  onTranscription: (transcription: VoiceTranscription) => void,
+  onSpeechStart?: (member: GuildMember) => void
 ): () => void {
   const unsubscribers: Array<() => void> = [];
   const listeningUserIds = new Set<string>();
@@ -598,7 +615,7 @@ function listenToAllMembersDeepgram(
   for (const [, member] of voiceChannel.members) {
     if (member.user.bot) continue;
     listeningUserIds.add(member.id);
-    const unsub = listenToUserDeepgram(connection, member, onTranscription);
+    const unsub = listenToUserDeepgram(connection, member, onTranscription, onSpeechStart);
     unsubscribers.push(unsub);
   }
 
@@ -607,7 +624,7 @@ function listenToAllMembersDeepgram(
     const member = voiceChannel.members.get(userId);
     if (!member || member.user.bot) return;
     listeningUserIds.add(userId);
-    const unsub = listenToUserDeepgram(connection, member, onTranscription);
+    const unsub = listenToUserDeepgram(connection, member, onTranscription, onSpeechStart);
     unsubscribers.push(unsub);
   };
   connection.receiver.speaking.on('start', onSpeaking);
