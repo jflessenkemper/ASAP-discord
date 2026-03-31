@@ -54,13 +54,14 @@ export async function transcribeVoice(audioBuffer: Buffer): Promise<string> {
  */
 export async function textToSpeech(
   text: string,
-  voiceName: string = 'Kore'
+  voiceName: string = 'Kore',
+  language?: string
 ): Promise<Buffer> {
   const startedAt = Date.now();
   // Prefer ElevenLabs for significantly lower latency
   if (isElevenLabsAvailable()) {
     try {
-      const audio = await elevenLabsTTS(text, voiceName);
+      const audio = await elevenLabsTTS(text, voiceName, language);
       recordTtsLatency('elevenlabs', Date.now() - startedAt);
       return audio;
     } catch (err) {
@@ -102,6 +103,7 @@ async function geminiTTS(text: string, voiceName: string): Promise<Buffer> {
       body: JSON.stringify({
         contents: [
           {
+            role: 'user',
             parts: [{ text }],
           },
         ],

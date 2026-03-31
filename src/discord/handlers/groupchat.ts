@@ -531,8 +531,14 @@ async function handleRileyMessage(
 
     const rileyMemory = getMemoryContext('executive-assistant');
     const contextMessage = `[${senderName}]: ${userMessage}`;
+    // Inject language hint when Mandarin Chinese characters are detected (not persisted to history)
+    const cjkPattern = /[\u4e00-\u9fff\u3400-\u4dbf]/;
+    const textLangHint = cjkPattern.test(userMessage)
+      ? '\n\n[Language detected: Mandarin Chinese. Please reply in Mandarin Chinese (简体中文).]'
+      : '';
+    const contextMessageWithLang = textLangHint ? `${contextMessage}${textLangHint}` : contextMessage;
 
-    const response = await agentRespond(riley, [...rileyMemory, ...groupHistory], contextMessage, async (_toolName, summary) => {
+    const response = await agentRespond(riley, [...rileyMemory, ...groupHistory], contextMessageWithLang, async (_toolName, summary) => {
       sendToolNotification(groupchat, riley, summary).catch(() => {});
     }, { signal });
 

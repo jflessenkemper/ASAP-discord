@@ -73,20 +73,20 @@ function splitSentences(text: string): string[] {
  * Pipeline TTS + playback: while sentence N plays, sentence N+1's TTS generates.
  * Falls back to full-buffer TTS if only one sentence.
  */
-async function speakPipelined(text: string, voice: string, signal?: AbortSignal): Promise<void> {
+async function speakPipelined(text: string, voice: string, signal?: AbortSignal, language?: string): Promise<void> {
   const sentences = splitSentences(text.slice(0, 500));
   if (sentences.length === 0) return;
 
   if (sentences.length === 1) {
     if (signal?.aborted) return;
-    const audio = await textToSpeech(sentences[0], voice);
+    const audio = await textToSpeech(sentences[0], voice, language);
     if (signal?.aborted) return;
     if (activeSession?.active && audio) await speakInVCWithOptions(audio, { signal });
     return;
   }
 
   // Start TTS for first sentence
-  let nextTts: Promise<Buffer> = textToSpeech(sentences[0], voice);
+  let nextTts: Promise<Buffer> = textToSpeech(sentences[0], voice, language);
 
   for (let i = 0; i < sentences.length; i++) {
     if (signal?.aborted) break;
@@ -95,7 +95,7 @@ async function speakPipelined(text: string, voice: string, signal?: AbortSignal)
 
     // Prefetch next sentence's TTS while this one plays
     if (i + 1 < sentences.length) {
-      nextTts = textToSpeech(sentences[i + 1], voice);
+      nextTts = textToSpeech(sentences[i + 1], voice, language);
     }
 
     await speakInVCWithOptions(audio, { signal });
@@ -137,7 +137,8 @@ function createLiveSpeechStreamer(
   voice: string,
   signal: AbortSignal,
   isCurrentTurn: () => boolean,
-  turnId: number
+  turnId: number,
+  language?: string
 ): {
   onPartialText: (partialText: string) => Promise<void>;
   finalize: (finalText: string) => Promise<boolean>;
@@ -171,7 +172,7 @@ function createLiveSpeechStreamer(
           activeSession.outputStartedAt = Date.now();
         }
         spokeAny = true;
-        await speakPipelined(toSpeak, voice, signal);
+        await speakPipelined(toSpeak, voice, signal, language);
       })
       .catch(() => {
         // Best-effort: interruption/cleanup paths can cancel queued speech.
@@ -394,12 +395,15 @@ export async function startCall(
       detail: `Channel=${voiceChannel.name} Initiator=${initiator.displayName}`,
     });
 
+    const sttNote = isDeepgramAvailable()
+      ? ''
+      : '\n⚠️ Real-time STT unavailable (Deepgram not configured) — using Gemini batch mode (~1-2s latency).';
     await sendAsAgent(
       groupchat,
       `✅ **Voice call started**\n` +
         `Initiated by **${initiator.displayName}**\n` +
         `${riley?.emoji || '📋'} **Riley** is on the line and listening now.\n\n` +
-        `Speak in **${voiceChannel.name}**. Say "leave" or ask Riley to end the call.`
+        `Speak in **${voiceChannel.name}**. Say "leave" or ask Riley to end the call.${sttNote}`
     );
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'Unknown error';
@@ -600,7 +604,7 @@ IMPORTANT: Only you speak in voice. If you direct Ace or any other agent, they r
 
 Keep your spoken response very brief (normally 1-3 short sentences) — you're in a voice call, not a text chat.${langHint}`;
 
-      const rileyStreamer = createLiveSpeechStreamer(riley.voice, signal, isCurrentTurn, turnId);
+      const rileyStreamer = createLiveSpeechStreamer(riley.voice, signal, isCurrentTurn, turnId, transcription.language);
 
       const response = await agentRespond(
         riley,
@@ -640,7 +644,7 @@ Keep your spoken response very brief (normally 1-3 short sentences) — you're i
       try {
         const rileySpoke = await rileyStreamer.finalize(response);
         if (!rileySpoke && isCurrentTurn() && !signal.aborted) {
-          await speakPipelined(response, riley.voice, signal);
+          await speakPipelined(response, riley.voice, signal, transcription.language);
         }
       } catch (ttsErr) {
         if (!isCurrentTurn()) return;

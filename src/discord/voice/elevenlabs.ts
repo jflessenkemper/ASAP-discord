@@ -93,12 +93,26 @@ const VOICE_ID_MAP: Record<string, string> = {
 const DEFAULT_VOICE_ID = '1u9fzC9CaZV94lApNwFM'; // ASAPCommander
 
 /**
+ * Select the ElevenLabs model based on the target language.
+ * eleven_turbo_v2_5 is optimised for English speed (~200ms TTFB, 32 languages).
+ * eleven_multilingual_v2 provides higher quality for non-English output.
+ */
+function resolveElevenLabsModel(language?: string): string {
+  if (!language || language === 'en' || language.startsWith('en-')) {
+    return 'eleven_turbo_v2_5';
+  }
+  return 'eleven_multilingual_v2';
+}
+
+/**
  * Generate speech with ElevenLabs — returns complete audio buffer.
- * Uses the Turbo v2.5 model for lowest latency (~200ms TTFB).
+ * Uses the Turbo v2.5 model for lowest latency (~200ms TTFB) for English,
+ * and eleven_multilingual_v2 for non-English languages.
  */
 export async function elevenLabsTTS(
   text: string,
-  voiceName: string = 'Achernar'
+  voiceName: string = 'Achernar',
+  language?: string
 ): Promise<Buffer> {
   if (!text || text.trim().length < 2) return Buffer.alloc(0);
   if (isElevenLabsOverLimit()) {
@@ -116,7 +130,7 @@ export async function elevenLabsTTS(
 
   const audio = await el.textToSpeech.convert(voiceId, {
     text,
-    model_id: 'eleven_turbo_v2_5',
+    model_id: resolveElevenLabsModel(language),
     output_format: 'mp3_44100_128',
     voice_settings: {
       stability: 0.5,
@@ -147,7 +161,8 @@ export async function elevenLabsTTS(
  */
 export async function* elevenLabsTTSStream(
   text: string,
-  voiceName: string = 'Achernar'
+  voiceName: string = 'Achernar',
+  language?: string
 ): AsyncGenerator<Buffer> {
   if (!text || text.trim().length < 2) return;
   if (isElevenLabsOverLimit()) {
@@ -159,7 +174,7 @@ export async function* elevenLabsTTSStream(
 
   const audio = await el.textToSpeech.convert(voiceId, {
     text,
-    model_id: 'eleven_turbo_v2_5',
+    model_id: resolveElevenLabsModel(language),
     output_format: 'mp3_44100_128',
     voice_settings: {
       stability: 0.5,

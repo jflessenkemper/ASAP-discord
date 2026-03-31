@@ -1,5 +1,4 @@
 import { createClient, LiveTranscriptionEvents, LiveClient } from '@deepgram/sdk';
-import { recordGeminiUsage } from '../usage';
 
 let deepgramClient: ReturnType<typeof createClient> | null = null;
 
@@ -51,7 +50,6 @@ export async function startLiveTranscription(
     const transcript = data?.channel?.alternatives?.[0]?.transcript;
     const detectedLang = data?.channel?.alternatives?.[0]?.languages?.[0] || data?.metadata?.language;
     if (transcript && data.is_final) {
-      recordGeminiUsage(); // Reuse gemini counter for simplicity
       onTranscript(transcript, detectedLang);
     }
   });

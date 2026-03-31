@@ -119,6 +119,12 @@ async function handleAgentMessageInner(
 
   try {
     const maxTokens = estimateTextMaxTokens(agent, userMessage);
+    // Inject language hint when Mandarin Chinese characters are detected (not persisted to history)
+    const cjkPattern = /[\u4e00-\u9fff\u3400-\u4dbf]/;
+    const textLangHint = cjkPattern.test(userMessage)
+      ? '\n\n[Language detected: Mandarin Chinese. Please reply in Mandarin Chinese (简体中文).]'
+      : '';
+    const userMessageWithLang = textLangHint ? `${userMessage}${textLangHint}` : userMessage;
     let streamedPreviewShown = false;
     let lastStreamEditAt = 0;
     let lastRenderedLength = 0;
@@ -139,7 +145,7 @@ async function handleAgentMessageInner(
       lastRenderedLength = clipped.length;
     };
 
-    const response = await agentRespond(agent, history, userMessage, async (toolName, summary) => {
+    const response = await agentRespond(agent, history, userMessageWithLang, async (toolName, summary) => {
       if (signal?.aborted) return;
       try {
         const wh = await getWebhook(channel);
