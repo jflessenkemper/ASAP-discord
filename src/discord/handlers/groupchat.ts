@@ -120,9 +120,10 @@ function ensureClaudeNotifications(groupchat: TextChannel): void {
   const sendSystemNotice = (content: string) => {
     const riley = getAgent('executive-assistant' as AgentId);
     const send = async () => {
+      const targetChannel = getAgentWorkChannel('executive-assistant', groupchat);
       if (riley) {
         try {
-          const wh = await getWebhook(groupchat);
+          const wh = await getWebhook(targetChannel);
           await wh.send({
             content,
             username: `${riley.emoji} ${riley.name}`,
@@ -133,7 +134,7 @@ function ensureClaudeNotifications(groupchat: TextChannel): void {
           // fall through
         }
       }
-      await groupchat.send(content).catch(() => {});
+      await targetChannel.send(content).catch(() => {});
     };
 
     void send();
@@ -757,7 +758,8 @@ async function handleRileyMessage(
         avatarURL: riley.avatarUrl,
       });
     } catch {
-      await groupchat.send(`⚠️ Riley encountered an error:\n\`\`\`${short}\`\`\``);
+      const fallback = ('send' in workspaceChannel) ? workspaceChannel : rileyWorkChannel;
+      await fallback.send(`⚠️ Riley encountered an error:\n\`\`\`${short}\`\`\``).catch(() => {});
     }
   } finally {
     await clearThinkingMessage().catch(() => {});
@@ -796,7 +798,8 @@ async function executeActions(
       await workspaceChannel.send(msg).catch(() => {});
       return;
     }
-    await groupchat.send(msg).catch(() => {});
+    const rileyChannel = getAgentWorkChannel('executive-assistant', groupchat);
+    await rileyChannel.send(msg).catch(() => {});
   }
 
   for (const [, action, param] of actions) {
