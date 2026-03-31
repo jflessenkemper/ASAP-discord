@@ -1030,6 +1030,7 @@ const DIRECTED_AGENT_IDS = new Set<string>([
 ]);
 
 const RILEY_USE_ALL_AGENTS = process.env.RILEY_USE_ALL_AGENTS !== 'false';
+const RILEY_ACE_ERROR_RECOVERY = process.env.RILEY_ACE_ERROR_RECOVERY !== 'false';
 
 function parseDirectives(text: string): string[] {
   return parseMentionedAgentIds(text, DIRECTED_AGENT_IDS);
@@ -1040,6 +1041,73 @@ function shouldFanOutAllAgents(rileyResponse: string): boolean {
   if (text.includes('no action needed') || text.includes('for awareness only')) return false;
   if (/(only|just)\s+@(ace|max|sophie|kane|raj|elena|kai|jude|liv|harper|mia|leo)\b/i.test(rileyResponse)) return false;
   return true;
+}
+
+async function recoverFromAgentErrors(
+  rileyResponse: string,
+  errorLines: string[],
+  groupchat: TextChannel,
+  workspaceChannel: WebhookCapableChannel,
+  signal?: AbortSignal
+): Promise<{ findings: string[]; errors: string[] }> {
+  const ace = getAgent('developer' as AgentId);
+  if (!ace) return { findings: [], errors: ['Ace: unavailable for recovery'] };
+
+  try {
+    if (signal?.aborted) return { findings: [], errors: [] };
+    markGoalProgress('🧯 Ace recovering agent errors...');
+    const aceChannel = getAgentWorkChannel('developer', groupchat);
+    aceChannel.sendTyping().catch(() => {});
+
+    const recoveryContext = [
+      '[System escalation from Riley]: One or more specialist agents errored during execution.',
+      '',
+      'Original Riley plan:',
+      rileyResponse,
+      '',
+      'Reported errors:',
+      ...errorLines.map((line) => `- ${line}`),
+      '',
+      'Your task:',
+      '1) Diagnose likely root cause(s).',
+      '2) Apply repo/tool fixes when possible.',
+      '3) Re-run or re-coordinate only the needed specialists using explicit @mentions from this guide:',
+      buildAgentMentionGuide(['security-auditor', 'api-reviewer', 'dba', 'performance', 'devops', 'copywriter', 'lawyer', 'qa', 'ux-reviewer', 'ios-engineer', 'android-engineer']),
+      '4) End with a short status: fixed, partially fixed, or blocked.',
+    ].join('\n');
+
+    const aceRecovery = await dispatchToAgent('developer', recoveryContext, aceChannel, {
+      signal,
+      maxTokens: Math.max(SUBAGENT_MAX_TOKENS, 2200),
+      persistUserContent: `[Riley recovery escalation]: ${errorLines.join('; ').slice(0, 1200)}`,
+      documentLine: '🧯 {response}',
+    });
+
+    if (signal?.aborted) return { findings: [], errors: [] };
+
+    const findings: string[] = [];
+    if (aceRecovery.trim()) {
+      findings.push(`[Ace]: ${aceRecovery.slice(0, 500)}`);
+    }
+
+    const recoverySubDirectives = parseDirectives(aceRecovery);
+    if (recoverySubDirectives.length > 0) {
+      const delegated = await handleSubAgents(recoverySubDirectives, aceRecovery, groupchat, workspaceChannel, signal);
+      findings.push(...delegated.findings);
+      return { findings, errors: delegated.errors };
+    }
+
+    return { findings, errors: [] };
+  } catch (err) {
+    console.error('Ace recovery error:', err instanceof Error ? err.message : 'Unknown');
+    try {
+      const wh = await getWebhook(workspaceChannel);
+      await wh.send({ content: '⚠️ Ace had an error while recovering specialist failures.', username: `${ace.emoji} ${ace.name}`, avatarURL: ace.avatarUrl });
+    } catch {
+      // best effort only
+    }
+    return { findings: [], errors: ['Ace: recovery error'] };
+  }
 }
 
 /**
@@ -1106,6 +1174,12 @@ async function handleAgentChain(
     const direct = await handleSubAgents(otherDirected, rileyResponse, groupchat, workspaceChannel, signal);
     consolidatedFindings.push(...direct.findings);
     consolidatedErrors.push(...direct.errors);
+  }
+
+  if (RILEY_ACE_ERROR_RECOVERY && !signal?.aborted && consolidatedErrors.length > 0) {
+    const recovered = await recoverFromAgentErrors(rileyResponse, consolidatedErrors, groupchat, workspaceChannel, signal);
+    consolidatedFindings.push(...recovered.findings);
+    consolidatedErrors.push(...recovered.errors);
   }
 
   if (GROUPCHAT_SUMMARY_ONLY && !signal?.aborted && (consolidatedFindings.length > 0 || consolidatedErrors.length > 0)) {
