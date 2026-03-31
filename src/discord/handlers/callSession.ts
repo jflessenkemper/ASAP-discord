@@ -21,7 +21,7 @@ const VOICE_DISCONNECT_GRACE_MS = 45 * 1000;
 /** Max conversation history in a call */
 const MAX_CALL_HISTORY = 40;
 const VOICE_PREFLIGHT_TIMEOUT_MS = parseInt(process.env.VOICE_PREFLIGHT_TIMEOUT_MS || '15000', 10);
-const VOICE_MAX_TOKENS_RILEY = parseInt(process.env.VOICE_MAX_TOKENS_RILEY || '220', 10);
+const VOICE_MAX_TOKENS_RILEY = parseInt(process.env.VOICE_MAX_TOKENS_RILEY || '320', 10);
 const VOICE_MAX_TOKENS_ACE = parseInt(process.env.VOICE_MAX_TOKENS_ACE || '260', 10);
 const VOICE_MAX_TOKENS_SPECIALIST = parseInt(process.env.VOICE_MAX_TOKENS_SPECIALIST || '220', 10);
 const VOICE_STREAM_PARTIAL_MIN_CHARS = parseInt(process.env.VOICE_STREAM_PARTIAL_MIN_CHARS || '24', 10);
@@ -145,6 +145,29 @@ function findSpeechBoundaryIndex(text: string, start: number, force: boolean): n
   }
 
   return boundary < 0 ? start : Math.min(text.length, boundary);
+}
+
+function finalizeSpokenResponse(raw: string): string {
+  const text = (raw || '').trim();
+  if (!text) return text;
+
+  const hasTerminalPunctuation = /[.!?)]\s*$/.test(text);
+  if (hasTerminalPunctuation) return text;
+
+  let lastBoundary = -1;
+  const re = /[.!?]+(?:\s+|$)/g;
+  let match: RegExpExecArray | null;
+  while ((match = re.exec(text)) !== null) {
+    lastBoundary = match.index + match[0].length;
+  }
+
+  // If the model produced a partial ending, keep only completed sentences.
+  if (lastBoundary >= 20) {
+    return text.slice(0, lastBoundary).trim();
+  }
+
+  // Single-clause fallback: preserve meaning but avoid abrupt cut-off delivery.
+  return `${text}.`;
 }
 
 function createLiveSpeechStreamer(
@@ -638,12 +661,13 @@ IMPORTANT: In your response, if you want Ace or another specialist to act, prefe
 
 IMPORTANT: Only you speak in voice. If you direct Ace or any other agent, they respond in text only.
 
-Keep your spoken response very brief (normally 1-3 short sentences) — you're in a voice call, not a text chat.${langHint}`;
+Keep your spoken response very brief (normally 1-3 short sentences) — you're in a voice call, not a text chat.
+IMPORTANT: End on a complete sentence, never a fragment.${langHint}`;
 
       const rileyStreamer = createLiveSpeechStreamer(riley.voice, signal, isCurrentTurn, turnId, transcription.language);
 
       const rileyLlmStartMs = Date.now();
-      const response = await agentRespond(
+      const responseRaw = await agentRespond(
         riley,
         [...rileyMemory, ...session.conversationHistory],
         rileyContext,
@@ -656,9 +680,11 @@ Keep your spoken response very brief (normally 1-3 short sentences) — you're i
           },
         }
       );
+      const response = finalizeSpokenResponse(responseRaw);
+
       await postVoiceStageLog(
         'riley_llm',
-        `turn=${turnId} llm_ms=${Date.now() - rileyLlmStartMs} response_chars=${response.length}`
+        `turn=${turnId} llm_ms=${Date.now() - rileyLlmStartMs} raw_chars=${responseRaw.length} final_chars=${response.length}`
       );
       if (!isCurrentTurn() || !response.trim()) return;
 
