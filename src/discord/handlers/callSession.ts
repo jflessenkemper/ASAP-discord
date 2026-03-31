@@ -27,6 +27,8 @@ const VOICE_MAX_TOKENS_SPECIALIST = parseInt(process.env.VOICE_MAX_TOKENS_SPECIA
 const VOICE_STREAM_PARTIAL_MIN_CHARS = parseInt(process.env.VOICE_STREAM_PARTIAL_MIN_CHARS || '24', 10);
 const VOICE_STREAM_FORCE_CHARS = parseInt(process.env.VOICE_STREAM_FORCE_CHARS || '90', 10);
 const VOICE_INTERRUPT_MIN_OUTPUT_ACTIVE_MS = parseInt(process.env.VOICE_INTERRUPT_MIN_OUTPUT_ACTIVE_MS || '350', 10);
+const VOICE_MIN_INPUT_CHARS = parseInt(process.env.VOICE_MIN_INPUT_CHARS || '3', 10);
+const VOICE_DUPLICATE_WINDOW_MS = parseInt(process.env.VOICE_DUPLICATE_WINDOW_MS || '2500', 10);
 
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | null = null;
@@ -220,6 +222,8 @@ export interface CallSession {
   outputStartedAt: number;
   lastInterruptAt: number;
   disconnectedSince: number | null;
+  lastInputFingerprint: string;
+  lastInputAt: number;
 }
 
 let activeSession: CallSession | null = null;
@@ -315,6 +319,8 @@ export async function startCall(
     outputStartedAt: 0,
     lastInterruptAt: 0,
     disconnectedSince: null,
+    lastInputFingerprint: '',
+    lastInputAt: 0,
   };
 
   // Heartbeat — detect disconnected voice channel
@@ -354,7 +360,6 @@ export async function startCall(
 
   // Log call start
   const riley = getAgent('executive-assistant' as AgentId);
-  const ace = getAgent('developer' as AgentId);
 
   activeSession.transcript.push(
     `[${new Date().toLocaleTimeString()}] Call started by ${initiator.displayName}`
@@ -378,7 +383,7 @@ export async function startCall(
       groupchat,
       `✅ **Voice call started**\n` +
         `Initiated by **${initiator.displayName}**\n` +
-        `${riley?.emoji || '📋'} **Riley** and ${ace?.emoji || '💻'} **Ace** are on the line and listening now.\n\n` +
+        `${riley?.emoji || '📋'} **Riley** is on the line and listening now.\n\n` +
         `Speak in **${voiceChannel.name}**. Say "leave" or ask Riley to end the call.`
     );
   } catch (err) {
@@ -505,7 +510,21 @@ async function handleVoiceInput(transcription: VoiceTranscription): Promise<void
   if (!activeSession?.active) return;
 
   const session = activeSession;
-  const userText = transcription.text;
+  const userText = (transcription.text || '').trim();
+  if (userText.length < VOICE_MIN_INPUT_CHARS) return;
+
+  const fingerprint = userText
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .replace(/[^a-z0-9\s]/g, '')
+    .trim();
+  if (!fingerprint) return;
+  if (fingerprint === session.lastInputFingerprint && Date.now() - session.lastInputAt < VOICE_DUPLICATE_WINDOW_MS) {
+    return;
+  }
+  session.lastInputFingerprint = fingerprint;
+  session.lastInputAt = Date.now();
+
   const turnId = session.currentTurnId + 1;
   const abortController = new AbortController();
   const { signal } = abortController;
@@ -552,7 +571,9 @@ You are in a voice call. ${transcription.username} just spoke. Your job:
 4. If it requires domain expertise, name which agent(s) should respond (e.g., "Kane, review this for security" or "Elena, what's the best schema?")
 5. If you need their input, present options clearly
 
-IMPORTANT: In your response, if you want Ace to implement something, say "@ace". For other agents, @mention them — they'll respond in text only (e.g., "@kane for security review"). Only you and Ace speak in voice. Other agents work via text.
+IMPORTANT: In your response, if you want Ace to implement something, say "@ace". For other agents, @mention them — they'll respond in text only (e.g., "@kane for security review").
+
+IMPORTANT: Only you speak in voice. If you direct Ace or any other agent, they respond in text only.
 
 Keep your spoken response very brief (normally 1-3 short sentences) — you're in a voice call, not a text chat.${langHint}`;
 

@@ -774,8 +774,9 @@ GOVERNANCE:
 - Only escalate budget to Jordan if a hard budget block remains after runtime auto-approval has already been attempted.
 - Ace is the Tool Master. If tooling is missing, stale, or unreliable, direct @ace to prepare it before the rest of the team proceeds.
 - Internal tool-usage approvals are your call. If more tool rounds are justified, approve and direct the team to continue.
-- If you state that a deployment/screenshots/URL action is happening, you MUST include explicit action tags in the same message: [ACTION:DEPLOY], [ACTION:SCREENSHOTS], [ACTION:URLS].
-- You are allowed to self-improve: if your own orchestration/routing/tooling is causing friction, direct @ace to patch the Discord bot code and deploy the improvement.
+- If you state that a deployment/screenshots/URL/cleanup action is happening, you MUST include explicit action tags in the same message: [ACTION:DEPLOY], [ACTION:SCREENSHOTS], [ACTION:URLS], [ACTION:CLEANUP:<count>].
+- You are allowed to self-improve: if your own orchestration/routing/tooling is causing friction, direct @ace to patch the Discord bot code and deploy the improvement in the same run.
+- If groupchat gets noisy/disjointed, run [ACTION:CLEANUP:<count>] to delete recent bot/webhook clutter before posting the consolidated update.
 ${budgetGovernance}
 ` : agent.id === 'developer' ? `
 GOVERNANCE:

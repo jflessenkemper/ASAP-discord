@@ -111,8 +111,47 @@ function inferImplicitActionTags(text: string): string {
   if (/(usage report|limits report|budget report|token report)/i.test(normalized)) {
     tags.add('[ACTION:LIMITS]');
   }
+  if (/(clean\s*up\s*(group)?\s*chat|delete\s+(spam|noise|disjointed|clutter)|tidy\s+up\s+groupchat|remove\s+spam\s+messages)/i.test(normalized)) {
+    tags.add('[ACTION:CLEANUP:25]');
+  }
 
   return [...tags].join('\n');
+}
+
+function parseCleanupTargetCount(param?: string): number {
+  if (!param) return 25;
+  const match = param.match(/\d+/);
+  const parsed = match ? parseInt(match[0], 10) : 25;
+  if (!Number.isFinite(parsed)) return 25;
+  return Math.max(1, Math.min(100, parsed));
+}
+
+async function cleanupGroupchatNoise(groupchat: TextChannel, targetCount: number): Promise<number> {
+  const fetchLimit = Math.max(40, Math.min(100, targetCount * 4));
+  const recent = await groupchat.messages.fetch({ limit: fetchLimit });
+  const now = Date.now();
+  const TWO_WEEKS_MS = 14 * 24 * 60 * 60 * 1000;
+  const botId = groupchat.client.user?.id;
+
+  const deletable = [...recent.values()].filter((msg) => {
+    if (!msg.deletable || msg.pinned) return false;
+    if (now - msg.createdTimestamp > TWO_WEEKS_MS) return false;
+
+    const byBot = !!botId && msg.author?.id === botId;
+    const byWebhook = !!msg.webhookId;
+    const noisyPrefix = /^(AUTOPILOT_AUDIT|Thinking…|🔧|📥|✅|⚠️)/u.test(msg.content || '');
+
+    return byBot || byWebhook || noisyPrefix;
+  });
+
+  const selected = deletable
+    .sort((a, b) => b.createdTimestamp - a.createdTimestamp)
+    .slice(0, targetCount)
+    .map((m) => m.id);
+
+  if (selected.length === 0) return 0;
+  const deleted = await groupchat.bulkDelete(selected, true);
+  return deleted.size;
 }
 
 function ensureGoalWatchdog(groupchat: TextChannel): void {
@@ -630,6 +669,20 @@ async function executeActions(
           const report = getUsageReport();
           markGoalProgress('📊 Usage report posted');
           await sendAsRiley(report);
+          break;
+        }
+        case 'CLEANUP': {
+          const target = parseCleanupTargetCount(param);
+          try {
+            const removed = await cleanupGroupchatNoise(groupchat, target);
+            markGoalProgress('🧽 Groupchat cleanup complete');
+            await sendAutopilotAudit(groupchat, 'action_executed', `Cleaned up ${removed} noisy groupchat messages.`, {
+              action: `CLEANUP:${target}`,
+            });
+            await sendAsRiley(`🧽 Cleaned up ${removed} noisy messages in groupchat.`);
+          } catch (err) {
+            await sendAsRiley(`❌ Groupchat cleanup failed: ${err instanceof Error ? err.message : 'Unknown'}`);
+          }
           break;
         }
         case 'CLEAR': {
