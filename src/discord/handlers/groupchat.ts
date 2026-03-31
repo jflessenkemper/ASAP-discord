@@ -247,19 +247,26 @@ function parseMentionedAgentIds(text: string, allowedIds?: Set<string>): string[
 // Riley posts a single consolidated summary to groupchat.
 const GROUPCHAT_SUMMARY_ONLY = process.env.GROUPCHAT_SUMMARY_ONLY !== 'false';
 
-function summarizeForRiley(raw: string, maxChars = 420): string {
-  const singleLine = raw.replace(/\s+/g, ' ').trim();
-  if (singleLine.length <= maxChars) return singleLine;
-  const sentenceWindow = singleLine.slice(0, Math.min(singleLine.length, maxChars + 120));
-  const sentenceBreak = Math.max(
-    sentenceWindow.lastIndexOf('. '),
-    sentenceWindow.lastIndexOf('! '),
-    sentenceWindow.lastIndexOf('? ')
-  );
-  if (sentenceBreak >= Math.floor(maxChars * 0.65)) {
-    return `${sentenceWindow.slice(0, sentenceBreak + 1).trim()}…`;
+function buildConsolidatedAgentUpdate(findings: string[], errors: string[]): string {
+  const normalizedFindings = findings
+    .map((line) => line.replace(/\s+/g, ' ').trim())
+    .filter((line) => line.length > 0)
+    .slice(0, 12);
+
+  const lines: string[] = ['Sub-agent update:'];
+  for (const finding of normalizedFindings) {
+    lines.push(`- ${finding}`);
   }
-  return `${singleLine.slice(0, maxChars - 1)}…`;
+  if (errors.length > 0) {
+    lines.push('Errors:');
+    for (const err of errors.slice(0, 8)) {
+      lines.push(`- ${err}`);
+    }
+  }
+
+  const rendered = lines.join('\n').trim();
+  if (rendered.length <= 1800) return rendered;
+  return `${rendered.slice(0, 1750).trim()}\n\n(Additional details are in each agent channel.)`;
 }
 
 function parseBudgetApproval(text: string): number | undefined | null {
@@ -775,6 +782,8 @@ async function handleAgentChain(
   // If Ace was directed, he gets Riley's full plan
   const aceDirected = effectiveAgents.includes('developer');
   const otherDirected = effectiveAgents.filter((id) => id !== 'developer');
+  const consolidatedFindings: string[] = [];
+  const consolidatedErrors: string[] = [];
   if (aceDirected) {
     const ace = getAgent('developer' as AgentId);
     if (ace) {
@@ -792,9 +801,6 @@ async function handleAgentChain(
         if (signal?.aborted) return;
 
         await sendAgentMessage(aceChannel, ace, aceResponse);
-        if (GROUPCHAT_SUMMARY_ONLY && aceChannel.id !== groupchat.id) {
-          await sendAgentMessage(groupchat, ace, summarizeForRiley(aceResponse));
-        }
         appendToMemory('developer', [
           { role: 'user', content: `[Riley directed]: ${rileyResponse.slice(0, 1000)}` },
           { role: 'assistant', content: `[Ace]: ${aceResponse}` },
@@ -807,7 +813,9 @@ async function handleAgentChain(
         // Ace may direct sub-agents
         const aceSubDirectives = parseDirectives(aceResponse);
         if (aceSubDirectives.length > 0) {
-          await handleSubAgents(aceSubDirectives, aceResponse, groupchat, signal);
+          const fromAce = await handleSubAgents(aceSubDirectives, aceResponse, groupchat, signal);
+          consolidatedFindings.push(...fromAce.findings);
+          consolidatedErrors.push(...fromAce.errors);
         }
       } catch (err) {
         console.error('Ace error:', err instanceof Error ? err.message : 'Unknown');
@@ -823,7 +831,16 @@ async function handleAgentChain(
 
   // Handle other agents Riley directed directly (not through Ace)
   if (otherDirected.length > 0) {
-    await handleSubAgents(otherDirected, rileyResponse, groupchat, signal);
+    const direct = await handleSubAgents(otherDirected, rileyResponse, groupchat, signal);
+    consolidatedFindings.push(...direct.findings);
+    consolidatedErrors.push(...direct.errors);
+  }
+
+  if (GROUPCHAT_SUMMARY_ONLY && !signal?.aborted && (consolidatedFindings.length > 0 || consolidatedErrors.length > 0)) {
+    const riley = getAgent('executive-assistant' as AgentId);
+    if (riley) {
+      await sendAgentMessage(groupchat, riley, buildConsolidatedAgentUpdate(consolidatedFindings, consolidatedErrors));
+    }
   }
 }
 
@@ -896,9 +913,6 @@ async function handleSubAgents(
 
         const outChannel = GROUPCHAT_SUMMARY_ONLY ? getAgentWorkChannel(id, groupchat) : groupchat;
         await sendAgentMessage(outChannel, agent, agentResponse);
-        if (GROUPCHAT_SUMMARY_ONLY && outChannel.id !== groupchat.id) {
-          await sendAgentMessage(groupchat, agent, summarizeForRiley(agentResponse));
-        }
         appendToMemory(id, [
           { role: 'user', content: `[Groupchat directive]: ${directiveContext.slice(0, 500)}` },
           { role: 'assistant', content: `[${agent.name}]: ${agentResponse}` },
@@ -971,9 +985,6 @@ async function handleDirectedMessage(
 
       const outChannel = GROUPCHAT_SUMMARY_ONLY ? getAgentWorkChannel(id, groupchat) : groupchat;
       await sendAgentMessage(outChannel, agent, response);
-      if (GROUPCHAT_SUMMARY_ONLY && outChannel.id !== groupchat.id) {
-        await sendAgentMessage(groupchat, agent, summarizeForRiley(response));
-      }
       appendToMemory(id, [
         { role: 'user', content: contextMessage },
         { role: 'assistant', content: `[${agent.name}]: ${response}` },
