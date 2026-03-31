@@ -777,9 +777,9 @@ export async function agentRespond(
   const { used: tokenUsed, remaining: tokenRemaining, limit: tokenLimit } = getClaudeTokenStatus();
 
   const rileyCoordination = agent.id === 'executive-assistant' ? `
-AGENT COORDINATION: Coordinate agents via @mentions in your response text. The system parses and routes automatically.
-@ace @max @sophie @kane @raj @elena @kai @jude @liv @harper @mia @leo
-CRITICAL: Do NOT use send_channel_message — ONLY @mentions work for agent coordination.
+AGENT COORDINATION: Coordinate agents via Discord mentions in your response text. The system parses and routes automatically.
+Prefer exact role mentions supplied in the live conversation context. If no exact mention tokens are provided, use canonical handles like @ace, @max, @sophie, @kane, @raj, @elena, @kai, @jude, @liv, @harper, @mia, and @leo.
+CRITICAL: Do NOT use send_channel_message — use Discord mentions for agent coordination.
     DEFAULT: When work needs execution, involve the full agent roster unless the user explicitly asks for a narrower subset.
 ` : '';
 
@@ -917,7 +917,7 @@ TOKENS: ${tokenUsed.toLocaleString()} used / ${tokenLimit.toLocaleString()} dail
     'git_create_branch', 'create_pull_request', 'merge_pull_request', 'add_pr_comment',
     'delete_channel', 'create_channel', 'rename_channel', 'set_channel_topic',
     'send_channel_message', 'clear_channel_messages', 'delete_category', 'move_channel',
-    'gcp_deploy', 'gcp_set_env', 'gcp_rollback', 'gcp_secret_set', 'gcp_vm_ssh',
+    'gcp_build_image', 'gcp_deploy', 'gcp_set_env', 'gcp_rollback', 'gcp_secret_set', 'gcp_secret_bind', 'gcp_vm_ssh',
     'memory_write', 'memory_append',
     'db_query',
     'capture_screenshots',
@@ -1220,6 +1220,10 @@ function formatToolSummary(toolName: string, input: Record<string, string>): str
       return `Capturing mobile harness snapshot`;
     case 'mobile_harness_stop':
       return `Stopping mobile harness session`;
+    case 'gcp_preflight':
+      return `Running GCP preflight checks`;
+    case 'gcp_build_image':
+      return `Building container image${input.tag ? ` (${input.tag})` : ''}`;
     case 'gcp_deploy':
       return `Deploying to Cloud Run${input.tag ? ` (${input.tag})` : ''}`;
     case 'gcp_set_env':
@@ -1232,6 +1236,8 @@ function formatToolSummary(toolName: string, input: Record<string, string>): str
       return `Rolling back to ${input.revision}`;
     case 'gcp_secret_set':
       return `Setting secret "${input.name}"`;
+    case 'gcp_secret_bind':
+      return `Binding secrets to Cloud Run service`;
     case 'gcp_secret_list':
       return `Listing GCP secrets`;
     case 'gcp_build_status':

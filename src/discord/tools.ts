@@ -705,9 +705,34 @@ export const REPO_TOOLS = [
   },
   // ── GCP Infrastructure tools ──
   {
+    name: 'gcp_preflight',
+    description:
+      'Run a GCP readiness check before mutating actions. Verifies active project/account, required APIs, and Cloud Run service visibility.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {},
+      required: [],
+    },
+  },
+  {
+    name: 'gcp_build_image',
+    description:
+      'Build and push a Docker image via Cloud Build only (no Cloud Run deploy). Use when you need an image artifact without changing live traffic.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        tag: {
+          type: 'string',
+          description: 'Optional image tag/label for tracking (e.g. "feat-fuel-tab")',
+        },
+      },
+      required: [],
+    },
+  },
+  {
     name: 'gcp_deploy',
     description:
-      'Trigger a Cloud Build deployment of the ASAP app to Cloud Run. This builds a Docker image and deploys it. Equivalent to `gcloud builds submit`. Use after merging PRs or pushing to main.',
+      'Build a Docker image with Cloud Build, deploy it to Cloud Run, and verify the latest revision/service URL. Use after merging PRs or pushing to main.',
     input_schema: {
       type: 'object' as const,
       properties: {
@@ -777,7 +802,7 @@ export const REPO_TOOLS = [
   {
     name: 'gcp_secret_set',
     description:
-      'Create or update a secret in GCP Secret Manager. The secret is automatically available to the Cloud Run service.',
+      'Create or update a secret in GCP Secret Manager. This does NOT attach the secret to Cloud Run by itself.',
     input_schema: {
       type: 'object' as const,
       properties: {
@@ -791,6 +816,21 @@ export const REPO_TOOLS = [
         },
       },
       required: ['name', 'value'],
+    },
+  },
+  {
+    name: 'gcp_secret_bind',
+    description:
+      'Bind Secret Manager secrets into the Cloud Run service via env vars using --update-secrets. Example: "DISCORD_BOT_TOKEN=DISCORD_BOT_TOKEN:latest"',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        bindings: {
+          type: 'string',
+          description: 'Comma-separated ENV_VAR=SECRET_NAME[:VERSION] pairs',
+        },
+      },
+      required: ['bindings'],
     },
   },
   {
@@ -1088,7 +1128,7 @@ export const REPO_TOOLS = [
 /**
  * Tool subset for review/advisory agents (QA, security, UX, etc.).
  * Keeps codebase write operations locked down, while allowing operational testing:
- * GCP inspect/deploy tools, screenshots, and mobile harness interactions.
+ * GCP inspect tools, screenshots, and mobile harness interactions.
  */
 const REVIEW_TOOL_NAMES = new Set([
   'read_file', 'search_files', 'list_directory', 'fetch_url',
@@ -1096,9 +1136,8 @@ const REVIEW_TOOL_NAMES = new Set([
   'run_tests', 'typecheck',
   'capture_screenshots',
   'mobile_harness_start', 'mobile_harness_step', 'mobile_harness_snapshot', 'mobile_harness_stop',
-  'gcp_deploy', 'gcp_set_env', 'gcp_get_env', 'gcp_list_revisions', 'gcp_rollback', 'gcp_secret_set', 'gcp_secret_list', 'gcp_build_status',
+  'gcp_preflight', 'gcp_get_env', 'gcp_list_revisions', 'gcp_secret_list', 'gcp_build_status',
   'gcp_logs_query', 'gcp_run_describe', 'gcp_storage_ls', 'gcp_artifact_list', 'gcp_sql_describe', 'gcp_project_info',
-  'set_daily_budget',
 ]);
 export const REVIEW_TOOLS = REPO_TOOLS.filter((t) => REVIEW_TOOL_NAMES.has(t.name));
 
@@ -1238,6 +1277,10 @@ export async function executeTool(
         return await mobileHarnessStop(sessionId);
       }
       // GCP infrastructure tools
+      case 'gcp_preflight':
+        return await gcpPreflight();
+      case 'gcp_build_image':
+        return await gcpBuildImage(input.tag);
       case 'gcp_deploy':
         return await gcpDeploy(input.tag);
       case 'gcp_set_env':
@@ -1250,6 +1293,8 @@ export async function executeTool(
         return await gcpRollback(input.revision);
       case 'gcp_secret_set':
         return await gcpSecretSet(input.name, input.value);
+      case 'gcp_secret_bind':
+        return await gcpSecretBind(input.bindings);
       case 'gcp_secret_list':
         return await gcpSecretList();
       case 'gcp_build_status':
@@ -2034,7 +2079,11 @@ function runTypecheck(target: 'client' | 'server' | 'both'): string {
 // GCP Infrastructure tools
 // ────────────────────────────────────────────
 
-const GCP_PROJECT = process.env.GCS_PROJECT_ID || 'asap-489910';
+const GCP_PROJECT =
+  process.env.GOOGLE_CLOUD_PROJECT ||
+  process.env.GCLOUD_PROJECT ||
+  process.env.GCS_PROJECT_ID ||
+  'asap-489910';
 const GCP_REGION = process.env.CLOUD_RUN_REGION || 'australia-southeast1';
 const GCP_SERVICE = process.env.CLOUD_RUN_SERVICE || 'asap';
 const GCP_TIMEOUT = 120_000;
@@ -2056,15 +2105,66 @@ function gcpExec(cmd: string): string {
 }
 
 async function gcpDeploy(tag?: string): Promise<string> {
-  const safeTag = tag ? tag.replace(/[^a-zA-Z0-9_.-]/g, '').slice(0, 50) : 'agent-deploy';
+  const built = await gcpBuildImage(tag);
+  if (!built.startsWith('✅')) return built;
+  const imageMatch = built.match(/Image:\s*(\S+)/);
+  const imageRef = imageMatch?.[1];
+  if (!imageRef) return `❌ Deploy failed: built image reference was not returned.`;
+
+  try {
+    gcpExec(
+      `gcloud run deploy ${GCP_SERVICE} --image=${imageRef} --project=${GCP_PROJECT} --region=${GCP_REGION} --platform=managed --quiet`
+    );
+    const status = gcpExec(
+      `gcloud run services describe ${GCP_SERVICE} --region=${GCP_REGION} --project=${GCP_PROJECT} --format="yaml(status.url,status.latestReadyRevisionName,status.traffic)"`
+    );
+    return `✅ Deployed ${imageRef} to Cloud Run service ${GCP_SERVICE}.\n\n${status}`;
+  } catch (err) {
+    return `❌ Deploy failed after image build (${imageRef}): ${err instanceof Error ? err.message : 'Unknown'}`;
+  }
+}
+
+async function gcpBuildImage(tag?: string): Promise<string> {
+  const nowTag = new Date().toISOString().replace(/[^0-9]/g, '').slice(0, 14);
+  const safeTag = tag ? tag.replace(/[^a-zA-Z0-9_.-]/g, '').slice(0, 50) : `agent-${nowTag}`;
+  const imageRef = `gcr.io/${GCP_PROJECT}/${GCP_SERVICE}:${safeTag}`;
+
   try {
     const result = gcpExec(
-      `gcloud builds submit --project=${GCP_PROJECT} --region=${GCP_REGION} --tag=gcr.io/${GCP_PROJECT}/${GCP_SERVICE}:${safeTag} --timeout=600`
+      `gcloud builds submit --project=${GCP_PROJECT} --region=${GCP_REGION} --tag=${imageRef} --timeout=600`
     );
-    return `✅ Build submitted (tag: ${safeTag})\n${result.slice(-1000)}`;
+    return `✅ Built and pushed image.\nImage: ${imageRef}\n\n${result.slice(-1000)}`;
   } catch (err) {
-    return `❌ Deploy failed: ${err instanceof Error ? err.message : 'Unknown'}`;
+    return `❌ Image build failed: ${err instanceof Error ? err.message : 'Unknown'}`;
   }
+}
+
+async function gcpPreflight(): Promise<string> {
+  const checks: Array<{ name: string; ok: boolean; detail: string }> = [];
+
+  const runCheck = (name: string, cmd: string, required = true) => {
+    try {
+      const out = gcpExec(cmd);
+      checks.push({ name, ok: true, detail: out.split('\n')[0] || 'ok' });
+    } catch (err) {
+      const detail = err instanceof Error ? err.message.split('\n')[0] : 'Unknown error';
+      checks.push({ name, ok: !required, detail: required ? detail : `Optional check failed: ${detail}` });
+    }
+  };
+
+  runCheck('gcloud available', 'gcloud --version');
+  runCheck('active project', 'gcloud config get-value project');
+  runCheck('authenticated account', 'gcloud auth list --filter=status:ACTIVE --format="value(account)"');
+  runCheck('Cloud Run API', `gcloud services list --enabled --project=${GCP_PROJECT} --filter="name:run.googleapis.com" --format="value(name)"`);
+  runCheck('Cloud Build API', `gcloud services list --enabled --project=${GCP_PROJECT} --filter="name:cloudbuild.googleapis.com" --format="value(name)"`);
+  runCheck('Secret Manager API', `gcloud services list --enabled --project=${GCP_PROJECT} --filter="name:secretmanager.googleapis.com" --format="value(name)"`);
+  runCheck('Cloud Run service', `gcloud run services describe ${GCP_SERVICE} --project=${GCP_PROJECT} --region=${GCP_REGION} --format="value(status.url)"`);
+
+  const failed = checks.filter((c) => !c.ok);
+  const lines = checks.map((c) => `${c.ok ? '✅' : '❌'} ${c.name}: ${c.detail || 'ok'}`);
+  lines.unshift(`Project: ${GCP_PROJECT} | Region: ${GCP_REGION} | Service: ${GCP_SERVICE}`);
+  lines.unshift(failed.length === 0 ? '✅ GCP preflight passed.' : `❌ GCP preflight failed (${failed.length} check${failed.length === 1 ? '' : 's'}).`);
+  return lines.join('\n');
 }
 
 async function gcpSetEnv(variables: string): Promise<string> {
@@ -2160,9 +2260,39 @@ async function gcpSecretSet(name: string, value: string): Promise<string> {
       input: value,
     });
 
-    return `✅ Secret "${safeName}" set successfully.`;
+    return `✅ Secret "${safeName}" set successfully in Secret Manager. Bind it to Cloud Run with gcp_secret_bind if the app should consume it.`;
   } catch (err) {
     return `❌ Failed to set secret: ${err instanceof Error ? err.message : 'Unknown'}`;
+  }
+}
+
+async function gcpSecretBind(bindings: string): Promise<string> {
+  const normalized = bindings
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean);
+
+  if (normalized.length === 0) {
+    return '❌ Invalid bindings. Use comma-separated ENV_VAR=SECRET_NAME[:VERSION] pairs.';
+  }
+
+  const parsed: string[] = [];
+  for (const item of normalized) {
+    const match = item.match(/^([A-Z_][A-Z0-9_]*)=([A-Za-z0-9_-]+)(?::([A-Za-z0-9._-]+))?$/);
+    if (!match) {
+      return `❌ Invalid binding "${item}". Expected ENV_VAR=SECRET_NAME[:VERSION].`;
+    }
+    const [, envVar, secretName, version] = match;
+    parsed.push(`${envVar}=${secretName}:${version || 'latest'}`);
+  }
+
+  try {
+    gcpExec(
+      `gcloud run services update ${GCP_SERVICE} --project=${GCP_PROJECT} --region=${GCP_REGION} --update-secrets=${parsed.join(',')}`
+    );
+    return `✅ Bound ${parsed.length} secret mapping${parsed.length === 1 ? '' : 's'} to Cloud Run service ${GCP_SERVICE}: ${parsed.join(', ')}`;
+  } catch (err) {
+    return `❌ Failed to bind secrets: ${err instanceof Error ? err.message : 'Unknown'}`;
   }
 }
 
