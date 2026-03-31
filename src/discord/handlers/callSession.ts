@@ -21,7 +21,7 @@ const VOICE_DISCONNECT_GRACE_MS = 45 * 1000;
 /** Max conversation history in a call */
 const MAX_CALL_HISTORY = 40;
 const VOICE_PREFLIGHT_TIMEOUT_MS = parseInt(process.env.VOICE_PREFLIGHT_TIMEOUT_MS || '15000', 10);
-const VOICE_MAX_TOKENS_RILEY = parseInt(process.env.VOICE_MAX_TOKENS_RILEY || '320', 10);
+const VOICE_MAX_TOKENS_RILEY = parseInt(process.env.VOICE_MAX_TOKENS_RILEY || '240', 10);
 const VOICE_MAX_TOKENS_ACE = parseInt(process.env.VOICE_MAX_TOKENS_ACE || '260', 10);
 const VOICE_MAX_TOKENS_SPECIALIST = parseInt(process.env.VOICE_MAX_TOKENS_SPECIALIST || '220', 10);
 const VOICE_STREAM_PARTIAL_MIN_CHARS = parseInt(process.env.VOICE_STREAM_PARTIAL_MIN_CHARS || '24', 10);

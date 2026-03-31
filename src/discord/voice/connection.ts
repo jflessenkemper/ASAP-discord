@@ -236,7 +236,7 @@ export function listenToUser(
     }
 
     const subscription = receiver.subscribe(member.id, {
-      end: { behavior: EndBehaviorType.AfterSilence, duration: 1500 },
+      end: { behavior: EndBehaviorType.AfterSilence, duration: 900 },
     });
 
     // Decode Opus frames → PCM (s16le, 48kHz, stereo) before collecting
@@ -251,9 +251,12 @@ export function listenToUser(
 
     const chunks: Buffer[] = [];
     let totalSize = 0;
-    const utteranceStartAt = Date.now();
+    let utteranceStartAt: number | null = null;
 
     decoder.on('data', (chunk: Buffer) => {
+      if (utteranceStartAt === null) {
+        utteranceStartAt = Date.now();
+      }
       totalSize += chunk.length;
       if (totalSize <= MAX_AUDIO_BUFFER) {
         chunks.push(chunk);
@@ -275,7 +278,7 @@ export function listenToUser(
                 username: member.displayName,
                 text,
                 timestamp: new Date(),
-                sttLatencyMs: Date.now() - utteranceStartAt,
+                sttLatencyMs: utteranceStartAt ? Date.now() - utteranceStartAt : undefined,
                 sttProvider: 'gemini',
               });
             }
@@ -473,10 +476,10 @@ export function listenToUserDeepgram(
         const subscription = receiver.subscribe(member.id, {
           // AfterInactivity is more resilient than AfterSilence for some clients
           // that send sparse/non-standard silence packets.
-          end: { behavior: EndBehaviorType.AfterInactivity, duration: 2000 },
+          end: { behavior: EndBehaviorType.AfterInactivity, duration: 900 },
         });
         currentSubscription = subscription;
-        utteranceStartAt = Date.now();
+        utteranceStartAt = null;
         firstTranscriptPending = true;
 
         // Decode Opus frames → PCM before sending to Deepgram (expects linear16)
@@ -491,6 +494,9 @@ export function listenToUserDeepgram(
         subscription.pipe(decoder);
 
         decoder.on('data', (chunk: Buffer) => {
+          if (utteranceStartAt === null) {
+            utteranceStartAt = Date.now();
+          }
           if (!destroyed && dgSession) {
             dgSession.send(chunk);
           }
