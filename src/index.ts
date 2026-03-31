@@ -30,6 +30,10 @@ import { getRemainingBudget } from './discord/usage';
 const app = express();
 const PORT = parseInt(process.env.PORT || '3001', 10);
 const IS_CLOUD_RUN = !!process.env.K_SERVICE || !!process.env.K_REVISION;
+
+if (IS_CLOUD_RUN) {
+  app.set('trust proxy', 1);
+}
 // Discord voice requires UDP. Cloud Run is HTTP-only, so force-disable bot there.
 const DISCORD_BOT_ENABLED = !IS_CLOUD_RUN && process.env.DISCORD_BOT_ENABLED !== 'false';
 
