@@ -397,6 +397,13 @@ export function listenToUserDeepgram(
 
   function scheduleDeepgramRetry(reason: string): void {
     if (destroyed || fallbackUnsub) return;
+    const normalizedReason = reason.toLowerCase();
+    // Some transient disconnects recover poorly in long-lived sessions and cause
+    // the "one response then silence" symptom. Fail over quickly to batch STT.
+    if (normalizedReason.includes('closed unexpectedly') || normalizedReason.includes('unauthorized')) {
+      fallbackToGemini(reason);
+      return;
+    }
     if (deepgramRetryAttempts >= MAX_DEEPGRAM_SESSION_RETRIES) {
       fallbackToGemini(reason);
       return;

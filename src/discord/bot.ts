@@ -97,9 +97,10 @@ export async function startBot(): Promise<void> {
 
       // Wire command audit to #github channel
       setCommandAuditCallback((cmd, allowed, reason) => {
+        if (!botChannels?.github) return;
         const icon = allowed ? '✅' : '🚫';
         const truncated = cmd.length > 100 ? cmd.slice(0, 100) + '...' : cmd;
-        botChannels!.github.send(`${icon} \`run_command\`: \`${truncated}\` — ${reason}`).catch(() => {});
+        botChannels.github.send(`${icon} \`run_command\`: \`${truncated}\` — ${reason}`).catch(() => {});
       });
 
       // Wire tool audit to #terminal channel — every tool invocation from every agent
@@ -107,6 +108,7 @@ export async function startBot(): Promise<void> {
       let suppressedDbAudits = 0;
       const DB_AUDIT_POST_INTERVAL_MS = 30_000;
       setToolAuditCallback((agentName, toolName, summary) => {
+        if (!botChannels?.terminal) return;
         const firstName = agentName.split(' ')[0];
         const isDbTool = toolName === 'db_query' || toolName === 'db_query_readonly';
 
@@ -122,16 +124,17 @@ export async function startBot(): Promise<void> {
             : '';
           suppressedDbAudits = 0;
           lastDbAuditPost = now;
-          botChannels!.terminal.send(`🧮 **${firstName}** → \`${toolName}\`${suppressedNote}`).catch(() => {});
+          botChannels.terminal.send(`🧮 **${firstName}** → \`${toolName}\`${suppressedNote}`).catch(() => {});
           return;
         }
 
-        botChannels!.terminal.send(`🔧 **${firstName}** → \`${toolName}\`: ${summary}`).catch(() => {});
+        botChannels.terminal.send(`🔧 **${firstName}** → \`${toolName}\`: ${summary}`).catch(() => {});
       });
 
       // Wire PR auto-review (Harper + Kane on sensitive files)
       setPRReviewCallback(async (prNumber, prTitle, changedFiles, diffSummary) => {
-        await autoReviewPR(prNumber, prTitle, changedFiles, diffSummary, botChannels!.groupchat);
+        if (!botChannels?.groupchat) return;
+        await autoReviewPR(prNumber, prTitle, changedFiles, diffSummary, botChannels.groupchat);
       });
       console.log(`Discord channels configured in "${guild.name}"`);
 
