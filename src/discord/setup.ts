@@ -4,9 +4,10 @@ import {
   TextChannel,
   VoiceChannel,
   CategoryChannel,
+  Role,
   PermissionFlagsBits,
 } from 'discord.js';
-import { getAgents } from './agents';
+import { getAgents, setAgentRoleId } from './agents';
 import { getWebhook } from './services/webhooks';
 
 const CAT_MAIN = 'ASAP';
@@ -77,6 +78,31 @@ async function findOrCreateCategory(guild: Guild, name: string): Promise<Categor
   return cat;
 }
 
+async function ensureAgentRole(guild: Guild, name: string, color: number): Promise<Role> {
+  let role = guild.roles.cache.find((existing) => existing.name === name);
+
+  if (!role) {
+    role = await guild.roles.create({
+      name,
+      color,
+      mentionable: true,
+      hoist: false,
+      permissions: [],
+      reason: 'ASAP agent routing role',
+    });
+    return role;
+  }
+
+  const updates: Parameters<Role['edit']>[0] = {};
+  if (role.color !== color) updates.color = color;
+  if (!role.mentionable) updates.mentionable = true;
+  if (Object.keys(updates).length > 0) {
+    role = await role.edit({ ...updates, reason: 'Sync ASAP agent role metadata' });
+  }
+
+  return role;
+}
+
 /** Find a text channel by name anywhere in the guild (ignores category). */
 function findTextChannel(guild: Guild, name: string): TextChannel | undefined {
   return guild.channels.cache.find(
@@ -115,6 +141,7 @@ export async function setupChannels(guild: Guild): Promise<BotChannels> {
 
   // Ensure caches are fresh
   await guild.channels.fetch();
+  await guild.roles.fetch();
 
   // ── One-time channel reset (set RESET_CHANNELS=true env var to trigger) ──
   if (process.env.RESET_CHANNELS === 'true') {
@@ -142,6 +169,12 @@ export async function setupChannels(guild: Guild): Promise<BotChannels> {
   const catMain = await findOrCreateCategory(guild, CAT_MAIN);
   const catAgents = await findOrCreateCategory(guild, CAT_AGENTS);
   const catOps = await findOrCreateCategory(guild, CAT_OPS);
+
+  // ── Agent roles ──
+  for (const [agentId, agent] of agents) {
+    const role = await ensureAgentRole(guild, agent.roleName, agent.color);
+    setAgentRoleId(agentId, role.id);
+  }
 
   // ── Helper: ensure a text channel exists (deduplicate, move to correct category) ──
   async function ensureText(
@@ -179,7 +212,7 @@ export async function setupChannels(guild: Guild): Promise<BotChannels> {
       `💻 **Ace (Developer)** implements what Riley plans.\n\n` +
       `Just type naturally — Riley handles everything.\n` +
       `She can join voice calls, deploy, take screenshots, and coordinate the whole team.\n\n` +
-      `You can also @mention any agent directly (e.g. @ace, @kane, @elena).`
+        `You can also mention any agent role directly (for example Ace, Kane, or Elena). Plain-text handles still work as a fallback.`
   );
 
   const decisions = await ensureText(

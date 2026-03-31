@@ -2,7 +2,7 @@ import { Message, TextChannel, EmbedBuilder } from 'discord.js';
 import { AgentConfig } from '../agents';
 import { agentRespond, ConversationMessage } from '../claude';
 import { appendToMemory, getMemoryContext } from '../memory';
-import { clearWebhookCache, getWebhook } from '../services/webhooks';
+import { clearWebhookCache, sendWebhookMessage, WebhookCapableChannel } from '../services/webhooks';
 import { mirrorAgentResponse } from '../services/diagnosticsWebhook';
 
 // Per-channel conversation history (in-memory, keyed by channelId)
@@ -99,8 +99,7 @@ async function handleAgentMessageInner(
   // Visible immediate feedback while the LLM is thinking.
   let pendingThinking: Message | null = null;
   try {
-    const wh = await getWebhook(channel);
-    pendingThinking = await wh.send({
+    pendingThinking = await sendWebhookMessage(channel, {
       content: 'Thinking…',
       username: `${agent.emoji} ${agent.name}`,
       avatarURL: agent.avatarUrl,
@@ -148,8 +147,7 @@ async function handleAgentMessageInner(
     const response = await agentRespond(agent, history, userMessageWithLang, async (toolName, summary) => {
       if (signal?.aborted) return;
       try {
-        const wh = await getWebhook(channel);
-        await wh.send({
+        await sendWebhookMessage(channel, {
           content: `🔧 ${summary}`,
           username: `${agent.emoji} ${agent.name}`,
           avatarURL: agent.avatarUrl,
@@ -215,8 +213,7 @@ async function handleAgentMessageInner(
         pendingThinking.delete().catch(() => {});
         pendingThinkingMessages.delete(channelId);
       }
-      const wh = await getWebhook(channel);
-      await wh.send({
+      await sendWebhookMessage(channel, {
         content: `⚠️ ${agent.name}: ${userFacing}\n\`\`\`${short}\`\`\``,
         username: `${agent.emoji} ${agent.name}`,
         avatarURL: agent.avatarUrl,
@@ -245,7 +242,7 @@ export function clearHistory(channelId: string): void {
  * Falls back to colored embeds if webhook creation fails.
  */
 export async function sendAgentMessage(
-  channel: TextChannel,
+  channel: WebhookCapableChannel,
   agent: AgentConfig,
   response: string
 ): Promise<void> {
@@ -253,12 +250,11 @@ export async function sendAgentMessage(
   const chunks = splitMessage(rendered, 1900);
 
   try {
-    const webhook = await getWebhook(channel);
     if (shouldProgressivelyReveal(rendered)) {
-      await sendProgressiveWebhookMessage(webhook, agent, rendered);
+      await sendProgressiveWebhookMessage(channel, agent, rendered);
     } else {
       for (const chunk of chunks) {
-        await webhook.send({
+        await sendWebhookMessage(channel, {
           content: chunk,
           username: `${agent.emoji} ${agent.name}`,
           avatarURL: agent.avatarUrl,
@@ -270,9 +266,8 @@ export async function sendAgentMessage(
     console.warn(`Webhook send failed for ${agent.name}, retrying with a fresh webhook:`, err instanceof Error ? err.message : 'Unknown');
     clearWebhookCache();
     try {
-      const retryWebhook = await getWebhook(channel);
       for (const chunk of chunks) {
-        await retryWebhook.send({
+        await sendWebhookMessage(channel, {
           content: chunk,
           username: `${agent.emoji} ${agent.name}`,
           avatarURL: agent.avatarUrl,
@@ -294,7 +289,7 @@ function shouldProgressivelyReveal(rendered: string): boolean {
 }
 
 async function sendProgressiveWebhookMessage(
-  webhook: Awaited<ReturnType<typeof getWebhook>>,
+  channel: WebhookCapableChannel,
   agent: AgentConfig,
   rendered: string
 ): Promise<void> {
@@ -303,7 +298,7 @@ async function sendProgressiveWebhookMessage(
     ? `${rendered.slice(0, initialChars)}…`
     : rendered;
 
-  const sent = await webhook.send({
+  const sent = await sendWebhookMessage(channel, {
     content: initialContent,
     username: `${agent.emoji} ${agent.name}`,
     avatarURL: agent.avatarUrl,

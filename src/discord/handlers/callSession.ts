@@ -598,7 +598,7 @@ You are in a voice call. ${transcription.username} just spoke. Your job:
 4. If it requires domain expertise, name which agent(s) should respond (e.g., "Kane, review this for security" or "Elena, what's the best schema?")
 5. If you need their input, present options clearly
 
-IMPORTANT: In your response, if you want Ace to implement something, say "@ace". For other agents, @mention them — they'll respond in text only (e.g., "@kane for security review").
+IMPORTANT: In your response, if you want Ace or another specialist to act, prefer exact Discord role mentions when available. If role mentions are not provided in context, use canonical handles like "@ace" or "@kane".
 
 IMPORTANT: Only you speak in voice. If you direct Ace or any other agent, they respond in text only.
 

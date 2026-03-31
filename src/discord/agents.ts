@@ -4,6 +4,12 @@ import path from 'path';
 export interface AgentConfig {
   id: string;
   name: string;
+  /** Short canonical handle used in plain-text fallback mentions */
+  handle: string;
+  /** Discord role name used for native role mentions */
+  roleName: string;
+  /** Alias tokens accepted by the router (without leading @) */
+  aliases: string[];
   channelName: string;
   emoji: string;
   /** Hex color for Discord embeds */
@@ -101,6 +107,54 @@ const DISPLAY_NAME: Record<string, string> = {
   'android-engineer': 'Leo (Android Engineer)',
 };
 
+const HANDLE_MAP: Record<string, string> = {
+  qa: 'max',
+  'ux-reviewer': 'sophie',
+  'security-auditor': 'kane',
+  'api-reviewer': 'raj',
+  dba: 'elena',
+  performance: 'kai',
+  devops: 'jude',
+  copywriter: 'liv',
+  developer: 'ace',
+  lawyer: 'harper',
+  'executive-assistant': 'riley',
+  'ios-engineer': 'mia',
+  'android-engineer': 'leo',
+};
+
+const ROLE_NAME_MAP: Record<string, string> = {
+  qa: 'Max',
+  'ux-reviewer': 'Sophie',
+  'security-auditor': 'Kane',
+  'api-reviewer': 'Raj',
+  dba: 'Elena',
+  performance: 'Kai',
+  devops: 'Jude',
+  copywriter: 'Liv',
+  developer: 'Ace',
+  lawyer: 'Harper',
+  'executive-assistant': 'Riley',
+  'ios-engineer': 'Mia',
+  'android-engineer': 'Leo',
+};
+
+const ALIAS_MAP: Record<string, string[]> = {
+  qa: ['qa', 'max'],
+  'ux-reviewer': ['ux-reviewer', 'ux', 'sophie'],
+  'security-auditor': ['security-auditor', 'security', 'kane'],
+  'api-reviewer': ['api-reviewer', 'api', 'raj'],
+  dba: ['dba', 'database', 'elena'],
+  performance: ['performance', 'perf', 'kai'],
+  devops: ['devops', 'ops', 'jude'],
+  copywriter: ['copywriter', 'copy', 'liv'],
+  developer: ['developer', 'dev', 'ace'],
+  lawyer: ['lawyer', 'legal', 'harper'],
+  'executive-assistant': ['executive-assistant', 'executive', 'assistant', 'riley'],
+  'ios-engineer': ['ios-engineer', 'ios', 'mia'],
+  'android-engineer': ['android-engineer', 'android', 'leo'],
+};
+
 const CHANNEL_NAME_MAP: Record<string, string> = {
   qa: '🧪-qa',
   'ux-reviewer': '🎨-ux-reviewer',
@@ -158,6 +212,7 @@ const AGENT_IDS = [
 export type AgentId = (typeof AGENT_IDS)[number];
 
 let agentCache: Map<AgentId, AgentConfig> | null = null;
+const agentRoleIds = new Map<AgentId, string>();
 
 export function getAgents(): Map<AgentId, AgentConfig> {
   if (agentCache) return agentCache;
@@ -172,6 +227,9 @@ export function getAgents(): Map<AgentId, AgentConfig> {
     agentCache.set(id, {
       id,
       name: DISPLAY_NAME[id] || id,
+      handle: HANDLE_MAP[id] || id,
+      roleName: ROLE_NAME_MAP[id] || DISPLAY_NAME[id] || id,
+      aliases: ALIAS_MAP[id] || [id],
       channelName: CHANNEL_NAME_MAP[id] || `${emoji}-${id}`,
       emoji,
       color: COLOR_MAP[id] || 0x99AAB5,
@@ -188,6 +246,65 @@ export function getAgents(): Map<AgentId, AgentConfig> {
 
 export function getAgent(id: AgentId): AgentConfig | undefined {
   return getAgents().get(id);
+}
+
+export function setAgentRoleId(id: AgentId, roleId: string | null): void {
+  if (roleId) {
+    agentRoleIds.set(id, roleId);
+    return;
+  }
+  agentRoleIds.delete(id);
+}
+
+export function getAgentRoleId(id: AgentId): string | null {
+  return agentRoleIds.get(id) || null;
+}
+
+export function getAgentMention(id: AgentId): string {
+  const roleId = getAgentRoleId(id);
+  if (roleId) return `<@&${roleId}>`;
+  const agent = getAgent(id);
+  return agent ? `@${agent.handle}` : `@${id}`;
+}
+
+export function getAgentAliases(id: AgentId): string[] {
+  const agent = getAgent(id);
+  if (!agent) return [id];
+  return [...new Set([id, agent.handle, ...agent.aliases])];
+}
+
+function normalizeAgentToken(token: string): string {
+  return token.trim().replace(/^@+/, '').toLowerCase();
+}
+
+export function resolveAgentId(token: string): AgentId | null {
+  const normalized = normalizeAgentToken(token);
+  for (const [id, agent] of getAgents()) {
+    if (normalized === id) return id;
+    if (normalized === agent.handle.toLowerCase()) return id;
+    if (normalized === agent.roleName.toLowerCase()) return id;
+    if (agent.aliases.some((alias) => alias.toLowerCase() === normalized)) return id;
+  }
+  return null;
+}
+
+export function resolveAgentIdByRoleId(roleId: string): AgentId | null {
+  for (const [id, mappedRoleId] of agentRoleIds.entries()) {
+    if (mappedRoleId === roleId) return id;
+  }
+  return null;
+}
+
+export function buildAgentMentionGuide(agentIds?: Iterable<AgentId>): string {
+  const ids = agentIds ? [...agentIds] : [...getAgents().keys()];
+  return ids
+    .map((id) => {
+      const agent = getAgent(id);
+      if (!agent) return null;
+      return `${agent.name.split(' ')[0]} ${getAgentMention(id)}`;
+    })
+    .filter((line): line is string => !!line)
+    .join(', ');
 }
 
 export function getAgentByChannelName(channelName: string): AgentConfig | undefined {

@@ -16,12 +16,10 @@
  */
 import 'dotenv/config';
 import { ChannelType, Client, GatewayIntentBits, Message, TextChannel } from 'discord.js';
+import { getAgent, resolveAgentId } from './agents';
 
 interface AgentTestCase {
   id: string;
-  /** Mention handle used in the groupchat message (maps to NAME_TO_ID in groupchat handler) */
-  mention: string;
-  name: string;
   prompt: string;
 }
 
@@ -35,83 +33,67 @@ interface TestResult {
 const AGENT_TESTS: AgentTestCase[] = [
   {
     id: 'executive-assistant',
-    mention: 'riley',
-    name: 'Riley (Executive Assistant)',
-    prompt: '@riley [smoke test] What is your primary role on this team? Reply in 1–2 sentences.',
+    prompt: 'What is your primary role on this team? Reply in 1–2 sentences.',
   },
   {
     id: 'developer',
-    mention: 'ace',
-    name: 'Ace (Developer)',
-    prompt: '@ace [smoke test] What programming language does the ASAP mobile app use? Reply in 1 sentence.',
+    prompt: 'What programming language does the ASAP mobile app use? Reply in 1 sentence.',
   },
   {
     id: 'qa',
-    mention: 'max',
-    name: 'Max (QA)',
-    prompt: '@max [smoke test] Name one critical test case for a job-matching feature. Reply in 1 sentence.',
+    prompt: 'Name one critical test case for a job-matching feature. Reply in 1 sentence.',
   },
   {
     id: 'ux-reviewer',
-    mention: 'sophie',
-    name: 'Sophie (UX Reviewer)',
-    prompt: '@sophie [smoke test] What is the most important UX principle for a gig economy mobile app? Reply in 1 sentence.',
+    prompt: 'What is the most important UX principle for a gig economy mobile app? Reply in 1 sentence.',
   },
   {
     id: 'security-auditor',
-    mention: 'kane',
-    name: 'Kane (Security Auditor)',
-    prompt: '@kane [smoke test] What is the most common authentication vulnerability in mobile apps? Reply in 1 sentence.',
+    prompt: 'What is the most common authentication vulnerability in mobile apps? Reply in 1 sentence.',
   },
   {
     id: 'api-reviewer',
-    mention: 'raj',
-    name: 'Raj (API Reviewer)',
-    prompt: '@raj [smoke test] What HTTP status code should a REST API return when a resource is not found? Reply in 1 sentence.',
+    prompt: 'What HTTP status code should a REST API return when a resource is not found? Reply in 1 sentence.',
   },
   {
     id: 'dba',
-    mention: 'elena',
-    name: 'Elena (DBA)',
-    prompt: '@elena [smoke test] What database does this project use? Reply in 1 sentence.',
+    prompt: 'What database does this project use? Reply in 1 sentence.',
   },
   {
     id: 'performance',
-    mention: 'kai',
-    name: 'Kai (Performance)',
-    prompt: '@kai [smoke test] What is the single most impactful performance optimisation for a React Native app? Reply in 1 sentence.',
+    prompt: 'What is the single most impactful performance optimisation for a React Native app? Reply in 1 sentence.',
   },
   {
     id: 'devops',
-    mention: 'jude',
-    name: 'Jude (DevOps)',
-    prompt: '@jude [smoke test] What CI/CD platform does this project use? Reply in 1 sentence.',
+    prompt: 'What CI/CD platform does this project use? Reply in 1 sentence.',
   },
   {
     id: 'copywriter',
-    mention: 'liv',
-    name: 'Liv (Copywriter)',
-    prompt: '@liv [smoke test] Write a 5-word tagline for the ASAP gig worker app.',
+    prompt: 'Write a 5-word tagline for the ASAP gig worker app.',
   },
   {
     id: 'lawyer',
-    mention: 'harper',
-    name: 'Harper (Lawyer)',
-    prompt: '@harper [smoke test] What is the key legal distinction between an employee and a contractor in Australia? Reply in 1 sentence.',
+    prompt: 'What is the key legal distinction between an employee and a contractor in Australia? Reply in 1 sentence.',
   },
   {
     id: 'ios-engineer',
-    mention: 'mia',
-    name: 'Mia (iOS Engineer)',
-    prompt: '@mia [smoke test] What is the primary programming language for iOS development? Reply in 1 sentence.',
+    prompt: 'What is the primary programming language for iOS development? Reply in 1 sentence.',
   },
   {
     id: 'android-engineer',
-    mention: 'leo',
-    name: 'Leo (Android Engineer)',
-    prompt: '@leo [smoke test] What is the primary programming language for Android development? Reply in 1 sentence.',
+    prompt: 'What is the primary programming language for Android development? Reply in 1 sentence.',
   },
 ];
+
+function getAgentName(id: string): string {
+  return getAgent(id as never)?.name || id;
+}
+
+function buildPrompt(test: AgentTestCase, roleMentions: Map<string, string>): string {
+  const agent = getAgent(test.id as never);
+  const mention = roleMentions.get(test.id) || `@${agent?.handle || test.id}`;
+  return `${mention} [smoke test] ${test.prompt}`;
+}
 
 function findGroupchat(guild: { channels: { cache: Map<string, any> } }): TextChannel | undefined {
   // Allow explicit override via env var
@@ -142,13 +124,17 @@ async function testAgent(
   test: AgentTestCase,
   selfId: string,
   timeoutMs: number,
+  roleMentions: Map<string, string>,
 ): Promise<{ passed: boolean; elapsed: number; snippet: string }> {
   const start = Date.now();
 
   return new Promise(async (resolve) => {
     let sent: Message;
     try {
-      sent = await channel.send(test.prompt);
+      sent = await Promise.race([
+        channel.send(buildPrompt(test, roleMentions)),
+        new Promise<never>((_, reject) => setTimeout(() => reject(new Error('Send timed out')), Math.min(timeoutMs, 15000))),
+      ]);
     } catch (err) {
       resolve({
         passed: false,
@@ -227,6 +213,7 @@ async function run(): Promise<void> {
 
   const guild = await client.guilds.fetch(guildId);
   await guild.channels.fetch();
+  await guild.roles.fetch();
 
   const groupchat = findGroupchat(guild);
   if (!groupchat) {
@@ -244,12 +231,20 @@ async function run(): Promise<void> {
   if (agentFilter) console.log(`Filter   : --agent=${agentFilter}`);
   console.log('');
 
+  const roleMentions = new Map<string, string>();
+  for (const test of AGENT_TESTS) {
+    const agent = getAgent(test.id as never);
+    if (!agent) continue;
+    const role = guild.roles.cache.find((candidate) => candidate.name === agent.roleName);
+    if (role) roleMentions.set(test.id, `<@&${role.id}>`);
+  }
+
   const testsToRun = agentFilter
     ? AGENT_TESTS.filter(
         (t) =>
           t.id === agentFilter ||
-          t.mention === agentFilter ||
-          t.name.toLowerCase().includes(agentFilter.toLowerCase()),
+          resolveAgentId(agentFilter || '') === t.id ||
+          getAgentName(t.id).toLowerCase().includes(agentFilter.toLowerCase()),
       )
     : AGENT_TESTS;
 
@@ -262,9 +257,9 @@ async function run(): Promise<void> {
   const results: TestResult[] = [];
 
   for (const test of testsToRun) {
-    process.stdout.write(`⏳  ${test.name} ... `);
+    process.stdout.write(`⏳  ${getAgentName(test.id)} ... `);
 
-    const { passed, elapsed, snippet } = await testAgent(groupchat, test, client.user!.id, timeoutMs);
+    const { passed, elapsed, snippet } = await testAgent(groupchat, test, client.user!.id, timeoutMs, roleMentions);
 
     if (passed) {
       console.log(`✅ PASS (${(elapsed / 1000).toFixed(1)}s)`);
@@ -273,7 +268,7 @@ async function run(): Promise<void> {
     }
     console.log(`   → ${snippet}`);
 
-    results.push({ agent: test.name, passed, elapsed, snippet });
+    results.push({ agent: getAgentName(test.id), passed, elapsed, snippet });
 
     // Pause between agents to let the bot finish its response
     await new Promise((r) => setTimeout(r, 3000));
