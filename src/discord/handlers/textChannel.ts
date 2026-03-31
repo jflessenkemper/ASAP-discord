@@ -1,5 +1,5 @@
 import { Message, TextChannel, EmbedBuilder } from 'discord.js';
-import { AgentConfig } from '../agents';
+import { AgentConfig, getAgentMention, resolveAgentId } from '../agents';
 import { agentRespond, ConversationMessage } from '../claude';
 import { appendToMemory, getMemoryContext } from '../memory';
 import { clearWebhookCache, sendWebhookMessage, WebhookCapableChannel } from '../services/webhooks';
@@ -339,11 +339,15 @@ function renderAgentMessage(raw: string): string {
   const formatted = segments.map((segment) => {
     if (segment.startsWith('```') && segment.endsWith('```')) return segment;
     const noHeavyBold = segment
-      // Keep @mentions bold, but demote other bold emphasis to plain text.
+      // Demote bold emphasis in prose so coordination messages read naturally.
       .replace(/\*\*(?!@)([^*\n]{1,120})\*\*/g, '$1')
       // Collapse excessive blank space.
       .replace(/\n{3,}/g, '\n\n');
-    return noHeavyBold.replace(/(^|\s)@([a-z0-9-]{2,32})\b/gi, (_m, prefix, name) => `${prefix}**@${name}**`);
+    return noHeavyBold.replace(/(^|\s)@([a-z0-9-]{2,32})\b/gi, (_m, prefix, name) => {
+      const resolved = resolveAgentId(name);
+      if (!resolved) return `${prefix}@${name}`;
+      return `${prefix}${getAgentMention(resolved)}`;
+    });
   }).join('');
 
   return formatted.trim();
