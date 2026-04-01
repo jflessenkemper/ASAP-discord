@@ -28,9 +28,12 @@ const PROJECT_CONTEXT_LIGHT = PROJECT_CONTEXT.slice(0, PROJECT_CONTEXT_LIGHT_MAX
 const GEMINI_FLASH = process.env.GEMINI_FLASH_MODEL || 'gemini-flash-latest';
 const GEMINI_PRO = process.env.GEMINI_PRO_MODEL || 'gemini-2.5-pro';
 const ANTHROPIC_OPUS = process.env.ANTHROPIC_CODING_MODEL || 'claude-opus-4-20250514';
-const DEFAULT_CODING_MODEL = process.env.CODING_AGENT_MODEL || (process.env.ANTHROPIC_API_KEY ? ANTHROPIC_OPUS : GEMINI_PRO);
+// Prefer Opus for coding work whenever possible; auth/runtime fallback already swaps to Gemini Pro if needed.
+const DEFAULT_CODING_MODEL = process.env.CODING_AGENT_MODEL || ANTHROPIC_OPUS;
 const DEFAULT_FAST_MODEL = process.env.FAST_AGENT_MODEL || GEMINI_FLASH;
-const HIGH_CAPABILITY_CODE_AGENTS = new Set(['developer', 'devops']);
+const FORCE_OPUS_FOR_CODE_WORK = process.env.FORCE_OPUS_FOR_CODE_WORK !== 'false';
+const ALWAYS_CODING_MODEL_AGENTS = new Set(['developer', 'devops', 'ios-engineer', 'android-engineer']);
+const CODE_WORK_RE = /\b(?:code|coding|implement|implementation|fix|bug|debug|refactor|build|compile|lint|typecheck|test(?:s|ing)?|deploy|migration|schema|sql|query|api|endpoint|component|screen|tsx|jsx|react|expo|node|frontend|backend|repo|commit|branch|diff|patch|pull request|pr)\b/i;
 
 /**
  * High-stakes prompts for Ace where Pro quality is worth the cost.
@@ -41,6 +44,10 @@ function isHighStakesPrompt(userMessage: string): boolean {
   return HIGH_STAKES_RE.test(userMessage);
 }
 
+function isCodeWorkPrompt(userMessage: string): boolean {
+  return CODE_WORK_RE.test(userMessage);
+}
+
 /** Detect failed tests/typecheck outputs that warrant escalation to Pro. */
 function hasValidationFailure(toolName: string, result: string): boolean {
   if (toolName !== 'run_tests' && toolName !== 'typecheck') return false;
@@ -49,12 +56,16 @@ function hasValidationFailure(toolName: string, result: string): boolean {
 
 /**
  * Model policy:
- * - Code-changing agents (`developer`, `devops`) default to the strongest coding model.
- * - Riley escalates to Pro on high-stakes operational prompts.
+ * - Code-oriented agents always use the strongest coding model.
+ * - Any agent doing code work is routed to Opus when enabled.
+ * - Riley still escalates to Pro for non-code high-stakes ops prompts.
  * - Everyone else stays on the fast model for responsiveness.
  */
 function modelForAgent(agentId: string, userMessage: string): string {
-  if (HIGH_CAPABILITY_CODE_AGENTS.has(agentId)) {
+  if (ALWAYS_CODING_MODEL_AGENTS.has(agentId)) {
+    return DEFAULT_CODING_MODEL;
+  }
+  if (FORCE_OPUS_FOR_CODE_WORK && isCodeWorkPrompt(userMessage)) {
     return DEFAULT_CODING_MODEL;
   }
   if (agentId === 'executive-assistant' && isHighStakesPrompt(userMessage)) {
@@ -1184,6 +1195,7 @@ TOKENS: ${tokenUsed.toLocaleString()} used / ${tokenLimit.toLocaleString()} dail
       recordClaudeUsage(
         response.response.usageMetadata?.promptTokenCount || 0,
         response.response.usageMetadata?.candidatesTokenCount || 0,
+        currentModelName,
       );
       const finalText = response.response.text() || 'Done.';
       if (cacheKey && totalToolCalls === 0 && finalText.length <= 500) {
@@ -1202,6 +1214,7 @@ TOKENS: ${tokenUsed.toLocaleString()} used / ${tokenLimit.toLocaleString()} dail
     recordClaudeUsage(
       response.response.usageMetadata?.promptTokenCount || 0,
       response.response.usageMetadata?.candidatesTokenCount || 0,
+      currentModelName,
     );
 
     // Separate read-only (parallel) and write (sequential) calls
@@ -1534,6 +1547,7 @@ export async function summarizeCall(
   recordClaudeUsage(
     result.response.usageMetadata?.promptTokenCount || 0,
     result.response.usageMetadata?.candidatesTokenCount || 0,
+    GEMINI_FLASH,
   );
   return result.response.text() || 'Could not generate summary.';
 }
@@ -1598,6 +1612,7 @@ Keep the summary under 700 words. Use bullet points. Drop small talk and redunda
   recordClaudeUsage(
     result.response.usageMetadata?.promptTokenCount || 0,
     result.response.usageMetadata?.candidatesTokenCount || 0,
+    GEMINI_FLASH,
   );
   return result.response.text() || existingSummary || 'Could not generate summary.';
 }

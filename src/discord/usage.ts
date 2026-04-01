@@ -23,6 +23,10 @@ const ANTHROPIC_CREDIT_CAP_USD = 0;
 interface UsageCounters {
   claudeInputTokens: number;
   claudeOutputTokens: number;
+  anthropicInputTokens: number;
+  anthropicOutputTokens: number;
+  geminiTextInputTokens: number;
+  geminiTextOutputTokens: number;
   geminiCalls: number;
   geminiInputTokens: number;
   elevenLabsChars: number;
@@ -33,6 +37,10 @@ interface UsageCounters {
 const usage: UsageCounters = {
   claudeInputTokens: 0,
   claudeOutputTokens: 0,
+  anthropicInputTokens: 0,
+  anthropicOutputTokens: 0,
+  geminiTextInputTokens: 0,
+  geminiTextOutputTokens: 0,
   geminiCalls: 0,
   geminiInputTokens: 0,
   elevenLabsChars: 0,
@@ -66,6 +74,10 @@ export async function initUsageCounters(): Promise<void> {
       const parsed = JSON.parse(rows[0].content);
       usage.claudeInputTokens = Number(parsed.claudeInputTokens) || 0;
       usage.claudeOutputTokens = Number(parsed.claudeOutputTokens) || 0;
+      usage.anthropicInputTokens = Number(parsed.anthropicInputTokens) || 0;
+      usage.anthropicOutputTokens = Number(parsed.anthropicOutputTokens) || 0;
+      usage.geminiTextInputTokens = Number(parsed.geminiTextInputTokens) || 0;
+      usage.geminiTextOutputTokens = Number(parsed.geminiTextOutputTokens) || 0;
       usage.geminiCalls = Number(parsed.geminiCalls) || 0;
       usage.geminiInputTokens = Number(parsed.geminiInputTokens) || 0;
       usage.elevenLabsChars = Number(parsed.elevenLabsChars) || 0;
@@ -73,6 +85,18 @@ export async function initUsageCounters(): Promise<void> {
       usage.lastReset = typeof parsed.lastReset === 'string'
         ? parsed.lastReset
         : new Date().toISOString().split('T')[0];
+
+      // Backfill older installs that only stored aggregate text-model tokens.
+      if (
+        usage.anthropicInputTokens === 0 &&
+        usage.anthropicOutputTokens === 0 &&
+        usage.geminiTextInputTokens === 0 &&
+        usage.geminiTextOutputTokens === 0 &&
+        (usage.claudeInputTokens > 0 || usage.claudeOutputTokens > 0)
+      ) {
+        usage.geminiTextInputTokens = usage.claudeInputTokens;
+        usage.geminiTextOutputTokens = usage.claudeOutputTokens;
+      }
     }
   } catch (err) {
     console.error('Failed to initialize usage counters:', err instanceof Error ? err.message : 'Unknown');
@@ -102,6 +126,10 @@ function resetIfNewDay(): void {
   if (usage.lastReset !== today) {
     usage.claudeInputTokens = 0;
     usage.claudeOutputTokens = 0;
+    usage.anthropicInputTokens = 0;
+    usage.anthropicOutputTokens = 0;
+    usage.geminiTextInputTokens = 0;
+    usage.geminiTextOutputTokens = 0;
     usage.geminiCalls = 0;
     usage.geminiInputTokens = 0;
     usage.elevenLabsChars = 0;
@@ -133,10 +161,24 @@ function effectiveTotalSpendForBudget(): number {
 }
 
 // ─── Recording functions ────────────────────────────────────────────────────
-export function recordClaudeUsage(inputTokens: number, outputTokens: number): void {
+function isAnthropicModelName(modelName?: string): boolean {
+  const key = String(modelName || '').trim().toLowerCase();
+  return key.includes('claude') || key.includes('opus') || key.includes('sonnet') || key.includes('haiku');
+}
+
+export function recordClaudeUsage(inputTokens: number, outputTokens: number, modelName?: string): void {
   resetIfNewDay();
   usage.claudeInputTokens += inputTokens;
   usage.claudeOutputTokens += outputTokens;
+
+  if (isAnthropicModelName(modelName)) {
+    usage.anthropicInputTokens += inputTokens;
+    usage.anthropicOutputTokens += outputTokens;
+  } else {
+    usage.geminiTextInputTokens += inputTokens;
+    usage.geminiTextOutputTokens += outputTokens;
+  }
+
   markUsageDirty();
 }
 
@@ -264,22 +306,26 @@ export function getClaudeTokenStatus(): { used: number; remaining: number; limit
 }
 
 // ─── Cost estimates ─────────────────────────────────────────────────────────
-// Gemini pricing per 1M tokens (Google AI / Vertex AI)
-// Gemini 2.0 Flash: $0.075 input / $0.30 output
-// Gemini 2.5 Pro:   $1.25  input / $10.00 output
-// Blended rate assuming ~90% Flash usage:
-const CLAUDE_INPUT_COST_PER_M = 0.20;   // blended: 0.9*0.075 + 0.1*1.25
-const CLAUDE_OUTPUT_COST_PER_M = 1.27;  // blended: 0.9*0.30  + 0.1*10.00
-// Gemini TTS/transcription calls — very cheap
-const GEMINI_COST_PER_CALL = 0.0001;
-// ElevenLabs — depends on plan, approximate per character
-const ELEVENLABS_COST_PER_CHAR = 0.00018;
+// These counters aggregate text-model usage across the bot.
+// Since coding work now prefers Claude Opus, use conservative Opus pricing by default
+// so the budget gate does not undercount spend. Override with env vars if the mix changes.
+const CLAUDE_INPUT_COST_PER_M = parseFloat(process.env.CLAUDE_INPUT_COST_PER_M || process.env.LLM_INPUT_COST_PER_M || '15');
+const CLAUDE_OUTPUT_COST_PER_M = parseFloat(process.env.CLAUDE_OUTPUT_COST_PER_M || process.env.LLM_OUTPUT_COST_PER_M || '75');
+const GEMINI_TEXT_INPUT_COST_PER_M = parseFloat(process.env.GEMINI_TEXT_INPUT_COST_PER_M || '0.20');
+const GEMINI_TEXT_OUTPUT_COST_PER_M = parseFloat(process.env.GEMINI_TEXT_OUTPUT_COST_PER_M || '1.27');
+// Gemini TTS/transcription calls — still cheap, but kept configurable.
+const GEMINI_COST_PER_CALL = parseFloat(process.env.GEMINI_COST_PER_CALL || '0.0001');
+// ElevenLabs — depends on plan, approximate per character.
+const ELEVENLABS_COST_PER_CHAR = parseFloat(process.env.ELEVENLABS_COST_PER_CHAR || '0.00018');
 
 function estimateDailyCost(): { claude: number; gemini: number; elevenLabs: number; total: number } {
   const claude =
-    (usage.claudeInputTokens / 1_000_000) * CLAUDE_INPUT_COST_PER_M +
-    (usage.claudeOutputTokens / 1_000_000) * CLAUDE_OUTPUT_COST_PER_M;
-  const gemini = usage.geminiCalls * GEMINI_COST_PER_CALL;
+    (usage.anthropicInputTokens / 1_000_000) * CLAUDE_INPUT_COST_PER_M +
+    (usage.anthropicOutputTokens / 1_000_000) * CLAUDE_OUTPUT_COST_PER_M;
+  const geminiText =
+    (usage.geminiTextInputTokens / 1_000_000) * GEMINI_TEXT_INPUT_COST_PER_M +
+    (usage.geminiTextOutputTokens / 1_000_000) * GEMINI_TEXT_OUTPUT_COST_PER_M;
+  const gemini = geminiText + (usage.geminiCalls * GEMINI_COST_PER_CALL);
   const elevenLabs = usage.elevenLabsChars * ELEVENLABS_COST_PER_CHAR;
   return { claude, gemini, elevenLabs, total: claude + gemini + elevenLabs };
 }
@@ -318,7 +364,7 @@ export function getUsageEmbed(): EmbedBuilder {
     .setColor(color)
     .addFields(
       {
-        name: '🧠 Gemini LLM (Google)',
+        name: '🧠 LLM Tokens (Claude/Gemini)',
         value:
           `${progressBar(totalClaudeTokens, DAILY_LIMITS.claudeTokens)}\n` +
           `${totalClaudeTokens.toLocaleString()} / ${DAILY_LIMITS.claudeTokens.toLocaleString()} tokens\n` +
@@ -373,7 +419,7 @@ export function getUsageReport(): string {
   return (
     `📊 **ASAP Usage Dashboard** — ${usage.lastReset}\n\n` +
     `${liveLine}\n\n` +
-    `**Gemini LLM (Google)**\n` +
+    `**LLM Tokens (Claude/Gemini)**\n` +
     `${progressBar(totalClaudeTokens, DAILY_LIMITS.claudeTokens)}\n` +
     `${totalClaudeTokens.toLocaleString()} / ${DAILY_LIMITS.claudeTokens.toLocaleString()} tokens` +
     ` (${usage.claudeInputTokens.toLocaleString()} in · ${usage.claudeOutputTokens.toLocaleString()} out)\n` +
