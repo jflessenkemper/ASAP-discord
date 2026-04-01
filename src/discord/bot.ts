@@ -106,6 +106,7 @@ export async function startBot(): Promise<void> {
       // Wire command audit to #github channel
       setCommandAuditCallback((cmd, allowed, reason) => {
         const githubChannel = configuredChannels.github;
+        if (!githubChannel) return;
         const icon = allowed ? '✅' : '🚫';
         const truncated = cmd.length > 100 ? cmd.slice(0, 100) + '...' : cmd;
         githubChannel.send(`${icon} \`run_command\`: \`${truncated}\` — ${reason}`).catch(() => {});
@@ -117,6 +118,8 @@ export async function startBot(): Promise<void> {
       const DB_AUDIT_POST_INTERVAL_MS = 30_000;
       setToolAuditCallback((agentName, toolName, summary) => {
         const terminalChannel = configuredChannels.terminal;
+        if (!terminalChannel) return;
+
         const firstName = agentName.split(' ')[0];
         const isDbTool = toolName === 'db_query' || toolName === 'db_query_readonly';
 

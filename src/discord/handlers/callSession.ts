@@ -22,17 +22,18 @@ const VOICE_DISCONNECT_GRACE_MS = 45 * 1000;
 /** Max conversation history in a call */
 const MAX_CALL_HISTORY = 40;
 const VOICE_PREFLIGHT_TIMEOUT_MS = parseInt(process.env.VOICE_PREFLIGHT_TIMEOUT_MS || '15000', 10);
-const VOICE_MAX_TOKENS_RILEY = parseInt(process.env.VOICE_MAX_TOKENS_RILEY || '320', 10);
-const VOICE_MAX_TOKENS_ACE = parseInt(process.env.VOICE_MAX_TOKENS_ACE || '260', 10);
-const VOICE_MAX_TOKENS_SPECIALIST = parseInt(process.env.VOICE_MAX_TOKENS_SPECIALIST || '220', 10);
-const VOICE_STREAM_PARTIAL_MIN_CHARS = parseInt(process.env.VOICE_STREAM_PARTIAL_MIN_CHARS || '24', 10);
-const VOICE_STREAM_FORCE_CHARS = parseInt(process.env.VOICE_STREAM_FORCE_CHARS || '90', 10);
-const VOICE_INTERRUPT_MIN_OUTPUT_ACTIVE_MS = parseInt(process.env.VOICE_INTERRUPT_MIN_OUTPUT_ACTIVE_MS || '1000', 10);
+const VOICE_MAX_TOKENS_RILEY = parseInt(process.env.VOICE_MAX_TOKENS_RILEY || '220', 10);
+const VOICE_MAX_TOKENS_ACE = parseInt(process.env.VOICE_MAX_TOKENS_ACE || '180', 10);
+const VOICE_MAX_TOKENS_SPECIALIST = parseInt(process.env.VOICE_MAX_TOKENS_SPECIALIST || '140', 10);
+const VOICE_STREAM_PARTIAL_MIN_CHARS = parseInt(process.env.VOICE_STREAM_PARTIAL_MIN_CHARS || '16', 10);
+const VOICE_STREAM_FORCE_CHARS = parseInt(process.env.VOICE_STREAM_FORCE_CHARS || '60', 10);
+const VOICE_INTERRUPT_MIN_OUTPUT_ACTIVE_MS = parseInt(process.env.VOICE_INTERRUPT_MIN_OUTPUT_ACTIVE_MS || '700', 10);
 const VOICE_MIN_INPUT_CHARS = parseInt(process.env.VOICE_MIN_INPUT_CHARS || '3', 10);
 const VOICE_DUPLICATE_WINDOW_MS = parseInt(process.env.VOICE_DUPLICATE_WINDOW_MS || '1200', 10);
 const VOICE_STAGE_LOGS_ENABLED = process.env.VOICE_STAGE_LOGS_ENABLED !== 'false';
-const VOICE_HISTORY_MAX_MESSAGES = parseInt(process.env.VOICE_HISTORY_MAX_MESSAGES || '16', 10);
-const VOICE_MEMORY_MAX_MESSAGES = parseInt(process.env.VOICE_MEMORY_MAX_MESSAGES || '10', 10);
+const VOICE_HISTORY_MAX_MESSAGES = parseInt(process.env.VOICE_HISTORY_MAX_MESSAGES || '10', 10);
+const VOICE_MEMORY_MAX_MESSAGES = parseInt(process.env.VOICE_MEMORY_MAX_MESSAGES || '8', 10);
+const VOICE_MAX_SPECIALIST_FANOUT = parseInt(process.env.VOICE_MAX_SPECIALIST_FANOUT || '1', 10);
 const RILEY_WARM_PHRASES = ['One moment.', 'Let me check.', 'I am on it.', 'Here is what I found.', 'Done.'];
 
 let voiceErrorChannel: TextChannel | null = null;
@@ -178,6 +179,16 @@ function finalizeSpokenResponse(raw: string): string {
 
   // Single-clause fallback: preserve meaning but avoid abrupt cut-off delivery.
   return `${text}.`;
+}
+
+function prioritizeVoiceDirectedAgents(agentIds: string[]): string[] {
+  const priority = ['developer', 'qa', 'security-auditor', 'api-reviewer', 'dba', 'performance', 'devops', 'ux-reviewer', 'copywriter', 'lawyer', 'ios-engineer', 'android-engineer'];
+  const unique = [...new Set(agentIds.filter(Boolean))];
+  return unique.sort((a, b) => {
+    const aIdx = priority.indexOf(a);
+    const bIdx = priority.indexOf(b);
+    return (aIdx === -1 ? 999 : aIdx) - (bIdx === -1 ? 999 : bIdx);
+  });
 }
 
 function createLiveSpeechStreamer(
@@ -677,10 +688,11 @@ You are in a voice call. ${transcription.username} just spoke. Your job:
 5. If you need their input, present options clearly
 
 IMPORTANT: In your response, if you want Ace or another specialist to act, prefer exact Discord role mentions when available. If role mentions are not provided in context, use canonical handles like "@ace" or "@kane".
+IMPORTANT: Default to @ace only. Add at most one extra specialist unless a second specialist is clearly necessary.
 
 IMPORTANT: Only you speak in voice. If you direct Ace or any other agent, they respond in text only.
 
-Keep your spoken response very brief (normally 1-3 short sentences) — you're in a voice call, not a text chat.
+Keep your spoken response very brief (normally 1-2 short sentences) — you're in a voice call, not a text chat.
 IMPORTANT: End on a complete sentence, never a fragment.${langHint}`;
 
       const rileyStreamer = createLiveSpeechStreamer(
@@ -780,13 +792,13 @@ IMPORTANT: End on a complete sentence, never a fragment.${langHint}`;
       if (!isCurrentTurn()) return;
 
       // Check which agents Riley directed.
-      const directedAgents = parseDirectedAgents(response);
-      const work: Array<Promise<void>> = [];
+      const directedAgents = prioritizeVoiceDirectedAgents(parseDirectedAgents(response));
+      const work: Array<() => Promise<void>> = [];
 
       if (directedAgents.includes('developer')) {
         const ace = getAgent('developer' as AgentId);
         if (ace && session.active) {
-          work.push((async () => {
+          work.push(async () => {
             try {
               const aceMemory = getMemoryContext('developer').slice(-VOICE_MEMORY_MAX_MESSAGES);
               const aceResponse = await agentRespond(
@@ -797,6 +809,7 @@ IMPORTANT: End on a complete sentence, never a fragment.${langHint}`;
                 {
                   signal,
                   maxTokens: VOICE_MAX_TOKENS_ACE,
+                  priority: 'voice',
                 }
               );
               if (!isCurrentTurn() || !aceResponse.trim()) return;
@@ -825,17 +838,19 @@ IMPORTANT: End on a complete sentence, never a fragment.${langHint}`;
               if (isAbortLikeError(err)) return;
               console.error('Ace voice response error:', err instanceof Error ? err.message : 'Unknown');
             }
-          })());
+          });
         }
       }
 
-      // Other sub-agents don't speak in VC — they work in text only.
-      const otherAgents = directedAgents.filter((id) => !VOICE_SPEAKERS.has(id));
+      // Other sub-agents don't speak in VC — keep fan-out deliberately small and serialized.
+      const otherAgents = directedAgents
+        .filter((id) => id !== 'developer' && !VOICE_SPEAKERS.has(id))
+        .slice(0, Math.max(0, VOICE_MAX_SPECIALIST_FANOUT));
       for (const agentId of otherAgents) {
         const agent = getAgent(agentId as AgentId);
         if (!agent) continue;
 
-        work.push((async () => {
+        work.push(async () => {
           const agentMemory = getMemoryContext(agentId).slice(-VOICE_MEMORY_MAX_MESSAGES);
           try {
             const agentResponse = await agentRespond(
@@ -843,7 +858,7 @@ IMPORTANT: End on a complete sentence, never a fragment.${langHint}`;
               [...agentMemory, ...session.conversationHistory.slice(-VOICE_HISTORY_MAX_MESSAGES)],
               `[Riley directed you during voice call]: ${response}\n[Original from ${transcription.username}]: ${userText}`,
               undefined,
-              { signal, maxTokens: VOICE_MAX_TOKENS_SPECIALIST }
+              { signal, maxTokens: VOICE_MAX_TOKENS_SPECIALIST, priority: 'voice' }
             );
             if (!isCurrentTurn() || !agentResponse.trim()) return;
             await sendAsAgent(session.groupchat, agentResponse.slice(0, 1900), agentId as AgentId);
@@ -858,11 +873,14 @@ IMPORTANT: End on a complete sentence, never a fragment.${langHint}`;
             if (isAbortLikeError(err)) return;
             console.error(`${agent.name} text response error:`, err instanceof Error ? err.message : 'Unknown');
           }
-        })());
+        });
       }
 
       if (work.length > 0) {
-        await Promise.allSettled(work);
+        for (const task of work) {
+          if (!isCurrentTurn()) break;
+          await task();
+        }
       }
       } catch (err) {
         if (!isCurrentTurn()) return;

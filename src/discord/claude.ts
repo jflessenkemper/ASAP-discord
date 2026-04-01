@@ -29,14 +29,18 @@ const PROJECT_CONTEXT_LIGHT = PROJECT_CONTEXT.slice(0, PROJECT_CONTEXT_LIGHT_MAX
 const GEMINI_FLASH = process.env.GEMINI_FLASH_MODEL || 'gemini-flash-latest';
 const GEMINI_PRO = process.env.GEMINI_PRO_MODEL || 'gemini-2.5-pro';
 const ANTHROPIC_OPUS = process.env.ANTHROPIC_CODING_MODEL || 'claude-opus-4-20250514';
-// Prefer Opus for coding work whenever possible; auth/runtime fallback already swaps to Gemini Pro if needed.
+// Prefer Opus for real coding work; short/status asks stay on the fast path.
 const DEFAULT_CODING_MODEL = process.env.CODING_AGENT_MODEL || ANTHROPIC_OPUS;
 const DEFAULT_FAST_MODEL = process.env.FAST_AGENT_MODEL || GEMINI_FLASH;
+const VOICE_FAST_MODEL = process.env.VOICE_FAST_MODEL || DEFAULT_FAST_MODEL;
 const FORCE_OPUS_FOR_CODE_WORK = process.env.FORCE_OPUS_FOR_CODE_WORK !== 'false';
 const ANTHROPIC_AUTO_CACHE = process.env.ANTHROPIC_AUTO_CACHE !== 'false';
 const COMPACT_RUNTIME_TOOL_PROMPTS = process.env.COMPACT_RUNTIME_TOOL_PROMPTS !== 'false';
-const ALWAYS_CODING_MODEL_AGENTS = new Set(['developer', 'devops', 'ios-engineer', 'android-engineer']);
+const CODE_HEAVY_AGENT_IDS = new Set(['developer', 'devops', 'ios-engineer', 'android-engineer']);
 const CODE_WORK_RE = /\b(?:code|coding|implement|implementation|fix|bug|debug|refactor|build|compile|lint|typecheck|test(?:s|ing)?|deploy|migration|schema|sql|query|api|endpoint|component|screen|tsx|jsx|react|expo|node|frontend|backend|repo|commit|branch|diff|patch|pull request|pr)\b/i;
+const TOOL_ACTION_RE = /\b(?:run|read|search|grep|inspect|check|verify|edit|change|update|deploy|build|test|commit|push|rollback|migrate|open)\b/i;
+const SIMPLE_FAST_PATH_RE = /^(?:ok(?:ay)?|yes|no|thanks?|thank you|status|summary|summari[sz]e|what happened|why|how|help|ping|continue|proceed|looks good|sounds good)\b/i;
+const DIRECT_ANSWER_ONLY_RE = /^(?:ok(?:ay)?|yes|no|thanks?|thank you|understood|sounds good|what does|what is|why is|how does|explain|summari[sz]e|clarify)\b/i;
 
 /**
  * High-stakes prompts for Ace where Pro quality is worth the cost.
@@ -51,6 +55,20 @@ function isCodeWorkPrompt(userMessage: string): boolean {
   return CODE_WORK_RE.test(userMessage);
 }
 
+function isSimpleFastPathPrompt(userMessage: string): boolean {
+  const trimmed = userMessage.replace(/\s+/g, ' ').trim();
+  if (!trimmed || trimmed.length > 220) return false;
+  if (TOOL_ACTION_RE.test(trimmed) || isCodeWorkPrompt(trimmed)) return false;
+  return SIMPLE_FAST_PATH_RE.test(trimmed) || trimmed.split(/\s+/).length <= 10;
+}
+
+function isDirectAnswerOnlyPrompt(userMessage: string): boolean {
+  const trimmed = userMessage.replace(/\s+/g, ' ').trim();
+  if (!trimmed || trimmed.length > 240) return false;
+  if (TOOL_ACTION_RE.test(trimmed) || isCodeWorkPrompt(trimmed)) return false;
+  return DIRECT_ANSWER_ONLY_RE.test(trimmed) || /^(?:who|what|why|how)\b/i.test(trimmed);
+}
+
 /** Detect failed tests/typecheck outputs that warrant escalation to Pro. */
 function hasValidationFailure(toolName: string, result: string): boolean {
   if (toolName !== 'run_tests' && toolName !== 'typecheck') return false;
@@ -59,13 +77,15 @@ function hasValidationFailure(toolName: string, result: string): boolean {
 
 /**
  * Model policy:
- * - Code-oriented agents always use the strongest coding model.
- * - Any agent doing code work is routed to Opus when enabled.
+ * - Voice and other short/status asks stay on the fast model.
+ * - Code-heavy prompts escalate to the coding model when warranted.
  * - Riley still escalates to Pro for non-code high-stakes ops prompts.
- * - Everyone else stays on the fast model for responsiveness.
  */
 function modelForAgent(agentId: string, userMessage: string): string {
-  if (ALWAYS_CODING_MODEL_AGENTS.has(agentId)) {
+  if (isSimpleFastPathPrompt(userMessage)) {
+    return DEFAULT_FAST_MODEL;
+  }
+  if (CODE_HEAVY_AGENT_IDS.has(agentId) && isCodeWorkPrompt(userMessage)) {
     return DEFAULT_CODING_MODEL;
   }
   if (FORCE_OPUS_FOR_CODE_WORK && isCodeWorkPrompt(userMessage)) {
@@ -110,6 +130,18 @@ function toolsForAgent(agentId: string): AnyTool[] {
     return hasFullRepoToolAccess(agentId) ? repoTools : reviewTools;
   }
   return repoTools;
+}
+
+function toolsForPrompt(agentId: string, userMessage: string): AnyTool[] {
+  if (isDirectAnswerOnlyPrompt(userMessage)) {
+    return [];
+  }
+
+  if (isSimpleFastPathPrompt(userMessage) && agentId !== 'executive-assistant') {
+    return (COMPACT_RUNTIME_TOOL_PROMPTS ? PROMPT_REVIEW_TOOLS : REVIEW_TOOLS) as unknown as AnyTool[];
+  }
+
+  return toolsForAgent(agentId);
 }
 
 /**
@@ -638,13 +670,13 @@ const MAX_TOOL_ROUNDS_EXECUTIVE = parseInt(process.env.MAX_TOOL_ROUNDS_EXECUTIVE
 /** Optional one-time extra Riley pass. Default OFF to avoid runaway tool loops. */
 const RILEY_AUTO_TOOL_EXTENSION = parseInt(process.env.RILEY_AUTO_TOOL_EXTENSION || '0', 10);
 /** Maximum history messages to send per request (excludes current user message) */
-const MAX_CONTEXT_MESSAGES = parseInt(process.env.MAX_CONTEXT_MESSAGES || '16', 10);
+const MAX_CONTEXT_MESSAGES = parseInt(process.env.MAX_CONTEXT_MESSAGES || '12', 10);
 /** Soft cap for history character volume sent per request */
-const MAX_CONTEXT_CHARS = parseInt(process.env.MAX_CONTEXT_CHARS || '6000', 10);
+const MAX_CONTEXT_CHARS = parseInt(process.env.MAX_CONTEXT_CHARS || '4200', 10);
 /** Per-message history cap so one long dump does not crowd out the rest of the context */
-const MAX_CONTEXT_MESSAGE_CHARS = parseInt(process.env.MAX_CONTEXT_MESSAGE_CHARS || '900', 10);
-const MAX_CONTEXT_SUMMARY_CHARS = parseInt(process.env.MAX_CONTEXT_SUMMARY_CHARS || '1400', 10);
-const MAX_CONTEXT_CODE_BLOCK_CHARS = parseInt(process.env.MAX_CONTEXT_CODE_BLOCK_CHARS || '500', 10);
+const MAX_CONTEXT_MESSAGE_CHARS = parseInt(process.env.MAX_CONTEXT_MESSAGE_CHARS || '750', 10);
+const MAX_CONTEXT_SUMMARY_CHARS = parseInt(process.env.MAX_CONTEXT_SUMMARY_CHARS || '1000', 10);
+const MAX_CONTEXT_CODE_BLOCK_CHARS = parseInt(process.env.MAX_CONTEXT_CODE_BLOCK_CHARS || '350', 10);
 /**
  * Max total time for a tool loop (ms).
  * Defaults to 6 minutes to stop fire-and-forget runaway runs; set to 0 only when you explicitly want no wall-clock cap.
@@ -764,15 +796,27 @@ function buildRuntimeStatusMessage(
   budget: { remaining: number; spent: number; limit: number },
   tokens: { used: number; remaining: number; limit: number },
 ): string {
-  const notes = [
-    `[Runtime status] Budget $${budget.spent.toFixed(2)}/$${budget.limit.toFixed(2)} used ($${budget.remaining.toFixed(2)} remaining). Tokens ${tokens.used.toLocaleString()}/${tokens.limit.toLocaleString()} used (${tokens.remaining.toLocaleString()} remaining).`,
-  ];
+  const lowBudget = budget.remaining < 0.5;
+  const lowTokens = tokens.remaining < Math.max(200_000, Math.round(tokens.limit * 0.15));
 
-  if (budget.remaining < 0.5) {
-    notes.push('Low budget warning: keep tool use minimal and avoid broad scans.');
+  // Keep the prompt prefix stable for better cache reuse unless headroom is genuinely low.
+  if (!lowBudget && !lowTokens) {
+    return userMessage;
   }
-  if (tokens.remaining < Math.max(200_000, Math.round(tokens.limit * 0.15))) {
-    notes.push('Low token headroom: prefer targeted reads, summaries, and one-agent execution paths.');
+
+  const notes = ['[Runtime status]'];
+  notes.push(lowBudget
+    ? `Budget is low: $${budget.remaining.toFixed(2)} remaining from a $${budget.limit.toFixed(2)} daily limit.`
+    : 'Budget is healthy.');
+  notes.push(lowTokens
+    ? `Token headroom is low: ${tokens.remaining.toLocaleString()} remaining.`
+    : 'Token headroom is healthy.');
+
+  if (lowBudget) {
+    notes.push('Keep tool use minimal and avoid broad scans.');
+  }
+  if (lowTokens) {
+    notes.push('Prefer targeted reads, short summaries, and one-agent execution paths.');
   }
 
   return `${notes.join('\n')}\n\n[User request]\n${userMessage}`;
@@ -1224,7 +1268,7 @@ RUNTIME EFFICIENCY:
     parts: [{ text: normalizeHistoryContentForModel(msg.content) }],
   }));
 
-  const agentTools = options?.disableTools ? [] : toolsForAgent(agent.id);
+  const agentTools = options?.disableTools ? [] : toolsForPrompt(agent.id, userMessage);
   const geminiTools = toGeminiTools(agentTools);
   const promptHistory = options?.chatSession?.chat
     ? await options.chatSession.chat.getHistory().catch(() => [] as Content[])
@@ -1245,7 +1289,7 @@ RUNTIME EFFICIENCY:
     toolResultChars: 0,
   };
 
-  let currentModelName = options?.modelOverride || options?.chatSession?.modelName || modelForAgent(agent.id, userMessage);
+  let currentModelName = options?.modelOverride || options?.chatSession?.modelName || (isPriority ? VOICE_FAST_MODEL : modelForAgent(agent.id, userMessage));
   let escalatedToPro = currentModelName === GEMINI_PRO;
 
   logAgentEvent(agent.id, 'invoke', `model=${currentModelName}, context=${trimmedHistory.length} msgs, ${formatPromptBreakdownForLog(pendingPromptBreakdown)}, prompt="${userMessage.slice(0, 200)}"`);
