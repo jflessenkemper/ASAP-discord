@@ -31,7 +31,34 @@ interface UsageCounters {
   geminiInputTokens: number;
   elevenLabsChars: number;
   approvedBudgetUsd: number;
+  llmRequests: number;
+  anthropicRequests: number;
+  geminiTextRequests: number;
+  llmCacheReadInputTokens: number;
+  llmCacheCreationInputTokens: number;
+  llmCacheReadRequests: number;
+  llmCacheCreationRequests: number;
+  promptSystemChars: number;
+  promptHistoryChars: number;
+  promptToolsChars: number;
+  promptUserChars: number;
+  promptToolResultChars: number;
   lastReset: string; // ISO date string (YYYY-MM-DD)
+}
+
+export interface PromptBreakdown {
+  systemChars?: number;
+  historyChars?: number;
+  toolsChars?: number;
+  userChars?: number;
+  toolResultChars?: number;
+}
+
+export interface ClaudeUsageAttribution {
+  modelName?: string;
+  cacheReadInputTokens?: number;
+  cacheCreationInputTokens?: number;
+  promptBreakdown?: PromptBreakdown;
 }
 
 const usage: UsageCounters = {
@@ -45,6 +72,18 @@ const usage: UsageCounters = {
   geminiInputTokens: 0,
   elevenLabsChars: 0,
   approvedBudgetUsd: 0,
+  llmRequests: 0,
+  anthropicRequests: 0,
+  geminiTextRequests: 0,
+  llmCacheReadInputTokens: 0,
+  llmCacheCreationInputTokens: 0,
+  llmCacheReadRequests: 0,
+  llmCacheCreationRequests: 0,
+  promptSystemChars: 0,
+  promptHistoryChars: 0,
+  promptToolsChars: 0,
+  promptUserChars: 0,
+  promptToolResultChars: 0,
   lastReset: new Date().toISOString().split('T')[0],
 };
 
@@ -82,6 +121,18 @@ export async function initUsageCounters(): Promise<void> {
       usage.geminiInputTokens = Number(parsed.geminiInputTokens) || 0;
       usage.elevenLabsChars = Number(parsed.elevenLabsChars) || 0;
       usage.approvedBudgetUsd = Number(parsed.approvedBudgetUsd) || 0;
+      usage.llmRequests = Number(parsed.llmRequests) || 0;
+      usage.anthropicRequests = Number(parsed.anthropicRequests) || 0;
+      usage.geminiTextRequests = Number(parsed.geminiTextRequests) || 0;
+      usage.llmCacheReadInputTokens = Number(parsed.llmCacheReadInputTokens) || 0;
+      usage.llmCacheCreationInputTokens = Number(parsed.llmCacheCreationInputTokens) || 0;
+      usage.llmCacheReadRequests = Number(parsed.llmCacheReadRequests) || 0;
+      usage.llmCacheCreationRequests = Number(parsed.llmCacheCreationRequests) || 0;
+      usage.promptSystemChars = Number(parsed.promptSystemChars) || 0;
+      usage.promptHistoryChars = Number(parsed.promptHistoryChars) || 0;
+      usage.promptToolsChars = Number(parsed.promptToolsChars) || 0;
+      usage.promptUserChars = Number(parsed.promptUserChars) || 0;
+      usage.promptToolResultChars = Number(parsed.promptToolResultChars) || 0;
       usage.lastReset = typeof parsed.lastReset === 'string'
         ? parsed.lastReset
         : new Date().toISOString().split('T')[0];
@@ -134,6 +185,18 @@ function resetIfNewDay(): void {
     usage.geminiInputTokens = 0;
     usage.elevenLabsChars = 0;
     usage.approvedBudgetUsd = 0;
+    usage.llmRequests = 0;
+    usage.anthropicRequests = 0;
+    usage.geminiTextRequests = 0;
+    usage.llmCacheReadInputTokens = 0;
+    usage.llmCacheCreationInputTokens = 0;
+    usage.llmCacheReadRequests = 0;
+    usage.llmCacheCreationRequests = 0;
+    usage.promptSystemChars = 0;
+    usage.promptHistoryChars = 0;
+    usage.promptToolsChars = 0;
+    usage.promptUserChars = 0;
+    usage.promptToolResultChars = 0;
     usage.lastReset = today;
     markUsageDirty();
   }
@@ -166,18 +229,50 @@ function isAnthropicModelName(modelName?: string): boolean {
   return key.includes('claude') || key.includes('opus') || key.includes('sonnet') || key.includes('haiku');
 }
 
-export function recordClaudeUsage(inputTokens: number, outputTokens: number, modelName?: string): void {
+function asNonNegativeInt(value: unknown): number {
+  const num = Number(value);
+  return Number.isFinite(num) && num > 0 ? Math.round(num) : 0;
+}
+
+export function recordClaudeUsage(
+  inputTokens: number,
+  outputTokens: number,
+  modelNameOrAttribution?: string | ClaudeUsageAttribution,
+): void {
   resetIfNewDay();
+
+  const attribution = typeof modelNameOrAttribution === 'string'
+    ? { modelName: modelNameOrAttribution }
+    : (modelNameOrAttribution || {});
+  const modelName = attribution.modelName;
+
   usage.claudeInputTokens += inputTokens;
   usage.claudeOutputTokens += outputTokens;
+  usage.llmRequests += 1;
 
   if (isAnthropicModelName(modelName)) {
     usage.anthropicInputTokens += inputTokens;
     usage.anthropicOutputTokens += outputTokens;
+    usage.anthropicRequests += 1;
   } else {
     usage.geminiTextInputTokens += inputTokens;
     usage.geminiTextOutputTokens += outputTokens;
+    usage.geminiTextRequests += 1;
   }
+
+  const cacheRead = asNonNegativeInt(attribution.cacheReadInputTokens);
+  const cacheCreation = asNonNegativeInt(attribution.cacheCreationInputTokens);
+  usage.llmCacheReadInputTokens += cacheRead;
+  usage.llmCacheCreationInputTokens += cacheCreation;
+  if (cacheRead > 0) usage.llmCacheReadRequests += 1;
+  if (cacheCreation > 0) usage.llmCacheCreationRequests += 1;
+
+  const prompt = attribution.promptBreakdown || {};
+  usage.promptSystemChars += asNonNegativeInt(prompt.systemChars);
+  usage.promptHistoryChars += asNonNegativeInt(prompt.historyChars);
+  usage.promptToolsChars += asNonNegativeInt(prompt.toolsChars);
+  usage.promptUserChars += asNonNegativeInt(prompt.userChars);
+  usage.promptToolResultChars += asNonNegativeInt(prompt.toolResultChars);
 
   markUsageDirty();
 }
@@ -341,6 +436,59 @@ function progressBar(used: number, limit: number, length: number = 20): string {
   return `${emoji} ${bar} ${pct}%`;
 }
 
+function formatCompactCount(value: number): string {
+  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`;
+  if (value >= 1_000) return `${(value / 1_000).toFixed(1)}k`;
+  return value.toLocaleString();
+}
+
+export function getPromptAttributionSnapshot(): {
+  requests: number;
+  anthropicRequests: number;
+  geminiRequests: number;
+  cacheReadTokens: number;
+  cacheCreationTokens: number;
+  cacheReadRequests: number;
+  cacheCreationRequests: number;
+  cacheHitRatePct: number;
+  avgPromptChars: {
+    system: number;
+    history: number;
+    tools: number;
+    user: number;
+    toolResults: number;
+    total: number;
+  };
+} {
+  resetIfNewDay();
+  const requests = Math.max(0, usage.llmRequests);
+  const avg = (value: number) => requests > 0 ? Math.round(value / requests) : 0;
+  const system = avg(usage.promptSystemChars);
+  const history = avg(usage.promptHistoryChars);
+  const tools = avg(usage.promptToolsChars);
+  const user = avg(usage.promptUserChars);
+  const toolResults = avg(usage.promptToolResultChars);
+
+  return {
+    requests,
+    anthropicRequests: usage.anthropicRequests,
+    geminiRequests: usage.geminiTextRequests,
+    cacheReadTokens: usage.llmCacheReadInputTokens,
+    cacheCreationTokens: usage.llmCacheCreationInputTokens,
+    cacheReadRequests: usage.llmCacheReadRequests,
+    cacheCreationRequests: usage.llmCacheCreationRequests,
+    cacheHitRatePct: requests > 0 ? Math.round((usage.llmCacheReadRequests / requests) * 100) : 0,
+    avgPromptChars: {
+      system,
+      history,
+      tools,
+      user,
+      toolResults,
+      total: system + history + tools + user + toolResults,
+    },
+  };
+}
+
 // ─── Formatted usage report (embed) ─────────────────────────────────────────
 export function getUsageEmbed(): EmbedBuilder {
   resetIfNewDay();
@@ -351,6 +499,11 @@ export function getUsageEmbed(): EmbedBuilder {
   const effectiveGcpSpend = effectiveGcpSpendForBudget(estimatedGcp);
   const effectiveTotalSpend = effectiveGcpSpend + cost.elevenLabs;
   const extraBudget = usage.approvedBudgetUsd;
+  const promptStats = getPromptAttributionSnapshot();
+  const promptLine = promptStats.requests > 0
+    ? `Avg chars/request: sys ${formatCompactCount(promptStats.avgPromptChars.system)} · tools ${formatCompactCount(promptStats.avgPromptChars.tools)} · hist ${formatCompactCount(promptStats.avgPromptChars.history)} · user ${formatCompactCount(promptStats.avgPromptChars.user)} · tool ${formatCompactCount(promptStats.avgPromptChars.toolResults)}`
+    : 'Prompt attribution will appear after the next LLM request.';
+  const cacheLine = `Cache read/write: ${formatCompactCount(promptStats.cacheReadTokens)} / ${formatCompactCount(promptStats.cacheCreationTokens)} tokens\nRead hits: ${promptStats.cacheReadRequests}/${promptStats.requests || 0} requests (${promptStats.cacheHitRatePct}%)`;
   const totalRatio = Math.max(
     totalClaudeTokens / DAILY_LIMITS.claudeTokens,
     usage.geminiCalls / DAILY_LIMITS.geminiCalls,
@@ -395,6 +548,10 @@ export function getUsageEmbed(): EmbedBuilder {
         name: '💰 Budget Gate (Today)',
         value: `Effective spend: **$${effectiveTotalSpend.toFixed(4)}**\nGCP used for gate: **$${effectiveGcpSpend.toFixed(4)}**\nLimit: **$${effectiveBudgetLimit().toFixed(2)}**${extraBudget > 0 ? ` (base $${DAILY_LIMITS.budgetUsd.toFixed(2)} + approved $${extraBudget.toFixed(2)})` : ''}`,
         inline: true,
+      },
+      {
+        name: '🧮 Prompt Efficiency',
+        value: `${cacheLine}\n${promptLine}`,
       }
     )
     .setFooter({ text: 'Resets at midnight UTC · Updates every 5 minutes · Live GCP billing may be delayed a few minutes' })
@@ -411,6 +568,7 @@ export function getUsageReport(): string {
   const effectiveGcpSpend = effectiveGcpSpendForBudget(estimatedGcp);
   const effectiveTotalSpend = effectiveGcpSpend + cost.elevenLabs;
   const extraBudget = usage.approvedBudgetUsd;
+  const promptStats = getPromptAttributionSnapshot();
 
   const liveLine = live.available && live.dailyCostUsd !== null
     ? `Live GCP billed spend today (UTC): **$${live.dailyCostUsd.toFixed(4)} ${live.currency}** (month-to-date **$${(live.monthCostUsd || 0).toFixed(4)} ${live.currency}**).`
@@ -423,7 +581,10 @@ export function getUsageReport(): string {
     `${progressBar(totalClaudeTokens, DAILY_LIMITS.claudeTokens)}\n` +
     `${totalClaudeTokens.toLocaleString()} / ${DAILY_LIMITS.claudeTokens.toLocaleString()} tokens` +
     ` (${usage.claudeInputTokens.toLocaleString()} in · ${usage.claudeOutputTokens.toLocaleString()} out)\n` +
-    `Estimated spend: **$${cost.claude.toFixed(4)}**\n\n` +
+    `Estimated spend: **$${cost.claude.toFixed(4)}**\n` +
+    `Cache read/write input tokens: **${formatCompactCount(promptStats.cacheReadTokens)} / ${formatCompactCount(promptStats.cacheCreationTokens)}**\n` +
+    `Cache read hits: **${promptStats.cacheReadRequests}/${promptStats.requests || 0} requests (${promptStats.cacheHitRatePct}%)**\n` +
+    `Avg prompt chars/request: system ${formatCompactCount(promptStats.avgPromptChars.system)} · tools ${formatCompactCount(promptStats.avgPromptChars.tools)} · history ${formatCompactCount(promptStats.avgPromptChars.history)} · user ${formatCompactCount(promptStats.avgPromptChars.user)} · tool results ${formatCompactCount(promptStats.avgPromptChars.toolResults)}\n\n` +
     `**Gemini Voice APIs**\n` +
     `${progressBar(usage.geminiCalls, DAILY_LIMITS.geminiCalls)}\n` +
     `${usage.geminiCalls} / ${DAILY_LIMITS.geminiCalls} API calls\n` +

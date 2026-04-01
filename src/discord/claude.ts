@@ -4,8 +4,8 @@ import { GoogleAuth } from 'google-auth-library';
 import { readFileSync } from 'fs';
 import { extname, join } from 'path';
 import { AgentConfig } from './agents';
-import { REPO_TOOLS, REVIEW_TOOLS, executeTool, getToolAuditCallback } from './tools';
-import { recordClaudeUsage, isClaudeOverLimit, isBudgetExceeded, getRemainingBudget, getClaudeTokenStatus, approveAdditionalBudget } from './usage';
+import { REPO_TOOLS, REVIEW_TOOLS, RILEY_TOOLS, PROMPT_REPO_TOOLS, PROMPT_REVIEW_TOOLS, PROMPT_RILEY_TOOLS, executeTool, getToolAuditCallback } from './tools';
+import { recordClaudeUsage, isClaudeOverLimit, isBudgetExceeded, getRemainingBudget, getClaudeTokenStatus, approveAdditionalBudget, type PromptBreakdown } from './usage';
 import { logAgentEvent } from './activityLog';
 import { recordAgentResponse, recordRateLimitHit } from './metrics';
 
@@ -17,11 +17,12 @@ try {
   console.warn('PROJECT_CONTEXT.md not found — agents will lack project context');
 }
 
-const PROJECT_CONTEXT_MAX_CHARS = parseInt(process.env.PROJECT_CONTEXT_MAX_CHARS || '3000', 10);
+// Keep shared project context lean; agents should pull details from tools only when needed.
+const PROJECT_CONTEXT_MAX_CHARS = parseInt(process.env.PROJECT_CONTEXT_MAX_CHARS || '1800', 10);
 if (PROJECT_CONTEXT.length > PROJECT_CONTEXT_MAX_CHARS) {
   PROJECT_CONTEXT = PROJECT_CONTEXT.slice(0, PROJECT_CONTEXT_MAX_CHARS) + '\n\n[Project context truncated for token efficiency]';
 }
-const PROJECT_CONTEXT_LIGHT_MAX_CHARS = parseInt(process.env.PROJECT_CONTEXT_LIGHT_MAX_CHARS || '1200', 10);
+const PROJECT_CONTEXT_LIGHT_MAX_CHARS = parseInt(process.env.PROJECT_CONTEXT_LIGHT_MAX_CHARS || '500', 10);
 const PROJECT_CONTEXT_LIGHT = PROJECT_CONTEXT.slice(0, PROJECT_CONTEXT_LIGHT_MAX_CHARS);
 
 // Model identifiers (env-overridable for fast runtime switching).
@@ -32,6 +33,8 @@ const ANTHROPIC_OPUS = process.env.ANTHROPIC_CODING_MODEL || 'claude-opus-4-2025
 const DEFAULT_CODING_MODEL = process.env.CODING_AGENT_MODEL || ANTHROPIC_OPUS;
 const DEFAULT_FAST_MODEL = process.env.FAST_AGENT_MODEL || GEMINI_FLASH;
 const FORCE_OPUS_FOR_CODE_WORK = process.env.FORCE_OPUS_FOR_CODE_WORK !== 'false';
+const ANTHROPIC_AUTO_CACHE = process.env.ANTHROPIC_AUTO_CACHE !== 'false';
+const COMPACT_RUNTIME_TOOL_PROMPTS = process.env.COMPACT_RUNTIME_TOOL_PROMPTS !== 'false';
 const ALWAYS_CODING_MODEL_AGENTS = new Set(['developer', 'devops', 'ios-engineer', 'android-engineer']);
 const CODE_WORK_RE = /\b(?:code|coding|implement|implementation|fix|bug|debug|refactor|build|compile|lint|typecheck|test(?:s|ing)?|deploy|migration|schema|sql|query|api|endpoint|component|screen|tsx|jsx|react|expo|node|frontend|backend|repo|commit|branch|diff|patch|pull request|pr)\b/i;
 
@@ -75,10 +78,12 @@ function modelForAgent(agentId: string, userMessage: string): string {
 }
 
 /**
- * Agents that need full tool access (write files, deploy, manage Discord, etc.).
- * All other agents get the lightweight REVIEW_TOOLS subset.
+ * Riley gets a deliberately smaller coordination/ops tool surface.
+ * Everyone else defaults to full repo tools; set LIMIT_NON_RILEY_AGENTS_TO_REVIEW_TOOLS=true
+ * to restore the older review-only restriction for non-core agents.
  */
-const FULL_TOOL_AGENTS = new Set(['developer', 'devops', 'executive-assistant']);
+const LEGACY_FULL_TOOL_AGENTS = new Set(['developer', 'devops', 'executive-assistant']);
+const LIMIT_NON_RILEY_AGENTS_TO_REVIEW_TOOLS = process.env.LIMIT_NON_RILEY_AGENTS_TO_REVIEW_TOOLS === 'true';
 
 // Resilience toggles: default ON so Riley can complete fire-and-forget requests.
 const RILEY_AUTO_APPROVE_BUDGET = process.env.RILEY_AUTO_APPROVE_BUDGET !== 'false';
@@ -88,8 +93,23 @@ const RILEY_TOKEN_OVERRUN_ALLOWANCE = parseInt(process.env.RILEY_TOKEN_OVERRUN_A
 
 type AnyTool = { name: string; description: string; input_schema: any };
 
+function hasFullRepoToolAccess(agentId: string): boolean {
+  return agentId !== 'executive-assistant'
+    && (!LIMIT_NON_RILEY_AGENTS_TO_REVIEW_TOOLS || LEGACY_FULL_TOOL_AGENTS.has(agentId));
+}
+
 function toolsForAgent(agentId: string): AnyTool[] {
-  return (FULL_TOOL_AGENTS.has(agentId) ? REPO_TOOLS : REVIEW_TOOLS) as unknown as AnyTool[];
+  const repoTools = (COMPACT_RUNTIME_TOOL_PROMPTS ? PROMPT_REPO_TOOLS : REPO_TOOLS) as unknown as AnyTool[];
+  const reviewTools = (COMPACT_RUNTIME_TOOL_PROMPTS ? PROMPT_REVIEW_TOOLS : REVIEW_TOOLS) as unknown as AnyTool[];
+  const rileyTools = (COMPACT_RUNTIME_TOOL_PROMPTS ? PROMPT_RILEY_TOOLS : RILEY_TOOLS) as unknown as AnyTool[];
+
+  if (agentId === 'executive-assistant') {
+    return rileyTools;
+  }
+  if (LIMIT_NON_RILEY_AGENTS_TO_REVIEW_TOOLS) {
+    return hasFullRepoToolAccess(agentId) ? repoTools : reviewTools;
+  }
+  return repoTools;
 }
 
 /**
@@ -148,7 +168,13 @@ const VERTEX_LOCATION = process.env.VERTEX_LOCATION || 'us-central1';
 type ToolCallLike = { name: string; args: object; id?: string };
 
 type ModelResponseLike = {
-  usageMetadata?: { promptTokenCount?: number; candidatesTokenCount?: number };
+  usageMetadata?: {
+    promptTokenCount?: number;
+    candidatesTokenCount?: number;
+    cacheCreationInputTokens?: number;
+    cacheReadInputTokens?: number;
+    cachedContentTokenCount?: number;
+  };
   text: () => string;
   functionCalls: () => ToolCallLike[];
 };
@@ -379,8 +405,13 @@ function makeResponseLikeFromAnthropic(raw: any): ModelResponseLike {
   const blocks: any[] = raw?.content || [];
   const response: ModelResponseLike = {
     usageMetadata: {
-      promptTokenCount: raw?.usage?.input_tokens || 0,
+      promptTokenCount:
+        (raw?.usage?.input_tokens || 0) +
+        (raw?.usage?.cache_creation_input_tokens || 0) +
+        (raw?.usage?.cache_read_input_tokens || 0),
       candidatesTokenCount: raw?.usage?.output_tokens || 0,
+      cacheCreationInputTokens: raw?.usage?.cache_creation_input_tokens || 0,
+      cacheReadInputTokens: raw?.usage?.cache_read_input_tokens || 0,
     },
     text: () => blocks.filter((block) => block?.type === 'text').map((block) => String(block.text || '')).join(''),
     functionCalls: () => blocks
@@ -413,7 +444,8 @@ function createAnthropicModel(
       system: options.systemInstruction,
       messages,
       tools: anthropicTools.length > 0 ? anthropicTools as any : undefined,
-    }, signal ? { signal } as any : undefined);
+      ...(ANTHROPIC_AUTO_CACHE ? { cache_control: { type: 'ephemeral' } as any } : {}),
+    } as any, signal ? { signal } as any : undefined);
 
     return { response: makeResponseLikeFromAnthropic(raw) };
   };
@@ -460,6 +492,42 @@ function createModel(modelName: string, options: { systemInstruction?: string; t
   }) as unknown as ModelLike;
 }
 
+function trimMiddle(text: string, maxChars: number): string {
+  if (text.length <= maxChars) return text;
+  const head = Math.max(80, Math.floor(maxChars * 0.65));
+  const tail = Math.max(40, maxChars - head - 24);
+  return `${text.slice(0, head)}\n…[trimmed for context]…\n${text.slice(-tail)}`;
+}
+
+function compactHistoryContent(role: 'user' | 'assistant', content: string): string {
+  let normalized = normalizeHistoryContentForModel(content)
+    .replace(/\r\n/g, '\n')
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+
+  if (!normalized) return '';
+
+  if (
+    role === 'assistant' &&
+    normalized.length <= 160 &&
+    /^(?:ok(?:ay)?|got it|working on it|looking into it|checking(?: now)?|done|thanks|noted|understood|will do)[.!]?$/i.test(normalized)
+  ) {
+    return '';
+  }
+
+  normalized = normalized.replace(/```([\s\S]*?)```/g, (_match, block) => {
+    const clipped = trimMiddle(String(block || '').trim(), MAX_CONTEXT_CODE_BLOCK_CHARS);
+    return `\`\`\`\n${clipped}\n\`\`\``;
+  });
+
+  const maxChars = normalized.startsWith('[Conversation Summary')
+    ? MAX_CONTEXT_SUMMARY_CHARS
+    : MAX_CONTEXT_MESSAGE_CHARS;
+
+  return trimMiddle(normalized, maxChars);
+}
+
 function trimConversationHistory(conversationHistory: ConversationMessage[]): ConversationMessage[] {
   if (conversationHistory.length === 0) return conversationHistory;
 
@@ -473,14 +541,17 @@ function trimConversationHistory(conversationHistory: ConversationMessage[]): Co
   for (let i = conversationHistory.length - 1; i >= 0; i--) {
     const msg = conversationHistory[i];
     if (summaryMsg && msg === summaryMsg) continue;
-    const msgLen = msg.content.length;
+    const compactContent = compactHistoryContent(msg.role, msg.content);
+    if (!compactContent) continue;
+    const msgLen = compactContent.length;
     if (recent.length >= MAX_CONTEXT_MESSAGES || chars + msgLen > MAX_CONTEXT_CHARS) break;
-    recent.push(msg);
+    recent.push({ ...msg, content: compactContent });
     chars += msgLen;
   }
 
   recent.reverse();
-  const merged = summaryMsg ? [summaryMsg, ...recent] : recent;
+  const compactSummary = summaryMsg ? compactHistoryContent(summaryMsg.role, summaryMsg.content) : '';
+  const merged = compactSummary ? [{ ...summaryMsg!, content: compactSummary }, ...recent] : recent;
 
   // Gemini chat history must start with a user message.
   // Groupchat edge cases can occasionally leave an assistant-first history.
@@ -499,7 +570,7 @@ function normalizeHistoryContentForModel(content: string): string {
     .trim();
 }
 
-function truncateToolResult(result: string, maxChars = 3500): string {
+function truncateToolResult(result: string, maxChars = 1800): string {
   if (result.length <= maxChars) return result;
   const head = Math.floor(maxChars * 0.75);
   const tail = maxChars - head;
@@ -511,11 +582,11 @@ function truncateToolResult(result: string, maxChars = 3500): string {
 }
 
 function getProjectContextForAgent(agentId: string): string {
-  return FULL_TOOL_AGENTS.has(agentId) ? PROJECT_CONTEXT : PROJECT_CONTEXT_LIGHT;
+  return hasFullRepoToolAccess(agentId) ? PROJECT_CONTEXT : PROJECT_CONTEXT_LIGHT;
 }
 
 function isCacheablePrompt(agentId: string, userMessage: string, history: ConversationMessage[]): boolean {
-  if (FULL_TOOL_AGENTS.has(agentId)) return false;
+  if (agentId === 'executive-assistant' || hasFullRepoToolAccess(agentId)) return false;
   if (userMessage.length > 120) return false;
   if (history.length > 6) return false;
   if (/\b(status|latest|current|deploy|build|screenshot|usage|budget|review|fix|run|test|voice|call|log|today|now)\b/i.test(userMessage)) {
@@ -560,19 +631,25 @@ export interface ConversationMessage {
   content: string;
 }
 
-/** Max tool-use iterations before forcing a text response */
-const MAX_TOOL_ROUNDS = parseInt(process.env.MAX_TOOL_ROUNDS || '60', 10);
-const MAX_TOOL_ROUNDS_DEVELOPER = parseInt(process.env.MAX_TOOL_ROUNDS_DEVELOPER || '90', 10);
-const MAX_TOOL_ROUNDS_EXECUTIVE = parseInt(process.env.MAX_TOOL_ROUNDS_EXECUTIVE || '75', 10);
+/** Max tool-use iterations before forcing a text response. Lower defaults help stop runaway loops. */
+const MAX_TOOL_ROUNDS = parseInt(process.env.MAX_TOOL_ROUNDS || '18', 10);
+const MAX_TOOL_ROUNDS_DEVELOPER = parseInt(process.env.MAX_TOOL_ROUNDS_DEVELOPER || '28', 10);
+const MAX_TOOL_ROUNDS_EXECUTIVE = parseInt(process.env.MAX_TOOL_ROUNDS_EXECUTIVE || '12', 10);
+/** Optional one-time extra Riley pass. Default OFF to avoid runaway tool loops. */
+const RILEY_AUTO_TOOL_EXTENSION = parseInt(process.env.RILEY_AUTO_TOOL_EXTENSION || '0', 10);
 /** Maximum history messages to send per request (excludes current user message) */
-const MAX_CONTEXT_MESSAGES = parseInt(process.env.MAX_CONTEXT_MESSAGES || '35', 10);
+const MAX_CONTEXT_MESSAGES = parseInt(process.env.MAX_CONTEXT_MESSAGES || '16', 10);
 /** Soft cap for history character volume sent per request */
-const MAX_CONTEXT_CHARS = parseInt(process.env.MAX_CONTEXT_CHARS || '16000', 10);
+const MAX_CONTEXT_CHARS = parseInt(process.env.MAX_CONTEXT_CHARS || '6000', 10);
+/** Per-message history cap so one long dump does not crowd out the rest of the context */
+const MAX_CONTEXT_MESSAGE_CHARS = parseInt(process.env.MAX_CONTEXT_MESSAGE_CHARS || '900', 10);
+const MAX_CONTEXT_SUMMARY_CHARS = parseInt(process.env.MAX_CONTEXT_SUMMARY_CHARS || '1400', 10);
+const MAX_CONTEXT_CODE_BLOCK_CHARS = parseInt(process.env.MAX_CONTEXT_CODE_BLOCK_CHARS || '500', 10);
 /**
  * Max total time for a tool loop (ms).
- * Set to 0 (default) to disable wall-clock timeout so agents can run as long as needed.
+ * Defaults to 6 minutes to stop fire-and-forget runaway runs; set to 0 only when you explicitly want no wall-clock cap.
  */
-const TOOL_LOOP_TIMEOUT = parseInt(process.env.TOOL_LOOP_TIMEOUT_MS || '0', 10);
+const TOOL_LOOP_TIMEOUT = parseInt(process.env.TOOL_LOOP_TIMEOUT_MS || '360000', 10);
 /** Max concurrent Gemini requests (global and per-model caps) */
 const MAX_CONCURRENT = parseInt(process.env.GEMINI_MAX_CONCURRENT || '5', 10);
 const MAX_CONCURRENT_FLASH = parseInt(process.env.GEMINI_MAX_CONCURRENT_FLASH || '4', 10);
@@ -619,6 +696,86 @@ function formatRecoveryTime(timestamp: number): string {
     second: '2-digit',
     hour12: false,
   });
+}
+
+type UsageTelemetry = {
+  inputTokens: number;
+  outputTokens: number;
+  cacheCreationInputTokens: number;
+  cacheReadInputTokens: number;
+};
+
+function readUsageInt(...values: unknown[]): number {
+  for (const value of values) {
+    const num = Number(value);
+    if (Number.isFinite(num) && num > 0) return Math.round(num);
+  }
+  return 0;
+}
+
+function extractUsageTelemetry(response: ModelResponseLike): UsageTelemetry {
+  const meta = (response.usageMetadata || {}) as Record<string, unknown>;
+  const raw = (response as any).__raw || {};
+  const rawUsage = raw?.usage || raw?.usageMetadata || raw?.usage_metadata || {};
+
+  return {
+    inputTokens: readUsageInt(meta.promptTokenCount, rawUsage.promptTokenCount, rawUsage.input_tokens),
+    outputTokens: readUsageInt(meta.candidatesTokenCount, rawUsage.candidatesTokenCount, rawUsage.output_tokens),
+    cacheCreationInputTokens: readUsageInt(
+      meta.cacheCreationInputTokens,
+      rawUsage.cacheCreationInputTokens,
+      rawUsage.cache_creation_input_tokens,
+    ),
+    cacheReadInputTokens: readUsageInt(
+      meta.cacheReadInputTokens,
+      meta.cachedContentTokenCount,
+      rawUsage.cacheReadInputTokens,
+      rawUsage.cache_read_input_tokens,
+      rawUsage.cachedContentTokenCount,
+      rawUsage.cached_content_token_count,
+    ),
+  };
+}
+
+function estimateHistoryChars(history: Content[]): number {
+  return history.reduce((sum, entry) => sum + (entry.parts || []).reduce((partSum, part: any) => partSum + String(part?.text || '').length, 0), 0);
+}
+
+function estimateToolSchemaChars(tools: AnyTool[]): number {
+  return tools.reduce(
+    (sum, tool) => sum + JSON.stringify({ name: tool.name, description: tool.description, input_schema: tool.input_schema }).length,
+    0,
+  );
+}
+
+function estimateToolResultChars(parts: Part[]): number {
+  return (parts || []).reduce((sum, part: any) => {
+    const output = part?.functionResponse?.response?.output;
+    return sum + String(output || '').length;
+  }, 0);
+}
+
+function formatPromptBreakdownForLog(breakdown: PromptBreakdown): string {
+  return `chars(sys=${breakdown.systemChars || 0},tools=${breakdown.toolsChars || 0},hist=${breakdown.historyChars || 0},user=${breakdown.userChars || 0},tool=${breakdown.toolResultChars || 0})`;
+}
+
+function buildRuntimeStatusMessage(
+  userMessage: string,
+  budget: { remaining: number; spent: number; limit: number },
+  tokens: { used: number; remaining: number; limit: number },
+): string {
+  const notes = [
+    `[Runtime status] Budget $${budget.spent.toFixed(2)}/$${budget.limit.toFixed(2)} used ($${budget.remaining.toFixed(2)} remaining). Tokens ${tokens.used.toLocaleString()}/${tokens.limit.toLocaleString()} used (${tokens.remaining.toLocaleString()} remaining).`,
+  ];
+
+  if (budget.remaining < 0.5) {
+    notes.push('Low budget warning: keep tool use minimal and avoid broad scans.');
+  }
+  if (tokens.remaining < Math.max(200_000, Math.round(tokens.limit * 0.15))) {
+    notes.push('Low token headroom: prefer targeted reads, summaries, and one-agent execution paths.');
+  }
+
+  return `${notes.join('\n')}\n\n[User request]\n${userMessage}`;
 }
 
 export function setRateLimitNotifyCallback(callback: ((message: string) => void | Promise<void>) | null): void {
@@ -973,7 +1130,7 @@ export async function agentRespond(
       : `⚠️ Daily budget of $${limit.toFixed(2)} has been reached ($${spent.toFixed(2)} spent) and runtime auto-approval could not clear it. Ask Riley to escalate only if she confirms the budget gate is still blocking.`;
   }
 
-  const isFullToolAgent = FULL_TOOL_AGENTS.has(agent.id);
+  const hasFullRepoTools = hasFullRepoToolAccess(agent.id);
   const { remaining, spent, limit } = getRemainingBudget();
   const { used: tokenUsed, remaining: tokenRemaining, limit: tokenLimit } = getClaudeTokenStatus();
 
@@ -981,7 +1138,7 @@ export async function agentRespond(
 AGENT COORDINATION: Coordinate agents via Discord mentions in your response text. The system parses and routes automatically.
 Prefer exact role mentions supplied in the live conversation context. If no exact mention tokens are provided, use canonical handles like @ace, @max, @sophie, @kane, @raj, @elena, @kai, @jude, @liv, @harper, @mia, and @leo.
 CRITICAL: Do NOT use send_channel_message — use Discord mentions for agent coordination.
-    DEFAULT: When work needs execution, involve the full agent roster unless the user explicitly asks for a narrower subset.
+    DEFAULT: When work needs execution, start with @ace only. Ace is the tool master and should bring in other specialists only if they are actually needed.
 ` : '';
 
   const budgetGovernance = RILEY_AUTO_APPROVE_BUDGET
@@ -1006,7 +1163,7 @@ GOVERNANCE:
 - You are Jordan's token master. Any request to increase Gemini tokens, Google Cloud credits, ElevenLabs credit, or daily budget must come through you.
 - Only escalate budget to Jordan if a hard budget block remains after runtime auto-approval has already been attempted.
 - Ace is the Tool Master. If tooling is missing, stale, or unreliable, direct @ace to prepare it before the rest of the team proceeds.
-- Internal tool-usage approvals are your call. If more tool rounds are justified, approve and direct the team to continue.
+- If a run hits the safety cap, restart with a tighter prompt or hand it to the best specialist instead of letting one loop sprawl.
 - If you state that a deployment/screenshots/URL/cleanup action is happening, you MUST include explicit action tags in the same message: [ACTION:DEPLOY], [ACTION:SCREENSHOTS], [ACTION:URLS], [ACTION:CLEANUP:<count>].
 - You are allowed to self-improve: if your own orchestration/routing/tooling is causing friction, direct @ace to patch the Discord bot code and deploy the improvement in the same run.
 - If groupchat gets noisy/disjointed, run [ACTION:CLEANUP:<count>] to delete recent bot/webhook clutter before posting the consolidated update.
@@ -1016,21 +1173,21 @@ GOVERNANCE:
 - You are the Tool Master. Own tool readiness for the whole team.
 - Keep .github/AGENT_TOOLING_STATUS.md accurate, make missing tools available where possible, and confirm readiness before other agents depend on them.
 - Riley is the token master. If more budget, credits, or token headroom is needed, report that to Riley instead of asking Jordan directly.
-- If you hit internal tool-usage caps, ask @riley for more tool usage approval and continue once approved.
+- If a run stops at the safety cap, report the current state clearly and wait for a tighter follow-up prompt.
 ${workerBudgetGovernance}
 ` : `
 GOVERNANCE:
 - Riley is the token master. Never ask Jordan directly for more tokens, budget, or credits. Ask Riley so she can seek approval.
 - Ace is the Tool Master. Before tool-heavy work, or anytime tool readiness is uncertain, check with @ace first and wait for the green light.
-- If you hit internal tool-usage caps, ask @riley for more tool usage approval and continue once approved.
+- If a run stops at the safety cap, report the current state clearly and wait for a tighter follow-up prompt.
 ${workerBudgetGovernance}
 `;
 
-  const toolsSection = isFullToolAgent
-    ? `\nYou can use the available tools for code, infra, and Discord operations.`
-    : `\nYou can use analysis tools plus operational testing tools (GCP, screenshots, and mobile harness). Repository write tools remain restricted.`;
-
-  const budgetWarning = remaining < 0.50 ? `\n⚠️ LOW BUDGET: $${remaining.toFixed(2)} remaining of $${limit.toFixed(2)} daily limit. Be extremely efficient — minimize tool calls, keep responses short.` : '';
+  const toolsSection = agent.id === 'executive-assistant'
+    ? `\nYou have a deliberately lean coordination/ops tool set. Prefer delegating code edits, deployments, and destructive changes to the best specialist instead of doing them yourself.`
+    : hasFullRepoTools
+      ? `\nYou can use the full repo, infra, and Discord tool surface when needed. Stay focused and avoid broad or repetitive scans.`
+      : `\nYou can use analysis tools plus operational testing tools (GCP, screenshots, and mobile harness). Repository write tools remain restricted.`;
 
   const systemPrompt = `${agent.systemPrompt}
 
@@ -1055,8 +1212,9 @@ Never start your visible reply with your own name, a role label, or bracketed sp
 Describe your role and capabilities plainly. Never call yourself "supreme", say you have "absolute authority", or claim unrestricted control. Do not exaggerate authority, status, or trust relationships.
 Tooling: Ace owns tool readiness. Check .github/AGENT_TOOLING_STATUS.md first. If tooling looks stale or a required tool may not be ready, coordinate with @ace before relying on it.
 ${governanceSection}
-BUDGET: $${spent.toFixed(2)} spent / $${limit.toFixed(2)} daily limit ($${remaining.toFixed(2)} remaining). Each tool call costs tokens. Be efficient.${budgetWarning}
-TOKENS: ${tokenUsed.toLocaleString()} used / ${tokenLimit.toLocaleString()} daily limit (${tokenRemaining.toLocaleString()} remaining). If remaining is low, reduce tool calls and avoid broad scans.`;
+RUNTIME EFFICIENCY:
+- Runtime budget and token status will be supplied separately in the task context.
+- Each tool call costs tokens. Prefer targeted reads, concise summaries, and the narrowest agent/tool path that can finish the job.`;
 
   // Convert conversation history to Gemini Content format.
   // Reused chat sessions already carry prior turns, so skip rebuilding history.
@@ -1068,10 +1226,29 @@ TOKENS: ${tokenUsed.toLocaleString()} used / ${tokenLimit.toLocaleString()} dail
 
   const agentTools = options?.disableTools ? [] : toolsForAgent(agent.id);
   const geminiTools = toGeminiTools(agentTools);
+  const promptHistory = options?.chatSession?.chat
+    ? await options.chatSession.chat.getHistory().catch(() => [] as Content[])
+    : history;
+  const runtimeUserMessage = buildRuntimeStatusMessage(
+    userMessage,
+    { remaining, spent, limit },
+    { used: tokenUsed, remaining: tokenRemaining, limit: tokenLimit },
+  );
+  const basePromptBreakdown: PromptBreakdown = {
+    systemChars: systemPrompt.length,
+    historyChars: estimateHistoryChars(promptHistory),
+    toolsChars: estimateToolSchemaChars(agentTools),
+  };
+  let pendingPromptBreakdown: PromptBreakdown = {
+    ...basePromptBreakdown,
+    userChars: runtimeUserMessage.length,
+    toolResultChars: 0,
+  };
+
   let currentModelName = options?.modelOverride || options?.chatSession?.modelName || modelForAgent(agent.id, userMessage);
   let escalatedToPro = currentModelName === GEMINI_PRO;
 
-  logAgentEvent(agent.id, 'invoke', `model=${currentModelName}, context=${trimmedHistory.length} msgs, prompt="${userMessage.slice(0, 200)}"`);
+  logAgentEvent(agent.id, 'invoke', `model=${currentModelName}, context=${trimmedHistory.length} msgs, ${formatPromptBreakdownForLog(pendingPromptBreakdown)}, prompt="${userMessage.slice(0, 200)}"`);
 
   if (options?.signal?.aborted) return '';
 
@@ -1106,7 +1283,7 @@ TOKENS: ${tokenUsed.toLocaleString()} used / ${tokenLimit.toLocaleString()} dail
   let response;
   try {
     response = await withConcurrencyLimit(currentModelName, () =>
-      withRetry(() => sendMessageWithOptionalStream(chat, userMessage, options?.signal, options?.onPartialText))
+      withRetry(() => sendMessageWithOptionalStream(chat, runtimeUserMessage, options?.signal, options?.onPartialText))
     , isPriority);
   } catch (err: any) {
     if (isAbortError(err)) {
@@ -1117,7 +1294,7 @@ TOKENS: ${tokenUsed.toLocaleString()} used / ${tokenLimit.toLocaleString()} dail
       logAgentEvent(agent.id, 'error', 'Anthropic auth failed — falling back to Gemini Pro');
       await swapToModel(GEMINI_PRO, history);
       response = await withConcurrencyLimit(currentModelName, () =>
-        withRetry(() => sendMessageWithOptionalStream(chat, userMessage, options?.signal, options?.onPartialText))
+        withRetry(() => sendMessageWithOptionalStream(chat, runtimeUserMessage, options?.signal, options?.onPartialText))
       , isPriority);
     } else if (isGeminiQuotaError(err)) {
       triggerGeminiQuotaFuse();
@@ -1192,29 +1369,46 @@ TOKENS: ${tokenUsed.toLocaleString()} used / ${tokenLimit.toLocaleString()} dail
 
     if (functionCalls.length === 0) {
       // No tool calls — final text response
+      const usageTelemetry = extractUsageTelemetry(response.response);
       recordClaudeUsage(
-        response.response.usageMetadata?.promptTokenCount || 0,
-        response.response.usageMetadata?.candidatesTokenCount || 0,
-        currentModelName,
+        usageTelemetry.inputTokens,
+        usageTelemetry.outputTokens,
+        {
+          modelName: currentModelName,
+          cacheCreationInputTokens: usageTelemetry.cacheCreationInputTokens,
+          cacheReadInputTokens: usageTelemetry.cacheReadInputTokens,
+          promptBreakdown: pendingPromptBreakdown,
+        },
       );
       const finalText = response.response.text() || 'Done.';
       if (cacheKey && totalToolCalls === 0 && finalText.length <= 500) {
         setCachedResponse(cacheKey, finalText);
       }
       recordAgentResponse(agent.id, Date.now() - loopStart);
-      logAgentEvent(agent.id, 'response', `${totalToolCalls} tools, response="${finalText.slice(0, 300)}"`, {
-        durationMs: Date.now() - loopStart,
-        tokensIn: response.response.usageMetadata?.promptTokenCount,
-        tokensOut: response.response.usageMetadata?.candidatesTokenCount,
-      });
+      logAgentEvent(
+        agent.id,
+        'response',
+        `${totalToolCalls} tools, cacheRead=${usageTelemetry.cacheReadInputTokens}, cacheWrite=${usageTelemetry.cacheCreationInputTokens}, ${formatPromptBreakdownForLog(pendingPromptBreakdown)}, response="${finalText.slice(0, 300)}"`,
+        {
+          durationMs: Date.now() - loopStart,
+          tokensIn: usageTelemetry.inputTokens,
+          tokensOut: usageTelemetry.outputTokens,
+        },
+      );
       return finalText;
     }
 
-    // Record usage for this round
+    // Record usage for this round with cache/prompt attribution.
+    const usageTelemetry = extractUsageTelemetry(response.response);
     recordClaudeUsage(
-      response.response.usageMetadata?.promptTokenCount || 0,
-      response.response.usageMetadata?.candidatesTokenCount || 0,
-      currentModelName,
+      usageTelemetry.inputTokens,
+      usageTelemetry.outputTokens,
+      {
+        modelName: currentModelName,
+        cacheCreationInputTokens: usageTelemetry.cacheCreationInputTokens,
+        cacheReadInputTokens: usageTelemetry.cacheReadInputTokens,
+        promptBreakdown: pendingPromptBreakdown,
+      },
     );
 
     // Separate read-only (parallel) and write (sequential) calls
@@ -1280,6 +1474,12 @@ TOKENS: ${tokenUsed.toLocaleString()} used / ${tokenLimit.toLocaleString()} dail
       }
     }
 
+    pendingPromptBreakdown = {
+      ...basePromptBreakdown,
+      userChars: 0,
+      toolResultChars: estimateToolResultChars(functionResponses),
+    };
+
     // Send tool results back
     try {
       response = await withConcurrencyLimit(currentModelName, () =>
@@ -1314,13 +1514,13 @@ TOKENS: ${tokenUsed.toLocaleString()} used / ${tokenLimit.toLocaleString()} dail
     }
   }
 
-  if (agent.id === 'executive-assistant' && !options?.rileyAutoToolApprovalUsed) {
-    const extension = Math.max(20, Math.ceil(baseToolRounds * 0.5));
-    logAgentEvent(agent.id, 'response', `Riley approved extra tool usage (+${extension} rounds)`);
+  if (agent.id === 'executive-assistant' && !options?.rileyAutoToolApprovalUsed && RILEY_AUTO_TOOL_EXTENSION > 0) {
+    const extension = Math.max(1, RILEY_AUTO_TOOL_EXTENSION);
+    logAgentEvent(agent.id, 'response', `Riley started one extra tool pass (+${extension} rounds)`);
     return agentRespond(
       agent,
       conversationHistory,
-      `${userMessage}\n\n[System note: Riley approved additional tool usage for this run (+${extension} rounds). Continue and finish.]`,
+      `${userMessage}\n\n[System note: one extra tool pass is enabled for this run (+${extension} rounds). Continue and finish.]`,
       onToolUse,
       {
         ...options,
@@ -1332,8 +1532,8 @@ TOKENS: ${tokenUsed.toLocaleString()} used / ${tokenLimit.toLocaleString()} dail
 
   logAgentEvent(agent.id, 'error', `Max tool iterations (${maxToolRounds}) after ${totalToolCalls} tool calls`, { durationMs: Date.now() - loopStart });
   return agent.id === 'executive-assistant'
-    ? 'I hit an internal tool-run safety limit for this pass. I can approve another pass if it is justified. Here is what I accomplished so far — check the repository and I can continue from the latest state.'
-    : 'I hit an internal tool-run safety limit for this pass. @riley please approve more tool usage if this work should continue, and I will resume from the latest repository state.';
+    ? 'I hit the per-pass tool safety cap for this run. The latest state is preserved; start a fresh, tighter follow-up if you want me to continue from here.'
+    : 'I hit the per-pass tool safety cap for this run. The latest state is preserved; send a tighter follow-up if you want me to continue from here.';
 }
 
 function sanitizeForCodeBlock(text: string): string {

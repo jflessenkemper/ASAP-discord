@@ -50,19 +50,20 @@ let activeThinkingMessage: Message | null = null;
 let activeGoalThreadId: string | null = null;
 let activeGoalSequence = 0;
 let claudeNotificationsBoundChannelId: string | null = null;
-const MAX_PARALLEL_SUBAGENTS = parseInt(process.env.MAX_PARALLEL_SUBAGENTS || '2', 10);
-const SUBAGENT_MAX_TOKENS = parseInt(process.env.SUBAGENT_MAX_TOKENS || '1800', 10);
+const MAX_PARALLEL_SUBAGENTS = parseInt(process.env.MAX_PARALLEL_SUBAGENTS || '1', 10);
+const SUBAGENT_MAX_TOKENS = parseInt(process.env.SUBAGENT_MAX_TOKENS || '900', 10);
 
 // Active goal tracking for /status
 let activeGoal: string | null = null;
 let goalStatus: string | null = null;
 
-// Goal stall auto-recovery: if Riley workflow goes quiet, nudge and continue automatically.
-const GOAL_STALL_TIMEOUT_MS = parseInt(process.env.GOAL_STALL_TIMEOUT_MS || '180000', 10);
-const GOAL_STALL_CHECK_INTERVAL_MS = parseInt(process.env.GOAL_STALL_CHECK_INTERVAL_MS || '30000', 10);
-const GOAL_STALL_MAX_RECOVERY_ATTEMPTS = parseInt(process.env.GOAL_STALL_MAX_RECOVERY_ATTEMPTS || '3', 10);
-const THREAD_CLOSE_REVIEW_IDLE_MS = parseInt(process.env.THREAD_CLOSE_REVIEW_IDLE_MS || '120000', 10);
-const THREAD_CLOSE_REVIEW_INTERVAL_MS = parseInt(process.env.THREAD_CLOSE_REVIEW_INTERVAL_MS || '300000', 10);
+// Goal stall auto-recovery: keep defaults conservative to avoid runaway token spend.
+const GOAL_STALL_TIMEOUT_MS = parseInt(process.env.GOAL_STALL_TIMEOUT_MS || '420000', 10);
+const GOAL_STALL_CHECK_INTERVAL_MS = parseInt(process.env.GOAL_STALL_CHECK_INTERVAL_MS || '60000', 10);
+const GOAL_STALL_MAX_RECOVERY_ATTEMPTS = parseInt(process.env.GOAL_STALL_MAX_RECOVERY_ATTEMPTS || '1', 10);
+const ENABLE_AUTOMATIC_THREAD_CLOSE_REVIEW = process.env.ENABLE_AUTOMATIC_THREAD_CLOSE_REVIEW === 'true';
+const THREAD_CLOSE_REVIEW_IDLE_MS = parseInt(process.env.THREAD_CLOSE_REVIEW_IDLE_MS || '1800000', 10);
+const THREAD_CLOSE_REVIEW_INTERVAL_MS = parseInt(process.env.THREAD_CLOSE_REVIEW_INTERVAL_MS || '7200000', 10);
 const THREAD_STATUS_POST_INTERVAL_MS = parseInt(process.env.THREAD_STATUS_POST_INTERVAL_MS || '3600000', 10);
 const ACTION_COMMAND_TIMEOUT_MS = parseInt(process.env.ACTION_COMMAND_TIMEOUT_MS || '120000', 10);
 const GOAL_THREAD_COUNTER_RE = /\bgoal[-\s]?(\d{4})\b/i;
@@ -510,6 +511,7 @@ async function closeGoalWorkspace(
 }
 
 async function maybeReviewThreadForClosure(groupchat: TextChannel): Promise<void> {
+  if (!ENABLE_AUTOMATIC_THREAD_CLOSE_REVIEW) return;
   if (!activeGoal || !activeGoalThreadId || activeAbortController) return;
 
   const now = Date.now();
@@ -1038,27 +1040,14 @@ async function handleRileyMessage(
 
     const rileyMemory = getMemoryContext('executive-assistant');
     const contextMessage = `[${senderName}]: ${userMessage}`;
-    const coordinationGuide = buildAgentMentionGuide([
-      'developer',
-      'qa',
-      'ux-reviewer',
-      'security-auditor',
-      'api-reviewer',
-      'dba',
-      'performance',
-      'devops',
-      'copywriter',
-      'lawyer',
-      'ios-engineer',
-      'android-engineer',
-    ]);
+    const aceGuide = buildAgentMentionGuide(['developer']);
     // Inject language hint when Mandarin Chinese characters are detected (not persisted to history)
     const cjkPattern = /[\u4e00-\u9fff\u3400-\u4dbf]/;
     const textLangHint = cjkPattern.test(userMessage)
       ? '\n\n[Language detected: Mandarin Chinese. Please reply in Mandarin Chinese (简体中文).]'
       : '';
-    const mentionGuide = `\n\n[Discord role mentions: ${coordinationGuide}. Prefer these exact mentions when delegating work.]`;
-    const threadCloseGuide = `\n\n[Thread workflow: keep this workspace thread open while work is in progress. After each specialist round, post one concise progress update in the workspace thread. When the task is fully complete and no more follow-up is required, include [ACTION:CLOSE_THREAD].]`;
+    const mentionGuide = `\n\n[Delegation default: start with ${aceGuide}. Ace can bring in other specialists only if needed.]`;
+    const threadCloseGuide = `\n\n[Keep the workspace thread updated briefly. Include [ACTION:CLOSE_THREAD] only when the task is fully complete.]`;
     const contextMessageWithLang = `${textLangHint ? `${contextMessage}${textLangHint}` : contextMessage}${mentionGuide}${threadCloseGuide}`;
 
     const response = await agentRespond(riley, [...rileyMemory, ...groupHistory], contextMessageWithLang, async (_toolName, summary) => {
@@ -1119,7 +1108,8 @@ async function handleRileyMessage(
       }
     }
 
-    await handleAgentChain(response, groupchat, workspaceChannel, signal);
+    const chainResponse = ensureAceFirstDelegation(response, userMessage);
+    await handleAgentChain(chainResponse, groupchat, workspaceChannel, signal);
 
     markGoalProgress('✅ Riley cycle completed');
   } catch (err) {
@@ -1436,8 +1426,9 @@ const DIRECTED_AGENT_IDS = new Set<string>([
   'ios-engineer', 'android-engineer',
 ]);
 
-const RILEY_USE_ALL_AGENTS = process.env.RILEY_USE_ALL_AGENTS !== 'false';
-const RILEY_ACE_ERROR_RECOVERY = process.env.RILEY_ACE_ERROR_RECOVERY !== 'false';
+const RILEY_USE_ALL_AGENTS = process.env.RILEY_USE_ALL_AGENTS === 'true';
+const RILEY_DIRECT_SPECIALISTS = process.env.RILEY_DIRECT_SPECIALISTS === 'true';
+const RILEY_ACE_ERROR_RECOVERY = process.env.RILEY_ACE_ERROR_RECOVERY === 'true';
 
 function parseDirectives(text: string): string[] {
   return parseMentionedAgentIds(text, DIRECTED_AGENT_IDS);
@@ -1448,6 +1439,22 @@ function shouldFanOutAllAgents(rileyResponse: string): boolean {
   if (text.includes('no action needed') || text.includes('for awareness only')) return false;
   if (/(only|just)\s+@(ace|max|sophie|kane|raj|elena|kai|jude|liv|harper|mia|leo)\b/i.test(rileyResponse)) return false;
   return true;
+}
+
+const ACE_FIRST_TASK_RE = /\b(?:fix|inspect|investigate|check|review|test|debug|look at|look into|trace|implement|update|change|patch|deploy|smoke|regression|audit|compare|why)\b/i;
+
+function shouldAutoDelegateToAce(userMessage: string, rileyResponse: string): boolean {
+  if (parseDirectives(rileyResponse).length > 0) return false;
+  const responseText = rileyResponse.toLowerCase();
+  if (responseText.includes('no action needed') || responseText.includes('for awareness only') || responseText.includes('decision required')) {
+    return false;
+  }
+  return ACE_FIRST_TASK_RE.test(userMessage);
+}
+
+function ensureAceFirstDelegation(rileyResponse: string, userMessage: string): string {
+  if (!shouldAutoDelegateToAce(userMessage, rileyResponse)) return rileyResponse;
+  return `${rileyResponse}\n\n${getAgentMention('developer' as AgentId)} please take the lead on this task and involve other specialists only if needed.`;
 }
 
 async function recoverFromAgentErrors(
@@ -1537,9 +1544,11 @@ async function handleAgentChain(
   if (effectiveAgents.length === 0) return;
   markGoalProgress('🧩 Coordinating specialist agents...');
 
-  // If Ace was directed, he gets Riley's full plan
-  const aceDirected = effectiveAgents.includes('developer');
-  const otherDirected = effectiveAgents.filter((id) => id !== 'developer');
+  // Riley now routes execution through Ace first; Ace decides whether specialists are needed.
+  const aceDirected = effectiveAgents.length > 0;
+  const otherDirected = RILEY_DIRECT_SPECIALISTS
+    ? effectiveAgents.filter((id) => id !== 'developer')
+    : [];
   const consolidatedFindings: string[] = [];
   const consolidatedErrors: string[] = [];
   if (aceDirected) {
@@ -1549,7 +1558,7 @@ async function handleAgentChain(
         if (signal?.aborted) return;
         const aceChannel = getAgentWorkChannel('developer', groupchat);
         aceChannel.sendTyping().catch(() => {});
-        const aceContext = `[Riley directed you]: ${rileyResponse}\n\nImplement what Riley asked. Use repo tools. If you need a sub-agent's help, use the exact Discord mentions from this guide: ${buildAgentMentionGuide(['security-auditor', 'api-reviewer', 'dba', 'performance', 'devops', 'copywriter', 'lawyer', 'qa', 'ux-reviewer', 'ios-engineer', 'android-engineer'])}. Report back concisely when done.`;
+        const aceContext = `[Riley directed you]: ${rileyResponse}\n\nOwn execution yourself first. Only bring in extra specialists if they are truly needed. If you do delegate, use the exact Discord mentions from this guide: ${buildAgentMentionGuide(['security-auditor', 'api-reviewer', 'dba', 'performance', 'devops', 'copywriter', 'lawyer', 'qa', 'ux-reviewer', 'ios-engineer', 'android-engineer'])}. Report back concisely when done.`;
 
         const aceResponse = await dispatchToAgent('developer', aceContext, aceChannel, {
           signal,
@@ -1656,18 +1665,21 @@ async function handleSubAgents(
     if (signal?.aborted) break;
     groupchat.sendTyping().catch(() => {});
 
-    const priorContext = priorFindings.length > 0
-      ? `\n\n**Prior agent findings (use these to inform your work):**\n${priorFindings.join('\n')}` : '';
+    const priorSummary = priorFindings.slice(-3).join('\n').slice(0, 900);
+    const priorContext = priorSummary
+      ? `\n\nPrior agent findings (use only if relevant):\n${priorSummary}`
+      : '';
+    const directiveExcerpt = directiveContext.replace(/\s+/g, ' ').trim().slice(0, 1400);
 
     const tierResults = await runLimited(
       tierAgents.map(({ id, agent }) => async () => {
         if (signal?.aborted) return;
         documentToChannel(id, `📥 Received task from groupchat. Working...`).catch(() => {});
-        const agentContext = `[Directive from groupchat]: ${directiveContext}${priorContext}\n\nDo your job. Be concise in your response — max 200 words. Report what you found or did.`;
+        const agentContext = `[Directive from groupchat]: ${directiveExcerpt}${priorContext}\n\nDo only the specialist work relevant to your role. Be concise — max 120 words. Report what you found or changed.`;
         const outChannel = getAgentWorkChannel(id, groupchat);
         const agentResponse = await dispatchToAgent(id as AgentId, agentContext, outChannel, {
           maxTokens: SUBAGENT_MAX_TOKENS,
-          memoryWindow: 10,
+          memoryWindow: 6,
           signal,
           persistUserContent: `[Groupchat directive]: ${directiveContext.slice(0, 500)}`,
           documentLine: `✅ {response}`,
@@ -1740,7 +1752,7 @@ async function handleDirectedMessage(
       const outChannel = getAgentWorkChannel(id, groupchat);
       await dispatchToAgent(id as AgentId, contextMessage, outChannel, {
         maxTokens: SUBAGENT_MAX_TOKENS,
-        memoryWindow: 10,
+        memoryWindow: 6,
         signal,
         documentLine: `Direct @mention from ${senderName}: {response}`,
         workspaceChannel,

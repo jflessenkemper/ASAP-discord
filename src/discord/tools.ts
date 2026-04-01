@@ -1202,6 +1202,24 @@ const REVIEW_TOOL_NAMES = new Set([
 ]);
 export const REVIEW_TOOLS = REPO_TOOLS.filter((t) => REVIEW_TOOL_NAMES.has(t.name));
 
+/**
+ * Riley keeps a leaner coordination/ops-only surface so orchestration stays focused.
+ * She can inspect state, run smoke checks, and communicate, but large code/deploy mutations
+ * are delegated to the specialist agents.
+ */
+const RILEY_TOOL_NAMES = new Set([
+  'read_file', 'search_files', 'list_directory', 'fetch_url',
+  'memory_read', 'memory_write', 'memory_append', 'memory_list',
+  'run_tests', 'typecheck', 'git_file_history', 'smoke_test_agents',
+  'list_threads', 'list_channels', 'send_channel_message', 'clear_channel_messages',
+  'read_logs', 'github_search', 'capture_screenshots',
+  'mobile_harness_start', 'mobile_harness_step', 'mobile_harness_snapshot', 'mobile_harness_stop',
+  'gcp_preflight', 'gcp_get_env', 'gcp_list_revisions', 'gcp_secret_list', 'gcp_build_status',
+  'gcp_logs_query', 'gcp_run_describe', 'gcp_storage_ls', 'gcp_artifact_list', 'gcp_sql_describe', 'gcp_project_info',
+  'set_daily_budget', 'db_query_readonly', 'db_schema',
+]);
+export const RILEY_TOOLS = REPO_TOOLS.filter((t) => RILEY_TOOL_NAMES.has(t.name));
+
 type PromptTool = {
   name: string;
   description: string;
@@ -1221,9 +1239,11 @@ function compactSchemaNode(node: any): any {
 }
 
 function compactToolForPrompt(tool: any): PromptTool {
+  const rawDescription = String(tool.description || tool.name).replace(/\s+/g, ' ').trim();
+  const shortDescription = rawDescription.split(/(?<=[.!?])\s+/)[0]?.slice(0, 140) || tool.name;
   return {
     name: tool.name,
-    description: tool.name,
+    description: shortDescription,
     input_schema: compactSchemaNode(tool.input_schema),
   };
 }
@@ -1234,6 +1254,7 @@ function compactToolForPrompt(tool: any): PromptTool {
  */
 export const PROMPT_REPO_TOOLS: PromptTool[] = REPO_TOOLS.map(compactToolForPrompt);
 export const PROMPT_REVIEW_TOOLS: PromptTool[] = REVIEW_TOOLS.map(compactToolForPrompt);
+export const PROMPT_RILEY_TOOLS: PromptTool[] = RILEY_TOOLS.map(compactToolForPrompt);
 
 // ────────────────────────────────────────────
 // Tool execution

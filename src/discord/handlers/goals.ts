@@ -26,7 +26,7 @@ export function clearDecision(): void {
 /**
  * Handle a message in the #goals channel.
  * Riley (Executive Assistant) receives the goal, creates a plan,
- * directs Ace (Developer) to implement, and Harper (Lawyer) reviews.
+ * and directs Ace (Developer) to implement. Ace pulls in specialists only when needed.
  */
 export async function handleGoalsMessage(
   message: Message,
@@ -67,7 +67,6 @@ async function processGoalsMessage(
   const senderName = message.member?.displayName || message.author.username;
   const riley = getAgent('executive-assistant' as AgentId);
   const ace = getAgent('developer' as AgentId);
-  const harper = getAgent('lawyer' as AgentId);
 
   if (!riley || !ace) return;
 
@@ -78,7 +77,7 @@ async function processGoalsMessage(
 
     const decisionContext = `[${senderName} responded to your decision request]: ${content}
 
-The user has made their choice. Acknowledge it briefly, then continue executing the plan. Direct Ace to implement the chosen approach.`;
+The user has made their choice. Acknowledge it briefly, then continue executing the plan. Start with Ace only; he can involve any needed specialists after he inspects the work.`;
 
     try {
       const rileyMemory = getMemoryContext('executive-assistant');
@@ -131,7 +130,7 @@ You are in the #goals channel. ${senderName} has given you a goal. Your job:
 3. If you need Jordan's input on an approach, use the Decision Protocol (🛑 Decision Required)
 4. If the goal is clear, create the plan and then give Ace (Developer) his first instruction
 
-Remember: You plan and coordinate. Ace implements. Harper reviews compliance. Other agents help in their domain.`;
+Remember: You plan and coordinate. Start with Ace first for execution. Ace can involve Harper or other specialists only if they are actually needed.`;
 
   try {
     // Riley creates the plan
@@ -157,36 +156,9 @@ Remember: You plan and coordinate. Ace implements. Harper reviews compliance. Ot
       return;
     }
 
-    // Riley's plan is ready — direct Ace to implement and Harper to review in parallel
-    const acePromise = executeAceStep(ace, riley, rileyResponse, senderName, goalsChannel);
-
-    const harperPromise = harper ? (async () => {
-      goalsChannel.sendTyping().catch(() => {});
-
-      const harperContext = `[Riley planned a goal from ${senderName}]: "${content}"
-
-Riley's plan:
-${rileyResponse.slice(0, 1500)}
-
-Review this for Australian business law compliance. Focus on: privacy (APPs), consumer law (ACL), contractor classification, data handling, and any regulatory concerns. Be concise — only flag actual issues.`;
-
-      const harperMemory = getMemoryContext('lawyer');
-      const harperResponse = await agentRespond(harper, [...harperMemory, ...goalsHistory], harperContext, async (_toolName, summary) => {
-        sendGoalsToolNotification(goalsChannel, harper, summary).catch(() => {});
-      }, { maxTokens: 4096 });
-
-      await sendAgentMessage(goalsChannel, harper, harperResponse);
-
-      goalsHistory.push({ role: 'user', content: `[System: Harper reviewing for compliance]` });
-      goalsHistory.push({ role: 'assistant', content: `[${harper.name}]: ${harperResponse}` });
-      appendToMemory('lawyer', [
-        { role: 'user', content: `[Compliance review for goal]: ${content.slice(0, 500)}` },
-        { role: 'assistant', content: `[Harper]: ${harperResponse}` },
-      ]);
-      documentToChannel('lawyer', `Reviewed compliance for goal: "${content.slice(0, 200)}"`).catch(() => {});
-    })() : Promise.resolve();
-
-    await Promise.allSettled([acePromise, harperPromise]);
+    // Riley's plan is ready — direct Ace to implement first.
+    // Ace can involve Harper or any other specialist if the work actually needs it.
+    await executeAceStep(ace, riley, rileyResponse, senderName, goalsChannel);
 
     trimHistory();
   } catch (err) {
@@ -217,7 +189,7 @@ async function executeAceStep(
   const aceContext = `[INSTRUCTION from Riley (Executive Assistant)]:
 ${rileyPlan}
 
-Riley has created this plan based on a goal from ${senderName}. Implement the steps assigned to you. Use your repo tools to read, write, and edit code. Report back what you've done.`;
+Riley has created this plan based on a goal from ${senderName}. Implement the steps assigned to you. Start the work yourself first, then involve any specialists only if they are actually needed. Use your repo tools to read, write, and edit code. Report back what you've done.`;
 
   const aceMemory = getMemoryContext('developer');
   const aceResponse = await agentRespond(ace, [...aceMemory, ...goalsHistory], aceContext, async (_toolName, summary) => {
