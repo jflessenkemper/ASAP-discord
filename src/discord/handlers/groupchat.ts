@@ -63,6 +63,7 @@ const GOAL_STALL_CHECK_INTERVAL_MS = parseInt(process.env.GOAL_STALL_CHECK_INTER
 const GOAL_STALL_MAX_RECOVERY_ATTEMPTS = parseInt(process.env.GOAL_STALL_MAX_RECOVERY_ATTEMPTS || '3', 10);
 const THREAD_CLOSE_REVIEW_IDLE_MS = parseInt(process.env.THREAD_CLOSE_REVIEW_IDLE_MS || '120000', 10);
 const THREAD_CLOSE_REVIEW_INTERVAL_MS = parseInt(process.env.THREAD_CLOSE_REVIEW_INTERVAL_MS || '300000', 10);
+const THREAD_STATUS_POST_INTERVAL_MS = parseInt(process.env.THREAD_STATUS_POST_INTERVAL_MS || '3600000', 10);
 const ACTION_COMMAND_TIMEOUT_MS = parseInt(process.env.ACTION_COMMAND_TIMEOUT_MS || '120000', 10);
 const GOAL_THREAD_COUNTER_RE = /\bgoal[-\s]?(\d{4})\b/i;
 const APP_SERVER_ROOT = (fs.existsSync(path.join(process.cwd(), 'package.json')) && fs.existsSync(path.join(process.cwd(), 'src')))
@@ -72,8 +73,12 @@ const APP_REPO_ROOT = path.resolve(APP_SERVER_ROOT, '..');
 let lastGoalProgressAt = Date.now();
 let goalRecoveryAttempts = 0;
 let lastThreadCloseReviewAt = 0;
+let lastThreadStatusPostAt = 0;
 let goalSequenceInitialized = false;
 let goalWatchdog: ReturnType<typeof setInterval> | null = null;
+let threadStatusChannel: TextChannel | null = null;
+let threadStatusSourceChannel: TextChannel | null = null;
+let threadStatusReporter: ReturnType<typeof setInterval> | null = null;
 
 function markGoalProgress(status?: string): void {
   lastGoalProgressAt = Date.now();
@@ -305,6 +310,93 @@ let decisionsChannel: TextChannel | null = null;
 /** Wire up the #decisions channel from bot startup. */
 export function setDecisionsChannel(channel: TextChannel): void {
   decisionsChannel = channel;
+}
+
+async function clearThreadStatusMessages(channel: TextChannel): Promise<number> {
+  let removed = 0;
+  let before: string | undefined;
+  const TWO_WEEKS_MS = 14 * 24 * 60 * 60 * 1000;
+
+  for (let batch = 0; batch < 5; batch++) {
+    const messages = await channel.messages.fetch({ limit: 100, before }).catch(() => null);
+    if (!messages || messages.size === 0) break;
+
+    const recentIds = [...messages.values()]
+      .filter((msg) => msg.deletable && (Date.now() - msg.createdTimestamp) < TWO_WEEKS_MS)
+      .map((msg) => msg.id);
+
+    if (recentIds.length > 0) {
+      const deleted = await channel.bulkDelete(recentIds, true).catch(() => null);
+      removed += deleted?.size ?? recentIds.length;
+    }
+
+    const oldMessages = [...messages.values()]
+      .filter((msg) => msg.deletable && (Date.now() - msg.createdTimestamp) >= TWO_WEEKS_MS);
+
+    for (const msg of oldMessages) {
+      await msg.delete().catch(() => {});
+      removed += 1;
+    }
+
+    before = messages.last()?.id;
+    if (messages.size < 100) break;
+  }
+
+  return removed;
+}
+
+export async function postThreadStatusSnapshotNow(reason = 'hourly'): Promise<void> {
+  if (!threadStatusChannel || !threadStatusSourceChannel) return;
+
+  const riley = getAgent('executive-assistant' as AgentId);
+  const timestamp = new Date().toLocaleString('en-AU', { timeZone: 'Australia/Sydney' });
+  const header = reason === 'hourly'
+    ? `🧵 **Hourly Thread Status** — ${timestamp}`
+    : `🧵 **Thread Status Refresh** — ${timestamp}`;
+  const currentGoal = activeGoal
+    ? `**Current Goal:** ${activeGoal}\n**Status:** ${goalStatus || 'In progress...'}`
+    : '**Current Goal:** none active';
+  const report = await buildThreadStatusReport(threadStatusSourceChannel);
+  const content = `${header}\n\n${currentGoal}\n\n${report}`;
+
+  await clearThreadStatusMessages(threadStatusChannel).catch(() => {});
+
+  if (riley) {
+    await sendWebhookMessage(threadStatusChannel, {
+      content,
+      username: `${riley.emoji} ${riley.name}`,
+      avatarURL: riley.avatarUrl,
+    }).catch(async () => {
+      await threadStatusChannel?.send(content).catch(() => {});
+    });
+  } else {
+    await threadStatusChannel.send(content).catch(() => {});
+  }
+
+  lastThreadStatusPostAt = Date.now();
+}
+
+export function setThreadStatusChannel(channel: TextChannel | null, groupchat?: TextChannel | null): void {
+  threadStatusChannel = channel;
+  if (groupchat) {
+    threadStatusSourceChannel = groupchat;
+  }
+
+  if (threadStatusReporter) {
+    clearInterval(threadStatusReporter);
+    threadStatusReporter = null;
+  }
+
+  if (!threadStatusChannel || !threadStatusSourceChannel) {
+    return;
+  }
+
+  lastThreadStatusPostAt = Date.now();
+  threadStatusReporter = setInterval(() => {
+    postThreadStatusSnapshotNow('hourly').catch((err) => {
+      console.error('Thread status reporter error:', err instanceof Error ? err.message : 'Unknown');
+    });
+  }, THREAD_STATUS_POST_INTERVAL_MS);
 }
 
 /** Generic parser for real Discord role mentions plus plain-text fallback handles. */
@@ -1178,7 +1270,9 @@ async function executeActions(
         }
         case 'THREADS': {
           markGoalProgress('🧵 Reviewing workspace threads');
-          await sendAsRiley(await buildThreadStatusReport(groupchat));
+          const report = await buildThreadStatusReport(groupchat);
+          await postThreadStatusSnapshotNow('manual').catch(() => {});
+          await sendAsRiley(report);
           break;
         }
         case 'HEALTH': {

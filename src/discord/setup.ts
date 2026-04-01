@@ -16,6 +16,7 @@ const CAT_OPS = 'Operations';
 
 const MAIN_CHANNELS = {
   groupchat: '💬-groupchat',
+  threadStatus: '🧵-thread-status',
   decisions: '📋-decisions',
   voice: '🎙️-command',
 } as const;
@@ -58,6 +59,7 @@ const LEGACY_ACCIDENTAL_CHANNELS = new Set([
 export interface BotChannels {
   agentChannels: Map<string, TextChannel>;
   groupchat: TextChannel;
+  threadStatus: TextChannel;
   decisions: TextChannel;
   github: TextChannel;
   callLog: TextChannel;
@@ -219,6 +221,13 @@ export async function setupChannels(guild: Guild): Promise<BotChannels> {
         `You can also mention any agent role directly (for example Ace, Kane, or Elena). Plain-text handles still work as a fallback.`
   );
 
+  const threadStatus = await ensureText(
+    MAIN_CHANNELS.threadStatus,
+    catMain,
+    '🧵 Riley posts a fresh hourly summary of open workspace threads and close-ready items.',
+    `🧵 **Thread Status**\n\nRiley refreshes this channel with a clean hourly snapshot of open workspace threads, stale work, and threads that look ready to close.`
+  );
+
   const decisions = await ensureText(
     MAIN_CHANNELS.decisions,
     catMain,
@@ -353,7 +362,7 @@ export async function setupChannels(guild: Guild): Promise<BotChannels> {
   }
 
   // ── Pre-create webhooks for all text channels (parallel) ──
-  const allTextChannels = [groupchat, decisions, github, callLog, limits, screenshots, url, terminal, voiceErrors, agentErrors, ...agentChannels.values()];
+  const allTextChannels = [groupchat, threadStatus, decisions, github, callLog, limits, screenshots, url, terminal, voiceErrors, agentErrors, ...agentChannels.values()];
   console.log('🔗 Pre-creating webhooks for all channels...');
   const webhookResults = await Promise.allSettled(
     allTextChannels.map((channel) => getWebhook(channel))
@@ -406,5 +415,5 @@ export async function setupChannels(guild: Guild): Promise<BotChannels> {
     console.log(`🔒 Restricted raw bot posting in ${restricted.length} non-Operations channel(s)`);
   }
 
-  return { agentChannels, groupchat, decisions, github, callLog, limits, screenshots, url, terminal, voiceErrors, agentErrors, voiceChannel };
+  return { agentChannels, groupchat, threadStatus, decisions, github, callLog, limits, screenshots, url, terminal, voiceErrors, agentErrors, voiceChannel };
 }

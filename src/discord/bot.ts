@@ -10,7 +10,7 @@ import { handleAgentMessage } from './handlers/textChannel';
 import { setCommandAuditCallback, setPRReviewCallback, setDiscordGuild, setToolAuditCallback, setAgentChannelResolver } from './tools';
 import { autoReviewPR } from './handlers/review';
 import { handleGroupchatMessage } from './handlers/groupchat';
-import { setDecisionsChannel, handleDecisionReply } from './handlers/groupchat';
+import { setDecisionsChannel, setThreadStatusChannel, handleDecisionReply } from './handlers/groupchat';
 import { endCall, isCallActive } from './handlers/callSession';
 import { setVoiceErrorChannel } from './handlers/callSession';
 import { setBotChannels } from './handlers/documentation';
@@ -90,6 +90,7 @@ export async function startBot(): Promise<void> {
       setDiscordGuild(guild);
       setAgentChannelResolver((agentId: string) => configuredChannels.agentChannels.get(agentId) || null);
       setDecisionsChannel(configuredChannels.decisions);
+      setThreadStatusChannel(configuredChannels.threadStatus, configuredChannels.groupchat);
       if (isTelephonyAvailable()) {
         setTelephonyChannels(configuredChannels.callLog, configuredChannels.groupchat);
         await initContacts();
@@ -215,6 +216,7 @@ export async function stopBot(): Promise<void> {
   setPRReviewCallback(async () => {});
   setVoiceErrorChannel(null);
   setAgentErrorChannel(null);
+  setThreadStatusChannel(null);
   await flushUsageCounters().catch(() => {});
   if (isCallActive()) {
     await endCall();
