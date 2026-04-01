@@ -58,8 +58,13 @@ let goalStatus: string | null = null;
 const GOAL_STALL_TIMEOUT_MS = parseInt(process.env.GOAL_STALL_TIMEOUT_MS || '180000', 10);
 const GOAL_STALL_CHECK_INTERVAL_MS = parseInt(process.env.GOAL_STALL_CHECK_INTERVAL_MS || '30000', 10);
 const GOAL_STALL_MAX_RECOVERY_ATTEMPTS = parseInt(process.env.GOAL_STALL_MAX_RECOVERY_ATTEMPTS || '3', 10);
+const THREAD_CLOSE_REVIEW_IDLE_MS = parseInt(process.env.THREAD_CLOSE_REVIEW_IDLE_MS || '120000', 10);
+const THREAD_CLOSE_REVIEW_INTERVAL_MS = parseInt(process.env.THREAD_CLOSE_REVIEW_INTERVAL_MS || '300000', 10);
+const GOAL_THREAD_COUNTER_RE = /\bgoal[-\s]?(\d{4})\b/i;
 let lastGoalProgressAt = Date.now();
 let goalRecoveryAttempts = 0;
+let lastThreadCloseReviewAt = 0;
+let goalSequenceInitialized = false;
 let goalWatchdog: ReturnType<typeof setInterval> | null = null;
 
 function markGoalProgress(status?: string): void {
@@ -243,6 +248,11 @@ function ensureGoalWatchdog(groupchat: TextChannel): void {
 
   goalWatchdog = setInterval(() => {
     if (!activeGoal) return;
+
+    maybeReviewThreadForClosure(groupchat).catch((err) => {
+      console.error('Thread close review error:', err instanceof Error ? err.message : 'Unknown');
+    });
+
     if (activeAbortController) return;
     if (Date.now() - lastGoalProgressAt < GOAL_STALL_TIMEOUT_MS) return;
     if (goalRecoveryAttempts >= GOAL_STALL_MAX_RECOVERY_ATTEMPTS) return;
@@ -259,7 +269,7 @@ function ensureGoalWatchdog(groupchat: TextChannel): void {
     ).catch(() => {});
 
     handleRileyMessage(
-      `[System auto-recovery] This goal appears stalled: "${activeGoal}". Summarize current state in one short paragraph, execute any pending deploy/screenshots/urls actions now using explicit [ACTION:...] tags, and continue without waiting for user follow-up.`,
+      `[System auto-recovery] This goal appears stalled: "${activeGoal}". Summarize current state in one short paragraph, execute any pending deploy/screenshots/urls actions now using explicit [ACTION:...] tags, and continue without waiting for user follow-up. If the work is actually complete, post a short wrap-up in the workspace thread and include [ACTION:CLOSE_THREAD].`,
       'System',
       undefined,
       groupchat
@@ -319,12 +329,46 @@ function sanitizeThreadName(input: string): string {
     .slice(0, 72);
 }
 
+function extractGoalSequence(threadName: string): number {
+  const match = String(threadName || '').match(GOAL_THREAD_COUNTER_RE);
+  if (!match) return 0;
+  const parsed = parseInt(match[1], 10);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+async function syncGoalSequence(groupchat: TextChannel): Promise<void> {
+  if (goalSequenceInitialized) return;
+
+  let maxSeen = activeGoalSequence;
+  const ingest = (threads: Iterable<{ name?: string }>) => {
+    for (const thread of threads || []) {
+      const seq = extractGoalSequence(thread?.name || '');
+      if (seq > maxSeen) {
+        maxSeen = seq;
+      }
+    }
+  };
+
+  try {
+    ingest(groupchat.threads.cache.values());
+    const active = await groupchat.threads.fetchActive().catch(() => null);
+    if (active) ingest(active.threads.values());
+    const archived = await groupchat.threads.fetchArchived({ limit: 100 }).catch(() => null);
+    if (archived) ingest(archived.threads.values());
+  } catch (err) {
+    console.warn('Could not sync goal thread counter:', err instanceof Error ? err.message : 'Unknown');
+  }
+
+  activeGoalSequence = maxSeen;
+  goalSequenceInitialized = true;
+}
+
 function buildGoalThreadName(senderName: string, content: string): string {
   activeGoalSequence = (activeGoalSequence + 1) % 10000;
   const goalId = activeGoalSequence.toString().padStart(4, '0');
   const sender = sanitizeThreadName(senderName).replace(/\s+/g, '-').toLowerCase() || 'user';
   const preview = sanitizeThreadName(content).split(' ').slice(0, 8).join(' ');
-  return sanitizeThreadName(`goal-${goalId} ${sender} ${preview}`) || `goal-${goalId}`;
+  return sanitizeThreadName(`Goal-${goalId} ${sender} ${preview}`) || `Goal-${goalId}`;
 }
 
 async function closeGoalWorkspace(
@@ -350,6 +394,43 @@ async function closeGoalWorkspace(
   activeGoalThreadId = null;
   activeGoal = null;
   goalStatus = '✅ Completed';
+  lastThreadCloseReviewAt = 0;
+}
+
+async function maybeReviewThreadForClosure(groupchat: TextChannel): Promise<void> {
+  if (!activeGoal || !activeGoalThreadId || activeAbortController) return;
+
+  const now = Date.now();
+  if (now - lastGoalProgressAt < THREAD_CLOSE_REVIEW_IDLE_MS) return;
+  if (now - lastThreadCloseReviewAt < THREAD_CLOSE_REVIEW_INTERVAL_MS) return;
+
+  const thread = groupchat.threads.cache.get(activeGoalThreadId)
+    || await groupchat.threads.fetch(activeGoalThreadId).catch(() => null);
+
+  if (!thread || thread.archived) {
+    activeGoalThreadId = null;
+    return;
+  }
+
+  lastThreadCloseReviewAt = now;
+  lastGoalProgressAt = now;
+  goalStatus = '🔎 Riley reviewing whether this thread can close...';
+
+  await sendAutopilotAudit(
+    groupchat,
+    'thread_close_review',
+    'Idle workspace thread triggered a closure-readiness review.',
+    { action: 'CHECK_CLOSE_THREAD' }
+  ).catch(() => {});
+
+  await handleRileyMessage(
+    `[System thread-close review] Review the current workspace thread for "${activeGoal}". If the work is fully complete and no more follow-up is required, post one concise final update in the workspace thread and include [ACTION:CLOSE_THREAD]. If anything is still pending or blocked, say exactly what remains and keep the thread open.`,
+    'System',
+    undefined,
+    groupchat,
+    undefined,
+    thread
+  );
 }
 
 async function ensureGoalWorkspace(groupchat: TextChannel, senderName: string, content: string): Promise<WebhookCapableChannel> {
@@ -360,6 +441,7 @@ async function ensureGoalWorkspace(groupchat: TextChannel, senderName: string, c
     activeGoalThreadId = null;
   }
 
+  await syncGoalSequence(groupchat);
   const threadName = buildGoalThreadName(senderName, content);
   const thread = await groupchat.threads.create({
     name: threadName,
@@ -368,6 +450,7 @@ async function ensureGoalWorkspace(groupchat: TextChannel, senderName: string, c
   });
 
   activeGoalThreadId = thread.id;
+  lastThreadCloseReviewAt = 0;
 
   const riley = getAgent('executive-assistant' as AgentId);
   if (riley) {
@@ -718,7 +801,7 @@ async function handleRileyMessage(
       ? '\n\n[Language detected: Mandarin Chinese. Please reply in Mandarin Chinese (简体中文).]'
       : '';
     const mentionGuide = `\n\n[Discord role mentions: ${coordinationGuide}. Prefer these exact mentions when delegating work.]`;
-    const threadCloseGuide = `\n\n[Thread workflow: keep this workspace thread open while work is in progress. When the task is fully complete and no more follow-up is required, include [ACTION:CLOSE_THREAD].]`;
+    const threadCloseGuide = `\n\n[Thread workflow: keep this workspace thread open while work is in progress. After each specialist round, post one concise progress update in the workspace thread. When the task is fully complete and no more follow-up is required, include [ACTION:CLOSE_THREAD].]`;
     const contextMessageWithLang = `${textLangHint ? `${contextMessage}${textLangHint}` : contextMessage}${mentionGuide}${threadCloseGuide}`;
 
     const response = await agentRespond(riley, [...rileyMemory, ...groupHistory], contextMessageWithLang, async (_toolName, summary) => {
