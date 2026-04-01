@@ -340,7 +340,68 @@ export const REPO_TOOLS = [
       required: [],
     },
   },
+  {
+    name: 'git_file_history',
+    description:
+      'Show recent git commits affecting a file or folder, with optional line blame. Use this to identify regressions, who changed a screen, or when a behavior was introduced.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        path: {
+          type: 'string',
+          description: 'Relative file or folder path from repo root, e.g. "app/_layout.tsx"',
+        },
+        limit: {
+          type: 'number',
+          description: 'Max commits to return (default: 10, max: 30)',
+        },
+        line_range: {
+          type: 'string',
+          description: 'Optional line range for blame, e.g. "20-40"',
+        },
+      },
+      required: ['path'],
+    },
+  },
+  {
+    name: 'smoke_test_agents',
+    description:
+      'Run the Discord smoke-test suite through ASAPTester. Use this after important routing or orchestration changes to verify agents still respond correctly end-to-end.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        agent: {
+          type: 'string',
+          description: 'Optional agent filter, e.g. "developer", "qa", or "executive-assistant". Leave empty to run the whole suite.',
+        },
+        timeout_ms: {
+          type: 'number',
+          description: 'Optional per-agent timeout in milliseconds (default: 90000, max: 180000).',
+        },
+      },
+      required: [],
+    },
+  },
   // ── Discord management tools ──
+  {
+    name: 'list_threads',
+    description:
+      'List workspace threads under the groupchat channel, including idle time and a ready-to-close heuristic. Useful for Riley to manage stale or completed threads.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        include_archived: {
+          type: 'string',
+          description: 'Set to "true" to also include recently archived threads.',
+        },
+        limit: {
+          type: 'number',
+          description: 'Max threads to show (default: 10, max: 25).',
+        },
+      },
+      required: [],
+    },
+  },
   {
     name: 'list_channels',
     description:
@@ -1133,7 +1194,7 @@ export const REPO_TOOLS = [
 const REVIEW_TOOL_NAMES = new Set([
   'read_file', 'search_files', 'list_directory', 'fetch_url',
   'db_query_readonly', 'db_schema', 'memory_read', 'memory_list',
-  'run_tests', 'typecheck',
+  'run_tests', 'typecheck', 'git_file_history', 'smoke_test_agents', 'list_threads',
   'capture_screenshots',
   'mobile_harness_start', 'mobile_harness_step', 'mobile_harness_snapshot', 'mobile_harness_stop',
   'gcp_preflight', 'gcp_get_env', 'gcp_list_revisions', 'gcp_secret_list', 'gcp_build_status',
@@ -1209,9 +1270,15 @@ export async function executeTool(
         return await ghListPRs();
       case 'run_tests':
         return runTests(input.test_pattern);
+      case 'git_file_history':
+        return gitFileHistory(input.path, parseInt(input.limit, 10) || 10, input.line_range);
+      case 'smoke_test_agents':
+        return smokeTestAgents(input.agent, parseInt(input.timeout_ms, 10) || 90_000);
       // Discord management
       case 'list_channels':
         return await discordListChannels();
+      case 'list_threads':
+        return await discordListThreads(String(input.include_archived || '').toLowerCase() === 'true', parseInt(input.limit, 10) || 10);
       case 'delete_channel':
         return await discordDeleteChannel(input.channel_name, input.reason);
       case 'create_channel':
@@ -1735,6 +1802,85 @@ function runTests(pattern?: string): string {
   }
 }
 
+function gitFileHistory(relativePath: string, limit = 10, lineRange?: string): string {
+  const target = String(relativePath || '').trim();
+  if (!target) return 'Provide a file or folder path, e.g. "app/_layout.tsx".';
+
+  safePath(target);
+  const safeLimit = Math.max(1, Math.min(limit, 30));
+
+  try {
+    const history = execFileSync('git', ['log', '--follow', '--oneline', '--decorate', '-n', String(safeLimit), '--', target], {
+      cwd: REPO_ROOT,
+      timeout: 20_000,
+      maxBuffer: 512 * 1024,
+      encoding: 'utf-8',
+      stdio: ['pipe', 'pipe', 'pipe'],
+    }).trim();
+
+    const sections = [`Recent commits for ${target}:\n${history || '(no matching commits found)'}`];
+    const match = String(lineRange || '').match(/^(\d+)\s*-\s*(\d+)$/);
+    if (match) {
+      const start = parseInt(match[1], 10);
+      const end = parseInt(match[2], 10);
+      if (Number.isFinite(start) && Number.isFinite(end) && start <= end) {
+        const blame = execFileSync('git', ['blame', '-L', `${start},${end}`, '--', target], {
+          cwd: REPO_ROOT,
+          timeout: 20_000,
+          maxBuffer: 512 * 1024,
+          encoding: 'utf-8',
+          stdio: ['pipe', 'pipe', 'pipe'],
+        }).trim();
+        sections.push(`Blame for ${target}:${start}-${end}\n${blame || '(no blame output)'}`);
+      }
+    }
+
+    return sections.join('\n\n').slice(0, 4000);
+  } catch (err: unknown) {
+    const execErr = err as { stdout?: string; stderr?: string; message?: string };
+    return `Git history lookup failed for ${target}: ${(execErr.stderr || execErr.stdout || execErr.message || 'Unknown error').trim().slice(0, 2000)}`;
+  }
+}
+
+function smokeTestAgents(agent?: string, timeoutMs = 90_000): string {
+  if (!process.env.DISCORD_TEST_BOT_TOKEN || !process.env.DISCORD_GUILD_ID) {
+    return 'Smoke-test bot is not configured here. Set DISCORD_TEST_BOT_TOKEN and DISCORD_GUILD_ID to enable end-to-end Discord smoke tests.';
+  }
+
+  const safeAgent = String(agent || '').replace(/[^a-z0-9-]/gi, '').trim();
+  const safeTimeout = Math.max(15_000, Math.min(timeoutMs, 180_000));
+  const cmd = safeAgent
+    ? `npm run discord:test:dist -- --agent=${safeAgent}`
+    : 'npm run discord:test:dist';
+
+  try {
+    const output = execSync(cmd, {
+      cwd: path.join(REPO_ROOT, 'server'),
+      timeout: Math.max(safeTimeout * 2, 120_000),
+      maxBuffer: 1024 * 1024,
+      encoding: 'utf-8',
+      env: { ...process.env, DISCORD_TEST_TIMEOUT_MS: String(safeTimeout), CI: 'true' },
+      shell: '/bin/sh',
+    }).trim();
+
+    return output.length > 4000
+      ? '... (output trimmed)\n' + output.slice(-4000)
+      : output || 'Smoke test completed with no output.';
+  } catch (err: unknown) {
+    const execErr = err as { stdout?: string; stderr?: string; message?: string };
+    const output = `${execErr.stdout || ''}\n${execErr.stderr || ''}`.trim();
+    return `Smoke test finished with failures:\n${(output || execErr.message || 'Unknown error').slice(-4000)}`;
+  }
+}
+
+function formatAge(ms: number): string {
+  if (!Number.isFinite(ms) || ms < 0) return 'unknown';
+  if (ms < 60_000) return `${Math.max(1, Math.round(ms / 1000))}s`;
+  if (ms < 3_600_000) return `${Math.round(ms / 60_000)}m`;
+  if (ms < 86_400_000) return `${Math.round(ms / 3_600_000)}h`;
+  return `${Math.round(ms / 86_400_000)}d`;
+}
+
 // ────────────────────────────────────────────
 // Discord management tools
 // ────────────────────────────────────────────
@@ -1742,6 +1888,13 @@ function runTests(pattern?: string): string {
 function requireGuild(): Guild {
   if (!discordGuild) throw new Error('Discord guild not available');
   return discordGuild;
+}
+
+function findGroupchatChannel(guild: Guild): TextChannel | null {
+  const channel = guild.channels.cache.find(
+    (candidate) => candidate.type === ChannelType.GuildText && candidate.name.includes('groupchat')
+  );
+  return channel ? channel as TextChannel : null;
 }
 
 async function discordListChannels(): Promise<string> {
@@ -1779,6 +1932,49 @@ async function discordListChannels(): Promise<string> {
   }
 
   return lines.join('\n') || 'No channels found.';
+}
+
+async function discordListThreads(includeArchived = false, limit = 10): Promise<string> {
+  const guild = requireGuild();
+  await guild.channels.fetch();
+  const groupchat = findGroupchatChannel(guild);
+  if (!groupchat) return 'Could not find the groupchat channel.';
+
+  const safeLimit = Math.max(1, Math.min(limit, 25));
+  const active = await groupchat.threads.fetchActive();
+  const activeThreads = [...active.threads.values()]
+    .sort((a, b) => (b.createdTimestamp || 0) - (a.createdTimestamp || 0))
+    .slice(0, safeLimit);
+
+  const now = Date.now();
+  const describe = async (thread: any, archived: boolean): Promise<string> => {
+    const recent = await thread.messages.fetch({ limit: 1 }).catch(() => null);
+    const last = recent?.first();
+    const lastTs = last?.createdTimestamp || thread.createdTimestamp || now;
+    const idle = formatAge(now - lastTs);
+    const state = archived ? 'archived' : (now - lastTs > 120_000 ? 'ready for review' : 'active');
+    return `- ${thread.name} (${state}, idle ${idle})`;
+  };
+
+  const lines: string[] = [`#${groupchat.name} threads`];
+
+  if (activeThreads.length === 0) {
+    lines.push('No active threads.');
+  } else {
+    lines.push('Active:');
+    lines.push(...(await Promise.all(activeThreads.map((thread) => describe(thread, false)))));
+  }
+
+  if (includeArchived) {
+    const archived = await groupchat.threads.fetchArchived({ limit: safeLimit }).catch(() => null);
+    const archivedThreads = [...(archived?.threads.values() || [])].slice(0, safeLimit);
+    if (archivedThreads.length > 0) {
+      lines.push('', 'Recently archived:');
+      lines.push(...(await Promise.all(archivedThreads.map((thread) => describe(thread, true)))));
+    }
+  }
+
+  return lines.join('\n').slice(0, 4000);
 }
 
 async function resolveDiscordTextChannel(channelName?: string, agentId?: string): Promise<TextChannel | undefined> {

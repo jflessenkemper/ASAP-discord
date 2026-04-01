@@ -1,3 +1,6 @@
+import fs from 'fs';
+import path from 'path';
+import { execFileSync } from 'child_process';
 import { Message, TextChannel, GuildMember, EmbedBuilder, ThreadAutoArchiveDuration } from 'discord.js';
 import {
   getAgents,
@@ -60,7 +63,12 @@ const GOAL_STALL_CHECK_INTERVAL_MS = parseInt(process.env.GOAL_STALL_CHECK_INTER
 const GOAL_STALL_MAX_RECOVERY_ATTEMPTS = parseInt(process.env.GOAL_STALL_MAX_RECOVERY_ATTEMPTS || '3', 10);
 const THREAD_CLOSE_REVIEW_IDLE_MS = parseInt(process.env.THREAD_CLOSE_REVIEW_IDLE_MS || '120000', 10);
 const THREAD_CLOSE_REVIEW_INTERVAL_MS = parseInt(process.env.THREAD_CLOSE_REVIEW_INTERVAL_MS || '300000', 10);
+const ACTION_COMMAND_TIMEOUT_MS = parseInt(process.env.ACTION_COMMAND_TIMEOUT_MS || '120000', 10);
 const GOAL_THREAD_COUNTER_RE = /\bgoal[-\s]?(\d{4})\b/i;
+const APP_SERVER_ROOT = (fs.existsSync(path.join(process.cwd(), 'package.json')) && fs.existsSync(path.join(process.cwd(), 'src')))
+  ? process.cwd()
+  : path.resolve(__dirname, '../../..');
+const APP_REPO_ROOT = path.resolve(APP_SERVER_ROOT, '..');
 let lastGoalProgressAt = Date.now();
 let goalRecoveryAttempts = 0;
 let lastThreadCloseReviewAt = 0;
@@ -175,6 +183,18 @@ function inferImplicitActionTags(text: string): string {
 
   if (/(usage report|limits report|budget report|token report)/i.test(normalized)) {
     tags.add('[ACTION:LIMITS]');
+  }
+  if (/(thread status|open threads|stale threads|ready to close)/i.test(normalized)) {
+    tags.add('[ACTION:THREADS]');
+  }
+  if (/(health check|release health|prod health|deployment health)/i.test(normalized)) {
+    tags.add('[ACTION:HEALTH]');
+  }
+  if (/(smoke test|sanity check|end to end check|e2e check)/i.test(normalized)) {
+    tags.add('[ACTION:SMOKE]');
+  }
+  if (/(who changed|look through commits|regression|git history|blame)/i.test(normalized)) {
+    tags.add('[ACTION:REGRESSION]');
   }
   if (/(clean\s*up\s*(group)?\s*chat|delete\s+(spam|noise|disjointed|clutter)|tidy\s+up\s+groupchat|remove\s+spam\s+messages)/i.test(normalized)) {
     tags.add('[ACTION:CLEANUP:25]');
@@ -431,6 +451,151 @@ async function maybeReviewThreadForClosure(groupchat: TextChannel): Promise<void
     undefined,
     thread
   );
+}
+
+function formatRelativeTime(ms: number): string {
+  if (!Number.isFinite(ms) || ms <= 0) return 'just now';
+  if (ms < 60_000) return `${Math.max(1, Math.round(ms / 1000))}s`;
+  if (ms < 3_600_000) return `${Math.round(ms / 60_000)}m`;
+  if (ms < 86_400_000) return `${Math.round(ms / 3_600_000)}h`;
+  return `${Math.round(ms / 86_400_000)}d`;
+}
+
+function trimCommandOutput(text: string, maxLen = 1500): string {
+  const normalized = String(text || '').trim();
+  if (!normalized) return '(no output)';
+  return normalized.length > maxLen
+    ? `${normalized.slice(0, maxLen)}\n… (truncated)`
+    : normalized;
+}
+
+function runRepoInspection(command: string, cwd = APP_REPO_ROOT): string {
+  try {
+    return execFileSync('bash', ['-lc', command], {
+      cwd,
+      timeout: ACTION_COMMAND_TIMEOUT_MS,
+      maxBuffer: 1024 * 1024,
+      encoding: 'utf-8',
+      env: { ...process.env, CI: 'true' },
+    });
+  } catch (err) {
+    const execErr = err as { stdout?: string; stderr?: string; message?: string };
+    return execErr.stderr || execErr.stdout || execErr.message || 'Unknown command error';
+  }
+}
+
+async function buildThreadStatusReport(groupchat: TextChannel): Promise<string> {
+  const active = await groupchat.threads.fetchActive().catch(() => null);
+  const threads = [...(active?.threads.values() || [])]
+    .filter((thread) => GOAL_THREAD_COUNTER_RE.test(thread.name))
+    .sort((a, b) => (b.createdTimestamp || 0) - (a.createdTimestamp || 0))
+    .slice(0, 8);
+
+  if (threads.length === 0) {
+    return '🧵 **Workspace Threads**\n\nNo active goal threads right now.';
+  }
+
+  const now = Date.now();
+  const lines = await Promise.all(threads.map(async (thread) => {
+    const recent = await thread.messages.fetch({ limit: 1 }).catch(() => null);
+    const last = recent?.first();
+    const lastTs = last?.createdTimestamp || thread.createdTimestamp || now;
+    const idleMs = Math.max(0, now - lastTs);
+    const status = idleMs >= THREAD_CLOSE_REVIEW_IDLE_MS ? '🟡 ready for close review' : '🟢 active';
+    return `${status} — **${thread.name}** — idle ${formatRelativeTime(idleMs)} — ${(thread.messageCount ?? '?')} msgs`;
+  }));
+
+  const readyCount = lines.filter((line) => line.startsWith('🟡')).length;
+  const summary = readyCount > 0
+    ? `Open goal threads: ${threads.length} (${readyCount} ready for close review)`
+    : `Open goal threads: ${threads.length}`;
+
+  return `🧵 **Workspace Threads**\n\n${summary}\n${lines.join('\n')}`;
+}
+
+async function fetchStatusSummary(url: string): Promise<string> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 10_000);
+  try {
+    const res = await fetch(url, {
+      method: 'GET',
+      headers: { 'user-agent': 'ASAPBot/1.0' },
+      signal: controller.signal,
+    });
+    const body = await res.text();
+    const snippet = body.replace(/\s+/g, ' ').trim().slice(0, 120);
+    return `${res.status} ${res.statusText}${snippet ? ` — ${snippet}` : ''}`;
+  } catch (err) {
+    return `unreachable — ${err instanceof Error ? err.message : 'Unknown'}`;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function buildDeploymentHealthReport(): Promise<string> {
+  const appUrl = process.env.FRONTEND_URL || 'https://asap-489910.australia-southeast1.run.app';
+  const healthUrl = `${appUrl.replace(/\/$/, '')}/api/health`;
+
+  const [appStatus, apiStatus, currentRevision, revisions] = await Promise.all([
+    fetchStatusSummary(appUrl),
+    fetchStatusSummary(healthUrl),
+    getCurrentRevision().catch(() => 'unknown'),
+    listRevisions(3).catch(() => []),
+  ]);
+
+  const revisionSummary = revisions.length > 0
+    ? revisions
+      .slice(0, 3)
+      .map((rev) => `• \`${rev.name}\` — ${new Date(rev.createTime).toLocaleString('en-AU', { timeZone: 'Australia/Sydney' })}`)
+      .join('\n')
+    : '• No recent revision data available';
+
+  return `🩺 **ASAP Health Check**\n\n🌐 App: ${appStatus}\n🧪 API health: ${apiStatus}\n📦 Active revision: \`${currentRevision}\`\n\nRecent revisions:\n${revisionSummary}`;
+}
+
+function buildRegressionReport(param?: string): string {
+  const raw = String(param || '').trim();
+  const cleaned = raw.replace(/[^a-zA-Z0-9_./\-\s]/g, ' ').trim().slice(0, 120);
+  const sections: string[] = [];
+
+  if (cleaned) {
+    if (/[/.]/.test(cleaned)) {
+      sections.push(`**File history for \`${cleaned}\`**\n\n\
+\
+${trimCommandOutput(runRepoInspection(`git log --oneline --decorate -n 10 -- ${JSON.stringify(cleaned)}`))}`);
+    }
+
+    sections.push(`**Matching commits**\n\n\
+\
+${trimCommandOutput(runRepoInspection(`git log --oneline --decorate --regexp-ignore-case --grep ${JSON.stringify(cleaned)} -n 10`))}`);
+  }
+
+  if (sections.length === 0) {
+    sections.push(`**Recent commits**\n\n\
+\
+${trimCommandOutput(runRepoInspection('git log --oneline --decorate -n 12'))}`);
+  }
+
+  return `🕵️ **Regression Detective**\n\n${sections.join('\n\n')}`;
+}
+
+async function runSmokeSummary(param?: string): Promise<string> {
+  const requested = String(param || '').trim().toLowerCase();
+  const safeAgent = requested.replace(/[^a-z0-9-]/g, '');
+  const defaultAgent = safeAgent || 'executive-assistant';
+
+  if (!process.env.DISCORD_TEST_BOT_TOKEN || !process.env.DISCORD_GUILD_ID) {
+    return `${await buildDeploymentHealthReport()}\n\nℹ️ Full Discord smoke runner is not configured on this environment, so I ran the deployment health check instead.`;
+  }
+
+  const output = runRepoInspection(
+    `npm run discord:test:dist -- --agent=${JSON.stringify(defaultAgent)}`,
+    APP_SERVER_ROOT,
+  );
+
+  return `🧪 **Agent Smoke Test** (${defaultAgent})\n\n\
+\
+${trimCommandOutput(output, 1800)}`;
 }
 
 async function ensureGoalWorkspace(groupchat: TextChannel, senderName: string, content: string): Promise<WebhookCapableChannel> {
@@ -1009,6 +1174,25 @@ async function executeActions(
         case 'STATUS': {
           const summary = getStatusSummary();
           await sendAsRiley(summary || '📋 No active tasks.');
+          break;
+        }
+        case 'THREADS': {
+          markGoalProgress('🧵 Reviewing workspace threads');
+          await sendAsRiley(await buildThreadStatusReport(groupchat));
+          break;
+        }
+        case 'HEALTH': {
+          markGoalProgress('🩺 Running app health check');
+          await sendAsRiley(await buildDeploymentHealthReport());
+          break;
+        }
+        case 'REGRESSION': {
+          await sendAsRiley(buildRegressionReport(param));
+          break;
+        }
+        case 'SMOKE': {
+          markGoalProgress('🧪 Running smoke check');
+          await sendAsRiley(await runSmokeSummary(param));
           break;
         }
         case 'LIMITS': {
