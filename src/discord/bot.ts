@@ -14,6 +14,7 @@ import { setDecisionsChannel, handleDecisionReply } from './handlers/groupchat';
 import { endCall, isCallActive } from './handlers/callSession';
 import { setVoiceErrorChannel } from './handlers/callSession';
 import { setBotChannels } from './handlers/documentation';
+import { setAgentErrorChannel, postAgentErrorLog } from './services/agentErrors';
 import { unregisterCommands } from './commands';
 import { setGitHubChannel } from './handlers/github';
 import { setLimitsChannel, startDashboardUpdates, stopDashboardUpdates, initUsageCounters, flushUsageCounters } from './usage';
@@ -79,30 +80,34 @@ export async function startBot(): Promise<void> {
       await initMemory();
       await initUsageCounters();
       botChannels = await setupChannels(guild);
-      setBotChannels(botChannels);
-      setGitHubChannel(botChannels.github);
-      setLimitsChannel(botChannels.limits);
-      setScreenshotsChannel(botChannels.screenshots);
-      setVoiceErrorChannel(botChannels.voiceErrors);
+      const configuredChannels = botChannels;
+      setBotChannels(configuredChannels);
+      setGitHubChannel(configuredChannels.github);
+      setLimitsChannel(configuredChannels.limits);
+      setScreenshotsChannel(configuredChannels.screenshots);
+      setVoiceErrorChannel(configuredChannels.voiceErrors);
+      setAgentErrorChannel(configuredChannels.agentErrors);
       setDiscordGuild(guild);
-      setAgentChannelResolver((agentId: string) => botChannels?.agentChannels.get(agentId) || null);
-      setDecisionsChannel(botChannels.decisions);
+      setAgentChannelResolver((agentId: string) => configuredChannels.agentChannels.get(agentId) || null);
+      setDecisionsChannel(configuredChannels.decisions);
       if (isTelephonyAvailable()) {
-        setTelephonyChannels(botChannels.callLog, botChannels.groupchat);
+        setTelephonyChannels(configuredChannels.callLog, configuredChannels.groupchat);
         await initContacts();
       }
       await startDashboardUpdates();
       // Startup health snapshot to bot-diagnostics webhook
       runModelHealthChecks().catch((err) => {
-        console.error('Model health check failed:', err instanceof Error ? err.message : 'Unknown');
+        const msg = err instanceof Error ? err.message : 'Unknown';
+        console.error('Model health check failed:', msg);
+        void postAgentErrorLog('discord:model-health', 'Model health check failed', { detail: msg, level: 'warn' });
       });
 
       // Wire command audit to #github channel
       setCommandAuditCallback((cmd, allowed, reason) => {
-        if (!botChannels?.github) return;
+        const githubChannel = configuredChannels.github;
         const icon = allowed ? '✅' : '🚫';
         const truncated = cmd.length > 100 ? cmd.slice(0, 100) + '...' : cmd;
-        botChannels.github.send(`${icon} \`run_command\`: \`${truncated}\` — ${reason}`).catch(() => {});
+        githubChannel.send(`${icon} \`run_command\`: \`${truncated}\` — ${reason}`).catch(() => {});
       });
 
       // Wire tool audit to #terminal channel — every tool invocation from every agent
@@ -110,7 +115,7 @@ export async function startBot(): Promise<void> {
       let suppressedDbAudits = 0;
       const DB_AUDIT_POST_INTERVAL_MS = 30_000;
       setToolAuditCallback((agentName, toolName, summary) => {
-        if (!botChannels?.terminal) return;
+        const terminalChannel = configuredChannels.terminal;
         const firstName = agentName.split(' ')[0];
         const isDbTool = toolName === 'db_query' || toolName === 'db_query_readonly';
 
@@ -126,24 +131,25 @@ export async function startBot(): Promise<void> {
             : '';
           suppressedDbAudits = 0;
           lastDbAuditPost = now;
-          botChannels.terminal.send(`🧮 **${firstName}** → \`${toolName}\`${suppressedNote}`).catch(() => {});
+          terminalChannel.send(`🧮 **${firstName}** → \`${toolName}\`${suppressedNote}`).catch(() => {});
           return;
         }
 
-        botChannels.terminal.send(`🔧 **${firstName}** → \`${toolName}\`: ${summary}`).catch(() => {});
+        terminalChannel.send(`🔧 **${firstName}** → \`${toolName}\`: ${summary}`).catch(() => {});
       });
 
       // Wire PR auto-review (Harper + Kane on sensitive files)
       setPRReviewCallback(async (prNumber, prTitle, changedFiles, diffSummary) => {
-        if (!botChannels?.groupchat) return;
-        await autoReviewPR(prNumber, prTitle, changedFiles, diffSummary, botChannels.groupchat);
+        await autoReviewPR(prNumber, prTitle, changedFiles, diffSummary, configuredChannels.groupchat);
       });
       console.log(`Discord channels configured in "${guild.name}"`);
 
       // Remove any old slash commands — everything is natural language now
       await unregisterCommands(readyClient, guildId);
     } catch (err) {
+      const msg = err instanceof Error ? err.stack || err.message : 'Unknown';
       console.error('Channel setup error:', err instanceof Error ? err.message : 'Unknown');
+      void postAgentErrorLog('discord:startup', 'Channel setup error', { detail: msg });
       // Fatal — bot cannot function without channels
       console.error('Bot initialization failed — destroying client');
       readyClient.destroy();
@@ -184,14 +190,18 @@ export async function startBot(): Promise<void> {
         return;
       }
     } catch (err) {
+      const msg = err instanceof Error ? err.stack || err.message : 'Unknown';
       console.error('Message handler error:', err instanceof Error ? err.message : 'Unknown');
+      void postAgentErrorLog('discord:message-handler', 'Message handler error', { detail: msg });
     }
   });
 
   try {
     await client.login(token);
   } catch (err) {
+    const msg = err instanceof Error ? err.stack || err.message : 'Unknown';
     console.error('Discord bot login failed:', err instanceof Error ? err.message : 'Unknown');
+    void postAgentErrorLog('discord:login', 'Discord bot login failed', { detail: msg });
   }
 }
 
@@ -200,6 +210,11 @@ export async function startBot(): Promise<void> {
  */
 export async function stopBot(): Promise<void> {
   stopDashboardUpdates();
+  setCommandAuditCallback(() => {});
+  setToolAuditCallback(() => {});
+  setPRReviewCallback(async () => {});
+  setVoiceErrorChannel(null);
+  setAgentErrorChannel(null);
   await flushUsageCounters().catch(() => {});
   if (isCallActive()) {
     await endCall();

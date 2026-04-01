@@ -1,3 +1,4 @@
+import Anthropic from '@anthropic-ai/sdk';
 import { GoogleGenerativeAI, Content, Part, FunctionDeclaration, Tool } from '@google/generative-ai';
 import { GoogleAuth } from 'google-auth-library';
 import { readFileSync } from 'fs';
@@ -23,9 +24,13 @@ if (PROJECT_CONTEXT.length > PROJECT_CONTEXT_MAX_CHARS) {
 const PROJECT_CONTEXT_LIGHT_MAX_CHARS = parseInt(process.env.PROJECT_CONTEXT_LIGHT_MAX_CHARS || '1200', 10);
 const PROJECT_CONTEXT_LIGHT = PROJECT_CONTEXT.slice(0, PROJECT_CONTEXT_LIGHT_MAX_CHARS);
 
-// Gemini model identifiers (env-overridable for fast runtime switching).
+// Model identifiers (env-overridable for fast runtime switching).
 const GEMINI_FLASH = process.env.GEMINI_FLASH_MODEL || 'gemini-flash-latest';
 const GEMINI_PRO = process.env.GEMINI_PRO_MODEL || 'gemini-2.5-pro';
+const ANTHROPIC_OPUS = process.env.ANTHROPIC_CODING_MODEL || 'claude-opus-4-20250514';
+const DEFAULT_CODING_MODEL = process.env.CODING_AGENT_MODEL || (process.env.ANTHROPIC_API_KEY ? ANTHROPIC_OPUS : GEMINI_PRO);
+const DEFAULT_FAST_MODEL = process.env.FAST_AGENT_MODEL || GEMINI_FLASH;
+const HIGH_CAPABILITY_CODE_AGENTS = new Set(['developer', 'devops']);
 
 /**
  * High-stakes prompts for Ace where Pro quality is worth the cost.
@@ -44,14 +49,18 @@ function hasValidationFailure(toolName: string, result: string): boolean {
 
 /**
  * Model policy:
- * - Default: Flash for all agents (fast, cheap)
- * - Escalate: Pro for Ace on explicit high-stakes prompts
+ * - Code-changing agents (`developer`, `devops`) default to the strongest coding model.
+ * - Riley escalates to Pro on high-stakes operational prompts.
+ * - Everyone else stays on the fast model for responsiveness.
  */
 function modelForAgent(agentId: string, userMessage: string): string {
-  if (agentId === 'developer' && isHighStakesPrompt(userMessage)) {
+  if (HIGH_CAPABILITY_CODE_AGENTS.has(agentId)) {
+    return DEFAULT_CODING_MODEL;
+  }
+  if (agentId === 'executive-assistant' && isHighStakesPrompt(userMessage)) {
     return GEMINI_PRO;
   }
-  return GEMINI_FLASH;
+  return DEFAULT_FAST_MODEL;
 }
 
 /**
@@ -108,7 +117,16 @@ function toGeminiTools(tools: AnyTool[]): Tool[] {
   }];
 }
 
+function toAnthropicTools(tools: AnyTool[]): Array<{ name: string; description: string; input_schema: any }> {
+  return tools.map((tool) => ({
+    name: tool.name,
+    description: tool.description || tool.name,
+    input_schema: tool.input_schema,
+  }));
+}
+
 let client: GoogleGenerativeAI | null = null;
+let anthropicClient: Anthropic | null = null;
 let vertexAuth: GoogleAuth | null = null;
 let vertexTokenCache: { token: string; expiresAtMs: number } | null = null;
 
@@ -116,10 +134,12 @@ const USE_VERTEX_AI = process.env.GEMINI_USE_VERTEX_AI === 'true';
 const VERTEX_PROJECT_ID = process.env.VERTEX_PROJECT_ID || process.env.GOOGLE_CLOUD_PROJECT || process.env.GCLOUD_PROJECT || '';
 const VERTEX_LOCATION = process.env.VERTEX_LOCATION || 'us-central1';
 
+type ToolCallLike = { name: string; args: object; id?: string };
+
 type ModelResponseLike = {
   usageMetadata?: { promptTokenCount?: number; candidatesTokenCount?: number };
   text: () => string;
-  functionCalls: () => Array<{ name: string; args: object }>;
+  functionCalls: () => ToolCallLike[];
 };
 
 type ModelResultLike = { response: ModelResponseLike };
@@ -294,7 +314,128 @@ function getClient(): GoogleGenerativeAI {
   return client;
 }
 
-function createModel(modelName: string, options: { systemInstruction?: string; tools?: Tool[]; generationConfig?: Record<string, any> }): ModelLike {
+function getAnthropicClient(): Anthropic {
+  if (!anthropicClient) {
+    anthropicClient = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY || '' });
+  }
+  return anthropicClient;
+}
+
+function isAnthropicModel(modelName: string): boolean {
+  const key = String(modelName || '').trim().toLowerCase();
+  return key.includes('claude') || key.includes('opus') || key.includes('sonnet');
+}
+
+function toAnthropicBlocks(parts: any[]): any[] {
+  const blocks: any[] = [];
+  for (const part of parts || []) {
+    if (typeof part?.text === 'string' && part.text.trim()) {
+      blocks.push({ type: 'text', text: part.text });
+    }
+    const functionResponse = part?.functionResponse;
+    if (functionResponse) {
+      blocks.push({
+        type: 'tool_result',
+        tool_use_id: String(functionResponse.toolUseId || functionResponse.name || 'tool'),
+        content: typeof functionResponse.response?.output === 'string'
+          ? functionResponse.response.output
+          : JSON.stringify(functionResponse.response?.output ?? ''),
+      });
+    }
+  }
+  return blocks.length > 0 ? blocks : [{ type: 'text', text: '' }];
+}
+
+function geminiHistoryToAnthropicMessages(history: Content[]): Array<{ role: 'user' | 'assistant'; content: any[] }> {
+  return history
+    .map((entry) => ({
+      role: entry.role === 'model' ? 'assistant' as const : 'user' as const,
+      content: toAnthropicBlocks(entry.parts as any[]),
+    }))
+    .filter((entry) => entry.content.length > 0);
+}
+
+function anthropicHistoryToGemini(history: Array<{ role: 'user' | 'assistant'; content: any[] }>): Content[] {
+  return history.map((entry) => ({
+    role: entry.role === 'assistant' ? 'model' : 'user',
+    parts: (entry.content || [])
+      .filter((block: any) => block?.type === 'text' && typeof block.text === 'string')
+      .map((block: any) => ({ text: String(block.text) })),
+  } as Content));
+}
+
+function makeResponseLikeFromAnthropic(raw: any): ModelResponseLike {
+  const blocks: any[] = raw?.content || [];
+  const response: ModelResponseLike = {
+    usageMetadata: {
+      promptTokenCount: raw?.usage?.input_tokens || 0,
+      candidatesTokenCount: raw?.usage?.output_tokens || 0,
+    },
+    text: () => blocks.filter((block) => block?.type === 'text').map((block) => String(block.text || '')).join(''),
+    functionCalls: () => blocks
+      .filter((block) => block?.type === 'tool_use' && block?.name)
+      .map((block) => ({
+        name: String(block.name),
+        args: (block.input || {}) as object,
+        id: typeof block.id === 'string' ? block.id : undefined,
+      })),
+  };
+  (response as any).__raw = raw;
+  return response;
+}
+
+function createAnthropicModel(
+  modelName: string,
+  options: { systemInstruction?: string; rawTools?: AnyTool[]; generationConfig?: Record<string, any> }
+): ModelLike {
+  const anthropic = getAnthropicClient();
+  const anthropicTools = toAnthropicTools(options.rawTools || []);
+  const maxTokens = Math.max(64, Number(options.generationConfig?.maxOutputTokens || 1024));
+
+  const invoke = async (
+    messages: Array<{ role: 'user' | 'assistant'; content: any[] }>,
+    signal?: AbortSignal,
+  ): Promise<ModelResultLike> => {
+    const raw = await anthropic.messages.create({
+      model: modelName,
+      max_tokens: maxTokens,
+      system: options.systemInstruction,
+      messages,
+      tools: anthropicTools.length > 0 ? anthropicTools as any : undefined,
+    }, signal ? { signal } as any : undefined);
+
+    return { response: makeResponseLikeFromAnthropic(raw) };
+  };
+
+  return {
+    startChat: ({ history }) => {
+      let workingHistory = geminiHistoryToAnthropicMessages(history || []);
+      return {
+        sendMessage: async (payload, requestOptions) => {
+          const nextMessage = typeof payload === 'string'
+            ? { role: 'user' as const, content: [{ type: 'text', text: payload }] }
+            : { role: 'user' as const, content: toAnthropicBlocks(payload as any[]) };
+
+          const requestMessages = [...workingHistory, nextMessage];
+          const result = await invoke(requestMessages, requestOptions?.signal);
+          const assistantContent = ((result.response as any)?.__raw?.content || (result as any)?.content || []) as any[];
+          workingHistory = [...requestMessages, { role: 'assistant' as const, content: assistantContent }];
+          return result;
+        },
+        getHistory: async () => anthropicHistoryToGemini(workingHistory),
+      };
+    },
+    generateContent: async (payload: string, requestOptions?: { signal?: AbortSignal }) => {
+      return invoke([{ role: 'user', content: [{ type: 'text', text: payload }] }], requestOptions?.signal);
+    },
+  };
+}
+
+function createModel(modelName: string, options: { systemInstruction?: string; tools?: Tool[]; rawTools?: AnyTool[]; generationConfig?: Record<string, any> }): ModelLike {
+  if (isAnthropicModel(modelName)) {
+    return createAnthropicModel(modelName, options);
+  }
+
   if (USE_VERTEX_AI) {
     return createVertexModel(modelName, options);
   }
@@ -495,6 +636,12 @@ function isGeminiQuotaError(err: any): boolean {
     msg.includes('invalid api key') ||
     status === 429
   );
+}
+
+function isAnthropicAuthError(err: any): boolean {
+  const msg = String(err?.message || err || '').toLowerCase();
+  const status = err?.status || err?.statusCode;
+  return status === 401 || msg.includes('invalid x-api-key') || msg.includes('authentication_error');
 }
 
 function isCreditsExhaustedNow(): boolean {
@@ -923,6 +1070,7 @@ TOKENS: ${tokenUsed.toLocaleString()} used / ${tokenLimit.toLocaleString()} dail
   const makeModel = (modelName: string) => createModel(modelName, {
     systemInstruction: systemPrompt,
     tools: geminiTools,
+    rawTools: agentTools,
     generationConfig: { maxOutputTokens: estimateMaxOutputTokens(agent.id, userMessage, options?.maxTokens) },
   });
 
@@ -932,6 +1080,16 @@ TOKENS: ${tokenUsed.toLocaleString()} used / ${tokenLimit.toLocaleString()} dail
     options.chatSession.chat = chat;
     options.chatSession.modelName = currentModelName;
   }
+
+  const swapToModel = async (nextModelName: string, nextHistory: Content[]): Promise<void> => {
+    currentModelName = nextModelName;
+    model = makeModel(nextModelName);
+    chat = model.startChat({ history: nextHistory });
+    if (options?.chatSession) {
+      options.chatSession.chat = chat;
+      options.chatSession.modelName = currentModelName;
+    }
+  };
 
   // Send initial user message
   let response;
@@ -944,7 +1102,13 @@ TOKENS: ${tokenUsed.toLocaleString()} used / ${tokenLimit.toLocaleString()} dail
       logAgentEvent(agent.id, 'error', 'Request interrupted by user', { durationMs: Date.now() - loopStart });
       return '';
     }
-    if (isGeminiQuotaError(err)) {
+    if (isAnthropicModel(currentModelName) && isAnthropicAuthError(err)) {
+      logAgentEvent(agent.id, 'error', 'Anthropic auth failed — falling back to Gemini Pro');
+      await swapToModel(GEMINI_PRO, history);
+      response = await withConcurrencyLimit(currentModelName, () =>
+        withRetry(() => sendMessageWithOptionalStream(chat, userMessage, options?.signal, options?.onPartialText))
+      , isPriority);
+    } else if (isGeminiQuotaError(err)) {
       triggerGeminiQuotaFuse();
       logAgentEvent(agent.id, 'error', 'Gemini quota exhausted');
       return agent.id === 'executive-assistant'
@@ -954,8 +1118,9 @@ TOKENS: ${tokenUsed.toLocaleString()} used / ${tokenLimit.toLocaleString()} dail
         : (DISABLE_GEMINI_QUOTA_FUSE
             ? '⚠️ Gemini rejected that request, but the local quota pause is disabled. Retry or continue with other work.'
             : `⚠️ Gemini quota is exhausted right now. Automatic retries resume at ${formatRecoveryTime(creditsExhaustedUntil)}. Ask Riley to request Jordan approval for more credits before continuing.`);
+    } else {
+      throw err;
     }
-    throw err;
   }
 
   // Tool-use loop
@@ -1012,7 +1177,7 @@ TOKENS: ${tokenUsed.toLocaleString()} used / ${tokenLimit.toLocaleString()} dail
       return '';
     }
 
-    const functionCalls = (response.response.functionCalls() || []) as Array<{ name: string; args: object }>;
+    const functionCalls = (response.response.functionCalls() || []) as ToolCallLike[];
 
     if (functionCalls.length === 0) {
       // No tool calls — final text response
@@ -1046,7 +1211,7 @@ TOKENS: ${tokenUsed.toLocaleString()} used / ${tokenLimit.toLocaleString()} dail
     const functionResponses: Part[] = [];
     let sawValidationFailure = false;
 
-    const processCall = async (call: { name: string; args: object }) => {
+    const processCall = async (call: ToolCallLike) => {
       const toolStart = Date.now();
       totalToolCalls++;
       const args = call.args as Record<string, string>;
@@ -1058,10 +1223,17 @@ TOKENS: ${tokenUsed.toLocaleString()} used / ${tokenLimit.toLocaleString()} dail
       logAgentEvent(agent.id, 'tool', summary, { durationMs: Date.now() - toolStart });
       if (onToolUse) await onToolUse(call.name, summary);
       const toolAudit = getToolAuditCallback();
-      if (toolAudit) toolAudit(agent.name, call.name, summary);
+      if (toolAudit) {
+        try {
+          toolAudit(agent.name, call.name, summary);
+        } catch (auditErr) {
+          console.warn('Tool audit callback failed:', auditErr instanceof Error ? auditErr.message : 'Unknown');
+        }
+      }
       return {
         functionResponse: {
           name: call.name,
+          ...(isAnthropicModel(currentModelName) && call.id ? { toolUseId: call.id } : {}),
           response: { output: truncateToolResult(result) },
         },
       } as Part;
@@ -1104,6 +1276,15 @@ TOKENS: ${tokenUsed.toLocaleString()} used / ${tokenLimit.toLocaleString()} dail
       if (isAbortError(err)) {
         logAgentEvent(agent.id, 'error', 'Request interrupted by user', { durationMs: Date.now() - loopStart });
         return '';
+      }
+      if (isAnthropicModel(currentModelName) && isAnthropicAuthError(err)) {
+        logAgentEvent(agent.id, 'error', 'Anthropic auth failed mid-loop — falling back to Gemini Pro');
+        const accumulatedHistory = await chat.getHistory();
+        await swapToModel(GEMINI_PRO, accumulatedHistory);
+        response = await withConcurrencyLimit(currentModelName, () =>
+          withRetry(() => sendMessageWithOptionalStream(chat, functionResponses, options?.signal, options?.onPartialText))
+        , isPriority);
+        continue;
       }
       if (isGeminiQuotaError(err)) {
         triggerGeminiQuotaFuse();

@@ -33,6 +33,7 @@ async function sendToolNotification(channel: WebhookCapableChannel, agent: Agent
 }
 import { triggerCloudBuild, listRevisions, getCurrentRevision, rollbackToRevision } from '../../services/cloudrun';
 import { captureAndPostScreenshots } from '../services/screenshots';
+import { postAgentErrorLog } from '../services/agentErrors';
 
 // Shared groupchat conversation history — persisted to disk via memory system
 let groupHistory: ConversationMessage[] = loadMemory('groupchat');
@@ -149,15 +150,24 @@ function inferImplicitActionTags(text: string): string {
   const normalized = text.toLowerCase();
   const allowInfraActions = process.env.RILEY_ALLOW_IMPLICIT_INFRA_ACTIONS === 'true';
 
-  if (allowInfraActions && /(build triggered|triggered build|deploying|deployment triggered|rolling out|release started)/i.test(normalized)) {
+  const deployRequested = /(build triggered|triggered build|deploying|deployment triggered|rolling out|release started)/i.test(normalized);
+  const deployNegated = /\b(?:do not|don't|dont|won't|wont|not|skip|without|avoid|no)\b[^.!?\n]{0,24}\b(?:deploy|deployment|roll\s*out|release)\b/i.test(normalized);
+  if (allowInfraActions && deployRequested && !deployNegated) {
     tags.add('[ACTION:DEPLOY]');
   }
-  if (/(capturing screenshots|taking screenshots|screenshot capture|posting screenshots)/i.test(normalized)) {
+
+  const screenshotsRequested = /(capturing screenshots|taking screenshots|screenshot capture|posting screenshots|take screenshots|capture screenshots)/i.test(normalized);
+  const screenshotsNegated = /\b(?:do not|don't|dont|won't|wont|not|skip|without|avoid|no)\b[^.!?\n]{0,24}\b(?:take|taking|capture|capturing|post|posting)?\s*screenshots?\b/i.test(normalized);
+  if (screenshotsRequested && !screenshotsNegated) {
     tags.add('[ACTION:SCREENSHOTS]');
   }
-  if (allowInfraActions && /(asap links|live url|app url|posting.*url|paste.*url|share.*url)/i.test(normalized)) {
+
+  const urlsRequested = /(asap links|live url|app url|posting.*url|paste.*url|share.*url)/i.test(normalized);
+  const urlsNegated = /\b(?:do not|don't|dont|won't|wont|not|skip|without|avoid|no)\b[^.!?\n]{0,24}\b(?:post|paste|share)?\s*.*url\b/i.test(normalized);
+  if (allowInfraActions && urlsRequested && !urlsNegated) {
     tags.add('[ACTION:URLS]');
   }
+
   if (/(usage report|limits report|budget report|token report)/i.test(normalized)) {
     tags.add('[ACTION:LIMITS]');
   }
@@ -420,9 +430,28 @@ function parseMentionedAgentIds(text: string, allowedIds?: Set<string>): AgentId
 // Detailed orchestration should happen inside the workspace thread.
 const GROUPCHAT_SUMMARY_ONLY = true;
 
+function formatAgentSummaryLine(line: string): string {
+  const normalized = line.replace(/\s+/g, ' ').trim();
+  const bracketed = normalized.match(/^\[([^\]]+)\]:\s*(.*)$/);
+  if (bracketed) {
+    const resolved = resolveAgentId(bracketed[1]);
+    const label = resolved ? getAgentMention(resolved) : bracketed[1];
+    return `${label}: ${bracketed[2]}`.trim();
+  }
+
+  const plain = normalized.match(/^([A-Za-z][A-Za-z\s-]{1,40}):\s*(.*)$/);
+  if (plain) {
+    const resolved = resolveAgentId(plain[1]);
+    const label = resolved ? getAgentMention(resolved) : plain[1];
+    return `${label}: ${plain[2]}`.trim();
+  }
+
+  return normalized;
+}
+
 function buildConsolidatedAgentUpdate(findings: string[], errors: string[]): string {
   const normalizedFindings = findings
-    .map((line) => line.replace(/\s+/g, ' ').trim())
+    .map(formatAgentSummaryLine)
     .filter((line) => line.length > 0)
     .slice(0, 12);
 
@@ -700,7 +729,7 @@ async function handleRileyMessage(
     await clearThinkingMessage();
 
     // Strip action tags before displaying to user
-    const displayResponse = response.replace(/\[ACTION:[^\]]+\]/g, '').trim();
+    const displayResponse = response.replace(/\[\s*action:[^\]]+\]/gi, '').trim();
     markGoalProgress('🧭 Riley coordinating...');
 
     appendToMemory('executive-assistant', [
@@ -718,7 +747,7 @@ async function handleRileyMessage(
     const implicitTags = inferImplicitActionTags(displayResponse);
     const actionPayload = implicitTags ? `${response}\n${implicitTags}` : response;
     if (implicitTags) {
-      await sendAgentMessage(rileyWorkChannel, riley, `Autopilot: executing implied actions.\n${implicitTags}`);
+      await sendAgentMessage(rileyWorkChannel, riley, 'Autopilot: executing the requested operational actions now.');
       await sendAutopilotAudit(
         groupchat,
         'implied_actions',
@@ -740,10 +769,14 @@ async function handleRileyMessage(
     if (signal?.aborted) return;
 
     // Check if Riley directed Ace or other agents
-    // Post Riley's current decision/plan to the workspace immediately so the
-    // thread stays up to date even if delegated work later stalls or errors.
+    // Post Riley's current decision/plan to both her work log and the workspace
+    // immediately so channel history and the thread stay in sync even if later
+    // delegated work stalls or errors.
     if (!signal?.aborted && displayResponse) {
-      await sendAgentMessage(workspaceChannel, riley, displayResponse);
+      await sendAgentMessage(rileyWorkChannel, riley, displayResponse);
+      if (workspaceChannel.id !== rileyWorkChannel.id) {
+        await sendAgentMessage(workspaceChannel, riley, displayResponse);
+      }
     }
 
     await handleAgentChain(response, groupchat, workspaceChannel, signal);
@@ -752,8 +785,12 @@ async function handleRileyMessage(
   } catch (err) {
     const abortLike = String((err as any)?.name || '').includes('Abort') || String((err as any)?.message || '').toLowerCase().includes('abort');
     if (abortLike || signal?.aborted) return;
-    const errMsg = err instanceof Error ? err.message : String(err);
+    const errMsg = err instanceof Error ? err.stack || err.message : String(err);
     console.error('Riley error:', errMsg);
+    void postAgentErrorLog('riley:groupchat', 'Riley orchestration error', {
+      agentId: 'executive-assistant',
+      detail: errMsg,
+    });
     const short = errMsg.length > 200 ? errMsg.slice(0, 200) + '…' : errMsg;
     try {
       const wh = await getWebhook(workspaceChannel);
@@ -781,7 +818,7 @@ async function executeActions(
   groupchat: TextChannel,
   workspaceChannel: WebhookCapableChannel
 ): Promise<void> {
-  const actionRe = /\[ACTION:(\w+)(?::([^\]]*))?\]/g;
+  const actionRe = /\[\s*action:(\w+)(?::([^\]]*))?\]/gi;
   const actions = [...response.matchAll(actionRe)];
 
   const riley = getAgent('executive-assistant' as AgentId);
@@ -1097,7 +1134,7 @@ async function recoverFromAgentErrors(
 
     const findings: string[] = [];
     if (aceRecovery.trim()) {
-      findings.push(`[Ace]: ${aceRecovery.slice(0, 500)}`);
+      findings.push(`${getAgentMention('developer' as AgentId)}: ${aceRecovery.slice(0, 500)}`);
     }
 
     const recoverySubDirectives = parseDirectives(aceRecovery);
@@ -1109,7 +1146,9 @@ async function recoverFromAgentErrors(
 
     return { findings, errors: [] };
   } catch (err) {
+    const msg = err instanceof Error ? err.stack || err.message : 'Unknown';
     console.error('Ace recovery error:', err instanceof Error ? err.message : 'Unknown');
+    void postAgentErrorLog('ace:recovery', 'Ace recovery error', { agentId: 'developer', detail: msg });
     try {
       const wh = await getWebhook(workspaceChannel);
       await wh.send({ content: '⚠️ Ace had an error while recovering specialist failures.', username: `${ace.emoji} ${ace.name}`, avatarURL: ace.avatarUrl });
@@ -1169,7 +1208,9 @@ async function handleAgentChain(
           consolidatedErrors.push(...fromAce.errors);
         }
       } catch (err) {
+        const msg = err instanceof Error ? err.stack || err.message : 'Unknown';
         console.error('Ace error:', err instanceof Error ? err.message : 'Unknown');
+        void postAgentErrorLog('ace:groupchat', 'Ace error', { agentId: 'developer', detail: msg });
         try {
           const wh = await getWebhook(workspaceChannel);
           await wh.send({ content: `⚠️ Ace had an error.`, username: `${ace.emoji} ${ace.name}`, avatarURL: ace.avatarUrl });
@@ -1273,19 +1314,24 @@ async function handleSubAgents(
         });
 
         if (signal?.aborted) return;
-        return `[${agent.name.split(' ')[0]}]: ${agentResponse.slice(0, 500)}`;
+        return `${getAgentMention(id as AgentId)}: ${agentResponse.slice(0, 500)}`;
       }),
       MAX_PARALLEL_SUBAGENTS
     );
 
     // Collect findings from this tier for the next tier
-    for (const result of tierResults) {
+    for (let i = 0; i < tierResults.length; i++) {
+      const result = tierResults[i];
       if (result.status === 'fulfilled') {
         if (typeof result.value === 'string' && result.value.length > 0) {
           priorFindings.push(result.value);
         }
       } else {
         console.error('Sub-agent tier error:', result.reason);
+        void postAgentErrorLog(`sub-agent:${tierAgents[i]?.id || 'unknown'}`, 'Sub-agent tier error', {
+          agentId: tierAgents[i]?.id,
+          detail: result.reason instanceof Error ? result.reason.stack || result.reason.message : String(result.reason),
+        });
       }
     }
 
@@ -1293,7 +1339,7 @@ async function handleSubAgents(
     for (let i = 0; i < tierResults.length; i++) {
       if (tierResults[i].status === 'rejected') {
         const { agent } = tierAgents[i];
-        errorLines.push(`${agent.name.split(' ')[0]}: error`);
+        errorLines.push(`${getAgentMention(tierAgents[i].id as AgentId)}: error`);
         try {
           const wh = await getWebhook(getAgentWorkChannel(tierAgents[i].id, groupchat));
           await wh.send({ content: `⚠️ ${agent.name.split(' ')[0]} had an error.`, username: `${agent.emoji} ${agent.name}`, avatarURL: agent.avatarUrl });
@@ -1348,7 +1394,12 @@ async function handleDirectedMessage(
   for (let i = 0; i < results.length; i++) {
     if (results[i].status === 'rejected') {
       const { agent } = validAgents[i];
-      console.error(`${agent.name} error:`, (results[i] as PromiseRejectedResult).reason);
+      const reason = (results[i] as PromiseRejectedResult).reason;
+      console.error(`${agent.name} error:`, reason);
+      void postAgentErrorLog(`direct:${validAgents[i].id}`, `${agent.name} error`, {
+        agentId: validAgents[i].id,
+        detail: reason instanceof Error ? reason.stack || reason.message : String(reason),
+      });
       try {
         const wh = await getWebhook(getAgentWorkChannel(validAgents[i].id, groupchat));
         await wh.send({ content: `⚠️ ${agent.name.split(' ')[0]} had an error.`, username: `${agent.emoji} ${agent.name}`, avatarURL: agent.avatarUrl });

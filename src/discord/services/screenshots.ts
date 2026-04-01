@@ -1,5 +1,7 @@
 import puppeteer, { Browser, Page } from 'puppeteer';
 import { TextChannel, AttachmentBuilder, Collection, Message } from 'discord.js';
+import { postAgentErrorLog } from './agentErrors';
+import { PUPPETEER_LAUNCH_ARGS, resolvePuppeteerExecutablePath } from './browserRuntime';
 
 /** iPhone 17 Pro Max approximate viewport (6.9" display, 3x retina → logical pixels) */
 const VIEWPORT = { width: 440, height: 956, deviceScaleFactor: 3 };
@@ -67,13 +69,8 @@ async function getPooledBrowser(): Promise<Browser> {
 
   browserPool = await puppeteer.launch({
     headless: true,
-    executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
-    args: [
-      '--no-sandbox',
-      '--disable-setuid-sandbox',
-      '--disable-dev-shm-usage',
-      '--disable-gpu',
-    ],
+    executablePath: resolvePuppeteerExecutablePath(),
+    args: [...PUPPETEER_LAUNCH_ARGS],
   });
   return browserPool;
 }
@@ -232,7 +229,12 @@ export async function captureAndPostScreenshots(
           new AttachmentBuilder(screenshot as Buffer, { name: `${screen.name}.png` })
         );
       } catch (err) {
-        console.error(`Screenshot error for ${screen.name}:`, err instanceof Error ? err.message : 'Unknown');
+        const msg = err instanceof Error ? err.message : 'Unknown';
+        console.error(`Screenshot error for ${screen.name}:`, msg);
+        void postAgentErrorLog('screenshots', `Could not capture ${screen.name}`, {
+          level: 'warn',
+          detail: msg,
+        });
         await targetChannel.send(`⚠️ Could not capture ${screen.name}`);
       }
     }
@@ -244,8 +246,10 @@ export async function captureAndPostScreenshots(
 
     await targetChannel.send(`✅ Captured ${attachments.length}/${SCREENS.length} screens — ${appUrl}`);
   } catch (err) {
-    console.error('Screenshot capture error:', err instanceof Error ? err.message : 'Unknown');
-    await targetChannel.send(`❌ Screenshot capture failed: ${err instanceof Error ? err.message : 'Unknown'}`);
+    const msg = err instanceof Error ? err.message : 'Unknown';
+    console.error('Screenshot capture error:', msg);
+    void postAgentErrorLog('screenshots', 'Screenshot capture failed', { detail: msg });
+    await targetChannel.send(`❌ Screenshot capture failed: ${msg}`);
   } finally {
     clearTimeout(timeout);
     captureInProgress = false;

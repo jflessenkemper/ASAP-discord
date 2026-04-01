@@ -21,6 +21,7 @@ import { startBot, stopBot } from './discord/bot';
 import { verifySignature, handleGitHubEvent } from './discord/handlers/github';
 import { captureAndPostScreenshots } from './discord/services/screenshots';
 import { getBotChannels } from './discord/bot';
+import { postAgentErrorLog } from './discord/services/agentErrors';
 import { getInboundTwiML, attachTelephonyWebSocket, isTelephonyAvailable } from './discord/services/telephony';
 import twilio from 'twilio';
 import { getMetricsText, PROMETHEUS_CONTENT_TYPE } from './discord/metrics';
@@ -36,6 +37,18 @@ if (IS_CLOUD_RUN) {
 }
 // Discord voice requires UDP. Cloud Run is HTTP-only, so force-disable bot there.
 const DISCORD_BOT_ENABLED = !IS_CLOUD_RUN && process.env.DISCORD_BOT_ENABLED !== 'false';
+
+process.on('unhandledRejection', (reason) => {
+  const detail = reason instanceof Error ? reason.stack || reason.message : String(reason);
+  console.error('Unhandled rejection:', detail);
+  void postAgentErrorLog('process:unhandledRejection', 'Unhandled promise rejection', { detail });
+});
+
+process.on('uncaughtException', (err) => {
+  const detail = err instanceof Error ? err.stack || err.message : String(err);
+  console.error('Uncaught exception:', detail);
+  void postAgentErrorLog('process:uncaughtException', 'Uncaught exception', { detail });
+});
 
 // Validate required production env vars
 if (process.env.NODE_ENV === 'production' && !process.env.FRONTEND_URL) {
@@ -182,7 +195,9 @@ app.post('/api/webhooks/github', express.json({ limit: '1mb' }), (req, res) => {
   }
 
   handleGitHubEvent(event, req.body).catch((err) => {
+    const msg = err instanceof Error ? err.stack || err.message : 'Unknown';
     console.error('GitHub webhook error:', err instanceof Error ? err.message : 'Unknown');
+    void postAgentErrorLog('github:webhook', 'GitHub webhook error', { detail: msg });
   });
 
   res.status(200).json({ ok: true });
@@ -200,7 +215,9 @@ app.post('/api/webhooks/build-complete', express.json({ limit: '10kb' }), (req, 
   const label = req.body?.commitSha?.slice(0, 7) || 'latest';
 
   captureAndPostScreenshots(appUrl, label).catch((err) => {
+    const msg = err instanceof Error ? err.stack || err.message : 'Unknown';
     console.error('Screenshot capture error:', err instanceof Error ? err.message : 'Unknown');
+    void postAgentErrorLog('build-complete:webhook', 'Screenshot capture error', { detail: msg });
   });
 
   const channels = getBotChannels();
@@ -256,6 +273,7 @@ app.use('/api/*', (_req, res) => {
 app.use((err: Error, _req: express.Request, res: express.Response, next: express.NextFunction) => {
   void next;
   console.error('Unhandled error:', err.message);
+  void postAgentErrorLog('express', 'Unhandled request error', { detail: err.stack || err.message });
   res.status(500).json({ error: 'Internal server error' });
 });
 

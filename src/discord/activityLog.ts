@@ -1,4 +1,5 @@
 import pool from '../db/pool';
+import { postAgentErrorLog } from './services/agentErrors';
 
 /**
  * Lightweight agent activity logger.
@@ -14,6 +15,18 @@ export function logAgentEvent(
   detail?: string,
   extra?: { durationMs?: number; tokensIn?: number; tokensOut?: number }
 ): void {
+  if (event === 'error') {
+    const meta = [
+      typeof extra?.durationMs === 'number' ? `durationMs=${extra.durationMs}` : null,
+      typeof extra?.tokensIn === 'number' ? `tokensIn=${extra.tokensIn}` : null,
+      typeof extra?.tokensOut === 'number' ? `tokensOut=${extra.tokensOut}` : null,
+    ].filter(Boolean).join(' ');
+    void postAgentErrorLog(`agent:${agentId}`, detail || 'Agent error', {
+      agentId,
+      detail: meta || undefined,
+    });
+  }
+
   pool.query(
     `INSERT INTO agent_activity_log (agent_id, event, detail, duration_ms, tokens_in, tokens_out)
      VALUES ($1, $2, $3, $4, $5, $6)`,
@@ -26,9 +39,10 @@ export function logAgentEvent(
       extra?.tokensOut ?? null,
     ]
   ).catch((err) => {
+    const msg = err instanceof Error ? err.message : 'Unknown';
     // Table might not exist yet if migration hasn't run — silently skip
-    if (err?.code !== '42P01') {
-      console.error('Activity log write error:', err instanceof Error ? err.message : 'Unknown');
+    if (err?.code !== '42P01' && !msg.includes('Cannot use a pool after calling end on the pool')) {
+      console.error('Activity log write error:', msg);
     }
   });
 }

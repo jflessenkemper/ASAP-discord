@@ -1,5 +1,6 @@
 import puppeteer, { Browser, Page } from 'puppeteer';
 import { AttachmentBuilder, TextChannel } from 'discord.js';
+import { PUPPETEER_LAUNCH_ARGS, resolvePuppeteerExecutablePath } from './browserRuntime';
 
 const VIEWPORT = { width: 440, height: 956, deviceScaleFactor: 3 };
 const NAV_TIMEOUT = 30_000;
@@ -50,12 +51,7 @@ async function postSnapshot(channel: TextChannel | undefined, page: Page, label:
 }
 
 function launchArgs(): string[] {
-  return [
-    '--no-sandbox',
-    '--disable-setuid-sandbox',
-    '--disable-dev-shm-usage',
-    '--disable-gpu',
-  ];
+  return [...PUPPETEER_LAUNCH_ARGS];
 }
 
 async function createPage(browser: Browser): Promise<Page> {
@@ -81,7 +77,7 @@ export async function mobileHarnessStart(
 
   const browser = await puppeteer.launch({
     headless: true,
-    executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
+    executablePath: resolvePuppeteerExecutablePath(),
     args: launchArgs(),
   });
 
