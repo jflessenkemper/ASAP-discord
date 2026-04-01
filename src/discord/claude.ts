@@ -701,6 +701,14 @@ const DEFAULT_MAX_OUTPUT_TOKENS = parseInt(process.env.DEFAULT_MAX_OUTPUT_TOKENS
 const DEFAULT_MAX_OUTPUT_TOKENS_DEVELOPER = parseInt(process.env.DEFAULT_MAX_OUTPUT_TOKENS_DEVELOPER || '2000', 10);
 const DISABLE_GEMINI_QUOTA_FUSE = process.env.DISABLE_GEMINI_QUOTA_FUSE === 'true';
 const GEMINI_QUOTA_FUSE_MS = parseInt(process.env.GEMINI_QUOTA_FUSE_MS || '300000', 10);
+const GEMINI_MAX_RETRIES = parseInt(process.env.GEMINI_MAX_RETRIES || '1', 10);
+const GEMINI_RETRY_BASE_DELAY_MS = parseInt(process.env.GEMINI_RETRY_BASE_DELAY_MS || '1500', 10);
+const GEMINI_429_PAUSE_MS = parseInt(process.env.GEMINI_429_PAUSE_MS || '25000', 10);
+const GEMINI_429_JITTER_MS = parseInt(process.env.GEMINI_429_JITTER_MS || '5000', 10);
+const RATE_LIMIT_FAST_FAIL_ON_429 = process.env.RATE_LIMIT_FAST_FAIL_ON_429 !== 'false';
+const GEMINI_RATE_LIMIT_FUSE_HITS = parseInt(process.env.GEMINI_RATE_LIMIT_FUSE_HITS || '6', 10);
+const GEMINI_RATE_LIMIT_FUSE_WINDOW_MS = parseInt(process.env.GEMINI_RATE_LIMIT_FUSE_WINDOW_MS || '180000', 10);
+const GEMINI_RATE_LIMIT_FUSE_COOLDOWN_MS = parseInt(process.env.GEMINI_RATE_LIMIT_FUSE_COOLDOWN_MS || '600000', 10);
 let activeClaude = 0;
 const claudeQueue: Array<() => void> = [];
 const activeByModel = new Map<string, number>();
@@ -720,6 +728,8 @@ let lastQuotaFuseNotificationAt = 0;
  */
 let rateLimitedUntil = 0;
 let creditsExhaustedUntil = 0;
+let rateLimitFuseUntil = 0;
+let recentRateLimitHits: number[] = [];
 
 function formatRecoveryTime(timestamp: number): string {
   return new Date(timestamp).toLocaleTimeString('en-AU', {
@@ -841,13 +851,19 @@ function isGeminiQuotaError(err: any): boolean {
   const msg = String(err?.message || err || '').toLowerCase();
   const status = err?.status || err?.statusCode;
   return (
+    status === 403 ||
     msg.includes('quota') ||
     msg.includes('resource_exhausted') ||
     msg.includes('billing') ||
     msg.includes('api key not valid') ||
-    msg.includes('invalid api key') ||
-    status === 429
+    msg.includes('invalid api key')
   );
+}
+
+function isGeminiRateLimitError(err: any): boolean {
+  const msg = String(err?.message || err || '').toLowerCase();
+  const status = err?.status || err?.statusCode;
+  return status === 429 || msg.includes('rate limit') || msg.includes('too many requests');
 }
 
 function isAnthropicAuthError(err: any): boolean {
@@ -875,10 +891,31 @@ function triggerGeminiQuotaFuse(): void {
   }
 }
 
+function registerRateLimitHit(): void {
+  const now = Date.now();
+  recentRateLimitHits = recentRateLimitHits.filter((ts) => now - ts <= GEMINI_RATE_LIMIT_FUSE_WINDOW_MS);
+  recentRateLimitHits.push(now);
+
+  if (recentRateLimitHits.length < GEMINI_RATE_LIMIT_FUSE_HITS) return;
+
+  rateLimitFuseUntil = Math.max(rateLimitFuseUntil, now + GEMINI_RATE_LIMIT_FUSE_COOLDOWN_MS);
+  if (!DISABLE_GEMINI_QUOTA_FUSE) {
+    creditsExhaustedUntil = Math.max(creditsExhaustedUntil, rateLimitFuseUntil);
+  }
+
+  if (quotaFuseNotifyCallback && now - lastQuotaFuseNotificationAt > 10_000) {
+    lastQuotaFuseNotificationAt = now;
+    void quotaFuseNotifyCallback(
+      `⚠️ Gemini is heavily rate-limited. Fast-fail mode is active until ${formatRecoveryTime(rateLimitFuseUntil)}.`
+    );
+  }
+}
+
 async function waitForRateLimit(): Promise<void> {
   const now = Date.now();
-  if (rateLimitedUntil > now) {
-    const waitMs = rateLimitedUntil - now;
+  const blockedUntil = Math.max(rateLimitedUntil, rateLimitFuseUntil);
+  if (blockedUntil > now) {
+    const waitMs = blockedUntil - now;
     console.warn(`Rate-limited: pausing all Claude requests for ${Math.ceil(waitMs / 1000)}s`);
     if (rateLimitNotifyCallback && waitMs > 2000 && now - lastRateLimitNotificationAt > 10_000) {
       lastRateLimitNotificationAt = now;
@@ -1029,7 +1066,7 @@ function estimateMaxOutputTokens(agentId: string, userMessage: string, explicit?
   return base;
 }
 
-async function withRetry<T>(fn: () => Promise<T>, retries = 3, delayMs = 2000): Promise<T> {
+async function withRetry<T>(fn: () => Promise<T>, retries = GEMINI_MAX_RETRIES, delayMs = GEMINI_RETRY_BASE_DELAY_MS): Promise<T> {
   for (let i = 0; i <= retries; i++) {
     try {
       return await fn();
@@ -1044,15 +1081,15 @@ async function withRetry<T>(fn: () => Promise<T>, retries = 3, delayMs = 2000): 
       let delay: number;
       if (status === 429) {
         recordRateLimitHit();
-        // Add ±10s of random jitter so concurrent requests that all hit 429
-        // simultaneously don't all resume at the exact same moment and
-        // immediately trigger another burst.
-        const jitter = Math.floor(Math.random() * 20_000) - 10_000; // ±10 s
-        delay = 60_000 + jitter;
-        // Global gate uses the upper bound (no jitter) so it's conservative
-        rateLimitedUntil = Math.max(rateLimitedUntil, Date.now() + 65_000);
+        registerRateLimitHit();
+        const halfJitter = Math.max(0, Math.floor(GEMINI_429_JITTER_MS / 2));
+        const jitter = Math.floor(Math.random() * (halfJitter * 2 + 1)) - halfJitter;
+        delay = Math.max(5000, GEMINI_429_PAUSE_MS + jitter);
+        // Global gate uses the upper bound (without negative jitter) so it's conservative.
+        rateLimitedUntil = Math.max(rateLimitedUntil, Date.now() + Math.max(5000, GEMINI_429_PAUSE_MS + halfJitter));
         console.warn(`429 rate limited — pausing ${Math.ceil(delay / 1000)}s (±jitter, retry ${i + 1}/${retries})`);
         logAgentEvent('system', 'rate_limit', `429 — pausing ${Math.ceil(delay / 1000)}s`);
+        if (RATE_LIMIT_FAST_FAIL_ON_429) throw err;
       } else {
         delay = delayMs * Math.pow(2, i);
         console.warn(`Gemini retry ${i + 1}/${retries} after ${delay}ms: ${err?.message || 'Unknown'}`);
@@ -1340,6 +1377,9 @@ RUNTIME EFFICIENCY:
       response = await withConcurrencyLimit(currentModelName, () =>
         withRetry(() => sendMessageWithOptionalStream(chat, runtimeUserMessage, options?.signal, options?.onPartialText))
       , isPriority);
+    } else if (isGeminiRateLimitError(err)) {
+      const recoverAt = Math.max(rateLimitedUntil, Date.now() + GEMINI_429_PAUSE_MS);
+      return `⏳ Gemini is currently rate-limited (throughput), not out of credit. Please retry after ${formatRecoveryTime(recoverAt)} or reduce parallel requests.`;
     } else if (isGeminiQuotaError(err)) {
       triggerGeminiQuotaFuse();
       logAgentEvent(agent.id, 'error', 'Gemini quota exhausted');
@@ -1542,6 +1582,10 @@ RUNTIME EFFICIENCY:
           withRetry(() => sendMessageWithOptionalStream(chat, functionResponses, options?.signal, options?.onPartialText))
         , isPriority);
         continue;
+      }
+      if (isGeminiRateLimitError(err)) {
+        const recoverAt = Math.max(rateLimitedUntil, Date.now() + GEMINI_429_PAUSE_MS);
+        return `⏳ Gemini is currently rate-limited (throughput), not out of credit. Please retry after ${formatRecoveryTime(recoverAt)} or reduce parallel requests.`;
       }
       if (isGeminiQuotaError(err)) {
         triggerGeminiQuotaFuse();
