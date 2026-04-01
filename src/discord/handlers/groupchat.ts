@@ -476,6 +476,7 @@ interface AgentDispatchOptions {
   memoryWindow?: number;
   documentLine?: string;
   persistUserContent?: string;
+  workspaceChannel?: WebhookCapableChannel;
 }
 
 async function dispatchToAgent(
@@ -504,6 +505,9 @@ async function dispatchToAgent(
   if (options.signal?.aborted) return '';
 
   await sendAgentMessage(outputChannel, agent, response);
+  if (options.workspaceChannel && options.workspaceChannel.id !== outputChannel.id) {
+    await sendAgentMessage(options.workspaceChannel, agent, response);
+  }
   appendToMemory(agentId, [
     { role: 'user', content: options.persistUserContent || contextMessage },
     { role: 'assistant', content: `[${agent.name}]: ${response}` },
@@ -736,12 +740,13 @@ async function handleRileyMessage(
     if (signal?.aborted) return;
 
     // Check if Riley directed Ace or other agents
-    await handleAgentChain(response, groupchat, workspaceChannel, signal);
-
-    // Post final Riley summary in the workspace thread after delegated work completes.
+    // Post Riley's current decision/plan to the workspace immediately so the
+    // thread stays up to date even if delegated work later stalls or errors.
     if (!signal?.aborted && displayResponse) {
       await sendAgentMessage(workspaceChannel, riley, displayResponse);
     }
+
+    await handleAgentChain(response, groupchat, workspaceChannel, signal);
 
     markGoalProgress('✅ Riley cycle completed');
   } catch (err) {
@@ -1085,6 +1090,7 @@ async function recoverFromAgentErrors(
       maxTokens: Math.max(SUBAGENT_MAX_TOKENS, 2200),
       persistUserContent: `[Riley recovery escalation]: ${errorLines.join('; ').slice(0, 1200)}`,
       documentLine: '🧯 {response}',
+      workspaceChannel,
     });
 
     if (signal?.aborted) return { findings: [], errors: [] };
@@ -1149,6 +1155,7 @@ async function handleAgentChain(
           signal,
           persistUserContent: `[Riley directed]: ${rileyResponse.slice(0, 1000)}`,
           documentLine: '✅ {response}',
+          workspaceChannel,
         });
 
         if (signal?.aborted) return;
@@ -1262,6 +1269,7 @@ async function handleSubAgents(
           signal,
           persistUserContent: `[Groupchat directive]: ${directiveContext.slice(0, 500)}`,
           documentLine: `✅ {response}`,
+          workspaceChannel,
         });
 
         if (signal?.aborted) return;
@@ -1328,6 +1336,7 @@ async function handleDirectedMessage(
         memoryWindow: 10,
         signal,
         documentLine: `Direct @mention from ${senderName}: {response}`,
+        workspaceChannel,
       });
 
       if (signal?.aborted) return;
