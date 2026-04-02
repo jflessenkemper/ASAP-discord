@@ -454,11 +454,15 @@ function getClient(): GoogleGenerativeAI {
 }
 
 function getAnthropicClient(): Anthropic {
-  const apiKey = String(process.env.ANTHROPIC_API_KEY || '').trim();
-  const authToken = String(process.env.ANTHROPIC_AUTH_TOKEN || '').trim();
-  if (!apiKey && !authToken) {
+  const configuredApiKey = String(process.env.ANTHROPIC_API_KEY || '').trim();
+  const configuredAuthToken = String(process.env.ANTHROPIC_AUTH_TOKEN || '').trim();
+  if (!configuredApiKey && !configuredAuthToken) {
     throw new Error('Anthropic credentials missing: set ANTHROPIC_API_KEY or ANTHROPIC_AUTH_TOKEN');
   }
+
+  // The SDK expects a single auth mechanism. Prefer API key when both are configured.
+  const apiKey = configuredApiKey || undefined;
+  const authToken = apiKey ? undefined : (configuredAuthToken || undefined);
 
   if (!anthropicClient) {
     anthropicClient = new Anthropic({
