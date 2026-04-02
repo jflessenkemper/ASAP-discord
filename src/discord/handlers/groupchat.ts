@@ -12,7 +12,7 @@ import {
   resolveAgentId,
   resolveAgentIdByRoleId,
 } from '../agents';
-import { agentRespond, ConversationMessage, getContextRuntimeReport, setQuotaFuseNotifyCallback, setRateLimitNotifyCallback } from '../claude';
+import { agentRespond, clearGeminiQuotaFuse, ConversationMessage, getContextRuntimeReport, getGeminiQuotaFuseStatus, setQuotaFuseNotifyCallback, setRateLimitNotifyCallback } from '../claude';
 import { appendToMemory, getMemoryContext, loadMemory, saveMemory, clearMemory, compressMemory } from '../memory';
 import { documentToChannel } from './documentation';
 import { sendAgentMessage, clearHistory } from './textChannel';
@@ -189,6 +189,9 @@ function inferImplicitActionTags(text: string): string {
 
   if (/(usage report|limits report|budget report|token report)/i.test(normalized)) {
     tags.add('[ACTION:LIMITS]');
+  }
+  if (/(clear quota fuse|reset quota fuse|unfuse|clear gemini fuse|reset gemini fuse)/i.test(normalized)) {
+    tags.add('[ACTION:UNFUSE]');
   }
   if (/(context report|prompt breakdown|token breakdown|context efficiency|prompt efficiency report)/i.test(normalized)) {
     tags.add('[ACTION:CONTEXT]');
@@ -1286,6 +1289,13 @@ async function executeActions(
           const report = getUsageReport();
           markGoalProgress('📊 Usage report posted');
           await sendAsRiley(report);
+          break;
+        }
+        case 'UNFUSE': {
+          clearGeminiQuotaFuse();
+          const status = getGeminiQuotaFuseStatus();
+          markGoalProgress('🧯 Cleared local Gemini quota fuse');
+          await sendAsRiley(`🧯 Cleared local Gemini quota/rate fuse. blocked=${status.blocked ? 'yes' : 'no'}.`);
           break;
         }
         case 'CONTEXT': {

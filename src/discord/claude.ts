@@ -1084,13 +1084,27 @@ function isAbortError(err: any): boolean {
 function isGeminiQuotaError(err: any): boolean {
   const msg = String(err?.message || err || '').toLowerCase();
   const status = err?.status || err?.statusCode;
-  return (
-    status === 403 ||
+  const quotaLike =
     msg.includes('quota') ||
     msg.includes('resource_exhausted') ||
     msg.includes('billing') ||
+    msg.includes('insufficient_quota') ||
+    msg.includes('quota exceeded');
+  return (
+    quotaLike ||
+    (status === 403 && quotaLike)
+  );
+}
+
+function isGeminiAuthError(err: any): boolean {
+  const msg = String(err?.message || err || '').toLowerCase();
+  const status = err?.status || err?.statusCode;
+  return (
+    status === 401 ||
     msg.includes('api key not valid') ||
-    msg.includes('invalid api key')
+    msg.includes('invalid api key') ||
+    msg.includes('permission denied') ||
+    msg.includes('unauthenticated')
   );
 }
 
@@ -1390,6 +1404,19 @@ function triggerGeminiQuotaFuse(): void {
       `⚠️ Gemini quota is exhausted. Automatic retries resume at ${formatRecoveryTime(creditsExhaustedUntil)}.`
     );
   }
+}
+
+export function clearGeminiQuotaFuse(): void {
+  creditsExhaustedUntil = 0;
+  rateLimitFuseUntil = 0;
+  recentRateLimitHits = [];
+}
+
+export function getGeminiQuotaFuseStatus(): { blocked: boolean; recoverAt: number } {
+  return {
+    blocked: isCreditsExhaustedNow(),
+    recoverAt: creditsExhaustedUntil,
+  };
 }
 
 function registerRateLimitHit(): void {
@@ -2190,6 +2217,9 @@ RUNTIME EFFICIENCY:
         : (DISABLE_GEMINI_QUOTA_FUSE
             ? '⚠️ Gemini rejected that request, but the local quota pause is disabled. Retry or continue with other work.'
             : `⚠️ Gemini quota is exhausted right now. Automatic retries resume at ${formatRecoveryTime(creditsExhaustedUntil)}. Ask Riley to request Jordan approval for more credits before continuing.`);
+    } else if (isGeminiAuthError(err)) {
+      logAgentEvent(agent.id, 'error', 'Gemini auth/config issue');
+      return '⚠️ Gemini auth/config issue detected (not quota). Check runtime API key/service account and provider mode flags, then retry.';
     } else {
       throw err;
     }
@@ -2441,6 +2471,10 @@ RUNTIME EFFICIENCY:
           : (DISABLE_GEMINI_QUOTA_FUSE
               ? '⚠️ Gemini rejected that request mid-run, but the local quota pause is disabled. Retry or continue with other work.'
               : '⚠️ Gemini quota is exhausted right now. Ask Riley to request Jordan approval for more credits before continuing.');
+      }
+      if (isGeminiAuthError(err)) {
+        logAgentEvent(agent.id, 'error', 'Gemini auth/config issue mid-loop');
+        return '⚠️ Gemini auth/config issue detected (not quota). Check runtime API key/service account and provider mode flags, then retry.';
       }
       throw err;
     }
