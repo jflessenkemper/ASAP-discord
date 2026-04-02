@@ -196,6 +196,21 @@ function sanitizeSchemaNode(node: any): any {
 
     out[key] = sanitizeSchemaNode(value);
   }
+  if (
+    Array.isArray(out.required)
+    && out.properties
+    && typeof out.properties === 'object'
+    && !Array.isArray(out.properties)
+  ) {
+    const allowed = new Set(Object.keys(out.properties));
+    out.required = out.required
+      .map((item: unknown) => String(item || ''))
+      .filter((name: string) => name.length > 0 && allowed.has(name));
+    if (out.required.length === 0) {
+      delete out.required;
+    }
+  }
+
   return out;
 }
 
