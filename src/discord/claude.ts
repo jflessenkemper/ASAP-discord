@@ -224,8 +224,11 @@ let vertexAuth: GoogleAuth | null = null;
 let vertexTokenCache: { token: string; expiresAtMs: number } | null = null;
 
 const USE_VERTEX_AI = process.env.GEMINI_USE_VERTEX_AI === 'true';
+const USE_VERTEX_ANTHROPIC = process.env.ANTHROPIC_USE_VERTEX_AI === 'true' || process.env.OPUS_USE_VERTEX_AI === 'true';
 const VERTEX_PROJECT_ID = process.env.VERTEX_PROJECT_ID || process.env.GOOGLE_CLOUD_PROJECT || process.env.GCLOUD_PROJECT || '';
 const VERTEX_LOCATION = process.env.VERTEX_LOCATION || 'us-central1';
+const VERTEX_ANTHROPIC_VERSION = process.env.VERTEX_ANTHROPIC_VERSION || 'vertex-2023-10-16';
+const PARTNER_MODEL_CACHE_ENABLED = process.env.PARTNER_MODEL_CACHE_ENABLED !== 'false';
 
 type ToolCallLike = { name: string; args: object; id?: string };
 
@@ -282,6 +285,13 @@ function makeVertexError(status: number, bodyText: string): Error & { status: nu
   return err;
 }
 
+function makeVertexAnthropicError(status: number, bodyText: string): Error & { status: number; statusCode: number } {
+  const err = new Error(`Vertex Anthropic error: HTTP ${status} ${bodyText.slice(0, 400)}`) as Error & { status: number; statusCode: number };
+  err.status = status;
+  err.statusCode = status;
+  return err;
+}
+
 async function getVertexAccessToken(): Promise<string> {
   const now = Date.now();
   if (vertexTokenCache && vertexTokenCache.expiresAtMs - now > 60_000) {
@@ -332,6 +342,35 @@ async function callVertexGenerateContent(
   if (!res.ok) {
     const bodyText = await res.text();
     throw makeVertexError(res.status, bodyText);
+  }
+
+  return res.json();
+}
+
+async function callVertexAnthropicRawPredict(
+  modelName: string,
+  body: Record<string, any>,
+  signal?: AbortSignal,
+): Promise<any> {
+  if (!VERTEX_PROJECT_ID) {
+    throw new Error('Vertex Anthropic is enabled but VERTEX_PROJECT_ID (or GOOGLE_CLOUD_PROJECT) is not set');
+  }
+
+  const token = await getVertexAccessToken();
+  const endpoint = `https://${VERTEX_LOCATION}-aiplatform.googleapis.com/v1/projects/${VERTEX_PROJECT_ID}/locations/${VERTEX_LOCATION}/publishers/anthropic/models/${encodeURIComponent(modelName)}:rawPredict`;
+  const res = await fetch(endpoint, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(body),
+    signal,
+  });
+
+  if (!res.ok) {
+    const bodyText = await res.text();
+    throw makeVertexAnthropicError(res.status, bodyText);
   }
 
   return res.json();
@@ -405,6 +444,7 @@ type ResponseCacheEntry = { value: string; ts: number };
 const responseCache = new Map<string, ResponseCacheEntry>();
 const RESPONSE_CACHE_TTL_MS = parseInt(process.env.RESPONSE_CACHE_TTL_MS || '120000', 10);
 const RESPONSE_CACHE_MAX_ENTRIES = parseInt(process.env.RESPONSE_CACHE_MAX_ENTRIES || '128', 10);
+const RESPONSE_CACHE_ALLOW_TOOL_AGENTS = process.env.RESPONSE_CACHE_ALLOW_TOOL_AGENTS === 'true';
 
 function getClient(): GoogleGenerativeAI {
   if (!client) {
@@ -414,10 +454,24 @@ function getClient(): GoogleGenerativeAI {
 }
 
 function getAnthropicClient(): Anthropic {
+  const apiKey = String(process.env.ANTHROPIC_API_KEY || '').trim();
+  const authToken = String(process.env.ANTHROPIC_AUTH_TOKEN || '').trim();
+  if (!apiKey && !authToken) {
+    throw new Error('Anthropic credentials missing: set ANTHROPIC_API_KEY or ANTHROPIC_AUTH_TOKEN');
+  }
+
   if (!anthropicClient) {
-    anthropicClient = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY || '' });
+    anthropicClient = new Anthropic({
+      ...(apiKey ? { apiKey } : {}),
+      ...(authToken ? { authToken } : {}),
+    } as any);
   }
   return anthropicClient;
+}
+
+function hasAnthropicCredentials(): boolean {
+  return Boolean(String(process.env.ANTHROPIC_API_KEY || '').trim())
+    || Boolean(String(process.env.ANTHROPIC_AUTH_TOKEN || '').trim());
 }
 
 function isAnthropicModel(modelName: string): boolean {
@@ -443,6 +497,23 @@ function toAnthropicBlocks(parts: any[]): any[] {
     }
   }
   return blocks.length > 0 ? blocks : [{ type: 'text', text: '' }];
+}
+
+function withAnthropicCacheControl(blocks: any[]): any[] {
+  if (!PARTNER_MODEL_CACHE_ENABLED || !Array.isArray(blocks)) return blocks;
+  return blocks.map((block) => {
+    if (!block || typeof block !== 'object') return block;
+    if (block.type !== 'text') return block;
+    const text = String(block.text || '');
+    if (text.length < 120) return block;
+    return { ...block, cache_control: { type: 'ephemeral' } };
+  });
+}
+
+function asAnthropicSystemInstruction(systemInstruction?: string): string | Array<{ type: 'text'; text: string; cache_control?: { type: 'ephemeral' } }> | undefined {
+  if (!systemInstruction) return undefined;
+  if (!PARTNER_MODEL_CACHE_ENABLED) return systemInstruction;
+  return [{ type: 'text', text: systemInstruction, cache_control: { type: 'ephemeral' } }];
 }
 
 function geminiHistoryToAnthropicMessages(history: Content[]): Array<{ role: 'user' | 'assistant'; content: any[] }> {
@@ -500,13 +571,15 @@ function createAnthropicModel(
     messages: Array<{ role: 'user' | 'assistant'; content: any[] }>,
     signal?: AbortSignal,
   ): Promise<ModelResultLike> => {
+    const cachedMessages = PARTNER_MODEL_CACHE_ENABLED
+      ? messages.map((msg) => ({ ...msg, content: withAnthropicCacheControl(msg.content || []) }))
+      : messages;
     const raw = await anthropic.messages.create({
       model: modelName,
       max_tokens: maxTokens,
-      system: options.systemInstruction,
-      messages,
+      system: asAnthropicSystemInstruction(options.systemInstruction),
+      messages: cachedMessages,
       tools: anthropicTools.length > 0 ? anthropicTools as any : undefined,
-      ...(ANTHROPIC_AUTO_CACHE ? { cache_control: { type: 'ephemeral' } as any } : {}),
     } as any, signal ? { signal } as any : undefined);
 
     return { response: makeResponseLikeFromAnthropic(raw) };
@@ -536,8 +609,70 @@ function createAnthropicModel(
   };
 }
 
+function createVertexAnthropicModel(
+  modelName: string,
+  options: { systemInstruction?: string; rawTools?: AnyTool[]; generationConfig?: Record<string, any> }
+): ModelLike {
+  const anthropicTools = toAnthropicTools(options.rawTools || []);
+  const maxTokens = Math.max(64, Number(options.generationConfig?.maxOutputTokens || 1024));
+
+  const invoke = async (
+    messages: Array<{ role: 'user' | 'assistant'; content: any[] }>,
+    signal?: AbortSignal,
+  ): Promise<ModelResultLike> => {
+    const cachedMessages = PARTNER_MODEL_CACHE_ENABLED
+      ? messages.map((msg) => ({ ...msg, content: withAnthropicCacheControl(msg.content || []) }))
+      : messages;
+
+    const raw = await callVertexAnthropicRawPredict(
+      modelName,
+      {
+        anthropic_version: VERTEX_ANTHROPIC_VERSION,
+        model: modelName,
+        max_tokens: maxTokens,
+        system: asAnthropicSystemInstruction(options.systemInstruction),
+        messages: cachedMessages,
+        tools: anthropicTools.length > 0 ? anthropicTools : undefined,
+      },
+      signal,
+    );
+
+    return { response: makeResponseLikeFromAnthropic(raw) };
+  };
+
+  return {
+    startChat: ({ history }) => {
+      let workingHistory = geminiHistoryToAnthropicMessages(history || []);
+      return {
+        sendMessage: async (payload, requestOptions) => {
+          const nextMessage = typeof payload === 'string'
+            ? { role: 'user' as const, content: [{ type: 'text', text: payload }] }
+            : { role: 'user' as const, content: toAnthropicBlocks(payload as any[]) };
+
+          const requestMessages = [...workingHistory, nextMessage];
+          const result = await invoke(requestMessages, requestOptions?.signal);
+          const assistantContent = ((result.response as any)?.__raw?.content || []) as any[];
+          workingHistory = [...requestMessages, { role: 'assistant' as const, content: assistantContent }];
+          return result;
+        },
+        getHistory: async () => anthropicHistoryToGemini(workingHistory),
+      };
+    },
+    generateContent: async (payload: string, requestOptions?: { signal?: AbortSignal }) => {
+      return invoke([{ role: 'user', content: [{ type: 'text', text: payload }] }], requestOptions?.signal);
+    },
+  };
+}
+
 function createModel(modelName: string, options: { systemInstruction?: string; tools?: Tool[]; rawTools?: AnyTool[]; generationConfig?: Record<string, any> }): ModelLike {
   if (isAnthropicModel(modelName)) {
+    if (USE_VERTEX_ANTHROPIC) {
+      return createVertexAnthropicModel(modelName, options);
+    }
+    if (!hasAnthropicCredentials()) {
+      // Fall back when Anthropic env is unavailable at runtime.
+      return createModel(GEMINI_PRO, options);
+    }
     return createAnthropicModel(modelName, options);
   }
 
@@ -650,9 +785,9 @@ function getProjectContextForAgent(agentId: string): string {
 }
 
 function isCacheablePrompt(agentId: string, userMessage: string, history: ConversationMessage[]): boolean {
-  if (agentId === 'executive-assistant' || hasFullRepoToolAccess(agentId)) return false;
+  if (!RESPONSE_CACHE_ALLOW_TOOL_AGENTS && (agentId === 'executive-assistant' || hasFullRepoToolAccess(agentId))) return false;
   if (userMessage.length > 120) return false;
-  if (history.length > 6) return false;
+  if (history.length > 4) return false;
   if (/\b(status|latest|current|deploy|build|screenshot|usage|budget|review|fix|run|test|voice|call|log|today|now)\b/i.test(userMessage)) {
     return false;
   }

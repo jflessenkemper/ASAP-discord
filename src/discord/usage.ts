@@ -102,6 +102,24 @@ let usageDirty = false;
 let usageWriteTimer: ReturnType<typeof setTimeout> | null = null;
 let costChannel: TextChannel | null = null;
 
+function toAgentTag(agentLabel: string): string {
+  const normalized = String(agentLabel || '').toLowerCase();
+  if (normalized.includes('riley')) return 'executive-assistant';
+  if (normalized.includes('ace')) return 'developer';
+  if (normalized.includes('max')) return 'qa';
+  if (normalized.includes('sophie')) return 'ux-reviewer';
+  if (normalized.includes('kane')) return 'security-auditor';
+  if (normalized.includes('raj')) return 'api-reviewer';
+  if (normalized.includes('elena')) return 'dba';
+  if (normalized.includes('kai')) return 'performance';
+  if (normalized.includes('jude')) return 'devops';
+  if (normalized.includes('liv')) return 'copywriter';
+  if (normalized.includes('harper')) return 'lawyer';
+  if (normalized.includes('mia')) return 'ios-engineer';
+  if (normalized.includes('leo')) return 'android-engineer';
+  return normalized.replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'unknown';
+}
+
 function markUsageDirty(): void {
   usageDirty = true;
   if (usageWriteTimer) clearTimeout(usageWriteTimer);
@@ -311,10 +329,9 @@ export function recordClaudeUsage(
     const reqCost = estimateRequestCostUsd(modelName, inputTokens, outputTokens);
     const budget = getRemainingBudget();
     const modelLabel = modelName || 'unknown-model';
+    const agentTag = toAgentTag(agentLabel);
     const line =
-      `💸 **${agentLabel}** • ${modelLabel}\n` +
-      `in=${inputTokens.toLocaleString()} out=${outputTokens.toLocaleString()} • est **$${reqCost.toFixed(4)}**\n` +
-      `today **$${budget.spent.toFixed(4)} / $${budget.limit.toFixed(2)}**`;
+      `💸 [agent:${agentTag}] model=${modelLabel} in=${inputTokens.toLocaleString()} out=${outputTokens.toLocaleString()} est=$${reqCost.toFixed(4)} today=$${budget.spent.toFixed(4)}/$${budget.limit.toFixed(2)}`;
     void costChannel.send(line.slice(0, 1900)).catch(() => {});
   }
 

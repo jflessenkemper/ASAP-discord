@@ -18,7 +18,7 @@ const MAIN_CHANNELS = {
   groupchat: '💬-groupchat',
   threadStatus: '🧵-thread-status',
   decisions: '📋-decisions',
-  voice: '🎙️-command',
+  voice: '🎤-voice',
 } as const;
 
 const OPS_CHANNELS = {
@@ -225,9 +225,9 @@ export async function setupChannels(guild: Guild): Promise<BotChannels> {
 
   const threadStatus = await ensureText(
     MAIN_CHANNELS.threadStatus,
-    catMain,
+    catOps,
     '🧵 Riley posts a fresh hourly summary of open workspace threads and close-ready items.',
-    `🧵 **Thread Status**\n\nRiley refreshes this channel with a clean hourly snapshot of open workspace threads, stale work, and threads that look ready to close.`
+    '🧵 Thread status snapshots post here.'
   );
 
   const decisions = await ensureText(
@@ -276,8 +276,9 @@ export async function setupChannels(guild: Guild): Promise<BotChannels> {
 
   const callLog = await ensureText(
     OPS_CHANNELS.callLog,
-    catOps,
-    '📋 Automatic transcripts and summaries of voice calls'
+    catMain,
+    '📋 Automatic transcripts and summaries of voice calls',
+    '📋 Voice call transcripts and summaries post here.'
   );
 
   const limits = await ensureText(
@@ -290,7 +291,7 @@ export async function setupChannels(guild: Guild): Promise<BotChannels> {
     OPS_CHANNELS.cost,
     catOps,
     '💸 Per-action spend feed by agent (model, tokens, estimated USD)',
-    `💸 **Agent Cost Feed**\n\nEvery LLM action posts an estimated cost line here so you can track spend in real time.`
+    '💸 One-line agent cost feed posts here.'
   );
 
   const screenshots = await ensureText(
@@ -315,7 +316,7 @@ export async function setupChannels(guild: Guild): Promise<BotChannels> {
     OPS_CHANNELS.terminal,
     catOps,
     '💻 Live feed of all tool calls made by agents — file ops, git, commands, searches',
-    `💻 **Agent Terminal**\n\nReal-time log of every tool invocation by any agent.\nFile reads, writes, edits, searches, git ops, commands, and more.`
+    '💻 One-line tool activity feed posts here.'
   );
 
   const voiceErrors = await ensureText(

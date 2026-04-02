@@ -110,18 +110,35 @@ export async function startBot(): Promise<void> {
         if (!githubChannel) return;
         const icon = allowed ? '✅' : '🚫';
         const truncated = cmd.length > 100 ? cmd.slice(0, 100) + '...' : cmd;
-        githubChannel.send(`${icon} \`run_command\`: \`${truncated}\` — ${reason}`).catch(() => {});
+        githubChannel.send(`${icon} [agent:system] run_command=${truncated.replace(/\s+/g, ' ')} reason=${reason.replace(/\s+/g, ' ')}`).catch(() => {});
       });
 
       // Wire tool audit to #terminal channel — every tool invocation from every agent
       let lastDbAuditPost = 0;
       let suppressedDbAudits = 0;
       const DB_AUDIT_POST_INTERVAL_MS = 30_000;
+      const toAgentTag = (name: string): string => {
+        const normalized = String(name || '').toLowerCase();
+        if (normalized.includes('riley')) return 'executive-assistant';
+        if (normalized.includes('ace')) return 'developer';
+        if (normalized.includes('max')) return 'qa';
+        if (normalized.includes('sophie')) return 'ux-reviewer';
+        if (normalized.includes('kane')) return 'security-auditor';
+        if (normalized.includes('raj')) return 'api-reviewer';
+        if (normalized.includes('elena')) return 'dba';
+        if (normalized.includes('kai')) return 'performance';
+        if (normalized.includes('jude')) return 'devops';
+        if (normalized.includes('liv')) return 'copywriter';
+        if (normalized.includes('harper')) return 'lawyer';
+        if (normalized.includes('mia')) return 'ios-engineer';
+        if (normalized.includes('leo')) return 'android-engineer';
+        return normalized.replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'unknown';
+      };
       setToolAuditCallback((agentName, toolName, summary) => {
         const terminalChannel = configuredChannels.terminal;
         if (!terminalChannel) return;
 
-        const firstName = agentName.split(' ')[0];
+        const tag = toAgentTag(agentName);
         const isDbTool = toolName === 'db_query' || toolName === 'db_query_readonly';
 
         if (isDbTool) {
@@ -136,11 +153,11 @@ export async function startBot(): Promise<void> {
             : '';
           suppressedDbAudits = 0;
           lastDbAuditPost = now;
-          terminalChannel.send(`🧮 **${firstName}** → \`${toolName}\`${suppressedNote}`).catch(() => {});
+          terminalChannel.send(`🧮 [agent:${tag}] tool=${toolName}${suppressedNote}`).catch(() => {});
           return;
         }
 
-        terminalChannel.send(`🔧 **${firstName}** → \`${toolName}\`: ${summary}`).catch(() => {});
+        terminalChannel.send(`🔧 [agent:${tag}] tool=${toolName} ${summary.replace(/\s+/g, ' ').trim()}`).catch(() => {});
       });
 
       // Wire PR auto-review (Harper + Kane on sensitive files)

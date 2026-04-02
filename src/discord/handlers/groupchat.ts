@@ -354,14 +354,12 @@ export async function postThreadStatusSnapshotNow(reason = 'hourly'): Promise<vo
 
   const riley = getAgent('executive-assistant' as AgentId);
   const timestamp = new Date().toLocaleString('en-AU', { timeZone: 'Australia/Sydney' });
-  const header = reason === 'hourly'
-    ? `🧵 **Hourly Thread Status** — ${timestamp}`
-    : `🧵 **Thread Status Refresh** — ${timestamp}`;
+  const label = reason === 'hourly' ? 'hourly' : 'manual';
   const currentGoal = activeGoal
-    ? `**Current Goal:** ${activeGoal}\n**Status:** ${goalStatus || 'In progress...'}`
-    : '**Current Goal:** none active';
+    ? `goal=${activeGoal.slice(0, 80)} status=${(goalStatus || 'in-progress').replace(/\s+/g, ' ').slice(0, 60)}`
+    : 'goal=none status=idle';
   const report = await buildThreadStatusReport(threadStatusSourceChannel);
-  const content = `${header}\n\n${currentGoal}\n\n${report}`;
+  const content = `🧵 [agent:executive-assistant] thread-status type=${label} at=${timestamp} ${currentGoal} ${report}`;
 
   await clearThreadStatusMessages(threadStatusChannel).catch(() => {});
 
@@ -589,25 +587,26 @@ async function buildThreadStatusReport(groupchat: TextChannel): Promise<string> 
     .slice(0, 8);
 
   if (threads.length === 0) {
-    return '🧵 **Workspace Threads**\n\nNo active goal threads right now.';
+    return 'open=0 ready=0 top=none';
   }
 
   const now = Date.now();
-  const lines = await Promise.all(threads.map(async (thread) => {
+  const rows = await Promise.all(threads.map(async (thread) => {
     const recent = await thread.messages.fetch({ limit: 1 }).catch(() => null);
     const last = recent?.first();
     const lastTs = last?.createdTimestamp || thread.createdTimestamp || now;
     const idleMs = Math.max(0, now - lastTs);
-    const status = idleMs >= THREAD_CLOSE_REVIEW_IDLE_MS ? '🟡 ready for close review' : '🟢 active';
-    return `${status} — **${thread.name}** — idle ${formatRelativeTime(idleMs)} — ${(thread.messageCount ?? '?')} msgs`;
+    const ready = idleMs >= THREAD_CLOSE_REVIEW_IDLE_MS;
+    return {
+      ready,
+      summary: `${thread.name.slice(0, 28).replace(/\s+/g, '_')}@${formatRelativeTime(idleMs)}`,
+    };
   }));
 
-  const readyCount = lines.filter((line) => line.startsWith('🟡')).length;
-  const summary = readyCount > 0
-    ? `Open goal threads: ${threads.length} (${readyCount} ready for close review)`
-    : `Open goal threads: ${threads.length}`;
+  const readyCount = rows.filter((row) => row.ready).length;
+  const top = rows.slice(0, 5).map((row) => row.summary).join(',');
 
-  return `🧵 **Workspace Threads**\n\n${summary}\n${lines.join('\n')}`;
+  return `open=${threads.length} ready=${readyCount} top=${top || 'none'}`;
 }
 
 async function fetchStatusSummary(url: string): Promise<string> {

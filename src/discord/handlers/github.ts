@@ -61,17 +61,22 @@ export async function handleGitHubEvent(
 }
 
 function formatEvent(event: string, p: Record<string, any>): string | null {
+  const actorTag = (raw: unknown): string => {
+    const value = String(raw || 'unknown').toLowerCase();
+    const slug = value.replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+    return slug || 'unknown';
+  };
+
   switch (event) {
     case 'push': {
       const branch = (p.ref || '').replace('refs/heads/', '');
       const commits = p.commits || [];
       if (commits.length === 0) return null;
       const pusher = p.pusher?.name || 'unknown';
-      const lines = commits
-        .slice(0, 5)
-        .map((c: any) => `  \`${(c.id || '').slice(0, 7)}\` ${(c.message || '').split('\n')[0].slice(0, 80)}`);
-      const extra = commits.length > 5 ? `\n  ... and ${commits.length - 5} more` : '';
-      return `📦 **${pusher}** pushed ${commits.length} commit${commits.length > 1 ? 's' : ''} to \`${branch}\`\n${lines.join('\n')}${extra}`;
+      const firstCommit = commits[0] || {};
+      const firstSha = String(firstCommit.id || '').slice(0, 7) || 'unknown';
+      const firstMsg = String(firstCommit.message || '').split('\n')[0].slice(0, 70);
+      return `📦 [agent:${actorTag(pusher)}] push branch=${branch} commits=${commits.length} first=${firstSha} msg=${firstMsg}`;
     }
 
     case 'pull_request': {
@@ -79,7 +84,7 @@ function formatEvent(event: string, p: Record<string, any>): string | null {
       const pr = p.pull_request || {};
       const user = pr.user?.login || 'unknown';
       const emoji = action === 'opened' ? '🟢' : action === 'closed' ? (pr.merged ? '🟣' : '🔴') : '🔵';
-      return `${emoji} **PR #${pr.number}** ${action} by **${user}** — ${(pr.title || '').slice(0, 100)}`;
+      return `${emoji} [agent:${actorTag(user)}] pr#${pr.number} action=${action} title=${String(pr.title || '').slice(0, 100)}`;
     }
 
     case 'issues': {
@@ -87,59 +92,61 @@ function formatEvent(event: string, p: Record<string, any>): string | null {
       const issue = p.issue || {};
       const user = issue.user?.login || 'unknown';
       const emoji = action === 'opened' ? '🟡' : action === 'closed' ? '✅' : '📝';
-      return `${emoji} **Issue #${issue.number}** ${action} by **${user}** — ${(issue.title || '').slice(0, 100)}`;
+      return `${emoji} [agent:${actorTag(user)}] issue#${issue.number} action=${action} title=${String(issue.title || '').slice(0, 100)}`;
     }
 
     case 'issue_comment': {
       const issue = p.issue || {};
       const comment = p.comment || {};
       const user = comment.user?.login || 'unknown';
-      return `💬 **${user}** commented on #${issue.number} — ${(comment.body || '').slice(0, 120)}`;
+      return `💬 [agent:${actorTag(user)}] issue#${issue.number} commented msg=${String(comment.body || '').slice(0, 120)}`;
     }
 
     case 'create': {
       const refType = p.ref_type; // branch or tag
       const ref = p.ref;
       const user = p.sender?.login || 'unknown';
-      return `🌿 **${user}** created ${refType} \`${ref}\``;
+      return `🌿 [agent:${actorTag(user)}] created ${refType} ${ref}`;
     }
 
     case 'delete': {
       const refType = p.ref_type;
       const ref = p.ref;
       const user = p.sender?.login || 'unknown';
-      return `🗑️ **${user}** deleted ${refType} \`${ref}\``;
+      return `🗑️ [agent:${actorTag(user)}] deleted ${refType} ${ref}`;
     }
 
     case 'release': {
       const release = p.release || {};
       const user = release.author?.login || 'unknown';
-      return `🚀 **Release ${release.tag_name || ''}** published by **${user}** — ${(release.name || '').slice(0, 100)}`;
+      return `🚀 [agent:${actorTag(user)}] release tag=${release.tag_name || ''} name=${String(release.name || '').slice(0, 90)}`;
     }
 
     case 'deployment_status': {
       const state = p.deployment_status?.state || 'unknown';
       const env = p.deployment_status?.environment || 'unknown';
       const emoji = state === 'success' ? '✅' : state === 'failure' ? '❌' : '⏳';
-      return `${emoji} Deployment to **${env}**: ${state}`;
+      const user = p.sender?.login || 'system';
+      return `${emoji} [agent:${actorTag(user)}] deploy env=${env} state=${state}`;
     }
 
     case 'workflow_run': {
       const run = p.workflow_run || {};
       if (p.action !== 'completed') return null;
       const emoji = run.conclusion === 'success' ? '✅' : '❌';
-      return `${emoji} **${run.name || 'Workflow'}** ${run.conclusion} on \`${(run.head_branch || '').slice(0, 30)}\``;
+      const user = run.actor?.login || p.sender?.login || 'system';
+      return `${emoji} [agent:${actorTag(user)}] workflow=${run.name || 'Workflow'} result=${run.conclusion} branch=${String(run.head_branch || '').slice(0, 30)}`;
     }
 
     case 'star': {
       if (p.action !== 'created') return null;
       const user = p.sender?.login || 'someone';
-      return `⭐ **${user}** starred the repo`;
+      return `⭐ [agent:${actorTag(user)}] starred repo`;
     }
 
     case 'fork': {
       const user = p.sender?.login || 'someone';
-      return `🍴 **${user}** forked the repo`;
+      return `🍴 [agent:${actorTag(user)}] forked repo`;
     }
 
     default:

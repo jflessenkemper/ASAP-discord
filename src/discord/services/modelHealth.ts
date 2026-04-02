@@ -1,4 +1,5 @@
 import { postDiagnostic } from './diagnosticsWebhook';
+import { GoogleAuth } from 'google-auth-library';
 import pool from '../../db/pool';
 import type { PoolClient } from 'pg';
 
@@ -11,7 +12,23 @@ interface CheckResult {
 const ANTHROPIC_MODELS = ['claude-sonnet-4-20250514', 'claude-opus-4-20250514'];
 const GEMINI_TEXT_MODEL = 'gemini-flash-latest';
 const GEMINI_TTS_MODEL = 'gemini-2.5-flash-preview-tts';
+const USE_VERTEX_ANTHROPIC = process.env.ANTHROPIC_USE_VERTEX_AI === 'true' || process.env.OPUS_USE_VERTEX_AI === 'true';
+const VERTEX_PROJECT_ID = process.env.VERTEX_PROJECT_ID || process.env.GOOGLE_CLOUD_PROJECT || process.env.GCLOUD_PROJECT || '';
+const VERTEX_LOCATION = process.env.VERTEX_LOCATION || 'us-central1';
+const VERTEX_ANTHROPIC_VERSION = process.env.VERTEX_ANTHROPIC_VERSION || 'vertex-2023-10-16';
+let vertexAuth: GoogleAuth | null = null;
 let lockClient: PoolClient | null = null;
+
+async function getVertexAccessToken(): Promise<string> {
+  if (!vertexAuth) {
+    vertexAuth = new GoogleAuth({ scopes: ['https://www.googleapis.com/auth/cloud-platform'] });
+  }
+  const authClient = await vertexAuth.getClient();
+  const accessToken = await authClient.getAccessToken();
+  const token = typeof accessToken === 'string' ? accessToken : accessToken?.token;
+  if (!token) throw new Error('Vertex auth failed: could not obtain access token');
+  return token;
+}
 
 export async function runModelHealthChecks(): Promise<void> {
   const shouldRun = await acquireRevisionHealthLock();
@@ -56,6 +73,40 @@ async function acquireRevisionHealthLock(): Promise<boolean> {
 }
 
 async function checkAnthropic(): Promise<CheckResult> {
+  if (USE_VERTEX_ANTHROPIC) {
+    if (!VERTEX_PROJECT_ID) {
+      return { name: 'Anthropic', ok: false, detail: 'Vertex Anthropic enabled but VERTEX_PROJECT_ID is missing' };
+    }
+
+    const modelName = process.env.ANTHROPIC_CODING_MODEL || ANTHROPIC_MODELS[1];
+    const endpoint = `https://${VERTEX_LOCATION}-aiplatform.googleapis.com/v1/projects/${VERTEX_PROJECT_ID}/locations/${VERTEX_LOCATION}/publishers/anthropic/models/${encodeURIComponent(modelName)}:rawPredict`;
+
+    try {
+      const token = await getVertexAccessToken();
+      const res = await fetchWithTimeout(endpoint, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          anthropic_version: VERTEX_ANTHROPIC_VERSION,
+          model: modelName,
+          max_tokens: 8,
+          messages: [{ role: 'user', content: [{ type: 'text', text: 'health check: respond with ok' }] }],
+        }),
+      }, 15000);
+
+      if (!res.ok) {
+        const body = await safeText(res);
+        return { name: 'Anthropic', ok: false, detail: `Vertex HTTP ${res.status} ${body.slice(0, 120)}` };
+      }
+      return { name: 'Anthropic', ok: true, detail: `Vertex partner model reachable: ${modelName}` };
+    } catch (err) {
+      return { name: 'Anthropic', ok: false, detail: err instanceof Error ? err.message : 'request failed' };
+    }
+  }
+
   const key = process.env.ANTHROPIC_API_KEY;
   if (!key) return { name: 'Anthropic', ok: false, detail: 'ANTHROPIC_API_KEY missing' };
 
