@@ -1,4 +1,3 @@
-import Anthropic from '@anthropic-ai/sdk';
 import { GoogleGenerativeAI, Content, Part, FunctionDeclaration, Tool } from '@google/generative-ai';
 import { GoogleAuth } from 'google-auth-library';
 import { readFileSync } from 'fs';
@@ -219,12 +218,10 @@ function toAnthropicTools(tools: AnyTool[]): Array<{ name: string; description: 
 }
 
 let client: GoogleGenerativeAI | null = null;
-let anthropicClient: Anthropic | null = null;
 let vertexAuth: GoogleAuth | null = null;
 let vertexTokenCache: { token: string; expiresAtMs: number } | null = null;
 
 const USE_VERTEX_AI = process.env.GEMINI_USE_VERTEX_AI === 'true';
-const USE_VERTEX_ANTHROPIC = process.env.ANTHROPIC_USE_VERTEX_AI === 'true' || process.env.OPUS_USE_VERTEX_AI === 'true';
 const VERTEX_PROJECT_ID = process.env.VERTEX_PROJECT_ID || process.env.GOOGLE_CLOUD_PROJECT || process.env.GCLOUD_PROJECT || '';
 const VERTEX_LOCATION = process.env.VERTEX_LOCATION || 'us-central1';
 const VERTEX_ANTHROPIC_VERSION = process.env.VERTEX_ANTHROPIC_VERSION || 'vertex-2023-10-16';
@@ -453,31 +450,6 @@ function getClient(): GoogleGenerativeAI {
   return client;
 }
 
-function getAnthropicClient(): Anthropic {
-  const configuredApiKey = String(process.env.ANTHROPIC_API_KEY || '').trim();
-  const configuredAuthToken = String(process.env.ANTHROPIC_AUTH_TOKEN || '').trim();
-  if (!configuredApiKey && !configuredAuthToken) {
-    throw new Error('Anthropic credentials missing: set ANTHROPIC_API_KEY or ANTHROPIC_AUTH_TOKEN');
-  }
-
-  // The SDK expects a single auth mechanism. Prefer API key when both are configured.
-  const apiKey = configuredApiKey || undefined;
-  const authToken = apiKey ? undefined : (configuredAuthToken || undefined);
-
-  if (!anthropicClient) {
-    anthropicClient = new Anthropic({
-      ...(apiKey ? { apiKey } : {}),
-      ...(authToken ? { authToken } : {}),
-    } as any);
-  }
-  return anthropicClient;
-}
-
-function hasAnthropicCredentials(): boolean {
-  return Boolean(String(process.env.ANTHROPIC_API_KEY || '').trim())
-    || Boolean(String(process.env.ANTHROPIC_AUTH_TOKEN || '').trim());
-}
-
 function isAnthropicModel(modelName: string): boolean {
   const key = String(modelName || '').trim().toLowerCase();
   return key.includes('claude') || key.includes('opus') || key.includes('sonnet');
@@ -563,56 +535,6 @@ function makeResponseLikeFromAnthropic(raw: any): ModelResponseLike {
   return response;
 }
 
-function createAnthropicModel(
-  modelName: string,
-  options: { systemInstruction?: string; rawTools?: AnyTool[]; generationConfig?: Record<string, any> }
-): ModelLike {
-  const anthropic = getAnthropicClient();
-  const anthropicTools = toAnthropicTools(options.rawTools || []);
-  const maxTokens = Math.max(64, Number(options.generationConfig?.maxOutputTokens || 1024));
-
-  const invoke = async (
-    messages: Array<{ role: 'user' | 'assistant'; content: any[] }>,
-    signal?: AbortSignal,
-  ): Promise<ModelResultLike> => {
-    const cachedMessages = PARTNER_MODEL_CACHE_ENABLED
-      ? messages.map((msg) => ({ ...msg, content: withAnthropicCacheControl(msg.content || []) }))
-      : messages;
-    const raw = await anthropic.messages.create({
-      model: modelName,
-      max_tokens: maxTokens,
-      system: asAnthropicSystemInstruction(options.systemInstruction),
-      messages: cachedMessages,
-      tools: anthropicTools.length > 0 ? anthropicTools as any : undefined,
-    } as any, signal ? { signal } as any : undefined);
-
-    return { response: makeResponseLikeFromAnthropic(raw) };
-  };
-
-  return {
-    startChat: ({ history }) => {
-      let workingHistory = geminiHistoryToAnthropicMessages(history || []);
-      return {
-        sendMessage: async (payload, requestOptions) => {
-          const nextMessage = typeof payload === 'string'
-            ? { role: 'user' as const, content: [{ type: 'text', text: payload }] }
-            : { role: 'user' as const, content: toAnthropicBlocks(payload as any[]) };
-
-          const requestMessages = [...workingHistory, nextMessage];
-          const result = await invoke(requestMessages, requestOptions?.signal);
-          const assistantContent = ((result.response as any)?.__raw?.content || (result as any)?.content || []) as any[];
-          workingHistory = [...requestMessages, { role: 'assistant' as const, content: assistantContent }];
-          return result;
-        },
-        getHistory: async () => anthropicHistoryToGemini(workingHistory),
-      };
-    },
-    generateContent: async (payload: string, requestOptions?: { signal?: AbortSignal }) => {
-      return invoke([{ role: 'user', content: [{ type: 'text', text: payload }] }], requestOptions?.signal);
-    },
-  };
-}
-
 function createVertexAnthropicModel(
   modelName: string,
   options: { systemInstruction?: string; rawTools?: AnyTool[]; generationConfig?: Record<string, any> }
@@ -670,14 +592,7 @@ function createVertexAnthropicModel(
 
 function createModel(modelName: string, options: { systemInstruction?: string; tools?: Tool[]; rawTools?: AnyTool[]; generationConfig?: Record<string, any> }): ModelLike {
   if (isAnthropicModel(modelName)) {
-    if (USE_VERTEX_ANTHROPIC) {
-      return createVertexAnthropicModel(modelName, options);
-    }
-    if (!hasAnthropicCredentials()) {
-      // Fall back when Anthropic env is unavailable at runtime.
-      return createModel(GEMINI_PRO, options);
-    }
-    return createAnthropicModel(modelName, options);
+    return createVertexAnthropicModel(modelName, options);
   }
 
   if (USE_VERTEX_AI) {
