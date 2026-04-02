@@ -170,12 +170,42 @@ function convertSchemaNode(node: any): any {
   return out;
 }
 
+function sanitizeSchemaNode(node: any): any {
+  if (!node || typeof node !== 'object') return node;
+  if (Array.isArray(node)) return node.map(sanitizeSchemaNode);
+
+  const out: Record<string, any> = {};
+  for (const [key, value] of Object.entries(node)) {
+    // Drop verbose/non-essential JSON-schema fields to reduce tool-schema token load.
+    if (key === 'title' || key === 'default' || key === 'examples' || key === '$schema') {
+      continue;
+    }
+    if (key === 'description') {
+      out[key] = String(value || '').slice(0, 180);
+      continue;
+    }
+    if (key === 'anyOf' || key === 'allOf' || key === 'oneOf') {
+      const candidates = Array.isArray(value) ? value.map(sanitizeSchemaNode).slice(0, 3) : [];
+      if (candidates.length > 0) {
+        out[key] = candidates;
+      }
+      continue;
+    }
+    if (key === 'nullable') {
+      continue;
+    }
+
+    out[key] = sanitizeSchemaNode(value);
+  }
+  return out;
+}
+
 function toGeminiTools(tools: AnyTool[]): Tool[] {
   return [{
     functionDeclarations: tools.map((tool) => ({
       name: tool.name,
-      description: tool.description || tool.name,
-      parameters: convertSchemaNode(tool.input_schema),
+      description: String(tool.description || tool.name).slice(0, 180),
+      parameters: convertSchemaNode(sanitizeSchemaNode(tool.input_schema)),
     } as FunctionDeclaration)),
   }];
 }
@@ -183,8 +213,8 @@ function toGeminiTools(tools: AnyTool[]): Tool[] {
 function toAnthropicTools(tools: AnyTool[]): Array<{ name: string; description: string; input_schema: any }> {
   return tools.map((tool) => ({
     name: tool.name,
-    description: tool.description || tool.name,
-    input_schema: tool.input_schema,
+    description: String(tool.description || tool.name).slice(0, 180),
+    input_schema: sanitizeSchemaNode(tool.input_schema),
   }));
 }
 
@@ -602,10 +632,12 @@ function normalizeHistoryContentForModel(content: string): string {
     .trim();
 }
 
-function truncateToolResult(result: string, maxChars = 1800): string {
+function truncateToolResult(result: string, maxChars = DEFAULT_TOOL_RESULT_TRUNCATE_CHARS): string {
   if (result.length <= maxChars) return result;
-  const head = Math.floor(maxChars * 0.75);
-  const tail = maxChars - head;
+  const importantTail = /(error|exception|traceback|stack|failed|failure|ENOENT|EACCES|ECONN|timeout|SyntaxError|TypeError|ReferenceError)/i.test(result);
+  const headRatio = importantTail ? 0.60 : 0.75;
+  const head = Math.max(120, Math.floor(maxChars * headRatio));
+  const tail = Math.max(80, maxChars - head);
   return (
     result.slice(0, head) +
     `\n\n[Output truncated — original was ${result.length} chars]\n\n` +
@@ -688,8 +720,11 @@ const MAX_CONCURRENT_FLASH = parseInt(process.env.GEMINI_MAX_CONCURRENT_FLASH ||
 const MAX_CONCURRENT_PRO = parseInt(process.env.GEMINI_MAX_CONCURRENT_PRO || '1', 10);
 const VOICE_DEDICATED_LANE_ENABLED = process.env.GEMINI_VOICE_DEDICATED_LANE !== 'false';
 const MAX_CONCURRENT_VOICE = parseInt(process.env.GEMINI_MAX_CONCURRENT_VOICE || '2', 10);
+const MAX_CONCURRENT_BACKGROUND = parseInt(process.env.GEMINI_MAX_CONCURRENT_BACKGROUND || '1', 10);
 const MAX_CONCURRENT_FLASH_VOICE = parseInt(process.env.GEMINI_MAX_CONCURRENT_FLASH_VOICE || '2', 10);
 const MAX_CONCURRENT_PRO_VOICE = parseInt(process.env.GEMINI_MAX_CONCURRENT_PRO_VOICE || '1', 10);
+const MAX_CONCURRENT_FLASH_BACKGROUND = parseInt(process.env.GEMINI_MAX_CONCURRENT_FLASH_BACKGROUND || '1', 10);
+const MAX_CONCURRENT_PRO_BACKGROUND = parseInt(process.env.GEMINI_MAX_CONCURRENT_PRO_BACKGROUND || '1', 10);
 const RESERVED_FLASH_PRIORITY_SLOTS = parseInt(process.env.GEMINI_RESERVED_FLASH_PRIORITY_SLOTS || '1', 10);
 /** Base queue release delay between parallel requests (lower = faster) */
 const QUEUE_RELEASE_DELAY_MS = parseInt(process.env.QUEUE_RELEASE_DELAY_MS || '120', 10);
@@ -715,6 +750,33 @@ const RATE_LIMIT_FAST_FAIL_ON_429 = process.env.RATE_LIMIT_FAST_FAIL_ON_429 !== 
 const GEMINI_RATE_LIMIT_FUSE_HITS = parseInt(process.env.GEMINI_RATE_LIMIT_FUSE_HITS || '6', 10);
 const GEMINI_RATE_LIMIT_FUSE_WINDOW_MS = parseInt(process.env.GEMINI_RATE_LIMIT_FUSE_WINDOW_MS || '180000', 10);
 const GEMINI_RATE_LIMIT_FUSE_COOLDOWN_MS = parseInt(process.env.GEMINI_RATE_LIMIT_FUSE_COOLDOWN_MS || '600000', 10);
+const CONTEXT_PRUNING_ENABLED = process.env.CONTEXT_PRUNING_ENABLED !== 'false';
+const CONTEXT_PRUNING_TTL_MS = parseInt(process.env.CONTEXT_PRUNING_TTL_MS || '300000', 10);
+const CONTEXT_PRUNING_SOFT_RATIO = parseFloat(process.env.CONTEXT_PRUNING_SOFT_RATIO || '0.30');
+const CONTEXT_PRUNING_HARD_RATIO = parseFloat(process.env.CONTEXT_PRUNING_HARD_RATIO || '0.50');
+const CONTEXT_PRUNING_KEEP_LAST_ASSISTANTS = parseInt(process.env.CONTEXT_PRUNING_KEEP_LAST_ASSISTANTS || '3', 10);
+const CONTEXT_PRUNING_MIN_TOOL_CHARS = parseInt(process.env.CONTEXT_PRUNING_MIN_TOOL_CHARS || '50000', 10);
+const CONTEXT_PRUNING_SOFT_MAX_CHARS = parseInt(process.env.CONTEXT_PRUNING_SOFT_MAX_CHARS || '4000', 10);
+const CONTEXT_PRUNING_SOFT_HEAD_CHARS = parseInt(process.env.CONTEXT_PRUNING_SOFT_HEAD_CHARS || '1500', 10);
+const CONTEXT_PRUNING_SOFT_TAIL_CHARS = parseInt(process.env.CONTEXT_PRUNING_SOFT_TAIL_CHARS || '1500', 10);
+const CONTEXT_PRUNING_HARD_CLEAR_ENABLED = process.env.CONTEXT_PRUNING_HARD_CLEAR !== 'false';
+const CONTEXT_PRUNING_HARD_PLACEHOLDER = process.env.CONTEXT_PRUNING_HARD_PLACEHOLDER || '[Old tool result content cleared]';
+const CONTEXT_WINDOW_TOKENS_DEFAULT = parseInt(process.env.CONTEXT_WINDOW_TOKENS_DEFAULT || '200000', 10);
+const CONTEXT_WINDOW_TOKENS_FLASH = parseInt(process.env.CONTEXT_WINDOW_TOKENS_FLASH || String(CONTEXT_WINDOW_TOKENS_DEFAULT), 10);
+const CONTEXT_WINDOW_TOKENS_PRO = parseInt(process.env.CONTEXT_WINDOW_TOKENS_PRO || String(CONTEXT_WINDOW_TOKENS_DEFAULT), 10);
+const CONTEXT_WINDOW_TOKENS_ANTHROPIC = parseInt(process.env.CONTEXT_WINDOW_TOKENS_ANTHROPIC || String(CONTEXT_WINDOW_TOKENS_DEFAULT), 10);
+const CONTEXT_CHARS_PER_TOKEN_ESTIMATE = parseFloat(process.env.CONTEXT_CHARS_PER_TOKEN_ESTIMATE || '4');
+const CONTEXT_PRUNING_TOOL_ALLOW = (process.env.CONTEXT_PRUNING_TOOL_ALLOW || '').split(',').map((v) => v.trim().toLowerCase()).filter(Boolean);
+const CONTEXT_PRUNING_TOOL_DENY = (process.env.CONTEXT_PRUNING_TOOL_DENY || '').split(',').map((v) => v.trim().toLowerCase()).filter(Boolean);
+const CONTEXT_OVERFLOW_MAX_RECOVERY_ATTEMPTS = parseInt(process.env.CONTEXT_OVERFLOW_MAX_RECOVERY_ATTEMPTS || '1', 10);
+const CONTEXT_OVERFLOW_MAX_OUTPUT_REDUCTION = parseFloat(process.env.CONTEXT_OVERFLOW_MAX_OUTPUT_REDUCTION || '0.65');
+const CONTEXT_OVERFLOW_MAX_TOOL_RESULT_REDUCTION = parseFloat(process.env.CONTEXT_OVERFLOW_MAX_TOOL_RESULT_REDUCTION || '0.65');
+const MIN_TOOL_RESULT_TRUNCATE_CHARS = parseInt(process.env.MIN_TOOL_RESULT_TRUNCATE_CHARS || '600', 10);
+const DEFAULT_TOOL_RESULT_TRUNCATE_CHARS = parseInt(process.env.DEFAULT_TOOL_RESULT_TRUNCATE_CHARS || '1800', 10);
+const CONTEXT_PREEMPTIVE_GUARD_RATIO = parseFloat(process.env.CONTEXT_PREEMPTIVE_GUARD_RATIO || '0.90');
+const CONTEXT_PREEMPTIVE_GUARD_ENABLED = process.env.CONTEXT_PREEMPTIVE_GUARD !== 'false';
+const CACHE_TOUCH_HEARTBEAT_MS = parseInt(process.env.CACHE_TOUCH_HEARTBEAT_MS || '3300000', 10);
+const CACHE_TOUCH_HEARTBEAT_ENABLED = process.env.CACHE_TOUCH_HEARTBEAT !== 'false';
 let activeClaude = 0;
 const claudeQueue: Array<() => void> = [];
 const activeByModel = new Map<string, number>();
@@ -727,6 +789,11 @@ const voiceClaudeQueue: Array<() => void> = [];
 const activeVoiceByModel = new Map<string, number>();
 const voiceModelQueues = new Map<string, Array<() => void>>();
 const voiceModelNextAllowedAt = new Map<string, number>();
+let activeBackgroundClaude = 0;
+const backgroundClaudeQueue: Array<() => void> = [];
+const activeBackgroundByModel = new Map<string, number>();
+const backgroundModelQueues = new Map<string, Array<() => void>>();
+const backgroundModelNextAllowedAt = new Map<string, number>();
 let rateLimitNotifyCallback: ((message: string) => void | Promise<void>) | null = null;
 let quotaFuseNotifyCallback: ((message: string) => void | Promise<void>) | null = null;
 let lastRateLimitNotificationAt = 0;
@@ -741,6 +808,27 @@ let rateLimitedUntil = 0;
 let creditsExhaustedUntil = 0;
 let rateLimitFuseUntil = 0;
 let recentRateLimitHits: number[] = [];
+const lastContextPruneAt = new Map<string, number>();
+const lastCacheTouchAt = new Map<string, number>();
+const laneOverflowPenalty = new Map<string, { outputPenalty: number; toolPenalty: number; observedAt: number }>();
+
+const contextRuntimeStats = {
+  prunePasses: 0,
+  softTrimmedToolResults: 0,
+  hardClearedToolResults: 0,
+  charsSaved: 0,
+  overflowRecoveries: 0,
+  preemptiveGuards: 0,
+  cacheHeartbeats: 0,
+};
+
+type ContextPruneStats = {
+  changed: boolean;
+  trimmedToolResults: number;
+  hardClearedToolResults: number;
+  charsBefore: number;
+  charsAfter: number;
+};
 
 function formatRecoveryTime(timestamp: number): string {
   return new Date(timestamp).toLocaleTimeString('en-AU', {
@@ -877,6 +965,273 @@ function isGeminiRateLimitError(err: any): boolean {
   return status === 429 || msg.includes('rate limit') || msg.includes('too many requests');
 }
 
+function isContextOverflowError(err: any): boolean {
+  const msg = String(err?.message || err || '').toLowerCase();
+  return (
+    msg.includes('context window') ||
+    msg.includes('maximum context length') ||
+    msg.includes('prompt too long') ||
+    msg.includes('prompt is too long') ||
+    msg.includes('context length exceeded') ||
+    msg.includes('request_too_large') ||
+    msg.includes('exceeds model context') ||
+    msg.includes('input token limit')
+  );
+}
+
+function extractObservedOverflowTokenCount(err: any): number | undefined {
+  const msg = String(err?.message || err || '');
+  const patterns = [
+    /prompt is too long:\s*([\d,]+)\s+tokens/i,
+    /resulted in\s+([\d,]+)\s+tokens/i,
+    /requested\s+([\d,]+)\s+tokens/i,
+    /context window exceeded:\s*requested\s*([\d,]+)/i,
+  ];
+  for (const pattern of patterns) {
+    const match = msg.match(pattern);
+    if (!match?.[1]) continue;
+    const parsed = Number(match[1].replace(/,/g, ''));
+    if (Number.isFinite(parsed) && parsed > 0) return parsed;
+  }
+  return undefined;
+}
+
+function getLaneOverflowPenalty(laneKey: string): { outputPenalty: number; toolPenalty: number } {
+  const penalty = laneOverflowPenalty.get(laneKey);
+  if (!penalty) return { outputPenalty: 0, toolPenalty: 0 };
+
+  const ageMs = Date.now() - penalty.observedAt;
+  if (ageMs > 20 * 60_000) {
+    laneOverflowPenalty.delete(laneKey);
+    return { outputPenalty: 0, toolPenalty: 0 };
+  }
+
+  const decay = Math.max(0, 1 - ageMs / (20 * 60_000));
+  return {
+    outputPenalty: penalty.outputPenalty * decay,
+    toolPenalty: penalty.toolPenalty * decay,
+  };
+}
+
+function wildcardToRegExp(pattern: string): RegExp {
+  const escaped = pattern.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*');
+  return new RegExp(`^${escaped}$`, 'i');
+}
+
+function matchesAnyWildcard(value: string, patterns: string[]): boolean {
+  if (!value || patterns.length === 0) return false;
+  return patterns.some((pattern) => wildcardToRegExp(pattern).test(value));
+}
+
+function isToolNamePrunable(toolName: string): boolean {
+  const normalized = String(toolName || '').trim().toLowerCase();
+  if (!normalized) return false;
+  if (CONTEXT_PRUNING_TOOL_ALLOW.length > 0 && !matchesAnyWildcard(normalized, CONTEXT_PRUNING_TOOL_ALLOW)) {
+    return false;
+  }
+  if (CONTEXT_PRUNING_TOOL_DENY.length > 0 && matchesAnyWildcard(normalized, CONTEXT_PRUNING_TOOL_DENY)) {
+    return false;
+  }
+  return true;
+}
+
+function getToolResultOutput(part: any): string {
+  const output = part?.functionResponse?.response?.output;
+  return typeof output === 'string' ? output : String(output || '');
+}
+
+function setToolResultOutput(part: any, output: string): void {
+  if (!part?.functionResponse) return;
+  if (!part.functionResponse.response || typeof part.functionResponse.response !== 'object') {
+    part.functionResponse.response = { output };
+    return;
+  }
+  part.functionResponse.response.output = output;
+}
+
+function estimateContextCharsWithToolResults(history: Content[]): number {
+  let total = 0;
+  for (const entry of history || []) {
+    const parts = (entry?.parts || []) as any[];
+    for (const part of parts) {
+      total += String(part?.text || '').length;
+      total += getToolResultOutput(part).length;
+    }
+  }
+  return total;
+}
+
+function resolveContextWindowTokensForModel(modelName: string): number {
+  const key = normalizeModelKey(modelName);
+  if (key.includes('claude') || key.includes('opus') || key.includes('sonnet')) {
+    return Math.max(1, CONTEXT_WINDOW_TOKENS_ANTHROPIC);
+  }
+  if (key.includes('pro')) {
+    return Math.max(1, CONTEXT_WINDOW_TOKENS_PRO);
+  }
+  return Math.max(1, CONTEXT_WINDOW_TOKENS_FLASH);
+}
+
+function softTrimToolOutput(output: string): string {
+  if (output.length <= CONTEXT_PRUNING_SOFT_MAX_CHARS) return output;
+  const head = Math.min(Math.max(32, CONTEXT_PRUNING_SOFT_HEAD_CHARS), output.length);
+  const tail = Math.min(Math.max(32, CONTEXT_PRUNING_SOFT_TAIL_CHARS), Math.max(0, output.length - head));
+  const bodyTail = tail > 0 ? output.slice(-tail) : '';
+  return `${output.slice(0, head)}\n\n…[tool result trimmed for context]…\n\n${bodyTail}`;
+}
+
+function findAssistantCutoffIndex(history: Content[], keepLastAssistants: number): number | null {
+  if (keepLastAssistants <= 0) return history.length;
+  let seen = 0;
+  for (let i = history.length - 1; i >= 0; i--) {
+    if (history[i]?.role === 'model') {
+      seen++;
+      if (seen >= keepLastAssistants) {
+        return i;
+      }
+    }
+  }
+  return null;
+}
+
+function pruneContextToolResults(history: Content[], modelName: string): { history: Content[]; stats: ContextPruneStats } {
+  const charsBefore = estimateContextCharsWithToolResults(history);
+  const charWindow = Math.max(1, Math.floor(resolveContextWindowTokensForModel(modelName) * CONTEXT_CHARS_PER_TOKEN_ESTIMATE));
+  let totalChars = charsBefore;
+  const stats: ContextPruneStats = {
+    changed: false,
+    trimmedToolResults: 0,
+    hardClearedToolResults: 0,
+    charsBefore,
+    charsAfter: charsBefore,
+  };
+
+  if (!history.length || totalChars / charWindow < CONTEXT_PRUNING_SOFT_RATIO) {
+    return { history, stats };
+  }
+
+  const cutoffIndex = findAssistantCutoffIndex(history, CONTEXT_PRUNING_KEEP_LAST_ASSISTANTS);
+  if (cutoffIndex === null) {
+    return { history, stats };
+  }
+
+  const nextHistory = cloneHistory(history);
+  const candidates: Array<{ part: any; output: string }> = [];
+
+  for (let i = 0; i < cutoffIndex; i++) {
+    const entry = nextHistory[i];
+    if (!entry || entry.role !== 'user') continue;
+    const parts = (entry.parts || []) as any[];
+    for (const part of parts) {
+      const toolName = String(part?.functionResponse?.name || '').trim();
+      if (!toolName || !isToolNamePrunable(toolName)) continue;
+      const output = getToolResultOutput(part);
+      if (!output) continue;
+      candidates.push({ part, output });
+    }
+  }
+
+  candidates.sort((a, b) => b.output.length - a.output.length);
+
+  for (const candidate of candidates) {
+    if (candidate.output.length < CONTEXT_PRUNING_MIN_TOOL_CHARS) continue;
+    const currentOutput = getToolResultOutput(candidate.part);
+    const trimmed = softTrimToolOutput(currentOutput);
+    if (trimmed === currentOutput) continue;
+    setToolResultOutput(candidate.part, trimmed);
+    totalChars -= (currentOutput.length - trimmed.length);
+    stats.trimmedToolResults++;
+    stats.changed = true;
+    if (totalChars / charWindow < CONTEXT_PRUNING_SOFT_RATIO) {
+      break;
+    }
+  }
+
+  if (CONTEXT_PRUNING_HARD_CLEAR_ENABLED && totalChars / charWindow >= CONTEXT_PRUNING_HARD_RATIO) {
+    for (const candidate of candidates) {
+      const currentOutput = getToolResultOutput(candidate.part);
+      if (!currentOutput || currentOutput === CONTEXT_PRUNING_HARD_PLACEHOLDER) continue;
+      setToolResultOutput(candidate.part, CONTEXT_PRUNING_HARD_PLACEHOLDER);
+      totalChars -= (currentOutput.length - CONTEXT_PRUNING_HARD_PLACEHOLDER.length);
+      stats.hardClearedToolResults++;
+      stats.changed = true;
+      if (totalChars / charWindow < CONTEXT_PRUNING_HARD_RATIO) {
+        break;
+      }
+    }
+  }
+
+  stats.charsAfter = Math.max(0, totalChars);
+  return { history: stats.changed ? nextHistory : history, stats };
+}
+
+function applyContextPruningIfDue(params: {
+  history: Content[];
+  modelName: string;
+  laneKey: string;
+  force?: boolean;
+}): { history: Content[]; stats: ContextPruneStats; applied: boolean } {
+  const now = Date.now();
+  const lastTouch = lastCacheTouchAt.get(params.laneKey) || 0;
+  if (!params.force && (!CONTEXT_PRUNING_ENABLED || CONTEXT_PRUNING_TTL_MS <= 0 || !lastTouch || (now - lastTouch) < CONTEXT_PRUNING_TTL_MS)) {
+    return {
+      history: params.history,
+      applied: false,
+      stats: {
+        changed: false,
+        trimmedToolResults: 0,
+        hardClearedToolResults: 0,
+        charsBefore: estimateContextCharsWithToolResults(params.history),
+        charsAfter: estimateContextCharsWithToolResults(params.history),
+      },
+    };
+  }
+  const result = pruneContextToolResults(params.history, params.modelName);
+  lastContextPruneAt.set(params.laneKey, now);
+  if (result.stats.changed) {
+    contextRuntimeStats.prunePasses += 1;
+    contextRuntimeStats.softTrimmedToolResults += result.stats.trimmedToolResults;
+    contextRuntimeStats.hardClearedToolResults += result.stats.hardClearedToolResults;
+    contextRuntimeStats.charsSaved += Math.max(0, result.stats.charsBefore - result.stats.charsAfter);
+  }
+  return { ...result, applied: true };
+}
+
+function markCacheTouched(laneKey: string): void {
+  const now = Date.now();
+  const last = lastCacheTouchAt.get(laneKey) || 0;
+  if (CACHE_TOUCH_HEARTBEAT_ENABLED && CACHE_TOUCH_HEARTBEAT_MS > 0 && last > 0 && (now - last) >= CACHE_TOUCH_HEARTBEAT_MS) {
+    contextRuntimeStats.cacheHeartbeats += 1;
+  }
+  lastCacheTouchAt.set(laneKey, now);
+}
+
+function applyPreemptiveContextGuard(params: {
+  history: Content[];
+  modelName: string;
+  laneKey: string;
+}): { history: Content[]; changed: boolean } {
+  if (!CONTEXT_PREEMPTIVE_GUARD_ENABLED) {
+    return { history: params.history, changed: false };
+  }
+  const charWindow = Math.max(1, Math.floor(resolveContextWindowTokensForModel(params.modelName) * CONTEXT_CHARS_PER_TOKEN_ESTIMATE));
+  const chars = estimateContextCharsWithToolResults(params.history);
+  if (chars / charWindow < CONTEXT_PREEMPTIVE_GUARD_RATIO) {
+    return { history: params.history, changed: false };
+  }
+
+  const guarded = applyContextPruningIfDue({
+    history: params.history,
+    modelName: params.modelName,
+    laneKey: params.laneKey,
+    force: true,
+  });
+  if (guarded.stats.changed) {
+    contextRuntimeStats.preemptiveGuards += 1;
+  }
+  return { history: guarded.history, changed: guarded.stats.changed };
+}
+
 function isAnthropicAuthError(err: any): boolean {
   const msg = String(err?.message || err || '').toLowerCase();
   const status = err?.status || err?.statusCode;
@@ -950,6 +1305,11 @@ function getVoiceModelConcurrencyCap(modelName: string): number {
   return key.includes('pro') ? MAX_CONCURRENT_PRO_VOICE : MAX_CONCURRENT_FLASH_VOICE;
 }
 
+function getBackgroundModelConcurrencyCap(modelName: string): number {
+  const key = normalizeModelKey(modelName);
+  return key.includes('pro') ? MAX_CONCURRENT_PRO_BACKGROUND : MAX_CONCURRENT_FLASH_BACKGROUND;
+}
+
 function getModelPaceMs(modelName: string): number {
   const key = normalizeModelKey(modelName);
   return key.includes('pro') ? MODEL_PACE_PRO_MS : MODEL_PACE_FLASH_MS;
@@ -963,6 +1323,14 @@ function getPriorityModelPaceMs(modelName: string): number {
 function getVoiceModelPaceMs(modelName: string): number {
   const key = normalizeModelKey(modelName);
   return key.includes('pro') ? MODEL_PACE_PRO_VOICE_MS : MODEL_PACE_FLASH_VOICE_MS;
+}
+
+function getBackgroundModelQueue(modelKey: string): Array<() => void> {
+  const existing = backgroundModelQueues.get(modelKey);
+  if (existing) return existing;
+  const created: Array<() => void> = [];
+  backgroundModelQueues.set(modelKey, created);
+  return created;
 }
 
 function getModelQueue(modelKey: string): Array<() => void> {
@@ -989,18 +1357,20 @@ function getVoiceModelQueue(modelKey: string): Array<() => void> {
   return created;
 }
 
-async function waitForModelPace(modelName: string, priority = false, lane: 'text' | 'voice' = 'text'): Promise<void> {
+async function waitForModelPace(modelName: string, priority = false, lane: 'text' | 'voice' | 'background' = 'text'): Promise<void> {
   const modelKey = normalizeModelKey(modelName);
   const now = Date.now();
   const nextAllowed = lane === 'voice'
     ? (voiceModelNextAllowedAt.get(modelKey) || 0)
-    : (modelNextAllowedAt.get(modelKey) || 0);
+    : lane === 'background'
+      ? (backgroundModelNextAllowedAt.get(modelKey) || 0)
+      : (modelNextAllowedAt.get(modelKey) || 0);
   if (nextAllowed > now) {
     await new Promise((resolve) => setTimeout(resolve, nextAllowed - now));
   }
 }
 
-function releaseNextQueued(modelKey: string, lane: 'text' | 'voice' = 'text'): void {
+function releaseNextQueued(modelKey: string, lane: 'text' | 'voice' | 'background' = 'text'): void {
   const releaseDelay = rateLimitedUntil > Date.now()
     ? QUEUE_RELEASE_DELAY_RATE_LIMIT_MS
     : QUEUE_RELEASE_DELAY_MS;
@@ -1020,6 +1390,30 @@ function releaseNextQueued(modelKey: string, lane: 'text' | 'voice' = 'text'): v
     }
 
     for (const queue of voiceModelQueues.values()) {
+      const next = queue.shift();
+      if (next) {
+        setTimeout(next, releaseDelay);
+        return;
+      }
+    }
+    return;
+  }
+
+  if (lane === 'background') {
+    const sameBackgroundQueue = getBackgroundModelQueue(modelKey);
+    const sameBackground = sameBackgroundQueue.shift();
+    if (sameBackground) {
+      setTimeout(sameBackground, releaseDelay);
+      return;
+    }
+
+    const globalBackgroundNext = backgroundClaudeQueue.shift();
+    if (globalBackgroundNext) {
+      setTimeout(globalBackgroundNext, releaseDelay);
+      return;
+    }
+
+    for (const queue of backgroundModelQueues.values()) {
       const next = queue.shift();
       if (next) {
         setTimeout(next, releaseDelay);
@@ -1066,17 +1460,20 @@ function releaseNextQueued(modelKey: string, lane: 'text' | 'voice' = 'text'): v
   }
 }
 
-async function withConcurrencyLimit<T>(modelName: string, fn: () => Promise<T>, priority = false): Promise<T> {
+async function withConcurrencyLimit<T>(
+  modelName: string,
+  fn: () => Promise<T>,
+  lane: 'normal' | 'voice' | 'background' = 'normal',
+): Promise<T> {
   const modelKey = normalizeModelKey(modelName);
-  const useVoiceLane = priority && VOICE_DEDICATED_LANE_ENABLED;
 
-  if (useVoiceLane) {
-    const voiceModelCap = Math.max(1, getVoiceModelConcurrencyCap(modelName));
-    const voiceGlobalCap = Math.max(1, MAX_CONCURRENT_VOICE);
+  if (lane === 'voice' && VOICE_DEDICATED_LANE_ENABLED) {
+    const modelCap = Math.max(1, getVoiceModelConcurrencyCap(modelName));
+    const globalCap = Math.max(1, MAX_CONCURRENT_VOICE);
 
     await waitForRateLimit();
-    while (activeVoiceClaude >= voiceGlobalCap || (activeVoiceByModel.get(modelKey) || 0) >= voiceModelCap) {
-      if (activeVoiceClaude >= voiceGlobalCap) {
+    while (activeVoiceClaude >= globalCap || (activeVoiceByModel.get(modelKey) || 0) >= modelCap) {
+      if (activeVoiceClaude >= globalCap) {
         await new Promise<void>((resolve) => voiceClaudeQueue.push(resolve));
       } else {
         await new Promise<void>((resolve) => getVoiceModelQueue(modelKey).push(resolve));
@@ -1085,7 +1482,6 @@ async function withConcurrencyLimit<T>(modelName: string, fn: () => Promise<T>, 
     }
 
     await waitForModelPace(modelName, true, 'voice');
-
     activeVoiceClaude++;
     activeVoiceByModel.set(modelKey, (activeVoiceByModel.get(modelKey) || 0) + 1);
 
@@ -1093,35 +1489,67 @@ async function withConcurrencyLimit<T>(modelName: string, fn: () => Promise<T>, 
       return await fn();
     } finally {
       activeVoiceClaude--;
-      const remainingVoiceModel = Math.max(0, (activeVoiceByModel.get(modelKey) || 0) - 1);
-      if (remainingVoiceModel === 0) {
+      const remaining = Math.max(0, (activeVoiceByModel.get(modelKey) || 0) - 1);
+      if (remaining === 0) {
         activeVoiceByModel.delete(modelKey);
       } else {
-        activeVoiceByModel.set(modelKey, remainingVoiceModel);
+        activeVoiceByModel.set(modelKey, remaining);
       }
       voiceModelNextAllowedAt.set(modelKey, Date.now() + getVoiceModelPaceMs(modelName));
       releaseNextQueued(modelKey, 'voice');
     }
   }
 
+  if (lane === 'background') {
+    const modelCap = Math.max(1, getBackgroundModelConcurrencyCap(modelName));
+    const globalCap = Math.max(1, MAX_CONCURRENT_BACKGROUND);
+
+    await waitForRateLimit();
+    while (activeBackgroundClaude >= globalCap || (activeBackgroundByModel.get(modelKey) || 0) >= modelCap) {
+      if (activeBackgroundClaude >= globalCap) {
+        await new Promise<void>((resolve) => backgroundClaudeQueue.push(resolve));
+      } else {
+        await new Promise<void>((resolve) => getBackgroundModelQueue(modelKey).push(resolve));
+      }
+      await waitForRateLimit();
+    }
+
+    await waitForModelPace(modelName, false, 'background');
+    activeBackgroundClaude++;
+    activeBackgroundByModel.set(modelKey, (activeBackgroundByModel.get(modelKey) || 0) + 1);
+
+    try {
+      return await fn();
+    } finally {
+      activeBackgroundClaude--;
+      const remaining = Math.max(0, (activeBackgroundByModel.get(modelKey) || 0) - 1);
+      if (remaining === 0) {
+        activeBackgroundByModel.delete(modelKey);
+      } else {
+        activeBackgroundByModel.set(modelKey, remaining);
+      }
+      backgroundModelNextAllowedAt.set(modelKey, Date.now() + getModelPaceMs(modelName));
+      releaseNextQueued(modelKey, 'background');
+    }
+  }
+
   const modelCap = getModelConcurrencyCap(modelName);
   const isFlash = !modelKey.includes('pro');
-  const reservedSlots = priority || !isFlash ? 0 : Math.max(0, RESERVED_FLASH_PRIORITY_SLOTS);
-  const effectiveGlobalCap = Math.max(1, MAX_CONCURRENT - reservedSlots);
+  const reservedSlots = !isFlash ? 0 : Math.max(0, RESERVED_FLASH_PRIORITY_SLOTS);
+  const globalCap = Math.max(1, MAX_CONCURRENT - reservedSlots);
   const effectiveModelCap = Math.max(1, modelCap - reservedSlots);
 
   await waitForRateLimit();
-  while (activeClaude >= effectiveGlobalCap || (activeByModel.get(modelKey) || 0) >= effectiveModelCap) {
-    if (activeClaude >= effectiveGlobalCap) {
-      await new Promise<void>((resolve) => (priority ? priorityClaudeQueue : claudeQueue).push(resolve));
+  while (activeClaude >= globalCap || (activeByModel.get(modelKey) || 0) >= effectiveModelCap) {
+    if (activeClaude >= globalCap) {
+      await new Promise<void>((resolve) => claudeQueue.push(resolve));
     } else {
-      await new Promise<void>((resolve) => (priority ? getPriorityModelQueue(modelKey) : getModelQueue(modelKey)).push(resolve));
+      await new Promise<void>((resolve) => getModelQueue(modelKey).push(resolve));
     }
     await waitForRateLimit();
   }
 
-  await waitForModelPace(modelName, priority, 'text');
-
+  await waitForModelPace(modelName, false, 'text');
   activeClaude++;
   activeByModel.set(modelKey, (activeByModel.get(modelKey) || 0) + 1);
 
@@ -1129,13 +1557,13 @@ async function withConcurrencyLimit<T>(modelName: string, fn: () => Promise<T>, 
     return await fn();
   } finally {
     activeClaude--;
-    const remainingModel = Math.max(0, (activeByModel.get(modelKey) || 0) - 1);
-    if (remainingModel === 0) {
+    const remaining = Math.max(0, (activeByModel.get(modelKey) || 0) - 1);
+    if (remaining === 0) {
       activeByModel.delete(modelKey);
     } else {
-      activeByModel.set(modelKey, remainingModel);
+      activeByModel.set(modelKey, remaining);
     }
-    modelNextAllowedAt.set(modelKey, Date.now() + (priority ? getPriorityModelPaceMs(modelName) : getModelPaceMs(modelName)));
+    modelNextAllowedAt.set(modelKey, Date.now() + getModelPaceMs(modelName));
     releaseNextQueued(modelKey, 'text');
   }
 }
@@ -1155,6 +1583,29 @@ function estimateMaxOutputTokens(agentId: string, userMessage: string, explicit?
   }
 
   return base;
+}
+
+function resolveAdaptiveMaxOutputTokens(params: {
+  agentId: string;
+  userMessage: string;
+  explicit?: number;
+  modelName: string;
+  promptCharsEstimate: number;
+  laneKey?: string;
+}): number {
+  const requested = estimateMaxOutputTokens(params.agentId, params.userMessage, params.explicit);
+  const contextWindowTokens = resolveContextWindowTokensForModel(params.modelName);
+  const promptTokensEstimate = Math.ceil(Math.max(0, params.promptCharsEstimate) / Math.max(1, CONTEXT_CHARS_PER_TOKEN_ESTIMATE));
+
+  // Keep healthy headroom for provider framing + tool wrappers.
+  const reservedTokens = Math.max(512, Math.floor(contextWindowTokens * 0.15));
+  const available = Math.max(128, contextWindowTokens - promptTokensEstimate - reservedTokens);
+  const overflowPenalty = params.laneKey
+    ? getLaneOverflowPenalty(params.laneKey).outputPenalty
+    : 0;
+  const penaltyFactor = Math.max(0.35, 1 - Math.min(CONTEXT_OVERFLOW_MAX_OUTPUT_REDUCTION, overflowPenalty));
+  const capped = Math.min(requested, Math.max(128, Math.floor(contextWindowTokens * 0.30)), available);
+  return Math.max(128, Math.floor(capped * penaltyFactor));
 }
 
 async function withRetry<T>(fn: () => Promise<T>, retries = GEMINI_MAX_RETRIES, delayMs = GEMINI_RETRY_BASE_DELAY_MS): Promise<T> {
@@ -1251,12 +1702,14 @@ export async function agentRespond(
     toolRoundBoost?: number;
     rileyAutoToolApprovalUsed?: boolean;
     disableTools?: boolean;
-    priority?: 'normal' | 'voice';
+    priority?: 'normal' | 'voice' | 'background';
     chatSession?: ReusableAgentChatSession;
   }
 ): Promise<string> {
   const cacheEligible = isCacheablePrompt(agent.id, userMessage, conversationHistory);
-  const isPriority = options?.priority === 'voice';
+  const lane = options?.priority || 'normal';
+  const isVoiceLane = lane === 'voice';
+  const pruneLaneKey = `${agent.id}:${lane}`;
   const cacheKey = cacheEligible ? makeResponseCacheKey(agent.id, userMessage, conversationHistory) : null;
   if (cacheKey) {
     const cached = getCachedResponse(cacheKey);
@@ -1390,17 +1843,33 @@ RUNTIME EFFICIENCY:
 
   // Convert conversation history to Gemini Content format.
   // Reused chat sessions already carry prior turns, so skip rebuilding history.
+  let currentModelName = options?.modelOverride || options?.chatSession?.modelName || (isVoiceLane ? VOICE_FAST_MODEL : modelForAgent(agent.id, userMessage));
+  let escalatedToPro = currentModelName === GEMINI_PRO;
+
   const trimmedHistory = options?.chatSession?.chat ? [] : trimConversationHistory(conversationHistory);
-  const history: Content[] = trimmedHistory.map((msg) => ({
+  let history: Content[] = trimmedHistory.map((msg) => ({
     role: msg.role === 'assistant' ? 'model' : 'user',
     parts: [{ text: normalizeHistoryContentForModel(msg.content) }],
   }));
+  const prunedInitialHistory = applyContextPruningIfDue({ history, modelName: currentModelName, laneKey: pruneLaneKey });
+  history = prunedInitialHistory.history;
 
   const agentTools = options?.disableTools ? [] : toolsForPrompt(agent.id, userMessage);
   const geminiTools = toGeminiTools(agentTools);
-  const promptHistory = options?.chatSession?.chat
+  let promptHistory = options?.chatSession?.chat
     ? await options.chatSession.chat.getHistory().catch(() => [] as Content[])
     : history;
+  if (options?.chatSession?.chat && CONTEXT_PRUNING_ENABLED) {
+    const sessionPrune = applyContextPruningIfDue({
+      history: promptHistory,
+      modelName: currentModelName,
+      laneKey: pruneLaneKey,
+    });
+    if (sessionPrune.stats.changed) {
+      history = sessionPrune.history;
+      promptHistory = sessionPrune.history;
+    }
+  }
   const runtimeUserMessage = buildRuntimeStatusMessage(
     userMessage,
     { remaining, spent, limit },
@@ -1417,8 +1886,14 @@ RUNTIME EFFICIENCY:
     toolResultChars: 0,
   };
 
-  let currentModelName = options?.modelOverride || options?.chatSession?.modelName || (isPriority ? VOICE_FAST_MODEL : modelForAgent(agent.id, userMessage));
-  let escalatedToPro = currentModelName === GEMINI_PRO;
+  const guardedInitial = applyPreemptiveContextGuard({
+    history,
+    modelName: currentModelName,
+    laneKey: pruneLaneKey,
+  });
+  if (guardedInitial.changed) {
+    history = guardedInitial.history;
+  }
 
   logAgentEvent(agent.id, 'invoke', `model=${currentModelName}, context=${trimmedHistory.length} msgs, ${formatPromptBreakdownForLog(pendingPromptBreakdown)}, prompt="${userMessage.slice(0, 200)}"`);
 
@@ -1426,12 +1901,31 @@ RUNTIME EFFICIENCY:
 
   const loopStart = Date.now();
   let totalToolCalls = 0;
+  const initialLanePenalty = getLaneOverflowPenalty(pruneLaneKey);
+  let toolResultTruncateChars = Math.max(
+    MIN_TOOL_RESULT_TRUNCATE_CHARS,
+    Math.floor(DEFAULT_TOOL_RESULT_TRUNCATE_CHARS * Math.max(0.35, 1 - Math.min(CONTEXT_OVERFLOW_MAX_TOOL_RESULT_REDUCTION, initialLanePenalty.toolPenalty))),
+  );
 
   const makeModel = (modelName: string) => createModel(modelName, {
     systemInstruction: systemPrompt,
     tools: geminiTools,
     rawTools: agentTools,
-    generationConfig: { maxOutputTokens: estimateMaxOutputTokens(agent.id, userMessage, options?.maxTokens) },
+    generationConfig: {
+      maxOutputTokens: resolveAdaptiveMaxOutputTokens({
+        agentId: agent.id,
+        userMessage,
+        explicit: options?.maxTokens,
+        modelName,
+        promptCharsEstimate:
+          (pendingPromptBreakdown.systemChars || 0) +
+          (pendingPromptBreakdown.historyChars || 0) +
+          (pendingPromptBreakdown.toolsChars || 0) +
+          (pendingPromptBreakdown.userChars || 0) +
+          (pendingPromptBreakdown.toolResultChars || 0),
+        laneKey: pruneLaneKey,
+      }),
+    },
   });
 
   let model = options?.chatSession?.chat ? null : makeModel(currentModelName);
@@ -1451,13 +1945,93 @@ RUNTIME EFFICIENCY:
     }
   };
 
+  const recoverContextOverflowAndRetry = async (
+    payload: string | Part[],
+    err: any,
+  ): Promise<ModelResultLike | null> => {
+    if (!isContextOverflowError(err) || CONTEXT_OVERFLOW_MAX_RECOVERY_ATTEMPTS < 1) {
+      return null;
+    }
+    let accumulatedHistory = await chat.getHistory().catch(() => [] as Content[]);
+    if (!accumulatedHistory.length) return null;
+
+    const aggressive = applyContextPruningIfDue({
+      history: accumulatedHistory,
+      modelName: currentModelName,
+      laneKey: pruneLaneKey,
+      force: true,
+    });
+
+    if (!aggressive.stats.changed) {
+      // Retry with a strict one-shot tool result truncation pass when pruning did not change anything.
+      const fallback = pruneContextToolResults(accumulatedHistory, currentModelName);
+      if (!fallback.stats.changed) return null;
+      accumulatedHistory = fallback.history;
+    } else {
+      accumulatedHistory = aggressive.history;
+    }
+
+    await swapToModel(currentModelName, accumulatedHistory);
+    const observedOverflowTokens = extractObservedOverflowTokenCount(err);
+    const currentPenalty = laneOverflowPenalty.get(pruneLaneKey) || { outputPenalty: 0, toolPenalty: 0, observedAt: Date.now() };
+    const overflowScale = observedOverflowTokens && observedOverflowTokens > 0
+      ? Math.min(1, observedOverflowTokens / Math.max(1, resolveContextWindowTokensForModel(currentModelName)))
+      : 0.5;
+    const outputPenalty = Math.min(
+      CONTEXT_OVERFLOW_MAX_OUTPUT_REDUCTION,
+      currentPenalty.outputPenalty + (0.2 * overflowScale),
+    );
+    const toolPenalty = Math.min(
+      CONTEXT_OVERFLOW_MAX_TOOL_RESULT_REDUCTION,
+      currentPenalty.toolPenalty + (0.25 * overflowScale),
+    );
+    laneOverflowPenalty.set(pruneLaneKey, { outputPenalty, toolPenalty, observedAt: Date.now() });
+    const toolPenaltyFactor = Math.max(0.35, 1 - toolPenalty);
+    toolResultTruncateChars = Math.max(
+      MIN_TOOL_RESULT_TRUNCATE_CHARS,
+      Math.floor(DEFAULT_TOOL_RESULT_TRUNCATE_CHARS * toolPenaltyFactor),
+    );
+    contextRuntimeStats.overflowRecoveries += 1;
+    logAgentEvent(
+      agent.id,
+      'response',
+      `Recovered from context overflow by pruning tool results (trimmed=${aggressive.stats.trimmedToolResults}, cleared=${aggressive.stats.hardClearedToolResults}, outputPenalty=${outputPenalty.toFixed(2)}, toolCap=${toolResultTruncateChars})`,
+    );
+    return withConcurrencyLimit(currentModelName, () =>
+      withRetry(() => sendMessageWithOptionalStream(chat, payload, options?.signal, options?.onPartialText))
+    , lane);
+  };
+
   // Send initial user message
   let response;
   try {
+    const historyBeforeSend = await chat.getHistory().catch(() => [] as Content[]);
+    if (historyBeforeSend.length > 0) {
+      const guarded = applyPreemptiveContextGuard({ history: historyBeforeSend, modelName: currentModelName, laneKey: pruneLaneKey });
+      if (guarded.changed) {
+        await swapToModel(currentModelName, guarded.history);
+      }
+    }
     response = await withConcurrencyLimit(currentModelName, () =>
       withRetry(() => sendMessageWithOptionalStream(chat, runtimeUserMessage, options?.signal, options?.onPartialText))
-    , isPriority);
+    , lane);
+    markCacheTouched(pruneLaneKey);
+    const lanePenalty = laneOverflowPenalty.get(pruneLaneKey);
+    if (lanePenalty) {
+      lanePenalty.outputPenalty = Math.max(0, lanePenalty.outputPenalty - 0.04);
+      lanePenalty.toolPenalty = Math.max(0, lanePenalty.toolPenalty - 0.04);
+      lanePenalty.observedAt = Date.now();
+      if (lanePenalty.outputPenalty <= 0.01 && lanePenalty.toolPenalty <= 0.01) {
+        laneOverflowPenalty.delete(pruneLaneKey);
+        toolResultTruncateChars = DEFAULT_TOOL_RESULT_TRUNCATE_CHARS;
+      }
+    }
   } catch (err: any) {
+    const recovered = await recoverContextOverflowAndRetry(runtimeUserMessage, err);
+    if (recovered) {
+      response = recovered;
+      markCacheTouched(pruneLaneKey);
+    } else {
     if (isAbortError(err)) {
       logAgentEvent(agent.id, 'error', 'Request interrupted by user', { durationMs: Date.now() - loopStart });
       return '';
@@ -1467,7 +2041,7 @@ RUNTIME EFFICIENCY:
       await swapToModel(GEMINI_PRO, history);
       response = await withConcurrencyLimit(currentModelName, () =>
         withRetry(() => sendMessageWithOptionalStream(chat, runtimeUserMessage, options?.signal, options?.onPartialText))
-      , isPriority);
+      , lane);
     } else if (isGeminiRateLimitError(err)) {
       const recoverAt = Math.max(rateLimitedUntil, Date.now() + GEMINI_429_PAUSE_MS);
       return `⏳ Gemini is currently rate-limited (throughput), not out of credit. Please retry after ${formatRecoveryTime(recoverAt)} or reduce parallel requests.`;
@@ -1483,6 +2057,7 @@ RUNTIME EFFICIENCY:
             : `⚠️ Gemini quota is exhausted right now. Automatic retries resume at ${formatRecoveryTime(creditsExhaustedUntil)}. Ask Riley to request Jordan approval for more credits before continuing.`);
     } else {
       throw err;
+    }
     }
   }
 
@@ -1618,7 +2193,7 @@ RUNTIME EFFICIENCY:
         functionResponse: {
           name: call.name,
           ...(isAnthropicModel(currentModelName) && call.id ? { toolUseId: call.id } : {}),
-          response: { output: truncateToolResult(result) },
+          response: { output: truncateToolResult(result, toolResultTruncateChars) },
         },
       } as Part;
     };
@@ -1657,12 +2232,53 @@ RUNTIME EFFICIENCY:
       toolResultChars: estimateToolResultChars(functionResponses),
     };
 
+    const preToolHistory = await chat.getHistory().catch(() => [] as Content[]);
+    if (preToolHistory.length > 0 && CONTEXT_PRUNING_ENABLED) {
+      const toolLoopPrune = applyContextPruningIfDue({
+        history: preToolHistory,
+        modelName: currentModelName,
+        laneKey: pruneLaneKey,
+      });
+      if (toolLoopPrune.stats.changed) {
+        await swapToModel(currentModelName, toolLoopPrune.history);
+      }
+    }
+
+    const preemptiveBeforeToolSend = await chat.getHistory().catch(() => [] as Content[]);
+    if (preemptiveBeforeToolSend.length > 0) {
+      const guarded = applyPreemptiveContextGuard({
+        history: preemptiveBeforeToolSend,
+        modelName: currentModelName,
+        laneKey: pruneLaneKey,
+      });
+      if (guarded.changed) {
+        await swapToModel(currentModelName, guarded.history);
+      }
+    }
+
     // Send tool results back
     try {
       response = await withConcurrencyLimit(currentModelName, () =>
         withRetry(() => sendMessageWithOptionalStream(chat, functionResponses, options?.signal, options?.onPartialText))
-      , isPriority);
+      , lane);
+      markCacheTouched(pruneLaneKey);
+      const lanePenalty = laneOverflowPenalty.get(pruneLaneKey);
+      if (lanePenalty) {
+        lanePenalty.outputPenalty = Math.max(0, lanePenalty.outputPenalty - 0.05);
+        lanePenalty.toolPenalty = Math.max(0, lanePenalty.toolPenalty - 0.05);
+        lanePenalty.observedAt = Date.now();
+        if (lanePenalty.outputPenalty <= 0.01 && lanePenalty.toolPenalty <= 0.01) {
+          laneOverflowPenalty.delete(pruneLaneKey);
+          toolResultTruncateChars = DEFAULT_TOOL_RESULT_TRUNCATE_CHARS;
+        }
+      }
     } catch (err: any) {
+      const recovered = await recoverContextOverflowAndRetry(functionResponses, err);
+      if (recovered) {
+        response = recovered;
+        markCacheTouched(pruneLaneKey);
+        continue;
+      }
       if (isAbortError(err)) {
         logAgentEvent(agent.id, 'error', 'Request interrupted by user', { durationMs: Date.now() - loopStart });
         return '';
@@ -1673,7 +2289,7 @@ RUNTIME EFFICIENCY:
         await swapToModel(GEMINI_PRO, accumulatedHistory);
         response = await withConcurrencyLimit(currentModelName, () =>
           withRetry(() => sendMessageWithOptionalStream(chat, functionResponses, options?.signal, options?.onPartialText))
-        , isPriority);
+        , lane);
         continue;
       }
       if (isGeminiRateLimitError(err)) {
@@ -1904,6 +2520,22 @@ function formatToolSummary(toolName: string, input: Record<string, string>): str
   }
 }
 
+export function getContextRuntimeReport(): string {
+  const avgCharsSaved = contextRuntimeStats.prunePasses > 0
+    ? Math.round(contextRuntimeStats.charsSaved / contextRuntimeStats.prunePasses)
+    : 0;
+  return (
+    `🧠 Runtime Context Efficiency\n` +
+    `Prune passes: ${contextRuntimeStats.prunePasses}\n` +
+    `Soft-trimmed tool results: ${contextRuntimeStats.softTrimmedToolResults}\n` +
+    `Hard-cleared tool results: ${contextRuntimeStats.hardClearedToolResults}\n` +
+    `Estimated chars saved: ${contextRuntimeStats.charsSaved.toLocaleString()} (avg ${avgCharsSaved.toLocaleString()} per pass)\n` +
+    `Preemptive guards: ${contextRuntimeStats.preemptiveGuards}\n` +
+    `Overflow recoveries: ${contextRuntimeStats.overflowRecoveries}\n` +
+    `Cache heartbeats: ${contextRuntimeStats.cacheHeartbeats}`
+  );
+}
+
 /**
  * Generate a summary of a voice call conversation.
  */
@@ -1923,7 +2555,7 @@ export async function summarizeCall(
     withRetry(() => model.generateContent(
       `Summarize this voice call between ${participants.join(', ')}:\n\n${transcript.join('\n')}`
     ))
-  );
+  , 'background');
 
   recordClaudeUsage(
     result.response.usageMetadata?.promptTokenCount || 0,
@@ -1988,7 +2620,7 @@ Keep the summary under 700 words. Use bullet points. Drop small talk and redunda
 
   const result = await withConcurrencyLimit(GEMINI_FLASH, () =>
     withRetry(() => model.generateContent(prompt))
-  );
+  , 'background');
 
   recordClaudeUsage(
     result.response.usageMetadata?.promptTokenCount || 0,

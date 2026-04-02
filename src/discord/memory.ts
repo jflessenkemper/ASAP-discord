@@ -21,6 +21,11 @@ const MAX_MESSAGES = 1000;
 const COMPRESS_THRESHOLD = 80;
 /** Number of recent messages to keep verbatim after compression */
 const KEEP_RECENT = 30;
+const COMPRESS_STAGE_PARTS = parseInt(process.env.MEMORY_COMPRESS_STAGE_PARTS || '3', 10);
+const COMPRESS_STAGE_MIN_MESSAGES = parseInt(process.env.MEMORY_COMPRESS_STAGE_MIN_MESSAGES || '24', 10);
+const COMPRESS_STAGE_CHUNK_CHAR_LIMIT = parseInt(process.env.MEMORY_COMPRESS_STAGE_CHUNK_CHAR_LIMIT || '7000', 10);
+const MEMORY_PERSIST_MAX_MESSAGE_CHARS = parseInt(process.env.MEMORY_PERSIST_MAX_MESSAGE_CHARS || '3500', 10);
+const MEMORY_PERSIST_CODE_BLOCK_CHARS = parseInt(process.env.MEMORY_PERSIST_CODE_BLOCK_CHARS || '900', 10);
 
 /** In-memory cache — primary read source for fast synchronous access */
 const memoryCache = new Map<string, ConversationMessage[]>();
@@ -33,6 +38,52 @@ let initialized = false;
 
 function safeAgentId(agentId: string): string {
   return agentId.replace(/[^a-z0-9-]/gi, '');
+}
+
+function trimMiddle(text: string, maxChars: number): string {
+  if (text.length <= maxChars) return text;
+  const head = Math.max(120, Math.floor(maxChars * 0.7));
+  const tail = Math.max(80, maxChars - head - 28);
+  return `${text.slice(0, head)}\n…[persisted context trimmed]…\n${text.slice(-tail)}`;
+}
+
+function compactPersistedContent(content: string): string {
+  let normalized = String(content || '')
+    .replace(/\r\n/g, '\n')
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+
+  if (!normalized) return normalized;
+
+  normalized = normalized.replace(/```([\s\S]*?)```/g, (_match, code) => {
+    const inner = trimMiddle(String(code || '').trim(), MEMORY_PERSIST_CODE_BLOCK_CHARS);
+    return `\`\`\`\n${inner}\n\`\`\``;
+  });
+
+  return trimMiddle(normalized, MEMORY_PERSIST_MAX_MESSAGE_CHARS);
+}
+
+function compactPersistedHistory(history: ConversationMessage[]): void {
+  for (let i = 0; i < history.length; i++) {
+    const msg = history[i];
+    if (!msg || typeof msg.content !== 'string') continue;
+    const compacted = compactPersistedContent(msg.content);
+    if (compacted !== msg.content) {
+      history[i] = { ...msg, content: compacted };
+    }
+  }
+}
+
+function isLowValueAck(message: ConversationMessage): boolean {
+  if (message.role !== 'assistant') return false;
+  const text = String(message.content || '').trim().toLowerCase();
+  return /^(ok|okay|thanks|thank you|done|noted|understood|got it|will do|sounds good)[.!]?$/.test(text);
+}
+
+function compactTranscriptHistory(history: ConversationMessage[]): ConversationMessage[] {
+  if (!history.length) return history;
+  return history.filter((msg) => !isLowValueAck(msg));
 }
 
 /** DB key for conversation history */
@@ -107,6 +158,8 @@ export function loadMemory(agentId: string): ConversationMessage[] {
  * Updates cache immediately, debounces DB write.
  */
 export function saveMemory(agentId: string, history: ConversationMessage[]): void {
+  compactPersistedHistory(history);
+
   // Trim in-place to preserve existing references (e.g. groupHistory)
   if (history.length > MAX_MESSAGES * 2) {
     history.splice(0, history.length - MAX_MESSAGES * 2);
@@ -191,17 +244,56 @@ export async function compressMemory(agentId: string): Promise<void> {
   compressionInProgress.add(agentId);
   const snapshotLen = history.length;
   try {
-    const toCompress = history.slice(0, snapshotLen - KEEP_RECENT);
-    const toKeep = history.slice(snapshotLen - KEEP_RECENT);
+    const toCompress = compactTranscriptHistory(history.slice(0, snapshotLen - KEEP_RECENT));
+    const toKeep = compactTranscriptHistory(history.slice(snapshotLen - KEEP_RECENT));
 
     const existingSummary = loadSummary(agentId);
-    const contextToSummarize = toCompress.map(m =>
-      `${m.role === 'user' ? 'User' : 'Agent'}: ${m.content.slice(0, 300)}`
-    ).join('\n');
-
     // Lazy import to avoid circular dependency
     const { summarizeConversation } = await import('./claude');
-    const newSummary = await summarizeConversation(existingSummary, contextToSummarize, agentId);
+
+    const formatMessages = (messages: ConversationMessage[]): string =>
+      messages
+        .map((m) => `${m.role === 'user' ? 'User' : 'Agent'}: ${m.content.slice(0, 300)}`)
+        .join('\n');
+
+    const summarizeInStages = async (messages: ConversationMessage[]): Promise<string> => {
+      if (messages.length < COMPRESS_STAGE_MIN_MESSAGES || COMPRESS_STAGE_PARTS <= 1) {
+        return summarizeConversation(existingSummary, formatMessages(messages), agentId);
+      }
+
+      const chunks: ConversationMessage[][] = [];
+      const targetChunkSize = Math.max(1, Math.ceil(messages.length / COMPRESS_STAGE_PARTS));
+      for (let i = 0; i < messages.length; i += targetChunkSize) {
+        chunks.push(messages.slice(i, i + targetChunkSize));
+      }
+
+      if (chunks.length <= 1) {
+        return summarizeConversation(existingSummary, formatMessages(messages), agentId);
+      }
+
+      const partials: string[] = [];
+      for (const chunk of chunks) {
+        const chunkText = formatMessages(chunk);
+        const boundedChunkText = chunkText.length > COMPRESS_STAGE_CHUNK_CHAR_LIMIT
+          ? `${chunkText.slice(0, COMPRESS_STAGE_CHUNK_CHAR_LIMIT)}\n[Chunk truncated for staged compression]`
+          : chunkText;
+        const partial = await summarizeConversation('', boundedChunkText, agentId);
+        if (partial.trim()) {
+          partials.push(partial.trim());
+        }
+      }
+
+      const mergedPartialContext = partials
+        .map((summary, idx) => `Part ${idx + 1}:\n${summary}`)
+        .join('\n\n');
+      if (!mergedPartialContext.trim()) {
+        return summarizeConversation(existingSummary, formatMessages(messages), agentId);
+      }
+
+      return summarizeConversation(existingSummary, mergedPartialContext, agentId);
+    };
+
+    const newSummary = await summarizeInStages(toCompress);
     if (newSummary.trim().length < 30) {
       console.warn(`Compression summary too short for ${agentId}; keeping verbatim history`);
       logAgentEvent(agentId, 'response', 'Skipped compression because generated summary was too short');

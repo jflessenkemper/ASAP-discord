@@ -34,6 +34,10 @@ const VOICE_STAGE_LOGS_ENABLED = process.env.VOICE_STAGE_LOGS_ENABLED !== 'false
 const VOICE_HISTORY_MAX_MESSAGES = parseInt(process.env.VOICE_HISTORY_MAX_MESSAGES || '10', 10);
 const VOICE_MEMORY_MAX_MESSAGES = parseInt(process.env.VOICE_MEMORY_MAX_MESSAGES || '8', 10);
 const VOICE_MAX_SPECIALIST_FANOUT = parseInt(process.env.VOICE_MAX_SPECIALIST_FANOUT || '1', 10);
+const VOICE_CONTEXT_MAX_CHARS = parseInt(process.env.VOICE_CONTEXT_MAX_CHARS || '3800', 10);
+const VOICE_CONTEXT_MESSAGE_MAX_CHARS = parseInt(process.env.VOICE_CONTEXT_MESSAGE_MAX_CHARS || '550', 10);
+const VOICE_CONTEXT_SUMMARY_MAX_CHARS = parseInt(process.env.VOICE_CONTEXT_SUMMARY_MAX_CHARS || '900', 10);
+const VOICE_FILLER_ONLY_RE = /^(?:uh+|um+|hmm+|mm+|ah+|er+|uh huh|huh|hmm okay|okay|ok|yeah|yep|nah|nope)[.!?\s]*$/i;
 const RILEY_WARM_PHRASES = ['One moment.', 'Let me check.', 'I am on it.', 'Here is what I found.', 'Done.'];
 
 let voiceErrorChannel: TextChannel | null = null;
@@ -191,6 +195,40 @@ function prioritizeVoiceDirectedAgents(agentIds: string[]): string[] {
   });
 }
 
+function trimVoiceText(content: string, maxChars: number): string {
+  const normalized = String(content || '').replace(/\s+/g, ' ').trim();
+  if (normalized.length <= maxChars) return normalized;
+  const head = Math.max(100, Math.floor(maxChars * 0.72));
+  const tail = Math.max(60, maxChars - head - 24);
+  return `${normalized.slice(0, head)} … ${normalized.slice(-tail)}`;
+}
+
+function compactVoiceHistoryForPrompt(history: ConversationMessage[]): ConversationMessage[] {
+  if (!history.length) return history;
+  const summaryMsg = history.find((m) => m.role === 'user' && m.content.startsWith('[Conversation Summary'));
+  const next: ConversationMessage[] = [];
+  let chars = 0;
+
+  for (let i = history.length - 1; i >= 0; i--) {
+    const msg = history[i];
+    if (summaryMsg && msg === summaryMsg) continue;
+    const compact = trimVoiceText(msg.content, VOICE_CONTEXT_MESSAGE_MAX_CHARS);
+    if (!compact) continue;
+    if (next.length >= VOICE_HISTORY_MAX_MESSAGES || chars + compact.length > VOICE_CONTEXT_MAX_CHARS) {
+      break;
+    }
+    next.push({ ...msg, content: compact });
+    chars += compact.length;
+  }
+
+  next.reverse();
+  if (summaryMsg) {
+    const summary = trimVoiceText(summaryMsg.content, VOICE_CONTEXT_SUMMARY_MAX_CHARS);
+    next.unshift({ ...summaryMsg, content: summary });
+  }
+  return next;
+}
+
 function createLiveSpeechStreamer(
   voice: string,
   signal: AbortSignal,
@@ -321,21 +359,26 @@ function interruptActiveVoiceTurn(reason: string): void {
 }
 
 async function sendAsAgent(channel: TextChannel, content: string, agentId: AgentId = 'executive-assistant'): Promise<void> {
+  const chunks = content.match(/.{1,1900}/gs) || [content];
   const agent = getAgent(agentId);
   if (agent) {
     try {
       const wh = await getWebhook(channel);
-      await wh.send({
-        content,
-        username: `${agent.emoji} ${agent.name}`,
-        avatarURL: agent.avatarUrl,
-      });
+      for (const chunk of chunks) {
+        await wh.send({
+          content: chunk,
+          username: `${agent.emoji} ${agent.name}`,
+          avatarURL: agent.avatarUrl,
+        });
+      }
       return;
     } catch {
       // fall through
     }
   }
-  await channel.send(content).catch(() => {});
+  for (const chunk of chunks) {
+    await channel.send(chunk).catch(() => {});
+  }
 }
 
 /**
@@ -613,6 +656,7 @@ async function handleVoiceInput(transcription: VoiceTranscription): Promise<void
   const session = activeSession;
   const userText = (transcription.text || '').trim();
   if (userText.length < VOICE_MIN_INPUT_CHARS) return;
+  if (VOICE_FILLER_ONLY_RE.test(userText)) return;
 
   const fingerprint = userText
     .toLowerCase()
@@ -673,8 +717,8 @@ async function handleVoiceInput(transcription: VoiceTranscription): Promise<void
     if (riley) {
       // Riley (EA) processes the input first and decides who should respond
       try {
-      const rileyMemory = getMemoryContext('executive-assistant').slice(-VOICE_MEMORY_MAX_MESSAGES);
-      const recentVoiceHistory = session.conversationHistory.slice(-VOICE_HISTORY_MAX_MESSAGES);
+      const rileyMemory = compactVoiceHistoryForPrompt(getMemoryContext('executive-assistant').slice(-VOICE_MEMORY_MAX_MESSAGES));
+      const recentVoiceHistory = compactVoiceHistoryForPrompt(session.conversationHistory);
       const langHint = transcription.language && transcription.language !== 'en'
         ? `\n\nIMPORTANT: The speaker is using ${transcription.language === 'zh' ? 'Mandarin Chinese' : transcription.language}. Respond in the SAME language they spoke in. The TTS system supports multilingual output.`
         : '';
@@ -804,9 +848,10 @@ IMPORTANT: End on a complete sentence, never a fragment.${langHint}`;
           work.push(async () => {
             try {
               const aceMemory = getMemoryContext('developer').slice(-VOICE_MEMORY_MAX_MESSAGES);
+              const compactSessionHistory = compactVoiceHistoryForPrompt(session.conversationHistory);
               const aceResponse = await agentRespond(
                 ace,
-                [...aceMemory, ...session.conversationHistory.slice(-VOICE_HISTORY_MAX_MESSAGES)],
+                [...compactVoiceHistoryForPrompt(aceMemory), ...compactSessionHistory],
                 `[Riley directed you in voice call]: ${response}\n\n[Original voice from ${transcription.username}]: ${userText}`,
                 undefined,
                 {
@@ -854,11 +899,12 @@ IMPORTANT: End on a complete sentence, never a fragment.${langHint}`;
         if (!agent) continue;
 
         work.push(async () => {
-          const agentMemory = getMemoryContext(agentId).slice(-VOICE_MEMORY_MAX_MESSAGES);
+          const agentMemory = compactVoiceHistoryForPrompt(getMemoryContext(agentId).slice(-VOICE_MEMORY_MAX_MESSAGES));
+          const compactSessionHistory = compactVoiceHistoryForPrompt(session.conversationHistory);
           try {
             const agentResponse = await agentRespond(
               agent,
-              [...agentMemory, ...session.conversationHistory.slice(-VOICE_HISTORY_MAX_MESSAGES)],
+              [...agentMemory, ...compactSessionHistory],
               `[Riley directed you during voice call]: ${response}\n[Original from ${transcription.username}]: ${userText}`,
               undefined,
               { signal, maxTokens: VOICE_MAX_TOKENS_SPECIALIST, priority: 'voice' }

@@ -43,6 +43,13 @@ interface UsageCounters {
   promptToolsChars: number;
   promptUserChars: number;
   promptToolResultChars: number;
+  modelStats: Record<string, {
+    inputTokens: number;
+    outputTokens: number;
+    cacheReadTokens: number;
+    cacheWriteTokens: number;
+    requests: number;
+  }>;
   lastReset: string; // ISO date string (YYYY-MM-DD)
 }
 
@@ -85,6 +92,7 @@ const usage: UsageCounters = {
   promptToolsChars: 0,
   promptUserChars: 0,
   promptToolResultChars: 0,
+  modelStats: {},
   lastReset: new Date().toISOString().split('T')[0],
 };
 
@@ -135,6 +143,7 @@ export async function initUsageCounters(): Promise<void> {
       usage.promptToolsChars = Number(parsed.promptToolsChars) || 0;
       usage.promptUserChars = Number(parsed.promptUserChars) || 0;
       usage.promptToolResultChars = Number(parsed.promptToolResultChars) || 0;
+      usage.modelStats = (parsed.modelStats && typeof parsed.modelStats === 'object') ? parsed.modelStats : {};
       usage.lastReset = typeof parsed.lastReset === 'string'
         ? parsed.lastReset
         : new Date().toISOString().split('T')[0];
@@ -199,6 +208,7 @@ function resetIfNewDay(): void {
     usage.promptToolsChars = 0;
     usage.promptUserChars = 0;
     usage.promptToolResultChars = 0;
+    usage.modelStats = {};
     usage.lastReset = today;
     markUsageDirty();
   }
@@ -234,6 +244,11 @@ function isAnthropicModelName(modelName?: string): boolean {
 function asNonNegativeInt(value: unknown): number {
   const num = Number(value);
   return Number.isFinite(num) && num > 0 ? Math.round(num) : 0;
+}
+
+function normalizeModelName(modelName?: string): string {
+  const value = String(modelName || '').trim().toLowerCase();
+  return value || 'unknown-model';
 }
 
 export function recordClaudeUsage(
@@ -276,6 +291,21 @@ export function recordClaudeUsage(
   usage.promptToolsChars += asNonNegativeInt(prompt.toolsChars);
   usage.promptUserChars += asNonNegativeInt(prompt.userChars);
   usage.promptToolResultChars += asNonNegativeInt(prompt.toolResultChars);
+
+  const modelKey = normalizeModelName(modelName);
+  const modelStats = usage.modelStats[modelKey] || {
+    inputTokens: 0,
+    outputTokens: 0,
+    cacheReadTokens: 0,
+    cacheWriteTokens: 0,
+    requests: 0,
+  };
+  modelStats.inputTokens += inputTokens;
+  modelStats.outputTokens += outputTokens;
+  modelStats.cacheReadTokens += cacheRead;
+  modelStats.cacheWriteTokens += cacheCreation;
+  modelStats.requests += 1;
+  usage.modelStats[modelKey] = modelStats;
 
   if (costChannel) {
     const reqCost = estimateRequestCostUsd(modelName, inputTokens, outputTokens);
@@ -618,6 +648,43 @@ export function getUsageReport(): string {
     `Estimated spend: **$${cost.elevenLabs.toFixed(4)}**\n\n` +
     `💰 **Effective spend for budget gate today: $${effectiveTotalSpend.toFixed(4)}**\n` +
     `Budget gate: **$${effectiveBudgetLimit().toFixed(2)}**${extraBudget > 0 ? ` (base $${DAILY_LIMITS.budgetUsd.toFixed(2)} + approved $${extraBudget.toFixed(2)})` : ''}`
+  );
+}
+
+export function getContextEfficiencyReport(): string {
+  resetIfNewDay();
+  const promptStats = getPromptAttributionSnapshot();
+  const req = Math.max(1, promptStats.requests);
+  const totalAvg = promptStats.avgPromptChars.total;
+  const pct = (value: number) => `${Math.round((value / Math.max(1, totalAvg)) * 100)}%`;
+
+  const topModels = Object.entries(usage.modelStats || {})
+    .map(([model, stats]) => {
+      const cost = estimateRequestCostUsd(model, stats.inputTokens, stats.outputTokens);
+      return { model, stats, cost };
+    })
+    .sort((a, b) => b.cost - a.cost)
+    .slice(0, 5);
+
+  const modelLines = topModels.length > 0
+    ? topModels.map((entry) =>
+      `• ${entry.model}: $${entry.cost.toFixed(4)} | req=${entry.stats.requests} | in=${formatCompactCount(entry.stats.inputTokens)} out=${formatCompactCount(entry.stats.outputTokens)} | cache r/w=${formatCompactCount(entry.stats.cacheReadTokens)}/${formatCompactCount(entry.stats.cacheWriteTokens)}`
+    ).join('\n')
+    : '• No per-model data yet.';
+
+  return (
+    `📦 **Prompt Context Breakdown**\n` +
+    `Requests observed: ${promptStats.requests}\n` +
+    `Avg chars/request: ${formatCompactCount(totalAvg)}\n` +
+    `• system: ${formatCompactCount(promptStats.avgPromptChars.system)} (${pct(promptStats.avgPromptChars.system)})\n` +
+    `• tools: ${formatCompactCount(promptStats.avgPromptChars.tools)} (${pct(promptStats.avgPromptChars.tools)})\n` +
+    `• history: ${formatCompactCount(promptStats.avgPromptChars.history)} (${pct(promptStats.avgPromptChars.history)})\n` +
+    `• user: ${formatCompactCount(promptStats.avgPromptChars.user)} (${pct(promptStats.avgPromptChars.user)})\n` +
+    `• tool results: ${formatCompactCount(promptStats.avgPromptChars.toolResults)} (${pct(promptStats.avgPromptChars.toolResults)})\n\n` +
+    `Cache read/write tokens: ${formatCompactCount(promptStats.cacheReadTokens)} / ${formatCompactCount(promptStats.cacheCreationTokens)}\n` +
+    `Cache hit rate: ${promptStats.cacheHitRatePct}% (${promptStats.cacheReadRequests}/${req})\n\n` +
+    `📉 **Top model cost + cache economics**\n` +
+    `${modelLines}`
   );
 }
 

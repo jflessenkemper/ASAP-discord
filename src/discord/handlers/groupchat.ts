@@ -12,14 +12,14 @@ import {
   resolveAgentId,
   resolveAgentIdByRoleId,
 } from '../agents';
-import { agentRespond, ConversationMessage, setQuotaFuseNotifyCallback, setRateLimitNotifyCallback } from '../claude';
+import { agentRespond, ConversationMessage, getContextRuntimeReport, setQuotaFuseNotifyCallback, setRateLimitNotifyCallback } from '../claude';
 import { appendToMemory, getMemoryContext, loadMemory, saveMemory, clearMemory, compressMemory } from '../memory';
 import { documentToChannel } from './documentation';
 import { sendAgentMessage, clearHistory } from './textChannel';
 import { startCall, endCall, isCallActive } from './callSession';
 import { makeOutboundCall, startConferenceCall, isTelephonyAvailable } from '../services/telephony';
 import { getBotChannels } from '../bot';
-import { approveAdditionalBudget, getUsageReport, refreshLiveBillingData, refreshUsageDashboard } from '../usage';
+import { approveAdditionalBudget, getContextEfficiencyReport, getUsageReport, refreshLiveBillingData, refreshUsageDashboard } from '../usage';
 import { getWebhook, sendWebhookMessage, WebhookCapableChannel } from '../services/webhooks';
 
 /** Send a tool-use notification as the agent (via webhook). */
@@ -189,6 +189,9 @@ function inferImplicitActionTags(text: string): string {
 
   if (/(usage report|limits report|budget report|token report)/i.test(normalized)) {
     tags.add('[ACTION:LIMITS]');
+  }
+  if (/(context report|prompt breakdown|token breakdown|context efficiency|prompt efficiency report)/i.test(normalized)) {
+    tags.add('[ACTION:CONTEXT]');
   }
   if (/(thread status|open threads|stale threads|ready to close)/i.test(normalized)) {
     tags.add('[ACTION:THREADS]');
@@ -1283,6 +1286,12 @@ async function executeActions(
           await refreshLiveBillingData().catch(() => {});
           const report = getUsageReport();
           markGoalProgress('📊 Usage report posted');
+          await sendAsRiley(report);
+          break;
+        }
+        case 'CONTEXT': {
+          const report = `${getContextEfficiencyReport()}\n\n${getContextRuntimeReport()}`;
+          markGoalProgress('🧠 Context report posted');
           await sendAsRiley(report);
           break;
         }

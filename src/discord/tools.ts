@@ -132,6 +132,14 @@ export const REPO_TOOLS = [
           type: 'string',
           description: 'Relative file path from repo root',
         },
+        offset: {
+          type: 'number',
+          description: 'Optional character offset to start reading from for paged reads',
+        },
+        max_bytes: {
+          type: 'number',
+          description: 'Optional maximum characters to return for this read page',
+        },
       },
       required: ['path'],
     },
@@ -1268,7 +1276,7 @@ export async function executeTool(
   try {
     switch (toolName) {
       case 'read_file':
-        return readFile(input.path);
+        return readFile(input.path, Number(input.offset), Number(input.max_bytes));
       case 'write_file':
         return writeFile(input.path, input.content);
       case 'edit_file':
@@ -1438,7 +1446,7 @@ export async function executeTool(
   }
 }
 
-function readFile(relativePath: string): string {
+function readFile(relativePath: string, offsetRaw?: number, maxBytesRaw?: number): string {
   const abs = safePath(relativePath);
   if (!fs.existsSync(abs)) {
     return `File not found: ${relativePath}`;
@@ -1447,7 +1455,24 @@ function readFile(relativePath: string): string {
   if (stat.size > MAX_WRITE_SIZE) {
     return `File too large (${Math.round(stat.size / 1024)} KB). Read specific sections or use search_files instead.`;
   }
-  return fs.readFileSync(abs, 'utf-8');
+  const content = fs.readFileSync(abs, 'utf-8');
+  const offset = Number.isFinite(offsetRaw as number) && (offsetRaw as number) > 0
+    ? Math.min(content.length, Math.floor(offsetRaw as number))
+    : 0;
+  const maxBytes = resolveAdaptiveReadMaxBytes(maxBytesRaw);
+
+  if (offset >= content.length) {
+    return `[Reached end of file. Size=${content.length} chars. offset=${offset}]`;
+  }
+
+  const end = Math.min(content.length, offset + maxBytes);
+  const page = content.slice(offset, end);
+  if (end >= content.length) {
+    return page;
+  }
+
+  const remaining = content.length - end;
+  return `${page}\n\n[Showing chars ${offset}-${end} of ${content.length}. ${remaining} chars remaining. Use offset=${end} to continue.]`;
 }
 
 function writeFile(relativePath: string, content: string): string {
@@ -1645,6 +1670,25 @@ const HARD_BLOCKED = [
   /:\(\)\s*\{/,                     // fork bomb
   />\s*\/dev\/sd/,                  // write to block devices
 ];
+
+const DEFAULT_READ_PAGE_MAX_BYTES = parseInt(process.env.DEFAULT_READ_PAGE_MAX_BYTES || '50000', 10);
+const MAX_ADAPTIVE_READ_MAX_BYTES = parseInt(process.env.MAX_ADAPTIVE_READ_MAX_BYTES || '512000', 10);
+const ADAPTIVE_READ_CONTEXT_SHARE = parseFloat(process.env.ADAPTIVE_READ_CONTEXT_SHARE || '0.20');
+const READ_CONTEXT_TOKENS = parseInt(process.env.READ_CONTEXT_TOKENS || '200000', 10);
+const CHARS_PER_TOKEN_ESTIMATE = parseFloat(process.env.READ_CHARS_PER_TOKEN_ESTIMATE || '4');
+
+function resolveAdaptiveReadMaxBytes(requested?: number): number {
+  const contextBased = Math.floor(
+    Math.max(1, READ_CONTEXT_TOKENS) *
+    Math.max(1, CHARS_PER_TOKEN_ESTIMATE) *
+    Math.max(0.01, ADAPTIVE_READ_CONTEXT_SHARE)
+  );
+  const baseline = Math.max(4096, Math.min(MAX_ADAPTIVE_READ_MAX_BYTES, contextBased, DEFAULT_READ_PAGE_MAX_BYTES));
+  if (!Number.isFinite(requested as number) || (requested as number) <= 0) {
+    return baseline;
+  }
+  return Math.max(1024, Math.min(MAX_ADAPTIVE_READ_MAX_BYTES, Math.floor(requested as number)));
+}
 
 /** Command audit log callback — set externally to post to Discord */
 let auditCallback: ((command: string, allowed: boolean, reason: string) => void) | null = null;

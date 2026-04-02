@@ -1,11 +1,68 @@
 import { GoogleGenerativeAI } from '@google/generative-ai';
+import { GoogleAuth } from 'google-auth-library';
 import { recordGeminiUsage, isGeminiOverLimit } from '../usage';
 import { elevenLabsTTS, isElevenLabsAvailable } from './elevenlabs';
 import { recordTtsError, recordTtsLatency, recordTranscriptionLatency } from '../metrics';
 
+const USE_VERTEX_AI = process.env.GEMINI_USE_VERTEX_AI === 'true';
+const VERTEX_PROJECT_ID = process.env.VERTEX_PROJECT_ID || process.env.GOOGLE_CLOUD_PROJECT || process.env.GCLOUD_PROJECT || '';
+const VERTEX_LOCATION = process.env.VERTEX_LOCATION || 'us-central1';
+
 const genAI = process.env.GEMINI_API_KEY
   ? new GoogleGenerativeAI(process.env.GEMINI_API_KEY)
   : null;
+
+let vertexAuth: GoogleAuth | null = null;
+let vertexTokenCache: { token: string; expiresAtMs: number } | null = null;
+
+function hasGeminiProviderConfigured(): boolean {
+  if (USE_VERTEX_AI) {
+    return Boolean(VERTEX_PROJECT_ID);
+  }
+  return Boolean(genAI);
+}
+
+async function getVertexAccessToken(): Promise<string> {
+  const now = Date.now();
+  if (vertexTokenCache && vertexTokenCache.expiresAtMs - now > 60_000) {
+    return vertexTokenCache.token;
+  }
+
+  if (!vertexAuth) {
+    vertexAuth = new GoogleAuth({ scopes: ['https://www.googleapis.com/auth/cloud-platform'] });
+  }
+
+  const authClient = await vertexAuth.getClient();
+  const accessToken = await authClient.getAccessToken();
+  const token = typeof accessToken === 'string' ? accessToken : accessToken?.token;
+  if (!token) throw new Error('Vertex auth failed: no access token');
+
+  vertexTokenCache = { token, expiresAtMs: now + 45 * 60_000 };
+  return token;
+}
+
+async function callVertexGenerateContent(modelName: string, body: Record<string, any>): Promise<any> {
+  if (!VERTEX_PROJECT_ID) {
+    throw new Error('Vertex AI is enabled but VERTEX_PROJECT_ID (or GOOGLE_CLOUD_PROJECT) is not set');
+  }
+  const token = await getVertexAccessToken();
+  const endpoint = `https://${VERTEX_LOCATION}-aiplatform.googleapis.com/v1/projects/${VERTEX_PROJECT_ID}/locations/${VERTEX_LOCATION}/publishers/google/models/${encodeURIComponent(modelName)}:generateContent`;
+  const response = await fetch(endpoint, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(body),
+  });
+
+  if (!response.ok) {
+    const errText = await response.text();
+    throw new Error(`Vertex Gemini error: ${response.status} ${errText.slice(0, 300)}`);
+  }
+
+  return response.json();
+}
 
 /**
  * Transcribe audio from a Discord voice stream using Gemini.
@@ -13,8 +70,10 @@ const genAI = process.env.GEMINI_API_KEY
  * Pre-filters silence to avoid wasting Gemini API calls.
  */
 export async function transcribeVoice(audioBuffer: Buffer): Promise<string> {
-    const startedAt = Date.now();
-  if (!genAI) throw new Error('Gemini API key not configured');
+  const startedAt = Date.now();
+  if (!hasGeminiProviderConfigured()) {
+    throw new Error(USE_VERTEX_AI ? 'Vertex Gemini is not configured' : 'Gemini API key not configured');
+  }
 
   // Client-side silence detection — skip silent audio before calling Gemini
   let nonSilentSamples = 0;
@@ -28,18 +87,35 @@ export async function transcribeVoice(audioBuffer: Buffer): Promise<string> {
 
   if (isGeminiOverLimit()) throw new Error('Daily Gemini API call limit reached');
 
-  const model = genAI.getGenerativeModel({ model: 'gemini-flash-latest' });
-
   const base64Audio = audioBuffer.toString('base64');
 
-  const result = await model.generateContent([
-    {
-      text: 'Transcribe the following audio recording. Return ONLY the transcribed text, nothing else. If the audio is unclear or silent, respond with [silence].',
-    },
-    { inlineData: { mimeType: 'audio/l16;rate=48000;channels=2', data: base64Audio } },
-  ]);
+  let text = '';
+  if (USE_VERTEX_AI) {
+    const data = await callVertexGenerateContent('gemini-flash-latest', {
+      contents: [
+        {
+          role: 'user',
+          parts: [
+            {
+              text: 'Transcribe the following audio recording. Return ONLY the transcribed text, nothing else. If the audio is unclear or silent, respond with [silence].',
+            },
+            { inlineData: { mimeType: 'audio/l16;rate=48000;channels=2', data: base64Audio } },
+          ],
+        },
+      ],
+    });
+    text = String(data?.candidates?.[0]?.content?.parts?.find((p: any) => typeof p?.text === 'string')?.text || '').trim();
+  } else {
+    const model = genAI!.getGenerativeModel({ model: 'gemini-flash-latest' });
+    const result = await model.generateContent([
+      {
+        text: 'Transcribe the following audio recording. Return ONLY the transcribed text, nothing else. If the audio is unclear or silent, respond with [silence].',
+      },
+      { inlineData: { mimeType: 'audio/l16;rate=48000;channels=2', data: base64Audio } },
+    ]);
+    text = result.response.text().trim();
+  }
 
-  const text = result.response.text().trim();
   recordTranscriptionLatency('gemini', Date.now() - startedAt);
   recordGeminiUsage();
   if (!text || text === '[silence]') return '';
@@ -91,48 +167,65 @@ export async function textToSpeech(
 async function geminiTTS(text: string, voiceName: string): Promise<Buffer> {
   // Use Gemini 2.5 Flash with audio output for TTS
   const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) throw new Error('Gemini API key not configured');
+  if (!USE_VERTEX_AI && !apiKey) throw new Error('Gemini API key not configured');
+  if (USE_VERTEX_AI && !VERTEX_PROJECT_ID) {
+    throw new Error('Vertex AI is enabled but VERTEX_PROJECT_ID (or GOOGLE_CLOUD_PROJECT) is not set');
+  }
   if (isGeminiOverLimit()) throw new Error('Daily Gemini API call limit reached');
 
-  // Use the REST API directly for TTS since the SDK doesn't support audio output natively
-  const response = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-tts:generateContent?key=${apiKey}`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: [
-          {
-            role: 'user',
-            parts: [{ text }],
-          },
-        ],
-        generationConfig: {
-          responseModalities: ['AUDIO'],
-          speechConfig: {
-            voiceConfig: {
-              prebuiltVoiceConfig: {
-                voiceName,
-              },
-            },
+  const body = {
+    contents: [
+      {
+        role: 'user',
+        parts: [{ text }],
+      },
+    ],
+    generationConfig: {
+      responseModalities: ['AUDIO'],
+      speechConfig: {
+        voiceConfig: {
+          prebuiltVoiceConfig: {
+            voiceName,
           },
         },
-      }),
-    }
-  );
+      },
+    },
+  };
 
-  if (!response.ok) {
-    const errText = await response.text();
-    throw new Error(`Gemini TTS error: ${response.status} ${errText}`);
-  }
-
-  const data = await response.json() as {
+  let data: {
     candidates?: Array<{
       content?: {
         parts?: Array<{ inlineData?: { mimeType: string; data: string } }>;
       };
     }>;
   };
+
+  if (USE_VERTEX_AI) {
+    data = await callVertexGenerateContent('gemini-2.5-flash-preview-tts', body);
+  } else {
+    // Use the REST API directly for TTS since the SDK doesn't support audio output natively
+    const response = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-tts:generateContent?key=${apiKey}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      }
+    );
+
+    if (!response.ok) {
+      const errText = await response.text();
+      throw new Error(`Gemini TTS error: ${response.status} ${errText}`);
+    }
+
+    data = await response.json() as {
+      candidates?: Array<{
+        content?: {
+          parts?: Array<{ inlineData?: { mimeType: string; data: string } }>;
+        };
+      }>;
+    };
+  }
 
   // Extract audio data from response
   const audioPart = data.candidates?.[0]?.content?.parts?.find(

@@ -199,6 +199,36 @@ const MAX_RESUBSCRIBES = 500;
 const MAX_AUDIO_BUFFER = 5 * 1024 * 1024;
 const VOICE_MIN_AUDIO_BYTES = parseInt(process.env.VOICE_MIN_AUDIO_BYTES || '48000', 10);
 const MAX_DEEPGRAM_SESSION_RETRIES = parseInt(process.env.MAX_DEEPGRAM_SESSION_RETRIES || '3', 10);
+const VOICE_ENDPOINT_SILENCE_BASE_MS = parseInt(process.env.VOICE_ENDPOINT_SILENCE_BASE_MS || '900', 10);
+const VOICE_ENDPOINT_SILENCE_MIN_MS = parseInt(process.env.VOICE_ENDPOINT_SILENCE_MIN_MS || '650', 10);
+const VOICE_ENDPOINT_SILENCE_MAX_MS = parseInt(process.env.VOICE_ENDPOINT_SILENCE_MAX_MS || '1400', 10);
+
+const voiceEndpointingByUser = new Map<string, { silenceMs: number; lastAudioBytes: number; turns: number }>();
+
+function getAdaptiveSilenceDuration(userId: string): number {
+  const state = voiceEndpointingByUser.get(userId);
+  if (!state) return VOICE_ENDPOINT_SILENCE_BASE_MS;
+  return Math.max(VOICE_ENDPOINT_SILENCE_MIN_MS, Math.min(VOICE_ENDPOINT_SILENCE_MAX_MS, Math.round(state.silenceMs)));
+}
+
+function updateAdaptiveSilenceDuration(userId: string, audioBytes: number): void {
+  const prev = voiceEndpointingByUser.get(userId) || { silenceMs: VOICE_ENDPOINT_SILENCE_BASE_MS, lastAudioBytes: 0, turns: 0 };
+  const next = { ...prev };
+  next.lastAudioBytes = audioBytes;
+  next.turns += 1;
+
+  // Short utterances benefit from faster endpointing; long utterances need more tail tolerance.
+  if (audioBytes < VOICE_MIN_AUDIO_BYTES * 2) {
+    next.silenceMs = Math.max(VOICE_ENDPOINT_SILENCE_MIN_MS, next.silenceMs - 80);
+  } else if (audioBytes > VOICE_MIN_AUDIO_BYTES * 6) {
+    next.silenceMs = Math.min(VOICE_ENDPOINT_SILENCE_MAX_MS, next.silenceMs + 120);
+  } else {
+    // Gentle decay back toward baseline.
+    next.silenceMs = next.silenceMs + (VOICE_ENDPOINT_SILENCE_BASE_MS - next.silenceMs) * 0.2;
+  }
+
+  voiceEndpointingByUser.set(userId, next);
+}
 
 /**
  * Create a prism-media Opus decoder that converts Opus frames from the Discord
@@ -238,7 +268,7 @@ export function listenToUser(
     }
 
     const subscription = receiver.subscribe(member.id, {
-      end: { behavior: EndBehaviorType.AfterSilence, duration: 900 },
+      end: { behavior: EndBehaviorType.AfterSilence, duration: getAdaptiveSilenceDuration(member.id) },
     });
 
     // Decode Opus frames → PCM (s16le, 48kHz, stereo) before collecting
@@ -277,6 +307,7 @@ export function listenToUser(
         const audioBuffer = Buffer.concat(chunks);
         // Need at least ~0.5s of PCM audio at 48kHz stereo (192 KB/s)
         if (audioBuffer.length >= VOICE_MIN_AUDIO_BYTES) {
+          updateAdaptiveSilenceDuration(member.id, audioBuffer.length);
           try {
             const text = await transcribeVoice(audioBuffer);
             if (text && !destroyed) {
@@ -293,6 +324,7 @@ export function listenToUser(
             console.error('Voice transcription error:', err instanceof Error ? err.message : 'Unknown');
           }
         } else {
+          updateAdaptiveSilenceDuration(member.id, audioBuffer.length);
           console.debug(`Skipped short voice buffer for ${member.displayName}: ${audioBuffer.length} bytes < ${VOICE_MIN_AUDIO_BYTES}`);
         }
       } else if (totalSize > MAX_AUDIO_BUFFER) {
@@ -485,7 +517,7 @@ export function listenToUserDeepgram(
         const subscription = receiver.subscribe(member.id, {
           // AfterInactivity is more resilient than AfterSilence for some clients
           // that send sparse/non-standard silence packets.
-          end: { behavior: EndBehaviorType.AfterInactivity, duration: 900 },
+          end: { behavior: EndBehaviorType.AfterInactivity, duration: getAdaptiveSilenceDuration(member.id) },
         });
         currentSubscription = subscription;
         utteranceStartAt = null;
@@ -518,6 +550,10 @@ export function listenToUserDeepgram(
         });
 
         decoder.on('end', () => {
+          if (utteranceStartAt !== null) {
+            const approxBytes = Math.max(VOICE_MIN_AUDIO_BYTES, Math.floor((Date.now() - utteranceStartAt) * 192));
+            updateAdaptiveSilenceDuration(member.id, approxBytes);
+          }
           if (!destroyed) {
             setTimeout(() => {
               if (!destroyed) subscribe();
