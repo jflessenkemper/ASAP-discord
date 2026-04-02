@@ -52,6 +52,7 @@ let activeGoalSequence = 0;
 let claudeNotificationsBoundChannelId: string | null = null;
 const MAX_PARALLEL_SUBAGENTS = parseInt(process.env.MAX_PARALLEL_SUBAGENTS || '1', 10);
 const SUBAGENT_MAX_TOKENS = parseInt(process.env.SUBAGENT_MAX_TOKENS || '900', 10);
+const GROUPCHAT_PROCESS_TIMEOUT_MS = parseInt(process.env.GROUPCHAT_PROCESS_TIMEOUT_MS || '120000', 10);
 
 // Active goal tracking for /status
 let activeGoal: string | null = null;
@@ -924,13 +925,39 @@ export async function handleGroupchatMessage(
   messageQueue = messageQueue.then(async () => {
     if (controller.signal.aborted) return;
     try {
-      await processGroupchatMessage(message, content, groupchat, controller.signal);
+      await withMessageTimeout(
+        processGroupchatMessage(message, content, groupchat, controller.signal),
+        GROUPCHAT_PROCESS_TIMEOUT_MS,
+      );
+    } catch (err) {
+      const detail = err instanceof Error ? err.stack || err.message : String(err);
+      console.error('Groupchat message processing failed:', detail);
+      void postAgentErrorLog('groupchat:queue', 'Groupchat message processing failed', {
+        detail,
+        level: 'warn',
+      });
     } finally {
       if (activeAbortController === controller) activeAbortController = null;
     }
   }).catch((err) => {
     console.error('Groupchat queue error:', err instanceof Error ? err.message : 'Unknown');
   });
+}
+
+async function withMessageTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) return promise;
+
+  let timer: NodeJS.Timeout | null = null;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`Groupchat message timed out after ${timeoutMs}ms`)), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 async function processGroupchatMessage(
