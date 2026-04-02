@@ -747,9 +747,11 @@ IMPORTANT: End on a complete sentence, never a fragment.${langHint}`;
         `[${new Date().toLocaleTimeString()}] Riley (EA): ${response}`
       );
 
-      // Send text to call-log (not groupchat — keep it clean)
-      await session.callLog.send(`${riley.emoji} **${riley.name}**: ${response.slice(0, 1900)}`);
-      await mirrorAgentResponse(riley.name, 'call-log', response);
+      // Do not block speech on diagnostics/network writes.
+      const rileyLogAndMirror = Promise.allSettled([
+        session.callLog.send(`${riley.emoji} **${riley.name}**: ${response.slice(0, 1900)}`),
+        mirrorAgentResponse(riley.name, 'call-log', response),
+      ]);
       appendToMemory('executive-assistant', [
         { role: 'user', content: `[Voice from ${transcription.username}]: ${userText}` },
         { role: 'assistant', content: `[Riley]: ${response}` },
@@ -760,6 +762,7 @@ IMPORTANT: End on a complete sentence, never a fragment.${langHint}`;
       try {
         const rileyTtsStartMs = Date.now();
         const rileySpoke = await rileyStreamer.finalize(response);
+        await rileyLogAndMirror;
         if (!rileySpoke && isCurrentTurn() && !signal.aborted) {
           await speakPipelined(
             response,
@@ -877,10 +880,10 @@ IMPORTANT: End on a complete sentence, never a fragment.${langHint}`;
       }
 
       if (work.length > 0) {
-        for (const task of work) {
-          if (!isCurrentTurn()) break;
+        await Promise.allSettled(work.map(async (task) => {
+          if (!isCurrentTurn()) return;
           await task();
-        }
+        }));
       }
       } catch (err) {
         if (!isCurrentTurn()) return;

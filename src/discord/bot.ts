@@ -17,7 +17,7 @@ import { setBotChannels } from './handlers/documentation';
 import { setAgentErrorChannel, postAgentErrorLog } from './services/agentErrors';
 import { unregisterCommands } from './commands';
 import { setGitHubChannel } from './handlers/github';
-import { setLimitsChannel, startDashboardUpdates, stopDashboardUpdates, initUsageCounters, flushUsageCounters } from './usage';
+import { setLimitsChannel, setCostChannel, startDashboardUpdates, stopDashboardUpdates, initUsageCounters, flushUsageCounters } from './usage';
 import { flushPendingWrites, initMemory } from './memory';
 import { setScreenshotsChannel } from './services/screenshots';
 import { setTelephonyChannels, isTelephonyAvailable, initContacts } from './services/telephony';
@@ -84,6 +84,7 @@ export async function startBot(): Promise<void> {
       setBotChannels(configuredChannels);
       setGitHubChannel(configuredChannels.github);
       setLimitsChannel(configuredChannels.limits);
+      setCostChannel(configuredChannels.cost);
       setScreenshotsChannel(configuredChannels.screenshots);
       setVoiceErrorChannel(configuredChannels.voiceErrors);
       setAgentErrorChannel(configuredChannels.agentErrors);
@@ -217,6 +218,7 @@ export async function stopBot(): Promise<void> {
   setCommandAuditCallback(() => {});
   setToolAuditCallback(() => {});
   setPRReviewCallback(async () => {});
+  setCostChannel(null);
   setVoiceErrorChannel(null);
   setAgentErrorChannel(null);
   setThreadStatusChannel(null);

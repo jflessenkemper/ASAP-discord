@@ -686,6 +686,10 @@ const TOOL_LOOP_TIMEOUT = parseInt(process.env.TOOL_LOOP_TIMEOUT_MS || '360000',
 const MAX_CONCURRENT = parseInt(process.env.GEMINI_MAX_CONCURRENT || '5', 10);
 const MAX_CONCURRENT_FLASH = parseInt(process.env.GEMINI_MAX_CONCURRENT_FLASH || '4', 10);
 const MAX_CONCURRENT_PRO = parseInt(process.env.GEMINI_MAX_CONCURRENT_PRO || '1', 10);
+const VOICE_DEDICATED_LANE_ENABLED = process.env.GEMINI_VOICE_DEDICATED_LANE !== 'false';
+const MAX_CONCURRENT_VOICE = parseInt(process.env.GEMINI_MAX_CONCURRENT_VOICE || '2', 10);
+const MAX_CONCURRENT_FLASH_VOICE = parseInt(process.env.GEMINI_MAX_CONCURRENT_FLASH_VOICE || '2', 10);
+const MAX_CONCURRENT_PRO_VOICE = parseInt(process.env.GEMINI_MAX_CONCURRENT_PRO_VOICE || '1', 10);
 const RESERVED_FLASH_PRIORITY_SLOTS = parseInt(process.env.GEMINI_RESERVED_FLASH_PRIORITY_SLOTS || '1', 10);
 /** Base queue release delay between parallel requests (lower = faster) */
 const QUEUE_RELEASE_DELAY_MS = parseInt(process.env.QUEUE_RELEASE_DELAY_MS || '120', 10);
@@ -695,6 +699,8 @@ const QUEUE_RELEASE_DELAY_RATE_LIMIT_MS = parseInt(process.env.QUEUE_RELEASE_DEL
 const MODEL_PACE_FLASH_MS = parseInt(process.env.GEMINI_MODEL_PACE_FLASH_MS || '180', 10);
 const MODEL_PACE_PRO_MS = parseInt(process.env.GEMINI_MODEL_PACE_PRO_MS || '700', 10);
 const MODEL_PACE_FLASH_PRIORITY_MS = parseInt(process.env.GEMINI_MODEL_PACE_FLASH_PRIORITY_MS || '0', 10);
+const MODEL_PACE_FLASH_VOICE_MS = parseInt(process.env.GEMINI_MODEL_PACE_FLASH_VOICE_MS || '0', 10);
+const MODEL_PACE_PRO_VOICE_MS = parseInt(process.env.GEMINI_MODEL_PACE_PRO_VOICE_MS || '300', 10);
 
 /** Lower default output tokens for faster first responses. */
 const DEFAULT_MAX_OUTPUT_TOKENS = parseInt(process.env.DEFAULT_MAX_OUTPUT_TOKENS || '1000', 10);
@@ -716,6 +722,11 @@ const modelQueues = new Map<string, Array<() => void>>();
 const priorityClaudeQueue: Array<() => void> = [];
 const priorityModelQueues = new Map<string, Array<() => void>>();
 const modelNextAllowedAt = new Map<string, number>();
+let activeVoiceClaude = 0;
+const voiceClaudeQueue: Array<() => void> = [];
+const activeVoiceByModel = new Map<string, number>();
+const voiceModelQueues = new Map<string, Array<() => void>>();
+const voiceModelNextAllowedAt = new Map<string, number>();
 let rateLimitNotifyCallback: ((message: string) => void | Promise<void>) | null = null;
 let quotaFuseNotifyCallback: ((message: string) => void | Promise<void>) | null = null;
 let lastRateLimitNotificationAt = 0;
@@ -934,6 +945,11 @@ function getModelConcurrencyCap(modelName: string): number {
   return key.includes('pro') ? MAX_CONCURRENT_PRO : MAX_CONCURRENT_FLASH;
 }
 
+function getVoiceModelConcurrencyCap(modelName: string): number {
+  const key = normalizeModelKey(modelName);
+  return key.includes('pro') ? MAX_CONCURRENT_PRO_VOICE : MAX_CONCURRENT_FLASH_VOICE;
+}
+
 function getModelPaceMs(modelName: string): number {
   const key = normalizeModelKey(modelName);
   return key.includes('pro') ? MODEL_PACE_PRO_MS : MODEL_PACE_FLASH_MS;
@@ -942,6 +958,11 @@ function getModelPaceMs(modelName: string): number {
 function getPriorityModelPaceMs(modelName: string): number {
   const key = normalizeModelKey(modelName);
   return key.includes('pro') ? MODEL_PACE_PRO_MS : MODEL_PACE_FLASH_PRIORITY_MS;
+}
+
+function getVoiceModelPaceMs(modelName: string): number {
+  const key = normalizeModelKey(modelName);
+  return key.includes('pro') ? MODEL_PACE_PRO_VOICE_MS : MODEL_PACE_FLASH_VOICE_MS;
 }
 
 function getModelQueue(modelKey: string): Array<() => void> {
@@ -960,19 +981,53 @@ function getPriorityModelQueue(modelKey: string): Array<() => void> {
   return created;
 }
 
-async function waitForModelPace(modelName: string, priority = false): Promise<void> {
+function getVoiceModelQueue(modelKey: string): Array<() => void> {
+  const existing = voiceModelQueues.get(modelKey);
+  if (existing) return existing;
+  const created: Array<() => void> = [];
+  voiceModelQueues.set(modelKey, created);
+  return created;
+}
+
+async function waitForModelPace(modelName: string, priority = false, lane: 'text' | 'voice' = 'text'): Promise<void> {
   const modelKey = normalizeModelKey(modelName);
   const now = Date.now();
-  const nextAllowed = modelNextAllowedAt.get(modelKey) || 0;
+  const nextAllowed = lane === 'voice'
+    ? (voiceModelNextAllowedAt.get(modelKey) || 0)
+    : (modelNextAllowedAt.get(modelKey) || 0);
   if (nextAllowed > now) {
     await new Promise((resolve) => setTimeout(resolve, nextAllowed - now));
   }
 }
 
-function releaseNextQueued(modelKey: string): void {
+function releaseNextQueued(modelKey: string, lane: 'text' | 'voice' = 'text'): void {
   const releaseDelay = rateLimitedUntil > Date.now()
     ? QUEUE_RELEASE_DELAY_RATE_LIMIT_MS
     : QUEUE_RELEASE_DELAY_MS;
+
+  if (lane === 'voice') {
+    const sameVoiceQueue = getVoiceModelQueue(modelKey);
+    const sameVoice = sameVoiceQueue.shift();
+    if (sameVoice) {
+      setTimeout(sameVoice, releaseDelay);
+      return;
+    }
+
+    const globalVoiceNext = voiceClaudeQueue.shift();
+    if (globalVoiceNext) {
+      setTimeout(globalVoiceNext, releaseDelay);
+      return;
+    }
+
+    for (const queue of voiceModelQueues.values()) {
+      const next = queue.shift();
+      if (next) {
+        setTimeout(next, releaseDelay);
+        return;
+      }
+    }
+    return;
+  }
 
   const samePriorityQueue = getPriorityModelQueue(modelKey);
   const samePriority = samePriorityQueue.shift();
@@ -1013,6 +1068,42 @@ function releaseNextQueued(modelKey: string): void {
 
 async function withConcurrencyLimit<T>(modelName: string, fn: () => Promise<T>, priority = false): Promise<T> {
   const modelKey = normalizeModelKey(modelName);
+  const useVoiceLane = priority && VOICE_DEDICATED_LANE_ENABLED;
+
+  if (useVoiceLane) {
+    const voiceModelCap = Math.max(1, getVoiceModelConcurrencyCap(modelName));
+    const voiceGlobalCap = Math.max(1, MAX_CONCURRENT_VOICE);
+
+    await waitForRateLimit();
+    while (activeVoiceClaude >= voiceGlobalCap || (activeVoiceByModel.get(modelKey) || 0) >= voiceModelCap) {
+      if (activeVoiceClaude >= voiceGlobalCap) {
+        await new Promise<void>((resolve) => voiceClaudeQueue.push(resolve));
+      } else {
+        await new Promise<void>((resolve) => getVoiceModelQueue(modelKey).push(resolve));
+      }
+      await waitForRateLimit();
+    }
+
+    await waitForModelPace(modelName, true, 'voice');
+
+    activeVoiceClaude++;
+    activeVoiceByModel.set(modelKey, (activeVoiceByModel.get(modelKey) || 0) + 1);
+
+    try {
+      return await fn();
+    } finally {
+      activeVoiceClaude--;
+      const remainingVoiceModel = Math.max(0, (activeVoiceByModel.get(modelKey) || 0) - 1);
+      if (remainingVoiceModel === 0) {
+        activeVoiceByModel.delete(modelKey);
+      } else {
+        activeVoiceByModel.set(modelKey, remainingVoiceModel);
+      }
+      voiceModelNextAllowedAt.set(modelKey, Date.now() + getVoiceModelPaceMs(modelName));
+      releaseNextQueued(modelKey, 'voice');
+    }
+  }
+
   const modelCap = getModelConcurrencyCap(modelName);
   const isFlash = !modelKey.includes('pro');
   const reservedSlots = priority || !isFlash ? 0 : Math.max(0, RESERVED_FLASH_PRIORITY_SLOTS);
@@ -1029,7 +1120,7 @@ async function withConcurrencyLimit<T>(modelName: string, fn: () => Promise<T>, 
     await waitForRateLimit();
   }
 
-  await waitForModelPace(modelName, priority);
+  await waitForModelPace(modelName, priority, 'text');
 
   activeClaude++;
   activeByModel.set(modelKey, (activeByModel.get(modelKey) || 0) + 1);
@@ -1045,7 +1136,7 @@ async function withConcurrencyLimit<T>(modelName: string, fn: () => Promise<T>, 
       activeByModel.set(modelKey, remainingModel);
     }
     modelNextAllowedAt.set(modelKey, Date.now() + (priority ? getPriorityModelPaceMs(modelName) : getModelPaceMs(modelName)));
-    releaseNextQueued(modelKey);
+    releaseNextQueued(modelKey, 'text');
   }
 }
 
@@ -1459,6 +1550,7 @@ RUNTIME EFFICIENCY:
         usageTelemetry.outputTokens,
         {
           modelName: currentModelName,
+          agentLabel: agent.name,
           cacheCreationInputTokens: usageTelemetry.cacheCreationInputTokens,
           cacheReadInputTokens: usageTelemetry.cacheReadInputTokens,
           promptBreakdown: pendingPromptBreakdown,
@@ -1489,6 +1581,7 @@ RUNTIME EFFICIENCY:
       usageTelemetry.outputTokens,
       {
         modelName: currentModelName,
+        agentLabel: agent.name,
         cacheCreationInputTokens: usageTelemetry.cacheCreationInputTokens,
         cacheReadInputTokens: usageTelemetry.cacheReadInputTokens,
         promptBreakdown: pendingPromptBreakdown,
@@ -1835,7 +1928,7 @@ export async function summarizeCall(
   recordClaudeUsage(
     result.response.usageMetadata?.promptTokenCount || 0,
     result.response.usageMetadata?.candidatesTokenCount || 0,
-    GEMINI_FLASH,
+    { modelName: GEMINI_FLASH, agentLabel: 'system:voice-summary' },
   );
   return result.response.text() || 'Could not generate summary.';
 }
@@ -1900,7 +1993,7 @@ Keep the summary under 700 words. Use bullet points. Drop small talk and redunda
   recordClaudeUsage(
     result.response.usageMetadata?.promptTokenCount || 0,
     result.response.usageMetadata?.candidatesTokenCount || 0,
-    GEMINI_FLASH,
+    { modelName: GEMINI_FLASH, agentLabel: `system:memory:${agentId}` },
   );
   return result.response.text() || existingSummary || 'Could not generate summary.';
 }

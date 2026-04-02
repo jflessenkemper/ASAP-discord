@@ -56,6 +56,7 @@ export interface PromptBreakdown {
 
 export interface ClaudeUsageAttribution {
   modelName?: string;
+  agentLabel?: string;
   cacheReadInputTokens?: number;
   cacheCreationInputTokens?: number;
   promptBreakdown?: PromptBreakdown;
@@ -91,6 +92,7 @@ const USAGE_DB_KEY = 'usage-counters-v1';
 let usageLoaded = false;
 let usageDirty = false;
 let usageWriteTimer: ReturnType<typeof setTimeout> | null = null;
+let costChannel: TextChannel | null = null;
 
 function markUsageDirty(): void {
   usageDirty = true;
@@ -245,6 +247,7 @@ export function recordClaudeUsage(
     ? { modelName: modelNameOrAttribution }
     : (modelNameOrAttribution || {});
   const modelName = attribution.modelName;
+  const agentLabel = attribution.agentLabel || 'system';
 
   usage.claudeInputTokens += inputTokens;
   usage.claudeOutputTokens += outputTokens;
@@ -273,6 +276,17 @@ export function recordClaudeUsage(
   usage.promptToolsChars += asNonNegativeInt(prompt.toolsChars);
   usage.promptUserChars += asNonNegativeInt(prompt.userChars);
   usage.promptToolResultChars += asNonNegativeInt(prompt.toolResultChars);
+
+  if (costChannel) {
+    const reqCost = estimateRequestCostUsd(modelName, inputTokens, outputTokens);
+    const budget = getRemainingBudget();
+    const modelLabel = modelName || 'unknown-model';
+    const line =
+      `💸 **${agentLabel}** • ${modelLabel}\n` +
+      `in=${inputTokens.toLocaleString()} out=${outputTokens.toLocaleString()} • est **$${reqCost.toFixed(4)}**\n` +
+      `today **$${budget.spent.toFixed(4)} / $${budget.limit.toFixed(2)}**`;
+    void costChannel.send(line.slice(0, 1900)).catch(() => {});
+  }
 
   markUsageDirty();
 }
@@ -412,6 +426,15 @@ const GEMINI_TEXT_OUTPUT_COST_PER_M = parseFloat(process.env.GEMINI_TEXT_OUTPUT_
 const GEMINI_COST_PER_CALL = parseFloat(process.env.GEMINI_COST_PER_CALL || '0.0001');
 // ElevenLabs — depends on plan, approximate per character.
 const ELEVENLABS_COST_PER_CHAR = parseFloat(process.env.ELEVENLABS_COST_PER_CHAR || '0.00018');
+
+function estimateRequestCostUsd(modelName: string | undefined, inputTokens: number, outputTokens: number): number {
+  if (isAnthropicModelName(modelName)) {
+    return (inputTokens / 1_000_000) * CLAUDE_INPUT_COST_PER_M +
+      (outputTokens / 1_000_000) * CLAUDE_OUTPUT_COST_PER_M;
+  }
+  return (inputTokens / 1_000_000) * GEMINI_TEXT_INPUT_COST_PER_M +
+    (outputTokens / 1_000_000) * GEMINI_TEXT_OUTPUT_COST_PER_M;
+}
 
 function estimateDailyCost(): { claude: number; gemini: number; elevenLabs: number; total: number } {
   const claude =
@@ -605,6 +628,10 @@ let updateInterval: ReturnType<typeof setInterval> | null = null;
 
 export function setLimitsChannel(channel: TextChannel): void {
   limitsChannel = channel;
+}
+
+export function setCostChannel(channel: TextChannel | null): void {
+  costChannel = channel;
 }
 
 /**
