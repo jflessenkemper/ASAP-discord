@@ -41,6 +41,15 @@ const TOOL_ACTION_RE = /\b(?:run|read|search|grep|inspect|check|verify|edit|chan
 const SIMPLE_FAST_PATH_RE = /^(?:ok(?:ay)?|yes|no|thanks?|thank you|status|summary|summari[sz]e|what happened|why|how|help|ping|continue|proceed|looks good|sounds good)\b/i;
 const DIRECT_ANSWER_ONLY_RE = /^(?:ok(?:ay)?|yes|no|thanks?|thank you|understood|sounds good|what does|what is|why is|how does|explain|summari[sz]e|clarify)\b/i;
 
+function normalizePromptForHeuristics(userMessage: string): string {
+  return String(userMessage || '')
+    .replace(/^\[[^\]]+\]:\s*/, '')
+    .replace(/<@[!&]?\d+>/g, ' ')
+    .replace(/^(?:\[[^\]]+\]\s*)+/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 /**
  * High-stakes prompts for Ace where Pro quality is worth the cost.
  * Everything else defaults to Flash for cost efficiency.
@@ -51,18 +60,19 @@ function isHighStakesPrompt(userMessage: string): boolean {
 }
 
 function isCodeWorkPrompt(userMessage: string): boolean {
-  return CODE_WORK_RE.test(userMessage);
+  const normalized = normalizePromptForHeuristics(userMessage);
+  return CODE_WORK_RE.test(normalized);
 }
 
 function isSimpleFastPathPrompt(userMessage: string): boolean {
-  const trimmed = userMessage.replace(/\s+/g, ' ').trim();
+  const trimmed = normalizePromptForHeuristics(userMessage);
   if (!trimmed || trimmed.length > 220) return false;
   if (TOOL_ACTION_RE.test(trimmed) || isCodeWorkPrompt(trimmed)) return false;
   return SIMPLE_FAST_PATH_RE.test(trimmed) || trimmed.split(/\s+/).length <= 10;
 }
 
 function isDirectAnswerOnlyPrompt(userMessage: string): boolean {
-  const trimmed = userMessage.replace(/\s+/g, ' ').trim();
+  const trimmed = normalizePromptForHeuristics(userMessage);
   if (!trimmed || trimmed.length > 240) return false;
   if (TOOL_ACTION_RE.test(trimmed) || isCodeWorkPrompt(trimmed)) return false;
   return DIRECT_ANSWER_ONLY_RE.test(trimmed) || /^(?:who|what|why|how)\b/i.test(trimmed);
