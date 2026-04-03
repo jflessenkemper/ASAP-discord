@@ -41,6 +41,7 @@ const VOICE_CONTEXT_MESSAGE_MAX_CHARS = parseInt(process.env.VOICE_CONTEXT_MESSA
 const VOICE_CONTEXT_SUMMARY_MAX_CHARS = parseInt(process.env.VOICE_CONTEXT_SUMMARY_MAX_CHARS || '900', 10);
 const VOICE_FILLER_ONLY_RE = /^(?:uh+|um+|hmm+|mm+|ah+|er+|uh huh|huh|hmm okay|okay|ok|yeah|yep|nah|nope)[.!?\s]*$/i;
 const RILEY_WARM_PHRASES = ['One moment.', 'Let me check.', 'I am on it.', 'Here is what I found.', 'Done.'];
+const VOICE_TURN_WATCHDOG_MS = parseInt(process.env.VOICE_TURN_WATCHDOG_MS || '20000', 10);
 
 let voiceErrorChannel: TextChannel | null = null;
 
@@ -676,6 +677,25 @@ async function handleVoiceInput(transcription: VoiceTranscription): Promise<void
 
   let firstTokenLogged = false;
   let firstAudioLogged = false;
+  let sttFinalMs = Number.isFinite(transcription.sttLatencyMs) ? Number(transcription.sttLatencyMs) : -1;
+  let firstTokenMs = -1;
+  let firstAudioMs = -1;
+  let watchdogTimer: ReturnType<typeof setTimeout> | null = null;
+
+  const armTurnWatchdog = () => {
+    if (VOICE_TURN_WATCHDOG_MS <= 0) return;
+    watchdogTimer = setTimeout(() => {
+      if (!activeSession?.active) return;
+      if (activeSession.currentTurnId !== turnId) return;
+      void postVoiceStageLog(
+        'turn_watchdog',
+        `turn=${turnId} elapsed_ms=${Date.now() - turnStartMs} user=${transcription.username}`,
+        'warn'
+      );
+    }, VOICE_TURN_WATCHDOG_MS);
+  };
+
+  armTurnWatchdog();
 
   try {
     await postVoiceStageLog(
@@ -747,7 +767,8 @@ IMPORTANT: End on a complete sentence, never a fragment.${langHint}`;
           onPartialText: async (partialText) => {
             if (!firstTokenLogged && partialText.trim()) {
               firstTokenLogged = true;
-              await postVoiceStageLog('riley_first_token', `turn=${turnId} token_ms=${Date.now() - turnStartMs}`);
+              firstTokenMs = Date.now() - turnStartMs;
+              await postVoiceStageLog('riley_first_token', `turn=${turnId} token_ms=${firstTokenMs}`);
             }
             await rileyStreamer.onPartialText(partialText);
           },
@@ -794,7 +815,8 @@ IMPORTANT: End on a complete sentence, never a fragment.${langHint}`;
             () => {
               if (firstAudioLogged) return;
               firstAudioLogged = true;
-              void postVoiceStageLog('riley_first_audio', `turn=${turnId} audio_ms=${Date.now() - turnStartMs}`);
+              firstAudioMs = Date.now() - turnStartMs;
+              void postVoiceStageLog('riley_first_audio', `turn=${turnId} audio_ms=${firstAudioMs}`);
             }
           );
         }
@@ -919,9 +941,18 @@ IMPORTANT: End on a complete sentence, never a fragment.${langHint}`;
     }
   } finally {
     if (session.currentTurnId === turnId) {
+      if (watchdogTimer) {
+        clearTimeout(watchdogTimer);
+        watchdogTimer = null;
+      }
       if (!signal.aborted && session.turnStartedAt > 0) {
+        const totalMs = Date.now() - turnStartMs;
         console.log(`[VOICE] turn ${turnId} completed in ${Date.now() - session.turnStartedAt}ms`);
-        await postVoiceStageLog('turn_total', `turn=${turnId} total_ms=${Date.now() - turnStartMs}`);
+        await postVoiceStageLog('turn_total', `turn=${turnId} total_ms=${totalMs}`);
+        await postVoiceStageLog(
+          'turn_summary',
+          `turn=${turnId} user=${transcription.username} stt_ms=${sttFinalMs} token_ms=${firstTokenMs} audio_ms=${firstAudioMs} total_ms=${totalMs}`
+        );
       }
       session.currentAbortController = null;
       session.outputActive = false;
