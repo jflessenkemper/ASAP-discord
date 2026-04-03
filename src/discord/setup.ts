@@ -57,6 +57,13 @@ const LEGACY_ACCIDENTAL_CHANNELS = new Set([
   '-api',
 ]);
 
+const LEGACY_COMMAND_VOICE_CHANNELS = new Set([
+  'command',
+  '🎤-command',
+  'voice-command',
+  '🎤-voice-command',
+]);
+
 export interface BotChannels {
   agentChannels: Map<string, TextChannel>;
   groupchat: TextChannel;
@@ -137,7 +144,7 @@ async function deduplicateChannel(guild: Guild, name: string): Promise<TextChann
 
 /**
  * Set up all required channels in the guild, organized under categories:
- *   ASAP        — groupchat, command (voice)
+ *   ASAP        — groupchat, voice
  *   Agents      — per-agent work log channels
  *   Operations  — github, call-log, limits
  *
@@ -240,6 +247,17 @@ export async function setupChannels(guild: Guild): Promise<BotChannels> {
       type: ChannelType.GuildVoice,
       parent: catMain,
     });
+  }
+
+  for (const ch of guild.channels.cache.values()) {
+    if (ch.type !== ChannelType.GuildVoice) continue;
+    if (ch.id === voiceChannel.id) continue;
+    if (!LEGACY_COMMAND_VOICE_CHANNELS.has(ch.name)) continue;
+    try {
+      await ch.delete('Removing legacy command voice channel in favor of main voice channel');
+      console.log(`  Deleted legacy voice channel: ${ch.name}`);
+    } catch {
+    }
   }
 
   const agentChannels = new Map<string, TextChannel>();

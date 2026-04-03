@@ -37,7 +37,7 @@ export function setAgentChannelResolver(cb: (agentId: string) => TextChannel | n
 }
 
 /** Channels that must never be deleted by agents (canonical key form). */
-const PROTECTED_CHANNEL_KEYS = ['groupchat', 'command', 'github', 'call-log', 'limits', 'screenshots', 'url', 'terminal'];
+const PROTECTED_CHANNEL_KEYS = ['groupchat', 'voice', 'github', 'call-log', 'limits', 'screenshots', 'url', 'terminal'];
 
 function toChannelProtectionKey(name: string): string {
   return String(name || '').toLowerCase().replace(/^[^a-z0-9]+/, '');
@@ -409,7 +409,7 @@ export const REPO_TOOLS = [
   {
     name: 'delete_channel',
     description:
-      'Permanently delete a Discord channel by name. Cannot delete protected channels (groupchat, command, github, call-log, limits). NEVER use this for "reset/clear" requests — use clear_channel_messages instead.',
+      'Permanently delete a Discord channel by name. Cannot delete protected channels (groupchat, voice, github, call-log, limits). NEVER use this for "reset/clear" requests — use clear_channel_messages instead.',
     input_schema: {
       type: 'object' as const,
       properties: {
