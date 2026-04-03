@@ -14,6 +14,8 @@
  *   DISCORD_TEST_TIMEOUT_MS optional (default 90000 ms per agent)
  *   DISCORD_GROUPCHAT_ID    optional — override groupchat channel ID lookup
  *   DISCORD_SMOKE_PRE_CLEAR optional (default true) — clear message history in text/news/thread channels before each smoke run
+ *   DISCORD_SMOKE_PRE_CLEAR_MAX_MS optional (default 600000) — abort pre-clear if elapsed time exceeds this limit
+ *   DISCORD_SMOKE_PRE_CLEAR_PER_CHANNEL_MAX optional (default 500) — max messages deleted per channel during pre-clear
  */
 import 'dotenv/config';
 import { ChannelType, Client, GatewayIntentBits, Message, TextChannel } from 'discord.js';
@@ -35,6 +37,7 @@ interface CleanupStats {
   channelName: string;
   deleted: number;
   failed: number;
+  timedOut: boolean;
 }
 
 const AGENT_TESTS: AgentTestCase[] = [
@@ -125,6 +128,18 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function getPreClearMaxMs(): number {
+  const value = Number(process.env.DISCORD_SMOKE_PRE_CLEAR_MAX_MS ?? '600000');
+  if (!Number.isFinite(value) || value <= 0) return 600000;
+  return Math.min(Math.max(60_000, Math.floor(value)), 3_600_000);
+}
+
+function getPerChannelDeleteCap(): number {
+  const value = Number(process.env.DISCORD_SMOKE_PRE_CLEAR_PER_CHANNEL_MAX ?? '500');
+  if (!Number.isFinite(value) || value <= 0) return 500;
+  return Math.min(Math.max(50, Math.floor(value)), 5_000);
+}
+
 async function discordApi(token: string, url: string, options: RequestInit = {}, retry = 0): Promise<Response> {
   const headers = {
     Authorization: `Bot ${token}`,
@@ -143,6 +158,9 @@ async function discordApi(token: string, url: string, options: RequestInit = {},
 }
 
 async function preClearGuildChannels(token: string, guildId: string): Promise<CleanupStats[]> {
+  const startedAt = Date.now();
+  const maxElapsedMs = getPreClearMaxMs();
+  const perChannelCap = getPerChannelDeleteCap();
   const channelRes = await discordApi(token, `https://discord.com/api/v10/guilds/${guildId}/channels`);
   if (!channelRes.ok) {
     throw new Error(`Failed to list guild channels: ${channelRes.status}`);
@@ -153,11 +171,25 @@ async function preClearGuildChannels(token: string, guildId: string): Promise<Cl
   const results: CleanupStats[] = [];
 
   for (const channel of messageChannels) {
+    if (Date.now() - startedAt > maxElapsedMs) {
+      results.push({ channelName: channel.name, deleted: 0, failed: 0, timedOut: true });
+      continue;
+    }
+
     let deleted = 0;
     let failed = 0;
+    let timedOut = false;
     let before: string | undefined;
 
     while (true) {
+      if (Date.now() - startedAt > maxElapsedMs) {
+        timedOut = true;
+        break;
+      }
+      if (deleted >= perChannelCap) {
+        break;
+      }
+
       const qs = new URLSearchParams({ limit: '100' });
       if (before) qs.set('before', before);
 
@@ -171,6 +203,14 @@ async function preClearGuildChannels(token: string, guildId: string): Promise<Cl
       if (!Array.isArray(messages) || messages.length === 0) break;
 
       for (const msg of messages) {
+        if (Date.now() - startedAt > maxElapsedMs) {
+          timedOut = true;
+          break;
+        }
+        if (deleted >= perChannelCap) {
+          break;
+        }
+
         const delRes = await discordApi(token, `https://discord.com/api/v10/channels/${channel.id}/messages/${msg.id}`, { method: 'DELETE' });
         if (delRes.status === 204 || delRes.status === 200 || delRes.status === 404) {
           deleted += 1;
@@ -182,9 +222,13 @@ async function preClearGuildChannels(token: string, guildId: string): Promise<Cl
 
       before = messages[messages.length - 1]?.id;
       await sleep(200);
+
+      if (deleted >= perChannelCap || timedOut) {
+        break;
+      }
     }
 
-    results.push({ channelName: channel.name, deleted, failed });
+    results.push({ channelName: channel.name, deleted, failed, timedOut });
   }
 
   return results;
@@ -298,7 +342,8 @@ async function run(): Promise<void> {
     const cleanup = await preClearGuildChannels(token, guildId);
     const totalDeleted = cleanup.reduce((sum, row) => sum + row.deleted, 0);
     const failures = cleanup.filter((row) => row.failed > 0).length;
-    console.log(`🧹 Cleanup done: channels=${cleanup.length} deleted=${totalDeleted} failed_channels=${failures}`);
+    const timedOut = cleanup.filter((row) => row.timedOut).length;
+    console.log(`🧹 Cleanup done: channels=${cleanup.length} deleted=${totalDeleted} failed_channels=${failures} timeout_channels=${timedOut}`);
   }
 
   const groupchat = findGroupchat(guild);

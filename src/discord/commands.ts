@@ -19,13 +19,29 @@ export async function registerCommands(client: Client, guildId: string): Promise
       sub
         .setName('threads')
         .setDescription('Thread status snapshot')
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName('deploy-checklist')
+        .setDescription('Riley pre/post deploy checklist for reliable releases')
+        .addStringOption((opt) =>
+          opt
+            .setName('phase')
+            .setDescription('Checklist phase')
+            .setRequired(false)
+            .addChoices(
+              { name: 'pre', value: 'pre' },
+              { name: 'post', value: 'post' },
+              { name: 'full', value: 'full' },
+            )
+        )
     );
 
   try {
     await rest.put(Routes.applicationGuildCommands(client.user!.id, guildId), {
       body: [ops.toJSON()],
     });
-    console.log('Registered guild slash commands: /ops now|costs|threads');
+    console.log('Registered guild slash commands: /ops now|costs|threads|deploy-checklist');
   } catch (err) {
     console.error('Slash command registration error:', err instanceof Error ? err.message : 'Unknown');
   }

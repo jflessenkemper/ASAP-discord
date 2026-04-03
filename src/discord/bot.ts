@@ -294,6 +294,13 @@ export async function stopBot(): Promise<void> {
 async function handleOpsInteraction(interaction: ChatInputCommandInteraction): Promise<void> {
   const view = interaction.options.getSubcommand(true);
 
+  if (view === 'deploy-checklist') {
+    const phase = interaction.options.getString('phase') || 'full';
+    const content = buildDeployChecklist(phase);
+    await interaction.reply({ content: content.slice(0, 1900), ephemeral: true });
+    return;
+  }
+
   if (view === 'costs') {
     await interaction.reply({
       content: `💸 Ops costs\n${getCostOpsSummaryLine()}\n${getUsageReport().split('\n')[1] || ''}`.slice(0, 1900),
@@ -316,4 +323,28 @@ async function handleOpsInteraction(interaction: ChatInputCommandInteraction): P
   const liveLine = getUsageReport().split('\n')[1] || '';
   const payload = `📡 Ops now\n${costLine}\n${liveLine}\n${threadLine}`;
   await interaction.reply({ content: payload.slice(0, 1900), ephemeral: true });
+}
+
+function buildDeployChecklist(phase: string): string {
+  const pre = [
+    '🧰 PRE-DEPLOY',
+    '1) Build/typecheck: npm run build',
+    '2) Quality: npm run quality:app && (cd server && npm run quality)',
+    '3) Security quick-pass: npm run security:semgrep && (cd server && npm run security:semgrep)',
+    '4) Confirm env/secrets present for deploy target',
+    '5) Commit + push with release notes and rollback commit hash',
+  ];
+
+  const post = [
+    '✅ POST-DEPLOY',
+    '1) Restart process and verify online status',
+    '2) Run full Discord smoke suite (pre-clear enabled)',
+    '3) Check /ops now + /ops threads + /ops costs outputs',
+    '4) Confirm error channels stayed quiet (voice-errors, agent-errors)',
+    '5) If failed: rollback immediately to previous known-good commit',
+  ];
+
+  if (phase === 'pre') return pre.join('\n');
+  if (phase === 'post') return post.join('\n');
+  return [...pre, '', ...post].join('\n');
 }
