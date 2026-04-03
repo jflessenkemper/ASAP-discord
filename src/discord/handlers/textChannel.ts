@@ -242,6 +242,9 @@ export async function sendAgentMessage(
   }
 
   const rendered = renderAgentMessage(response);
+  if (!rendered.trim()) {
+    return;
+  }
   const chunks = splitMessage(rendered, 1900);
 
   try {
