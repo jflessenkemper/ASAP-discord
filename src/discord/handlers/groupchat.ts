@@ -53,6 +53,8 @@ let claudeNotificationsBoundChannelId: string | null = null;
 const MAX_PARALLEL_SUBAGENTS = parseInt(process.env.MAX_PARALLEL_SUBAGENTS || '1', 10);
 const SUBAGENT_MAX_TOKENS = parseInt(process.env.SUBAGENT_MAX_TOKENS || '900', 10);
 const GROUPCHAT_PROCESS_TIMEOUT_MS = parseInt(process.env.GROUPCHAT_PROCESS_TIMEOUT_MS || '120000', 10);
+const RILEY_NO_RESPONSE_TIMEOUT_MS = parseInt(process.env.RILEY_NO_RESPONSE_TIMEOUT_MS || '45000', 10);
+const DIRECT_GROUPCHAT_SHORT_PROMPT_MAX_WORDS = parseInt(process.env.DIRECT_GROUPCHAT_SHORT_PROMPT_MAX_WORDS || '18', 10);
 
 // Active goal tracking for /status
 let activeGoal: string | null = null;
@@ -92,6 +94,22 @@ function compactAuditField(value: string | undefined | null, maxLen = 80): strin
   const normalized = (value || 'n/a').replace(/\s+/g, ' ').trim();
   if (normalized.length <= maxLen) return normalized;
   return `${normalized.slice(0, maxLen - 1)}…`;
+}
+
+function normalizeDirectedPrompt(prompt: string): string {
+  return String(prompt || '')
+    .replace(/<@[!&]?\d+>/g, ' ')
+    .replace(/^(?:\[[^\]]+\]\s*)+/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function shouldEchoDirectedResponseToGroupchat(agentIds: string[], userMessage: string): boolean {
+  if (agentIds.length !== 1 || agentIds[0] !== 'developer') return false;
+  const normalized = normalizeDirectedPrompt(userMessage);
+  if (!normalized) return false;
+  if (normalized.length > 180) return false;
+  return normalized.split(/\s+/).length <= DIRECT_GROUPCHAT_SHORT_PROMPT_MAX_WORDS;
 }
 
 async function sendAutopilotAudit(
@@ -1066,7 +1084,24 @@ async function handleRileyMessage(
   const rileyWorkChannel = getAgentWorkChannel('executive-assistant', groupchat);
 
   let stopTyping: () => void = () => {};
+  let hasVisibleRileyResponse = false;
+  let noResponseTimer: NodeJS.Timeout | null = null;
   try {
+    noResponseTimer = setTimeout(() => {
+      if (hasVisibleRileyResponse || signal?.aborted) return;
+      const seconds = Math.round(RILEY_NO_RESPONSE_TIMEOUT_MS / 1000);
+      const timeoutText = `⚠️ Riley has not responded in ${seconds}s for this goal. The run may be stalled; timeout safeguards are active.`;
+      void sendAgentMessage(workspaceChannel, riley, timeoutText).catch(() => {});
+      if (workspaceChannel.id !== groupchat.id) {
+        void groupchat.send(timeoutText).catch(() => {});
+      }
+      void postAgentErrorLog('riley:timeout', 'No Riley response within timeout', {
+        agentId: 'executive-assistant',
+        detail: `goal=${activeGoal || 'none'} timeoutMs=${RILEY_NO_RESPONSE_TIMEOUT_MS}`,
+        level: 'warn',
+      });
+    }, RILEY_NO_RESPONSE_TIMEOUT_MS);
+
     stopTyping = startTypingLoop(rileyWorkChannel);
     await setThinkingMessage(rileyWorkChannel, riley);
 
@@ -1134,6 +1169,7 @@ async function handleRileyMessage(
     // immediately so channel history and the thread stay in sync even if later
     // delegated work stalls or errors.
     if (!signal?.aborted && displayResponse) {
+      hasVisibleRileyResponse = true;
       await sendAgentMessage(rileyWorkChannel, riley, displayResponse);
       if (workspaceChannel.id !== rileyWorkChannel.id) {
         await sendAgentMessage(workspaceChannel, riley, displayResponse);
@@ -1155,6 +1191,7 @@ async function handleRileyMessage(
     });
     const short = errMsg.length > 200 ? errMsg.slice(0, 200) + '…' : errMsg;
     try {
+      hasVisibleRileyResponse = true;
       const wh = await getWebhook(workspaceChannel);
       await wh.send({
         content: `⚠️ Riley encountered an error:\n\`\`\`${short}\`\`\``,
@@ -1166,6 +1203,7 @@ async function handleRileyMessage(
       await fallback.send(`⚠️ Riley encountered an error:\n\`\`\`${short}\`\`\``).catch(() => {});
     }
   } finally {
+    if (noResponseTimer) clearTimeout(noResponseTimer);
     await clearThinkingMessage().catch(() => {});
     stopTyping();
   }
@@ -1786,6 +1824,7 @@ async function handleDirectedMessage(
   const contextMessage = `[${senderName}]: ${userMessage}`;
   markGoalProgress('🎯 Direct specialist routing...');
   groupchat.sendTyping().catch(() => {});
+  const echoToGroupchat = shouldEchoDirectedResponseToGroupchat(agentIds, userMessage);
 
   const validAgents = agentIds
     .map((id) => ({ id, agent: getAgent(id as AgentId) }))
@@ -1795,13 +1834,21 @@ async function handleDirectedMessage(
     validAgents.map(({ id, agent }) => async () => {
       if (signal?.aborted) return;
       const outChannel = getAgentWorkChannel(id, groupchat);
-      await dispatchToAgent(id as AgentId, contextMessage, outChannel, {
+      const agentResponse = await dispatchToAgent(id as AgentId, contextMessage, outChannel, {
         maxTokens: SUBAGENT_MAX_TOKENS,
         memoryWindow: 6,
         signal,
         documentLine: `Direct @mention from ${senderName}: {response}`,
         workspaceChannel,
       });
+
+      if (signal?.aborted) return;
+      if (echoToGroupchat) {
+        const compact = agentResponse.replace(/\s+/g, ' ').trim().slice(0, 600);
+        if (compact) {
+          await sendAgentMessage(groupchat, agent, compact);
+        }
+      }
 
       if (signal?.aborted) return;
     }),
