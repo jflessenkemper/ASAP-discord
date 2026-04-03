@@ -2438,7 +2438,7 @@ RUNTIME EFFICIENCY:
 
   if (!options?.safetyCapSynthesisUsed) {
     const synthesisPrompt = agent.id === 'executive-assistant'
-      ? `${userMessage}\n\n[System note: tool safety cap reached. Do not use tools. In one concise response, summarize what was completed, what evidence was gathered, what remains open, and finish with Next steps.]`
+      ? `${userMessage}\n\n[System note: tool safety cap reached. Do not use tools. In one concise response, summarize current status and evidence gathered. CRITICAL: do not claim work is complete unless evidence is checkable from runtime artifacts (screenshots, harness snapshots, or puppeteer/playwright-style output). If that evidence is missing, explicitly say verification is pending and list what remains open. Finish with Next steps.]`
       : `${userMessage}\n\n[System note: tool safety cap reached. Do not use tools. Return a concise completion summary using this exact format:\nResult: <one sentence>\nEvidence: <files/checks/outcome>\nRisk/Follow-up: <one sentence>.]`;
     logAgentEvent(agent.id, 'response', `Starting final no-tools synthesis after tool cap (${maxToolRounds} rounds)`);
     return agentRespond(

@@ -1346,7 +1346,7 @@ async function handleRileyMessage(
     if (signal?.aborted) return;
     await clearThinkingMessage();
 
-    const displayResponse = appendDefaultNextSteps(
+    let displayResponse = appendDefaultNextSteps(
       response.replace(/\[\s*action:[^\]]+\]/gi, '').trim()
     );
     markGoalProgress('🧭 Riley coordinating...');
@@ -1376,6 +1376,17 @@ async function handleRileyMessage(
     await executeActions(actionPayload, member, groupchat, workspaceChannel);
     markGoalProgress();
 
+    const verificationRequired = goalNeedsRuntimeVerification(activeGoal || userMessage || response);
+    const completionClaimed = isCompletionClaim(displayResponse);
+    let completionVerified = true;
+    if (verificationRequired && completionClaimed) {
+      const evidenceSince = Math.max(Date.now() - 2 * 60 * 60 * 1000, activeGoalStartedAt - 60_000);
+      completionVerified = await hasRecentRuntimeVerificationEvidence(groupchat, workspaceChannel, evidenceSince);
+      if (!completionVerified) {
+        displayResponse = '⏳ Verification pending: I cannot mark this as complete yet because there is no checkable runtime evidence in screenshots/harness output. I will keep this open until proof is posted.';
+      }
+    }
+
     if (displayResponse.includes('🛑') || displayResponse.includes('Decision Required')) {
       const target = decisionsChannel || groupchat;
       postDecisionEmbed(target, groupchat, displayResponse).catch(() => {});
@@ -1389,7 +1400,7 @@ async function handleRileyMessage(
       if (workspaceChannel.id !== rileyWorkChannel.id) {
         await sendAgentMessage(workspaceChannel, riley, displayResponse);
       }
-      if (shouldMirrorCompletionToGroupchat(displayResponse, workspaceChannel, groupchat)) {
+      if (completionClaimed && completionVerified && shouldMirrorCompletionToGroupchat(displayResponse, workspaceChannel, groupchat)) {
         await sendAgentMessage(groupchat, riley, `✅ Completion update: ${displayResponse}`);
       }
     }
@@ -1646,12 +1657,12 @@ async function executeActions(
           break;
         }
         case 'CLOSE_THREAD': {
-          const goalRequiresMapEvidence = requiresMapScreenshotEvidence(activeGoal || '');
-          if (goalRequiresMapEvidence) {
+          const goalNeedsEvidence = goalNeedsRuntimeVerification(activeGoal || '');
+          if (goalNeedsEvidence) {
             const evidenceSince = Math.max(Date.now() - 2 * 60 * 60 * 1000, activeGoalStartedAt - 60_000);
-            const hasMapEvidence = await hasRecentMapScreenshotEvidence(evidenceSince);
-            if (!hasMapEvidence) {
-              await sendAsRiley('🛑 Cannot close this thread yet. Required map screenshot evidence was not found in #📸-screenshots. Please run [ACTION:SCREENSHOTS] and include the map screen capture first.');
+            const hasEvidence = await hasRecentRuntimeVerificationEvidence(groupchat, workspaceChannel, evidenceSince);
+            if (!hasEvidence) {
+              await sendAsRiley('🛑 Cannot close this thread yet. Runtime verification evidence is missing. Please provide checkable proof via screenshots or mobile harness/puppeteer output before closing.');
               break;
             }
           }
@@ -1851,36 +1862,66 @@ function appendDefaultNextSteps(text: string): string {
   return `${text.trim()}\n\nNext steps:\n1. Run a focused smoke test on the changed flow and confirm expected output.\n2. If results look good, deploy and post the release/check links.\n3. If you want, I can also add a regression guard so this does not recur.`;
 }
 
-function requiresMapScreenshotEvidence(text: string): boolean {
+function goalNeedsRuntimeVerification(text: string): boolean {
   const normalized = String(text || '').toLowerCase();
   if (!normalized.trim()) return false;
-  const mentionsMap = /\bmap\b|screen2-map|dive\s*in/.test(normalized);
-  const mentionsProof = /\bscreenshot|evidence|verify|verification|prove|proof|smoke\b/.test(normalized);
-  return mentionsMap && mentionsProof;
+  if (/\bstatus\b|\bthreads?\b|\busage\b|\blimits\b|\bhealth\b|\burls?\b|\blink\b/.test(normalized)) return false;
+  return /\bfix|implement|update|change|refactor|remove|add|build|ship|deploy|feature|bug|ui|screen|flow\b/.test(normalized);
 }
 
-async function hasRecentMapScreenshotEvidence(sinceTs: number): Promise<boolean> {
+function isCompletionClaim(text: string): boolean {
+  const normalized = String(text || '').toLowerCase();
+  return /(done|completed|complete|fixed|resolved|implemented|deployed|shipped|finished|ready)/.test(normalized);
+}
+
+function hasInteractiveEvidenceText(content: string): boolean {
+  const normalized = String(content || '').toLowerCase();
+  return /harness snapshot|mobile harness|capture screenshots|screenshots captured|puppeteer|playwright|visual verification|interactive flow verification|verified in app/.test(normalized);
+}
+
+async function fetchRecentMessages(channel: any, limit = 60): Promise<Message[]> {
+  if (!channel || !('messages' in channel) || !channel.messages?.fetch) return [];
+  try {
+    const fetched = await channel.messages.fetch({ limit });
+    return [...fetched.values()] as Message[];
+  } catch {
+    return [];
+  }
+}
+
+async function hasRecentRuntimeVerificationEvidence(
+  groupchat: TextChannel,
+  workspaceChannel: WebhookCapableChannel,
+  sinceTs: number
+): Promise<boolean> {
   const channels = getBotChannels();
-  const screenshots = channels?.screenshots;
-  if (!screenshots) return false;
+  const rileyChannel = getAgentWorkChannel('executive-assistant', groupchat);
+  const candidates = [channels?.screenshots, workspaceChannel, rileyChannel].filter(Boolean);
 
   try {
-    const recent = await screenshots.messages.fetch({ limit: 60 });
-    for (const msg of recent.values()) {
-      if (msg.createdTimestamp < sinceTs) continue;
-      const content = String(msg.content || '').toLowerCase();
-      if (/map[-\s]?screen|map[-\s]?dashboard|dive\s*in\s*map|verification.*map/.test(content)) {
-        return true;
-      }
-      for (const attachment of msg.attachments.values()) {
-        const name = String(attachment.name || '').toLowerCase();
-        if (/map[-\s]?screen|map[-\s]?dashboard|dive[-\s]?in[-\s]?map|\bmap\b.*\.png/.test(name)) {
+    for (const candidate of candidates) {
+      const recent = await fetchRecentMessages(candidate, 60);
+      for (const msg of recent) {
+        if (msg.createdTimestamp < sinceTs) continue;
+        if (msg.attachments?.size > 0) {
           return true;
+        }
+
+        const content = String(msg.content || '');
+        if (hasInteractiveEvidenceText(content)) {
+          return true;
+        }
+
+        for (const attachment of msg.attachments.values()) {
+          const name = String(attachment.name || '').toLowerCase();
+          if (/\.(png|jpg|jpeg|webp)$/.test(name)) {
+            return true;
+          }
         }
       }
     }
   } catch (err) {
-    console.warn('Could not verify map screenshot evidence:', err instanceof Error ? err.message : 'Unknown');
+    console.warn('Could not verify runtime evidence:', err instanceof Error ? err.message : 'Unknown');
   }
 
   return false;
@@ -1891,7 +1932,8 @@ function shouldMirrorCompletionToGroupchat(text: string, workspaceChannel: Webho
   const normalized = String(text || '').toLowerCase();
   if (!normalized.trim()) return false;
   if (/decision\s+required|\bblocked\b|waiting\s+for\s+(?:approval|input)|need\s+approval/.test(normalized)) return false;
-  return /(done|completed|complete|fixed|resolved|implemented|deployed|shipped|finished|ready)/.test(normalized);
+  if (/\breceived\b|\bstarting\b|\bworking\b|\bplan\b|\bwill\b|\bin progress\b|\bongoing\b/.test(normalized)) return false;
+  return isCompletionClaim(normalized);
 }
 
 function buildChainCompletionWatchdogMessage(findings: string[], errors: string[]): string {
@@ -2012,7 +2054,7 @@ async function handleAgentChain(
   const consolidatedFindings: string[] = [];
   const consolidatedErrors: string[] = [];
   const rileyAlreadyCompletion = /(done|completed|complete|fixed|resolved|implemented|deployed|shipped|finished|ready)/i.test(rileyResponse);
-  const needsMapEvidence = requiresMapScreenshotEvidence(`${activeGoal || ''}\n${rileyResponse}`);
+  const needsRuntimeEvidence = goalNeedsRuntimeVerification(`${activeGoal || ''}\n${rileyResponse}`);
   if (aceDirected) {
     const ace = getAgent('developer' as AgentId);
     if (ace) {
@@ -2128,14 +2170,14 @@ async function handleAgentChain(
     consolidatedErrors.push(...recovered.errors);
   }
 
-  if (!signal?.aborted && needsMapEvidence) {
+  if (!signal?.aborted && needsRuntimeEvidence) {
     const evidenceSince = Math.max(Date.now() - 2 * 60 * 60 * 1000, activeGoalStartedAt - 60_000);
-    const hasMapEvidence = await hasRecentMapScreenshotEvidence(evidenceSince);
-    if (!hasMapEvidence) {
-      consolidatedErrors.push('Required map screenshot evidence is missing in #📸-screenshots (expected map-screen/map-dashboard capture).');
+    const hasEvidence = await hasRecentRuntimeVerificationEvidence(groupchat, workspaceChannel, evidenceSince);
+    if (!hasEvidence) {
+      consolidatedErrors.push('Required runtime verification evidence is missing (screenshots or mobile harness/puppeteer output).');
       const riley = getAgent('executive-assistant' as AgentId);
       if (riley) {
-        await sendAgentMessage(workspaceChannel, riley, '🛑 Completion gate: map screenshot evidence is required but missing. I will keep this thread open until screenshots include the map screen (for example, 03-map-screen / 04-map-dashboard).');
+        await sendAgentMessage(workspaceChannel, riley, '🛑 Completion gate: runtime verification evidence is required but missing. I will keep this thread open until checkable proof is posted (screenshots or harness/puppeteer output).');
       }
     }
   }
