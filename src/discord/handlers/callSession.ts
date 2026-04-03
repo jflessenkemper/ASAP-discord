@@ -23,6 +23,7 @@ const VOICE_DISCONNECT_GRACE_MS = 45 * 1000;
 /** Max conversation history in a call */
 const MAX_CALL_HISTORY = 40;
 const VOICE_PREFLIGHT_TIMEOUT_MS = parseInt(process.env.VOICE_PREFLIGHT_TIMEOUT_MS || '15000', 10);
+const VOICE_STARTUP_SELFTEST_ENABLED = String(process.env.VOICE_STARTUP_SELFTEST_ENABLED || 'false').toLowerCase() === 'true';
 const VOICE_MAX_TOKENS_RILEY = parseInt(process.env.VOICE_MAX_TOKENS_RILEY || '220', 10);
 const VOICE_MAX_TOKENS_ACE = parseInt(process.env.VOICE_MAX_TOKENS_ACE || '180', 10);
 const VOICE_MAX_TOKENS_SPECIALIST = parseInt(process.env.VOICE_MAX_TOKENS_SPECIALIST || '140', 10);
@@ -484,63 +485,6 @@ export async function startCall(
     }
   }, HEARTBEAT_INTERVAL);
 
-  const riley = getAgent('executive-assistant' as AgentId);
-
-  activeSession.transcript.push(
-    `[${new Date().toLocaleTimeString()}] Call started by ${initiator.displayName}`
-  );
-
-  const preflightStartMs = Date.now();
-  try {
-    const checkAudio = await withTimeout(
-      textToSpeech(`Hello ${initiator.displayName}.`),
-      VOICE_PREFLIGHT_TIMEOUT_MS,
-      'TTS preflight'
-    );
-    await withTimeout(speakInVC(checkAudio), VOICE_PREFLIGHT_TIMEOUT_MS, 'Voice playback preflight');
-    await postDiagnostic('Voice self-test passed at call start.', {
-      level: 'info',
-      source: 'callSession.startCall',
-      detail: `Channel=${voiceChannel.name} Initiator=${initiator.displayName}`,
-    });
-    await postVoiceStageLog('preflight_ok', `tts_playback_ms=${Date.now() - preflightStartMs}`);
-
-    const sttNote = isDeepgramAvailable()
-      ? ''
-      : '\n⚠️ Real-time STT unavailable (Deepgram not configured) — using Gemini batch mode (~1-2s latency).';
-    await sendAsAgent(
-      groupchat,
-      `✅ **Voice call started**\n` +
-        `Initiated by **${initiator.displayName}**\n` +
-        `${riley?.emoji || '📋'} **Riley** is on the line and listening now.\n\n` +
-        `Speak in **${voiceChannel.name}**. Say "leave" or ask Riley to end the call.${sttNote}`
-    );
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : 'Unknown error';
-    console.error('Voice output self-test failed:', msg);
-    await postVoiceStageLog('preflight_failed', `ms=${Date.now() - preflightStartMs} error=${msg}`, 'error');
-    await postDiagnostic('Voice self-test failed.', {
-      level: 'error',
-      source: 'callSession.startCall',
-      detail: msg,
-    });
-    await sendAsAgent(
-      groupchat,
-      `⚠️ Voice preflight failed: ${msg}. I am leaving voice so you are not stuck waiting on silence.`
-    );
-    leaveVC();
-    recordVoiceCallEnd();
-    if (activeSession?.heartbeatTimer) {
-      clearInterval(activeSession.heartbeatTimer);
-    }
-    activeSession = null;
-    return;
-  }
-
-  await postVoiceStageLog('call_started', `channel=${voiceChannel.name} total_startup_ms=${Date.now() - callStartMs}`);
-  if (riley) {
-    primeElevenLabsVoiceCache(riley.voice, RILEY_WARM_PHRASES).catch(() => {});
-  }
   const unsub = listenToAllMembersSmart(
     connection,
     voiceChannel,
@@ -573,6 +517,58 @@ export async function startCall(
   activeSession.unsubscribers.push(() => {
     connection.receiver.speaking.off('start', onSpeakingStart);
   });
+
+  const riley = getAgent('executive-assistant' as AgentId);
+
+  activeSession.transcript.push(
+    `[${new Date().toLocaleTimeString()}] Call started by ${initiator.displayName}`
+  );
+
+  const sttNote = isDeepgramAvailable()
+    ? ''
+    : '\n⚠️ Real-time STT unavailable (Deepgram not configured) — using Gemini batch mode (~1-2s latency).';
+  await sendAsAgent(
+    groupchat,
+    `✅ **Voice call started**\n` +
+      `Initiated by **${initiator.displayName}**\n` +
+      `${riley?.emoji || '📋'} **Riley** is on the line and listening now.\n\n` +
+      `Speak in **${voiceChannel.name}**. Say "leave" or ask Riley to end the call.${sttNote}`
+  );
+
+  if (VOICE_STARTUP_SELFTEST_ENABLED) {
+    const preflightStartMs = Date.now();
+    void (async () => {
+      try {
+        const checkAudio = await withTimeout(
+          textToSpeech(`Hello ${initiator.displayName}.`),
+          VOICE_PREFLIGHT_TIMEOUT_MS,
+          'TTS preflight'
+        );
+        if (!activeSession?.active) return;
+        await withTimeout(speakInVC(checkAudio), VOICE_PREFLIGHT_TIMEOUT_MS, 'Voice playback preflight');
+        await postDiagnostic('Voice self-test passed at call start.', {
+          level: 'info',
+          source: 'callSession.startCall',
+          detail: `Channel=${voiceChannel.name} Initiator=${initiator.displayName}`,
+        });
+        await postVoiceStageLog('preflight_ok', `tts_playback_ms=${Date.now() - preflightStartMs}`);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : 'Unknown error';
+        console.error('Voice output self-test failed:', msg);
+        await postVoiceStageLog('preflight_failed', `ms=${Date.now() - preflightStartMs} error=${msg}`, 'warn');
+        await postDiagnostic('Voice self-test failed.', {
+          level: 'warn',
+          source: 'callSession.startCall',
+          detail: msg,
+        });
+      }
+    })();
+  }
+
+  await postVoiceStageLog('call_started', `channel=${voiceChannel.name} total_startup_ms=${Date.now() - callStartMs}`);
+  if (riley) {
+    primeElevenLabsVoiceCache(riley.voice, RILEY_WARM_PHRASES).catch(() => {});
+  }
 }
 
 /**
@@ -906,10 +902,10 @@ IMPORTANT: End on a complete sentence, never a fragment.${langHint}`;
       }
 
       if (work.length > 0) {
-        await Promise.allSettled(work.map(async (task) => {
-          if (!isCurrentTurn()) return;
+        void Promise.allSettled(work.map(async (task) => {
+          if (!activeSession?.active) return;
           await task();
-        }));
+        })).catch(() => {});
       }
       } catch (err) {
         if (!isCurrentTurn()) return;
