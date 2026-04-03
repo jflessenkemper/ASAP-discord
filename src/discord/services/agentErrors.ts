@@ -1,4 +1,5 @@
 import { TextChannel } from 'discord.js';
+import { postOpsLine } from './opsFeed';
 
 interface AgentErrorExtra {
   agentId?: string;
@@ -6,7 +7,6 @@ interface AgentErrorExtra {
   level?: 'info' | 'warn' | 'error';
 }
 
-const MAX_DISCORD_CONTENT = 1900;
 let agentErrorChannel: TextChannel | null = null;
 
 export function setAgentErrorChannel(channel: TextChannel | null): void {
@@ -21,14 +21,22 @@ export async function postAgentErrorLog(
   if (!agentErrorChannel) return;
 
   const level = extra?.level || 'error';
-  const icon = level === 'error' ? '🚨' : level === 'warn' ? '⚠️' : 'ℹ️';
-  const agentLine = extra?.agentId ? `\nAgent: ${sanitize(extra.agentId, 120)}` : '';
-  const detailLine = extra?.detail ? `\nDetail: ${sanitize(extra.detail, 1400)}` : '';
-  const content = `${icon} **${sanitize(source, 120)}**\nMessage: ${sanitize(message, 900)}${agentLine}${detailLine}`;
+  const severity = level === 'error' ? 'error' : level === 'warn' ? 'warn' : 'info';
+  const detail = extra?.detail ? `detail=${sanitize(extra.detail, 420)}` : 'detail=none';
+  const action = severity === 'error'
+    ? 'inspect stack trace and recover service'
+    : severity === 'warn'
+      ? 'monitor and retry if recurring'
+      : 'none';
 
-  for (const chunk of splitMessage(content, MAX_DISCORD_CONTENT)) {
-    await agentErrorChannel.send(chunk).catch(() => {});
-  }
+  await postOpsLine(agentErrorChannel, {
+    actor: sanitize(extra?.agentId || 'system', 120),
+    scope: `agent-error:${sanitize(source, 80)}`,
+    metric: sanitize(message, 180),
+    delta: detail,
+    action,
+    severity,
+  });
 }
 
 function sanitize(value: string, maxLen: number): string {
@@ -41,14 +49,3 @@ function sanitize(value: string, maxLen: number): string {
     .slice(0, maxLen);
 }
 
-function splitMessage(text: string, maxLen: number): string[] {
-  if (text.length <= maxLen) return [text];
-
-  const chunks: string[] = [];
-  let start = 0;
-  while (start < text.length) {
-    chunks.push(text.slice(start, start + maxLen));
-    start += maxLen;
-  }
-  return chunks;
-}

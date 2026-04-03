@@ -3,6 +3,7 @@ import {
   GatewayIntentBits,
   Events,
   Partials,
+  ChatInputCommandInteraction,
 } from 'discord.js';
 import { setupChannels, BotChannels } from './setup';
 import { getAgentByChannelName } from './agents';
@@ -15,14 +16,24 @@ import { endCall, isCallActive } from './handlers/callSession';
 import { setVoiceErrorChannel } from './handlers/callSession';
 import { setBotChannels } from './handlers/documentation';
 import { setAgentErrorChannel, postAgentErrorLog } from './services/agentErrors';
-import { unregisterCommands } from './commands';
+import { registerCommands } from './commands';
 import { setGitHubChannel } from './handlers/github';
-import { setLimitsChannel, setCostChannel, startDashboardUpdates, stopDashboardUpdates, initUsageCounters, flushUsageCounters } from './usage';
+import { setLimitsChannel, setCostChannel, startDashboardUpdates, stopDashboardUpdates, initUsageCounters, flushUsageCounters, getUsageReport, getCostOpsSummaryLine } from './usage';
 import { flushPendingWrites, initMemory } from './memory';
 import { setScreenshotsChannel } from './services/screenshots';
 import { setTelephonyChannels, isTelephonyAvailable, initContacts } from './services/telephony';
 import { runModelHealthChecks } from './services/modelHealth';
+import { flushAllOpsDigests, postOpsLine } from './services/opsFeed';
+import { getThreadStatusOpsLine } from './handlers/groupchat';
 
+/**
+ * Discord runtime bootstrap.
+ *
+ * Responsibilities:
+ * 1) Resolve and wire channels/services at startup.
+ * 2) Route inbound messages to agent/groupchat handlers.
+ * 3) Keep shared callbacks (tool audit, PR review, usage dashboards) connected.
+ */
 let client: Client | null = null;
 let botChannels: BotChannels | null = null;
 
@@ -106,9 +117,15 @@ export async function startBot(): Promise<void> {
       setCommandAuditCallback((cmd, allowed, reason) => {
         const githubChannel = configuredChannels.github;
         if (!githubChannel) return;
-        const icon = allowed ? '✅' : '🚫';
         const truncated = cmd.length > 100 ? cmd.slice(0, 100) + '...' : cmd;
-        githubChannel.send(`${icon} [agent:system] run_command=${truncated.replace(/\s+/g, ' ')} reason=${reason.replace(/\s+/g, ' ')}`).catch(() => {});
+        void postOpsLine(githubChannel, {
+          actor: 'system',
+          scope: 'command-audit',
+          metric: `run-command allowed=${allowed}`,
+          delta: `${truncated.replace(/\s+/g, ' ')} reason=${reason.replace(/\s+/g, ' ')}`,
+          action: allowed ? 'none' : 'review blocked command request',
+          severity: allowed ? 'info' : 'warn',
+        });
       });
 
       let lastDbAuditPost = 0;
@@ -150,11 +167,25 @@ export async function startBot(): Promise<void> {
             : '';
           suppressedDbAudits = 0;
           lastDbAuditPost = now;
-          terminalChannel.send(`🧮 [agent:${tag}] tool=${toolName}${suppressedNote}`).catch(() => {});
+          void postOpsLine(terminalChannel, {
+            actor: tag,
+            scope: 'tool-audit:db',
+            metric: toolName,
+            delta: `batched${suppressedNote}`,
+            action: 'none',
+            severity: 'info',
+          });
           return;
         }
 
-        terminalChannel.send(`🔧 [agent:${tag}] tool=${toolName} ${summary.replace(/\s+/g, ' ').trim()}`).catch(() => {});
+        void postOpsLine(terminalChannel, {
+          actor: tag,
+          scope: 'tool-audit',
+          metric: toolName,
+          delta: summary.replace(/\s+/g, ' ').trim(),
+          action: 'none',
+          severity: 'info',
+        });
       });
 
       setPRReviewCallback(async (prNumber, prTitle, changedFiles, diffSummary) => {
@@ -162,7 +193,7 @@ export async function startBot(): Promise<void> {
       });
       console.log(`Discord channels configured in "${guild.name}"`);
 
-      await unregisterCommands(readyClient, guildId);
+      await registerCommands(readyClient, guildId);
     } catch (err) {
       const msg = err instanceof Error ? err.stack || err.message : 'Unknown';
       console.error('Channel setup error:', err instanceof Error ? err.message : 'Unknown');
@@ -174,6 +205,8 @@ export async function startBot(): Promise<void> {
   });
 
   client.on(Events.MessageCreate, async (message) => {
+    // Ignore bot traffic except the dedicated smoke-test bot so e2e tests can
+    // still exercise the same production routing path.
     const testerBotId = process.env.DISCORD_TESTER_BOT_ID || '1487426371209789450';
     if (message.author.bot && message.author.id !== testerBotId) return;
     if (!botChannels) return;
@@ -207,6 +240,22 @@ export async function startBot(): Promise<void> {
     }
   });
 
+  client.on(Events.InteractionCreate, async (interaction) => {
+    if (!interaction.isChatInputCommand()) return;
+    if (interaction.commandName !== 'ops') return;
+
+    try {
+      await handleOpsInteraction(interaction);
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : 'Unknown';
+      if (interaction.deferred || interaction.replied) {
+        await interaction.followUp({ content: `Ops command failed: ${detail}`, ephemeral: true }).catch(() => {});
+      } else {
+        await interaction.reply({ content: `Ops command failed: ${detail}`, ephemeral: true }).catch(() => {});
+      }
+    }
+  });
+
   try {
     await client.login(token);
   } catch (err) {
@@ -229,6 +278,7 @@ export async function stopBot(): Promise<void> {
   setAgentErrorChannel(null);
   setThreadStatusChannel(null);
   await flushUsageCounters().catch(() => {});
+  await flushAllOpsDigests().catch(() => {});
   if (isCallActive()) {
     await endCall();
   }
@@ -239,4 +289,31 @@ export async function stopBot(): Promise<void> {
     botChannels = null;
     console.log('Discord bot disconnected');
   }
+}
+
+async function handleOpsInteraction(interaction: ChatInputCommandInteraction): Promise<void> {
+  const view = interaction.options.getSubcommand(true);
+
+  if (view === 'costs') {
+    await interaction.reply({
+      content: `💸 Ops costs\n${getCostOpsSummaryLine()}\n${getUsageReport().split('\n')[1] || ''}`.slice(0, 1900),
+      ephemeral: true,
+    });
+    return;
+  }
+
+  if (view === 'threads') {
+    const threadLine = await getThreadStatusOpsLine();
+    await interaction.reply({
+      content: `🧵 Ops threads\n${threadLine}`.slice(0, 1900),
+      ephemeral: true,
+    });
+    return;
+  }
+
+  const threadLine = await getThreadStatusOpsLine();
+  const costLine = getCostOpsSummaryLine();
+  const liveLine = getUsageReport().split('\n')[1] || '';
+  const payload = `📡 Ops now\n${costLine}\n${liveLine}\n${threadLine}`;
+  await interaction.reply({ content: payload.slice(0, 1900), ephemeral: true });
 }

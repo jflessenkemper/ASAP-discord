@@ -12,6 +12,7 @@ import { isDeepgramAvailable } from '../voice/deepgram';
 import { postDiagnostic, mirrorAgentResponse, mirrorVoiceTranscript } from '../services/diagnosticsWebhook';
 import { getWebhook } from '../services/webhooks';
 import { recordVoiceCallStart, recordVoiceCallEnd } from '../metrics';
+import { postOpsLine } from '../services/opsFeed';
 
 /** Only Riley (EA) speaks in voice calls */
 const VOICE_SPEAKERS = new Set(['executive-assistant']);
@@ -48,9 +49,19 @@ export function setVoiceErrorChannel(channel: TextChannel | null): void {
 
 async function postVoiceStageLog(stage: string, detail: string, level: 'info' | 'warn' | 'error' = 'info'): Promise<void> {
   if (!VOICE_STAGE_LOGS_ENABLED || !voiceErrorChannel) return;
-  const icon = level === 'error' ? '🚨' : level === 'warn' ? '⚠️' : 'ℹ️';
-  const line = `${icon} [voice:${stage}] ${detail}`;
-  await voiceErrorChannel.send(line.slice(0, 1900)).catch(() => {});
+  const action = level === 'error'
+    ? 'restart voice pipeline and inspect credentials'
+    : level === 'warn'
+      ? 'check voice stage health if repeated'
+      : 'none';
+  await postOpsLine(voiceErrorChannel, {
+    actor: 'system',
+    scope: `voice:${stage}`,
+    metric: 'voice-stage',
+    delta: detail,
+    action,
+    severity: level,
+  });
 }
 
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {

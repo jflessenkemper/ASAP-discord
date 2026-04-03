@@ -13,6 +13,7 @@
  *   DISCORD_GUILD_ID        required
  *   DISCORD_TEST_TIMEOUT_MS optional (default 90000 ms per agent)
  *   DISCORD_GROUPCHAT_ID    optional — override groupchat channel ID lookup
+ *   DISCORD_SMOKE_PRE_CLEAR optional (default true) — clear message history in text/news/thread channels before each smoke run
  */
 import 'dotenv/config';
 import { ChannelType, Client, GatewayIntentBits, Message, TextChannel } from 'discord.js';
@@ -28,6 +29,12 @@ interface TestResult {
   passed: boolean;
   elapsed: number;
   snippet: string;
+}
+
+interface CleanupStats {
+  channelName: string;
+  deleted: number;
+  failed: number;
 }
 
 const AGENT_TESTS: AgentTestCase[] = [
@@ -109,6 +116,80 @@ function findGroupchat(guild: { channels: { cache: Map<string, any> } }): TextCh
   return undefined;
 }
 
+function shouldPreClear(): boolean {
+  const raw = String(process.env.DISCORD_SMOKE_PRE_CLEAR ?? 'true').trim().toLowerCase();
+  return !['0', 'false', 'no', 'off'].includes(raw);
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function discordApi(token: string, url: string, options: RequestInit = {}, retry = 0): Promise<Response> {
+  const headers = {
+    Authorization: `Bot ${token}`,
+    'Content-Type': 'application/json',
+    ...(options.headers || {}),
+  };
+
+  const res = await fetch(url, { ...options, headers });
+  if (res.status === 429) {
+    const body = await res.json().catch(() => ({})) as { retry_after?: number };
+    const retryMs = Math.ceil((Number(body.retry_after) || 1) * 1000) + 100;
+    await sleep(retryMs);
+    if (retry < 8) return discordApi(token, url, options, retry + 1);
+  }
+  return res;
+}
+
+async function preClearGuildChannels(token: string, guildId: string): Promise<CleanupStats[]> {
+  const channelRes = await discordApi(token, `https://discord.com/api/v10/guilds/${guildId}/channels`);
+  if (!channelRes.ok) {
+    throw new Error(`Failed to list guild channels: ${channelRes.status}`);
+  }
+
+  const channels = await channelRes.json() as Array<{ id: string; name: string; type: number }>;
+  const messageChannels = channels.filter((channel) => [0, 5, 10, 11, 12].includes(channel.type));
+  const results: CleanupStats[] = [];
+
+  for (const channel of messageChannels) {
+    let deleted = 0;
+    let failed = 0;
+    let before: string | undefined;
+
+    while (true) {
+      const qs = new URLSearchParams({ limit: '100' });
+      if (before) qs.set('before', before);
+
+      const listRes = await discordApi(token, `https://discord.com/api/v10/channels/${channel.id}/messages?${qs.toString()}`);
+      if (!listRes.ok) {
+        failed += 1;
+        break;
+      }
+
+      const messages = await listRes.json() as Array<{ id: string }>;
+      if (!Array.isArray(messages) || messages.length === 0) break;
+
+      for (const msg of messages) {
+        const delRes = await discordApi(token, `https://discord.com/api/v10/channels/${channel.id}/messages/${msg.id}`, { method: 'DELETE' });
+        if (delRes.status === 204 || delRes.status === 200 || delRes.status === 404) {
+          deleted += 1;
+        } else {
+          failed += 1;
+        }
+        await sleep(120);
+      }
+
+      before = messages[messages.length - 1]?.id;
+      await sleep(200);
+    }
+
+    results.push({ channelName: channel.name, deleted, failed });
+  }
+
+  return results;
+}
+
 /** Returns true if the message is a bot/webhook reply (not our own sent message). */
 function isBotOrWebhookReply(msg: Message, sent: Message, selfId: string): boolean {
   if (msg.id === sent.id) return false;
@@ -187,6 +268,7 @@ async function run(): Promise<void> {
   const token = process.env.DISCORD_TEST_BOT_TOKEN;
   const guildId = process.env.DISCORD_GUILD_ID;
   const timeoutMs = Number(process.env.DISCORD_TEST_TIMEOUT_MS ?? '90000');
+  const preClear = shouldPreClear();
   const agentFilter = process.argv.find((a) => a.startsWith('--agent='))?.slice('--agent='.length);
 
   if (!token) throw new Error('Missing DISCORD_TEST_BOT_TOKEN');
@@ -211,6 +293,14 @@ async function run(): Promise<void> {
   await guild.channels.fetch();
   await guild.roles.fetch();
 
+  if (preClear) {
+    console.log('🧹 Pre-smoke cleanup: clearing messages from text/news/thread channels...');
+    const cleanup = await preClearGuildChannels(token, guildId);
+    const totalDeleted = cleanup.reduce((sum, row) => sum + row.deleted, 0);
+    const failures = cleanup.filter((row) => row.failed > 0).length;
+    console.log(`🧹 Cleanup done: channels=${cleanup.length} deleted=${totalDeleted} failed_channels=${failures}`);
+  }
+
   const groupchat = findGroupchat(guild);
   if (!groupchat) {
     console.error('FATAL: Could not find 💬-groupchat channel. Set DISCORD_GROUPCHAT_ID env var.');
@@ -224,6 +314,7 @@ async function run(): Promise<void> {
   console.log(`Guild    : ${guild.name}`);
   console.log(`Channel  : #${groupchat.name} (${groupchat.id})`);
   console.log(`Timeout  : ${timeoutMs / 1000}s per agent`);
+  console.log(`Pre-clear: ${preClear ? 'enabled' : 'disabled'}`);
   if (agentFilter) console.log(`Filter   : --agent=${agentFilter}`);
   console.log('');
 

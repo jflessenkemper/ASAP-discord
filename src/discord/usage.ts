@@ -1,6 +1,7 @@
 import { TextChannel, EmbedBuilder } from 'discord.js';
 import pool from '../db/pool';
 import { getLiveBillingSnapshot, refreshLiveBillingSnapshot } from '../services/billing';
+import { postOpsLine } from './services/opsFeed';
 
 const DAILY_LIMITS = {
   /** Max LLM input+output tokens per day (Gemini) */
@@ -325,9 +326,14 @@ export function recordClaudeUsage(
     const budget = getRemainingBudget();
     const modelLabel = modelName || 'unknown-model';
     const agentTag = toAgentTag(agentLabel);
-    const line =
-      `💸 [agent:${agentTag}] model=${modelLabel} in=${inputTokens.toLocaleString()} out=${outputTokens.toLocaleString()} est=$${reqCost.toFixed(4)} today=$${budget.spent.toFixed(4)}/$${budget.limit.toFixed(2)}`;
-    void costChannel.send(line.slice(0, 1900)).catch(() => {});
+    void postOpsLine(costChannel, {
+      actor: agentTag,
+      scope: 'cost:request',
+      metric: modelLabel,
+      delta: `in=${formatCompactCount(inputTokens)} out=${formatCompactCount(outputTokens)} req=$${reqCost.toFixed(4)} today=$${budget.spent.toFixed(2)}/$${budget.limit.toFixed(2)}`,
+      action: 'none',
+      severity: 'info',
+    });
   }
 
   markUsageDirty();
@@ -623,31 +629,33 @@ export function getUsageReport(): string {
   const promptStats = getPromptAttributionSnapshot();
 
   const liveLine = live.available && live.dailyCostUsd !== null
-    ? `Live GCP billed spend today (UTC): **$${live.dailyCostUsd.toFixed(4)} ${live.currency}** (month-to-date **$${(live.monthCostUsd || 0).toFixed(4)} ${live.currency}**).`
-    : `Live GCP billed spend is currently unavailable (${live.error || 'no billing metric data yet'}).`;
+    ? `☁️ Live GCP | today $${live.dailyCostUsd.toFixed(4)} ${live.currency} | mtd $${(live.monthCostUsd || 0).toFixed(4)} ${live.currency}`
+    : `☁️ Live GCP | unavailable (${live.error || 'no billing metric data yet'})`;
 
-  return (
-    `📊 **ASAP Usage Dashboard** — ${usage.lastReset}\n\n` +
-    `${liveLine}\n\n` +
-    `**LLM Tokens (Claude/Gemini)**\n` +
-    `${progressBar(totalClaudeTokens, DAILY_LIMITS.claudeTokens)}\n` +
-    `${totalClaudeTokens.toLocaleString()} / ${DAILY_LIMITS.claudeTokens.toLocaleString()} tokens` +
-    ` (${usage.claudeInputTokens.toLocaleString()} in · ${usage.claudeOutputTokens.toLocaleString()} out)\n` +
-    `Estimated spend: **$${cost.claude.toFixed(4)}**\n` +
-    `Cache read/write input tokens: **${formatCompactCount(promptStats.cacheReadTokens)} / ${formatCompactCount(promptStats.cacheCreationTokens)}**\n` +
-    `Cache read hits: **${promptStats.cacheReadRequests}/${promptStats.requests || 0} requests (${promptStats.cacheHitRatePct}%)**\n` +
-    `Avg prompt chars/request: system ${formatCompactCount(promptStats.avgPromptChars.system)} · tools ${formatCompactCount(promptStats.avgPromptChars.tools)} · history ${formatCompactCount(promptStats.avgPromptChars.history)} · user ${formatCompactCount(promptStats.avgPromptChars.user)} · tool results ${formatCompactCount(promptStats.avgPromptChars.toolResults)}\n\n` +
-    `**Gemini Voice APIs**\n` +
-    `${progressBar(usage.geminiCalls, DAILY_LIMITS.geminiCalls)}\n` +
-    `${usage.geminiCalls} / ${DAILY_LIMITS.geminiCalls} API calls\n` +
-    `Estimated spend: **$${cost.gemini.toFixed(4)}**\n\n` +
-    `**ElevenLabs TTS**\n` +
-    `${progressBar(usage.elevenLabsChars, DAILY_LIMITS.elevenLabsChars)}\n` +
-    `${usage.elevenLabsChars.toLocaleString()} / ${DAILY_LIMITS.elevenLabsChars.toLocaleString()} characters\n` +
-    `Estimated spend: **$${cost.elevenLabs.toFixed(4)}**\n\n` +
-    `💰 **Effective spend for budget gate today: $${effectiveTotalSpend.toFixed(4)}**\n` +
-    `Budget gate: **$${effectiveBudgetLimit().toFixed(2)}**${extraBudget > 0 ? ` (base $${DAILY_LIMITS.budgetUsd.toFixed(2)} + approved $${extraBudget.toFixed(2)})` : ''}`
-  );
+  const lines = [
+    `📊 ASAP Usage Dashboard | reset ${usage.lastReset}`,
+    liveLine,
+    `🧠 Claude/Gemini | ${progressBar(totalClaudeTokens, DAILY_LIMITS.claudeTokens)} | ${formatCompactCount(totalClaudeTokens)}/${formatCompactCount(DAILY_LIMITS.claudeTokens)} tokens | in ${formatCompactCount(usage.claudeInputTokens)} | out ${formatCompactCount(usage.claudeOutputTokens)} | est $${cost.claude.toFixed(4)}`,
+    `🔊 Gemini Voice | ${progressBar(usage.geminiCalls, DAILY_LIMITS.geminiCalls)} | ${formatCompactCount(usage.geminiCalls)}/${formatCompactCount(DAILY_LIMITS.geminiCalls)} calls | est $${cost.gemini.toFixed(4)}`,
+    `🗣️ ElevenLabs | ${progressBar(usage.elevenLabsChars, DAILY_LIMITS.elevenLabsChars)} | ${formatCompactCount(usage.elevenLabsChars)}/${formatCompactCount(DAILY_LIMITS.elevenLabsChars)} chars | est $${cost.elevenLabs.toFixed(4)}`,
+    `🧮 Prompt | cache r/w ${formatCompactCount(promptStats.cacheReadTokens)}/${formatCompactCount(promptStats.cacheCreationTokens)} | hits ${promptStats.cacheReadRequests}/${promptStats.requests || 0} (${promptStats.cacheHitRatePct}%) | avg chars sys ${formatCompactCount(promptStats.avgPromptChars.system)} tools ${formatCompactCount(promptStats.avgPromptChars.tools)} hist ${formatCompactCount(promptStats.avgPromptChars.history)} user ${formatCompactCount(promptStats.avgPromptChars.user)} tool ${formatCompactCount(promptStats.avgPromptChars.toolResults)}`,
+    `💰 Budget gate | spend $${effectiveTotalSpend.toFixed(4)} | limit $${effectiveBudgetLimit().toFixed(2)}${extraBudget > 0 ? ` (base $${DAILY_LIMITS.budgetUsd.toFixed(2)} + approved $${extraBudget.toFixed(2)})` : ''}`,
+  ];
+
+  return lines.join('\n');
+}
+
+export function getCostOpsSummaryLine(): string {
+  resetIfNewDay();
+  const cost = estimateDailyCost();
+  const live = getLiveBillingSnapshot();
+  const effectiveGcpSpend = effectiveGcpSpendForBudget(cost.claude + cost.gemini);
+  const total = effectiveGcpSpend + cost.elevenLabs;
+  const budget = effectiveBudgetLimit();
+  const livePart = live.available && live.dailyCostUsd !== null
+    ? `live=$${live.dailyCostUsd.toFixed(2)}${live.currency ? ` ${live.currency}` : ''}`
+    : 'live=unavailable';
+  return `💸 sev=info [agent:system] | scope=cost:daily | metric=budget-gate | delta=total=$${total.toFixed(2)} limit=$${budget.toFixed(2)} ${livePart} | action=none | corr=cost-snapshot | age=0s`;
 }
 
 export function getContextEfficiencyReport(): string {
@@ -667,23 +675,15 @@ export function getContextEfficiencyReport(): string {
 
   const modelLines = topModels.length > 0
     ? topModels.map((entry) =>
-      `• ${entry.model}: $${entry.cost.toFixed(4)} | req=${entry.stats.requests} | in=${formatCompactCount(entry.stats.inputTokens)} out=${formatCompactCount(entry.stats.outputTokens)} | cache r/w=${formatCompactCount(entry.stats.cacheReadTokens)}/${formatCompactCount(entry.stats.cacheWriteTokens)}`
-    ).join('\n')
-    : '• No per-model data yet.';
+      `🤖 ${entry.model} req ${entry.stats.requests} in ${formatCompactCount(entry.stats.inputTokens)} out ${formatCompactCount(entry.stats.outputTokens)} cache ${formatCompactCount(entry.stats.cacheReadTokens)}/${formatCompactCount(entry.stats.cacheWriteTokens)} est $${entry.cost.toFixed(4)}`
+    ).join(' || ')
+    : '🤖 No per-model data yet.';
 
   return (
-    `📦 **Prompt Context Breakdown**\n` +
-    `Requests observed: ${promptStats.requests}\n` +
-    `Avg chars/request: ${formatCompactCount(totalAvg)}\n` +
-    `• system: ${formatCompactCount(promptStats.avgPromptChars.system)} (${pct(promptStats.avgPromptChars.system)})\n` +
-    `• tools: ${formatCompactCount(promptStats.avgPromptChars.tools)} (${pct(promptStats.avgPromptChars.tools)})\n` +
-    `• history: ${formatCompactCount(promptStats.avgPromptChars.history)} (${pct(promptStats.avgPromptChars.history)})\n` +
-    `• user: ${formatCompactCount(promptStats.avgPromptChars.user)} (${pct(promptStats.avgPromptChars.user)})\n` +
-    `• tool results: ${formatCompactCount(promptStats.avgPromptChars.toolResults)} (${pct(promptStats.avgPromptChars.toolResults)})\n\n` +
-    `Cache read/write tokens: ${formatCompactCount(promptStats.cacheReadTokens)} / ${formatCompactCount(promptStats.cacheCreationTokens)}\n` +
-    `Cache hit rate: ${promptStats.cacheHitRatePct}% (${promptStats.cacheReadRequests}/${req})\n\n` +
-    `📉 **Top model cost + cache economics**\n` +
-    `${modelLines}`
+    `📦 Prompt context | requests ${promptStats.requests} | avg chars ${formatCompactCount(totalAvg)}\n` +
+    `🧩 Breakdown | sys ${formatCompactCount(promptStats.avgPromptChars.system)} (${pct(promptStats.avgPromptChars.system)}) | tools ${formatCompactCount(promptStats.avgPromptChars.tools)} (${pct(promptStats.avgPromptChars.tools)}) | hist ${formatCompactCount(promptStats.avgPromptChars.history)} (${pct(promptStats.avgPromptChars.history)}) | user ${formatCompactCount(promptStats.avgPromptChars.user)} (${pct(promptStats.avgPromptChars.user)}) | tool ${formatCompactCount(promptStats.avgPromptChars.toolResults)} (${pct(promptStats.avgPromptChars.toolResults)})\n` +
+    `🧠 Cache | read/write ${formatCompactCount(promptStats.cacheReadTokens)}/${formatCompactCount(promptStats.cacheCreationTokens)} | hit-rate ${promptStats.cacheHitRatePct}% (${promptStats.cacheReadRequests}/${req})\n` +
+    `📉 Models | ${modelLines}`
   );
 }
 

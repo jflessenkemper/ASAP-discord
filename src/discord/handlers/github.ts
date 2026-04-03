@@ -1,6 +1,7 @@
 import { TextChannel } from 'discord.js';
 import crypto from 'crypto';
 import { captureAndPostScreenshots } from '../services/screenshots';
+import { formatOpsLine } from '../services/opsFeed';
 
 let githubChannel: TextChannel | null = null;
 
@@ -73,77 +74,153 @@ function formatEvent(event: string, p: Record<string, any>): string | null {
       const firstCommit = commits[0] || {};
       const firstSha = String(firstCommit.id || '').slice(0, 7) || 'unknown';
       const firstMsg = String(firstCommit.message || '').split('\n')[0].slice(0, 70);
-      return `📦 [agent:${actorTag(pusher)}] push branch=${branch} commits=${commits.length} first=${firstSha} msg=${firstMsg}`;
+      return formatOpsLine({
+        actor: actorTag(pusher),
+        scope: 'github:push',
+        metric: `branch=${branch || 'unknown'}`,
+        delta: `commits=${commits.length} first=${firstSha} msg=${firstMsg}`,
+        action: 'none',
+        severity: 'info',
+      });
     }
 
     case 'pull_request': {
       const action = p.action;
       const pr = p.pull_request || {};
       const user = pr.user?.login || 'unknown';
-      const emoji = action === 'opened' ? '🟢' : action === 'closed' ? (pr.merged ? '🟣' : '🔴') : '🔵';
-      return `${emoji} [agent:${actorTag(user)}] pr#${pr.number} action=${action} title=${String(pr.title || '').slice(0, 100)}`;
+      const sev = action === 'closed' && !pr.merged ? 'warn' : 'info';
+      return formatOpsLine({
+        actor: actorTag(user),
+        scope: 'github:pull-request',
+        metric: `pr#${pr.number} action=${action}`,
+        delta: `title=${String(pr.title || '').slice(0, 100)}`,
+        action: sev === 'warn' ? 'review closed-unmerged PR' : 'none',
+        severity: sev,
+      });
     }
 
     case 'issues': {
       const action = p.action;
       const issue = p.issue || {};
       const user = issue.user?.login || 'unknown';
-      const emoji = action === 'opened' ? '🟡' : action === 'closed' ? '✅' : '📝';
-      return `${emoji} [agent:${actorTag(user)}] issue#${issue.number} action=${action} title=${String(issue.title || '').slice(0, 100)}`;
+      return formatOpsLine({
+        actor: actorTag(user),
+        scope: 'github:issue',
+        metric: `issue#${issue.number} action=${action}`,
+        delta: `title=${String(issue.title || '').slice(0, 100)}`,
+        action: 'none',
+        severity: 'info',
+      });
     }
 
     case 'issue_comment': {
       const issue = p.issue || {};
       const comment = p.comment || {};
       const user = comment.user?.login || 'unknown';
-      return `💬 [agent:${actorTag(user)}] issue#${issue.number} commented msg=${String(comment.body || '').slice(0, 120)}`;
+      return formatOpsLine({
+        actor: actorTag(user),
+        scope: 'github:issue-comment',
+        metric: `issue#${issue.number}`,
+        delta: `comment=${String(comment.body || '').slice(0, 120)}`,
+        action: 'none',
+        severity: 'info',
+      });
     }
 
     case 'create': {
       const refType = p.ref_type; // branch or tag
       const ref = p.ref;
       const user = p.sender?.login || 'unknown';
-      return `🌿 [agent:${actorTag(user)}] created ${refType} ${ref}`;
+      return formatOpsLine({
+        actor: actorTag(user),
+        scope: 'github:create',
+        metric: `${refType || 'ref'}=${ref || 'unknown'}`,
+        delta: 'resource-created',
+        action: 'none',
+        severity: 'info',
+      });
     }
 
     case 'delete': {
       const refType = p.ref_type;
       const ref = p.ref;
       const user = p.sender?.login || 'unknown';
-      return `🗑️ [agent:${actorTag(user)}] deleted ${refType} ${ref}`;
+      return formatOpsLine({
+        actor: actorTag(user),
+        scope: 'github:delete',
+        metric: `${refType || 'ref'}=${ref || 'unknown'}`,
+        delta: 'resource-deleted',
+        action: 'verify delete was intentional',
+        severity: 'warn',
+      });
     }
 
     case 'release': {
       const release = p.release || {};
       const user = release.author?.login || 'unknown';
-      return `🚀 [agent:${actorTag(user)}] release tag=${release.tag_name || ''} name=${String(release.name || '').slice(0, 90)}`;
+      return formatOpsLine({
+        actor: actorTag(user),
+        scope: 'github:release',
+        metric: `tag=${release.tag_name || 'unknown'}`,
+        delta: `name=${String(release.name || '').slice(0, 90)}`,
+        action: 'none',
+        severity: 'info',
+      });
     }
 
     case 'deployment_status': {
       const state = p.deployment_status?.state || 'unknown';
       const env = p.deployment_status?.environment || 'unknown';
-      const emoji = state === 'success' ? '✅' : state === 'failure' ? '❌' : '⏳';
       const user = p.sender?.login || 'system';
-      return `${emoji} [agent:${actorTag(user)}] deploy env=${env} state=${state}`;
+      const sev = state === 'failure' ? 'error' : state === 'success' ? 'info' : 'warn';
+      return formatOpsLine({
+        actor: actorTag(user),
+        scope: 'github:deployment',
+        metric: `env=${env}`,
+        delta: `state=${state}`,
+        action: sev === 'error' ? 'inspect deployment logs and rollback if needed' : 'none',
+        severity: sev,
+      });
     }
 
     case 'workflow_run': {
       const run = p.workflow_run || {};
       if (p.action !== 'completed') return null;
-      const emoji = run.conclusion === 'success' ? '✅' : '❌';
       const user = run.actor?.login || p.sender?.login || 'system';
-      return `${emoji} [agent:${actorTag(user)}] workflow=${run.name || 'Workflow'} result=${run.conclusion} branch=${String(run.head_branch || '').slice(0, 30)}`;
+      const ok = run.conclusion === 'success';
+      return formatOpsLine({
+        actor: actorTag(user),
+        scope: 'github:workflow',
+        metric: `${run.name || 'workflow'}:${String(run.head_branch || '').slice(0, 30) || 'unknown'}`,
+        delta: `result=${run.conclusion || 'unknown'}`,
+        action: ok ? 'none' : 'open workflow run and fix failing job',
+        severity: ok ? 'info' : 'error',
+      });
     }
 
     case 'star': {
       if (p.action !== 'created') return null;
       const user = p.sender?.login || 'someone';
-      return `⭐ [agent:${actorTag(user)}] starred repo`;
+      return formatOpsLine({
+        actor: actorTag(user),
+        scope: 'github:star',
+        metric: 'repo-starred',
+        delta: 'new-star',
+        action: 'none',
+        severity: 'info',
+      });
     }
 
     case 'fork': {
       const user = p.sender?.login || 'someone';
-      return `🍴 [agent:${actorTag(user)}] forked repo`;
+      return formatOpsLine({
+        actor: actorTag(user),
+        scope: 'github:fork',
+        metric: 'repo-forked',
+        delta: 'new-fork',
+        action: 'none',
+        severity: 'info',
+      });
     }
 
     default:

@@ -37,11 +37,16 @@ async function sendToolNotification(channel: WebhookCapableChannel, agent: Agent
 import { triggerCloudBuild, listRevisions, getCurrentRevision, rollbackToRevision } from '../../services/cloudrun';
 import { captureAndPostScreenshots } from '../services/screenshots';
 import { postAgentErrorLog } from '../services/agentErrors';
+import { formatOpsLine } from '../services/opsFeed';
 
 let groupHistory: ConversationMessage[] = loadMemory('groupchat');
 
+// Global FIFO for groupchat events. A single stuck request can block all later
+// messages, so processing is always paired with explicit timeout guards.
 let messageQueue: Promise<void> = Promise.resolve();
 
+// In-flight cancellation token. New inbound messages abort older work so the
+// bot follows the newest user intent instead of finishing stale tasks.
 let activeAbortController: AbortController | null = null;
 let activeThinkingMessage: Message | null = null;
 let activeGoalThreadId: string | null = null;
@@ -370,10 +375,17 @@ export async function postThreadStatusSnapshotNow(reason = 'hourly'): Promise<vo
   const timestamp = new Date().toLocaleString('en-AU', { timeZone: 'Australia/Sydney' });
   const label = reason === 'hourly' ? 'hourly' : 'manual';
   const currentGoal = activeGoal
-    ? `goal=${activeGoal.slice(0, 80)} status=${(goalStatus || 'in-progress').replace(/\s+/g, ' ').slice(0, 60)}`
+    ? `goal=${activeGoal.replace(/\s+/g, ' ').slice(0, 72)} status=${(goalStatus || 'in-progress').replace(/\s+/g, ' ').slice(0, 48)}`
     : 'goal=none status=idle';
   const report = await buildThreadStatusReport(threadStatusSourceChannel);
-  const content = `🧵 [agent:executive-assistant] thread-status type=${label} at=${timestamp} ${currentGoal} ${report}`;
+  const content = formatOpsLine({
+    actor: 'executive-assistant',
+    scope: 'thread-status',
+    metric: `type=${label}`,
+    delta: `at=${timestamp} ${currentGoal} ${report}`,
+    action: 'none',
+    severity: 'info',
+  });
 
   await clearThreadStatusMessages(threadStatusChannel).catch(() => {});
 
@@ -390,6 +402,33 @@ export async function postThreadStatusSnapshotNow(reason = 'hourly'): Promise<vo
   }
 
   lastThreadStatusPostAt = Date.now();
+}
+
+export async function getThreadStatusOpsLine(): Promise<string> {
+  if (!threadStatusSourceChannel) {
+    return formatOpsLine({
+      actor: 'executive-assistant',
+      scope: 'thread-status',
+      metric: 'snapshot',
+      delta: 'source-channel=unavailable',
+      action: 'check groupchat channel wiring',
+      severity: 'warn',
+    });
+  }
+
+  const report = await buildThreadStatusReport(threadStatusSourceChannel);
+  const currentGoal = activeGoal
+    ? `goal=${activeGoal.replace(/\s+/g, ' ').slice(0, 60)} status=${(goalStatus || 'in-progress').replace(/\s+/g, ' ').slice(0, 40)}`
+    : 'goal=none status=idle';
+
+  return formatOpsLine({
+    actor: 'executive-assistant',
+    scope: 'thread-status',
+    metric: 'snapshot',
+    delta: `${currentGoal} ${report}`,
+    action: 'none',
+    severity: 'info',
+  });
 }
 
 export function setThreadStatusChannel(channel: TextChannel | null, groupchat?: TextChannel | null): void {
@@ -601,7 +640,7 @@ async function buildThreadStatusReport(groupchat: TextChannel): Promise<string> 
     .slice(0, 8);
 
   if (threads.length === 0) {
-    return 'open=0 ready=0 top=none';
+    return '📈 open=0 | ✅ ready=0 | ⏳ active=0 | 🧵 top=none';
   }
 
   const now = Date.now();
@@ -611,16 +650,20 @@ async function buildThreadStatusReport(groupchat: TextChannel): Promise<string> 
     const lastTs = last?.createdTimestamp || thread.createdTimestamp || now;
     const idleMs = Math.max(0, now - lastTs);
     const ready = idleMs >= THREAD_CLOSE_REVIEW_IDLE_MS;
+    const shortName = thread.name
+      .replace(/\s+/g, '_')
+      .slice(0, 22);
     return {
       ready,
-      summary: `${thread.name.slice(0, 28).replace(/\s+/g, '_')}@${formatRelativeTime(idleMs)}`,
+      summary: `${ready ? '✅' : '⏳'}${shortName}:${formatRelativeTime(idleMs)}`,
     };
   }));
 
   const readyCount = rows.filter((row) => row.ready).length;
-  const top = rows.slice(0, 5).map((row) => row.summary).join(',');
+  const activeCount = Math.max(0, rows.length - readyCount);
+  const top = rows.slice(0, 5).map((row) => row.summary).join(' | ');
 
-  return `open=${threads.length} ready=${readyCount} top=${top || 'none'}`;
+  return `📈 open=${threads.length} | ✅ ready=${readyCount} | ⏳ active=${activeCount} | 🧵 top=${top || 'none'}`;
 }
 
 async function fetchStatusSummary(url: string): Promise<string> {
@@ -1036,6 +1079,8 @@ async function withRileyResponseWatchdog(
   groupchat: TextChannel,
   work: Promise<void>,
 ): Promise<void> {
+  // Outer watchdog: if Riley never emits visible output for a goal, post a
+  // clear stalled-run alert so operators are not left with silent threads.
   if (!Number.isFinite(RILEY_NO_RESPONSE_TIMEOUT_MS) || RILEY_NO_RESPONSE_TIMEOUT_MS <= 0) {
     await work;
     return;

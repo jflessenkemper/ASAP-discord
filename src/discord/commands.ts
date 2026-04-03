@@ -1,18 +1,32 @@
-import { Client, REST, Routes } from 'discord.js';
+import { Client, REST, Routes, SlashCommandBuilder } from 'discord.js';
 
-/**
- * Unregister all slash commands — we use natural language through Riley now.
- * This runs once on startup to clean up old slash commands.
- */
-export async function unregisterCommands(client: Client, guildId: string): Promise<void> {
+export async function registerCommands(client: Client, guildId: string): Promise<void> {
   const rest = new REST({ version: '10' }).setToken(client.token!);
+  const ops = new SlashCommandBuilder()
+    .setName('ops')
+    .setDescription('Show operational snapshots')
+    .addSubcommand((sub) =>
+      sub
+        .setName('now')
+        .setDescription('Combined ops snapshot (cost, live billing, thread status)')
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName('costs')
+        .setDescription('Cost and budget snapshot')
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName('threads')
+        .setDescription('Thread status snapshot')
+    );
 
   try {
     await rest.put(Routes.applicationGuildCommands(client.user!.id, guildId), {
-      body: [],
+      body: [ops.toJSON()],
     });
-    console.log('Unregistered all slash commands — natural language mode');
+    console.log('Registered guild slash commands: /ops now|costs|threads');
   } catch (err) {
-    console.error('Slash command cleanup error:', err instanceof Error ? err.message : 'Unknown');
+    console.error('Slash command registration error:', err instanceof Error ? err.message : 'Unknown');
   }
 }
