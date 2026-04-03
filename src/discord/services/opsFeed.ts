@@ -47,8 +47,10 @@ function digestIntervalMs(): number {
   return 15 * 60 * 1000;
 }
 
-function shouldDigest(severity: OpsSeverity): boolean {
-  return severity === 'info';
+function shouldDigest(channel: TextChannel, severity: OpsSeverity): boolean {
+  if (severity !== 'info') return false;
+  const name = String(channel.name || '').toLowerCase();
+  return name.includes('cost');
 }
 
 function severityEmoji(severity: OpsSeverity): string {
@@ -166,7 +168,7 @@ export async function postOpsLine(channel: TextChannel, input: OpsLineInput): Pr
   const severity = input.severity || 'info';
   const line = formatOpsLine({ ...input, severity });
 
-  if (shouldDigest(severity)) {
+  if (shouldDigest(channel, severity)) {
     const state = scheduleDigest(channel);
     state.entries.push({ scope: input.scope, metric: input.metric, severity });
     if (!state.timer) {
