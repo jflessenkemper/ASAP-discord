@@ -1,7 +1,7 @@
 import { TextChannel, EmbedBuilder } from 'discord.js';
 import pool from '../db/pool';
 import { getLiveBillingSnapshot, refreshLiveBillingSnapshot } from '../services/billing';
-import { postOpsLine } from './services/opsFeed';
+import { formatOpsLine, postOpsLine } from './services/opsFeed';
 
 const DAILY_LIMITS = {
   /** Max LLM input+output tokens per day (Gemini) */
@@ -655,7 +655,16 @@ export function getCostOpsSummaryLine(): string {
   const livePart = live.available && live.dailyCostUsd !== null
     ? `live=$${live.dailyCostUsd.toFixed(2)}${live.currency ? ` ${live.currency}` : ''}`
     : 'live=unavailable';
-  return `💸 sev=info [agent:system] | scope=cost:daily | metric=budget-gate | delta=total=$${total.toFixed(2)} limit=$${budget.toFixed(2)} ${livePart} | action=none | corr=cost-snapshot | age=0s`;
+  return formatOpsLine({
+    actor: 'system',
+    scope: 'cost:daily',
+    metric: 'budget-gate',
+    delta: `total=$${total.toFixed(2)} limit=$${budget.toFixed(2)} ${livePart}`,
+    action: 'none',
+    severity: 'info',
+    correlationId: 'cost-snapshot',
+    occurredAtMs: Date.now(),
+  });
 }
 
 export function getContextEfficiencyReport(): string {

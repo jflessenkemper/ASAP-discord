@@ -75,8 +75,8 @@ function newCorrelationId(seed = ''): string {
 
 function sanitizeValue(value: string, maxLen = 200): string {
   return String(value || '')
-    .replace(/@(everyone|here)/gi, '[at-$1]')
-    .replace(/<@[!&]?\d+>/g, '[mention]')
+    .replace(/@(everyone|here)/gi, 'at-$1')
+    .replace(/<@[!&]?\d+>/g, 'mention')
     .replace(/\s+/g, ' ')
     .trim()
     .slice(0, maxLen);
@@ -92,7 +92,7 @@ export function formatOpsLine(input: OpsLineInput): string {
   const corr = sanitizeValue(input.correlationId || newCorrelationId(scope), 24);
   const age = ageLabel(input.occurredAtMs);
 
-  return `${severityEmoji(severity)} sev=${severity} [agent:${actor}] | scope=${scope} | metric=${metric} | delta=${delta} | action=${action} | corr=${corr} | age=${age}`;
+  return `${severityEmoji(severity)} severity=${severity} | agent=${actor} | scope=${scope} | metric=${metric} | delta=${delta} | action=${action} | corr=${corr} | age=${age}`;
 }
 
 function summarizeDigest(entries: DigestEntry[]): string {
@@ -147,6 +147,8 @@ function scheduleDigest(channel: TextChannel): DigestState {
 }
 
 function getAlertMention(): string {
+  const enabled = String(process.env.DISCORD_OPS_ALERT_MENTIONS || 'false').toLowerCase() === 'true';
+  if (!enabled) return '';
   const roleId = String(process.env.DISCORD_OPS_ALERT_ROLE_ID || '').trim();
   if (!roleId) return '';
   return `<@&${roleId}>`;

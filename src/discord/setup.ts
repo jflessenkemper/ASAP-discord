@@ -282,7 +282,7 @@ export async function setupChannels(guild: Guild): Promise<BotChannels> {
 
   const screenshots = await ensureText(
     OPS_CHANNELS.screenshots,
-    catOps,
+    catMain,
     '📸 Automated screenshots of every app screen after each build (iPhone 17 Pro Max)',
     '📸 Build screenshot updates post here as one-line entries.'
   );
@@ -290,7 +290,7 @@ export async function setupChannels(guild: Guild): Promise<BotChannels> {
   const appUrl = process.env.FRONTEND_URL || 'https://asap-489910.australia-southeast1.run.app';
   const url = await ensureText(
     OPS_CHANNELS.url,
-    catOps,
+    catMain,
     '🔗 Live app URL and build links — updated on every deploy',
     `🔗 App URL: ${appUrl} | Cloud Build: https://console.cloud.google.com/cloud-build/builds?project=asap-489910 | Cloud Run: https://console.cloud.google.com/run/detail/australia-southeast1/asap?project=asap-489910`
   );

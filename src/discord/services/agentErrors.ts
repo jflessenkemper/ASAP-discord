@@ -41,8 +41,8 @@ export async function postAgentErrorLog(
 
 function sanitize(value: string, maxLen: number): string {
   return String(value || '')
-    .replace(/@(everyone|here)/gi, '[at-$1]')
-    .replace(/<@[!&]?\d+>/g, '[mention]')
+    .replace(/@(everyone|here)/gi, 'at-$1')
+    .replace(/<@[!&]?\d+>/g, 'mention')
     .replace(/```/g, 'ˋˋˋ')
     .replace(/\s+/g, ' ')
     .trim()
