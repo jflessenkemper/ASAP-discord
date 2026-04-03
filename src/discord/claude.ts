@@ -29,6 +29,7 @@ const DEFAULT_CODING_MODEL = process.env.CODING_AGENT_MODEL || ANTHROPIC_OPUS;
 const DEFAULT_FAST_MODEL = process.env.FAST_AGENT_MODEL || GEMINI_FLASH;
 const VOICE_FAST_MODEL = process.env.VOICE_FAST_MODEL || DEFAULT_FAST_MODEL;
 const FORCE_OPUS_FOR_CODE_WORK = process.env.FORCE_OPUS_FOR_CODE_WORK !== 'false';
+const DEVELOPER_ALWAYS_OPUS = process.env.DEVELOPER_ALWAYS_OPUS !== 'false';
 const ANTHROPIC_AUTO_CACHE = process.env.ANTHROPIC_AUTO_CACHE !== 'false';
 const COMPACT_RUNTIME_TOOL_PROMPTS = process.env.COMPACT_RUNTIME_TOOL_PROMPTS !== 'false';
 const CODE_HEAVY_AGENT_IDS = new Set(['developer', 'devops', 'ios-engineer', 'android-engineer']);
@@ -103,6 +104,9 @@ function hasValidationFailure(toolName: string, result: string): boolean {
  * - Riley still escalates to Pro for non-code high-stakes ops prompts.
  */
 function modelForAgent(agentId: string, userMessage: string): string {
+  if (agentId === 'developer' && DEVELOPER_ALWAYS_OPUS) {
+    return DEFAULT_CODING_MODEL;
+  }
   if (isSimpleFastPathPrompt(userMessage)) {
     return DEFAULT_FAST_MODEL;
   }
@@ -1411,6 +1415,16 @@ function normalizeModelKey(modelName: string): string {
   return String(modelName || '').trim().toLowerCase();
 }
 
+function isOpusModel(modelName: string): boolean {
+  return /\bopus\b/i.test(String(modelName || ''));
+}
+
+function isPotentiallyMutatingCommand(command: string): boolean {
+  const cmd = String(command || '').toLowerCase();
+  if (!cmd.trim()) return false;
+  return /(\b(?:git\s+(?:add|commit|push|merge|rebase|reset|checkout|restore|cherry-pick)|rm\s+-|mv\s+|cp\s+|sed\s+-i|perl\s+-i|tee\s+|truncate\s+|chmod\s+|chown\s+|npm\s+run\s+format|pnpm\s+format|yarn\s+format)\b)/.test(cmd);
+}
+
 function getModelConcurrencyCap(modelName: string): number {
   const key = normalizeModelKey(modelName);
   return key.includes('pro') ? MAX_CONCURRENT_PRO : MAX_CONCURRENT_FLASH;
@@ -2185,6 +2199,10 @@ RUNTIME EFFICIENCY:
     'mobile_harness_start', 'mobile_harness_step', 'mobile_harness_snapshot', 'mobile_harness_stop',
   ]);
 
+  const CODE_WRITE_TOOLS = new Set([
+    'write_file', 'edit_file', 'batch_edit',
+  ]);
+
   for (let round = 0; round < maxToolRounds; round++) {
     const tokenStatus = getClaudeTokenStatus();
     const tokenHardExceeded = tokenStatus.used >= (tokenStatus.limit + Math.max(0, RILEY_TOKEN_OVERRUN_ALLOWANCE));
@@ -2281,6 +2299,60 @@ RUNTIME EFFICIENCY:
       const toolStart = Date.now();
       totalToolCalls++;
       const args = call.args as Record<string, string>;
+
+      if (CODE_WRITE_TOOLS.has(call.name) && agent.id !== 'developer') {
+        const blocked = `Blocked: ${call.name} is restricted to Ace (developer). Delegate code edits to @ace.`;
+        logAgentEvent(agent.id, 'tool', blocked, { durationMs: Date.now() - toolStart });
+        if (onToolUse) await onToolUse(call.name, blocked);
+        return {
+          functionResponse: {
+            name: call.name,
+            ...(isAnthropicModel(currentModelName) && call.id ? { toolUseId: call.id } : {}),
+            response: { output: blocked },
+          },
+        } as Part;
+      }
+
+      if (CODE_WRITE_TOOLS.has(call.name) && agent.id === 'developer' && !isOpusModel(currentModelName)) {
+        const blocked = `Blocked: ${call.name} requires Opus. Current model is ${currentModelName}. Switch Ace to Opus before changing code.`;
+        logAgentEvent(agent.id, 'tool', blocked, { durationMs: Date.now() - toolStart });
+        if (onToolUse) await onToolUse(call.name, blocked);
+        return {
+          functionResponse: {
+            name: call.name,
+            ...(isAnthropicModel(currentModelName) && call.id ? { toolUseId: call.id } : {}),
+            response: { output: blocked },
+          },
+        } as Part;
+      }
+
+      if (call.name === 'run_command' && isPotentiallyMutatingCommand((args as any)?.command || '')) {
+        if (agent.id !== 'developer') {
+          const blocked = 'Blocked: mutating run_command is restricted to Ace (developer). Delegate implementation changes to @ace.';
+          logAgentEvent(agent.id, 'tool', blocked, { durationMs: Date.now() - toolStart });
+          if (onToolUse) await onToolUse(call.name, blocked);
+          return {
+            functionResponse: {
+              name: call.name,
+              ...(isAnthropicModel(currentModelName) && call.id ? { toolUseId: call.id } : {}),
+              response: { output: blocked },
+            },
+          } as Part;
+        }
+        if (!isOpusModel(currentModelName)) {
+          const blocked = `Blocked: mutating run_command requires Ace on Opus. Current model is ${currentModelName}.`;
+          logAgentEvent(agent.id, 'tool', blocked, { durationMs: Date.now() - toolStart });
+          if (onToolUse) await onToolUse(call.name, blocked);
+          return {
+            functionResponse: {
+              name: call.name,
+              ...(isAnthropicModel(currentModelName) && call.id ? { toolUseId: call.id } : {}),
+              response: { output: blocked },
+            },
+          } as Part;
+        }
+      }
+
       const result = await executeTool(call.name, args, { agentId: agent.id });
       if (agent.id === 'developer' && !options?.modelOverride && hasValidationFailure(call.name, result)) {
         sawValidationFailure = true;
