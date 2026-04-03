@@ -1004,13 +1004,17 @@ async function processGroupchatMessage(
 
     if (activeGoal) {
       markGoalProgress('▶️ Resuming after budget approval');
-      await handleRileyMessage(
+      await withRileyResponseWatchdog(
+        workspaceChannel,
+        groupchat,
+        handleRileyMessage(
         `Budget approval has been granted by ${senderName}. Resume the paused work on this goal: ${activeGoal}`,
         senderName,
         message.member || undefined,
         groupchat,
         signal,
         workspaceChannel
+        ),
       );
     }
     return;
@@ -1025,7 +1029,11 @@ async function processGroupchatMessage(
     if (uniqueMentions.length === 1 && uniqueMentions[0] === 'executive-assistant') {
       activeGoal = content;
       markGoalProgress('⏳ Riley planning...');
-      await handleRileyMessage(content, senderName, message.member || undefined, groupchat, signal, workspaceChannel);
+      await withRileyResponseWatchdog(
+        workspaceChannel,
+        groupchat,
+        handleRileyMessage(content, senderName, message.member || undefined, groupchat, signal, workspaceChannel),
+      );
     } else {
       // User explicitly @mentioned non-Riley agents — route to them directly
       await handleDirectedMessage(content, senderName, uniqueMentions, groupchat, workspaceChannel, signal);
@@ -1034,7 +1042,49 @@ async function processGroupchatMessage(
     // No @mentions — goes to Riley, she coordinates
     activeGoal = content;
     markGoalProgress('⏳ Riley planning...');
-    await handleRileyMessage(content, senderName, message.member || undefined, groupchat, signal, workspaceChannel);
+    await withRileyResponseWatchdog(
+      workspaceChannel,
+      groupchat,
+      handleRileyMessage(content, senderName, message.member || undefined, groupchat, signal, workspaceChannel),
+    );
+  }
+}
+
+async function withRileyResponseWatchdog(
+  workspaceChannel: WebhookCapableChannel,
+  groupchat: TextChannel,
+  work: Promise<void>,
+): Promise<void> {
+  if (!Number.isFinite(RILEY_NO_RESPONSE_TIMEOUT_MS) || RILEY_NO_RESPONSE_TIMEOUT_MS <= 0) {
+    await work;
+    return;
+  }
+
+  let fired = false;
+  const timer = setTimeout(() => {
+    fired = true;
+    const seconds = Math.round(RILEY_NO_RESPONSE_TIMEOUT_MS / 1000);
+    const msg = `⚠️ No Riley response after ${seconds}s for this goal. Investigating stall and retrying safeguards.`;
+    void postAgentErrorLog('riley:watchdog', 'No Riley response observed for goal', {
+      agentId: 'executive-assistant',
+      detail: `goal=${activeGoal || 'none'} timeoutMs=${RILEY_NO_RESPONSE_TIMEOUT_MS}`,
+      level: 'warn',
+    });
+    if ('send' in workspaceChannel) {
+      void workspaceChannel.send(msg).catch(() => {});
+    }
+    if (workspaceChannel.id !== groupchat.id) {
+      void groupchat.send(msg).catch(() => {});
+    }
+  }, RILEY_NO_RESPONSE_TIMEOUT_MS);
+
+  try {
+    await work;
+  } finally {
+    clearTimeout(timer);
+    if (fired) {
+      markGoalProgress('⚠️ Riley response timeout observed');
+    }
   }
 }
 
