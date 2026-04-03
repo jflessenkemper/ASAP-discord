@@ -891,6 +891,114 @@ function parseBudgetApproval(text: string): number | undefined | null {
   return undefined;
 }
 
+function stripMentionsForIntent(text: string): string {
+  return String(text || '')
+    .replace(/<@[!&]?\d+>/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function detectDirectVoiceAction(text: string): 'join' | 'leave' | null {
+  const normalized = stripMentionsForIntent(text).toLowerCase();
+  if (!normalized) return null;
+
+  const words = normalized.split(/\s+/).filter(Boolean);
+  if (words.length > 20 || normalized.length > 180) return null;
+
+  const lead = String.raw`(?:hey|hi|yo)?\s*(?:riley|asap)?\s*[,!:;-]?\s*(?:please\s+)?(?:can you\s+|could you\s+|will you\s+)?`;
+  const joinPattern = new RegExp(
+    String.raw`^${lead}(?:join|start|open|connect|enter|hop\s+in(?:to)?|jump\s+in(?:to)?)\b[\w\s-]{0,40}\b(?:voice|vc|call|voice\s+chat|voice\s+channel)\b`,
+    'i',
+  );
+  const leavePattern = new RegExp(
+    String.raw`^${lead}(?:leave|end|stop|disconnect|hang\s*up|drop)\b[\w\s-]{0,40}\b(?:voice|vc|call|voice\s+chat|voice\s+channel)?\b`,
+    'i',
+  );
+
+  if (joinPattern.test(normalized)) return 'join';
+  if (leavePattern.test(normalized) || /^(?:leave|end call|hang up|disconnect)$/i.test(normalized)) return 'leave';
+  return null;
+}
+
+async function handleDirectVoiceActionIfRequested(message: Message, content: string, groupchat: TextChannel): Promise<boolean> {
+  const action = detectDirectVoiceAction(content);
+  if (!action) return false;
+
+  const channels = getBotChannels();
+  if (!channels) {
+    await groupchat.send('⚠️ Voice channels are not configured yet.').catch(() => {});
+    return true;
+  }
+
+  if (action === 'join') {
+    if (isCallActive()) {
+      await groupchat.send('📞 Riley is already in voice.').catch(() => {});
+      return true;
+    }
+    if (!message.member) {
+      await groupchat.send('📞 I need you to be in the server to join voice.').catch(() => {});
+      return true;
+    }
+    await startCall(channels.voiceChannel, groupchat, channels.callLog, message.member);
+    return true;
+  }
+
+  if (!isCallActive()) {
+    await groupchat.send('📞 No active voice call to leave.').catch(() => {});
+    return true;
+  }
+  await endCall();
+  return true;
+}
+
+function detectDirectOpsAction(text: string): 'status' | 'limits' | 'threads' | null {
+  const normalized = stripMentionsForIntent(text).toLowerCase();
+  if (!normalized) return null;
+
+  const words = normalized.split(/\s+/).filter(Boolean);
+  if (words.length > 18 || normalized.length > 160) return null;
+
+  const lead = String.raw`^(?:hey|hi|yo)?\s*(?:riley|asap)?\s*[,!:;-]?\s*(?:please\s+)?(?:can you\s+|could you\s+|will you\s+)?`;
+  const statusPattern = new RegExp(`${lead}(?:status|what(?:'| i)?s\s+the\s+status|update\s+status|current\s+goal)\??$`, 'i');
+  const limitsPattern = new RegExp(`${lead}(?:limits|usage|budget|spend|costs|token\s+usage|show\s+limits|show\s+usage)\??$`, 'i');
+  const threadsPattern = new RegExp(`${lead}(?:threads|thread\s+status|open\s+threads|workspace\s+threads)\??$`, 'i');
+
+  if (statusPattern.test(normalized)) return 'status';
+  if (limitsPattern.test(normalized)) return 'limits';
+  if (threadsPattern.test(normalized)) return 'threads';
+  return null;
+}
+
+async function sendQuickRileyMessage(groupchat: TextChannel, content: string): Promise<void> {
+  const riley = getAgent('executive-assistant' as AgentId);
+  if (riley) {
+    await sendAgentMessage(groupchat, riley, content);
+    return;
+  }
+  await groupchat.send(content).catch(() => {});
+}
+
+async function handleDirectOpsActionIfRequested(content: string, groupchat: TextChannel): Promise<boolean> {
+  const action = detectDirectOpsAction(content);
+  if (!action) return false;
+
+  if (action === 'status') {
+    await sendQuickRileyMessage(groupchat, getStatusSummary() || '📋 No active tasks.');
+    return true;
+  }
+
+  if (action === 'limits') {
+    await refreshLiveBillingData().catch(() => {});
+    await sendQuickRileyMessage(groupchat, getUsageReport());
+    return true;
+  }
+
+  const report = await buildThreadStatusReport(groupchat);
+  await postThreadStatusSnapshotNow('manual').catch(() => {});
+  await sendQuickRileyMessage(groupchat, report);
+  return true;
+}
+
 function getAgentWorkChannel(agentId: string, fallback: TextChannel): TextChannel {
   const channels = getBotChannels();
   return channels?.agentChannels.get(agentId) || fallback;
@@ -1014,6 +1122,16 @@ async function processGroupchatMessage(
   signal?: AbortSignal
 ): Promise<void> {
   const senderName = message.member?.displayName || message.author.username;
+  if (await handleDirectOpsActionIfRequested(content, groupchat)) {
+    markGoalProgress('⚡ Quick ops action handled directly');
+    return;
+  }
+
+  if (await handleDirectVoiceActionIfRequested(message, content, groupchat)) {
+    markGoalProgress('📞 Voice action handled directly');
+    return;
+  }
+
   const workspaceChannel = await ensureGoalWorkspace(groupchat, senderName, content);
   markGoalProgress();
 
