@@ -7,7 +7,6 @@ import helmet from 'helmet';
 import cookieParser from 'cookie-parser';
 import authRoutes from './routes/auth';
 import jobRoutes from './routes/jobs';
-import employeeRoutes from './routes/employees';
 import locationRoutes from './routes/location';
 import mapkitRoutes from './routes/mapkit';
 import fuelRoutes from './routes/fuel';
@@ -15,7 +14,6 @@ import shopRoutes from './routes/shop';
 import favoritesRoutes from './routes/favorites';
 import publicRoutes from './routes/public';
 import searchRoutes from './routes/search';
-import businessRoutes from './routes/business';
 import pool from './db/pool';
 import {
   startBot,
@@ -34,6 +32,7 @@ import {
   getRemainingBudget,
 } from './discord/bot.single';
 import twilio from 'twilio';
+import { loadRuntimeSecrets } from './services/runtimeSecrets';
 
 const app = express();
 const PORT = parseInt(process.env.PORT || '3001', 10);
@@ -176,7 +175,6 @@ app.get('/api/agent-log/text', async (req, res) => {
 // Routes
 app.use('/api/auth', authRoutes);
 app.use('/api/jobs', jobRoutes);
-app.use('/api/employees', employeeRoutes);
 app.use('/api/location', locationRoutes);
 app.use('/api/mapkit', mapkitRoutes);
 app.use('/api/fuel', fuelRoutes);
@@ -184,7 +182,6 @@ app.use('/api/shop', shopRoutes);
 app.use('/api/favorites', favoritesRoutes);
 app.use('/api/public', publicRoutes);
 app.use('/api/search', searchRoutes);
-app.use('/api/business', businessRoutes);
 
 // GitHub webhook endpoint
 app.post('/api/webhooks/github', express.json({ limit: '1mb' }), (req, res) => {
@@ -305,23 +302,27 @@ let cleanupInterval: ReturnType<typeof setInterval>;
 const server = app.listen(PORT, () => {
   console.log(`ASAP server running on http://localhost:${PORT}`);
 
-  // Attach Twilio WebSocket handler for phone calls
-  if (isTelephonyAvailable()) {
-    attachTelephonyWebSocket(server);
-    console.log('Telephony WebSocket attached');
-  }
+  void (async () => {
+    await loadRuntimeSecrets().catch(() => {});
 
-  // Run the Discord bot only on the dedicated voice-capable host.
-  if (DISCORD_BOT_ENABLED) {
-    startBot().catch((err) => {
-      console.error('Discord bot startup error:', err instanceof Error ? err.message : 'Unknown');
-    });
-  } else {
-    const reason = IS_CLOUD_RUN
-      ? 'Cloud Run runtime detected (UDP unavailable for Discord voice)'
-      : 'DISCORD_BOT_ENABLED=false';
-    console.log(`Discord bot startup disabled: ${reason}`);
-  }
+    // Attach Twilio WebSocket handler for phone calls
+    if (isTelephonyAvailable()) {
+      attachTelephonyWebSocket(server);
+      console.log('Telephony WebSocket attached');
+    }
+
+    // Run the Discord bot only on the dedicated voice-capable host.
+    if (DISCORD_BOT_ENABLED) {
+      startBot().catch((err) => {
+        console.error('Discord bot startup error:', err instanceof Error ? err.message : 'Unknown');
+      });
+    } else {
+      const reason = IS_CLOUD_RUN
+        ? 'Cloud Run runtime detected (UDP unavailable for Discord voice)'
+        : 'DISCORD_BOT_ENABLED=false';
+      console.log(`Discord bot startup disabled: ${reason}`);
+    }
+  })();
 
   // Clean up expired sessions and 2FA codes every hour
   cleanupInterval = setInterval(async () => {

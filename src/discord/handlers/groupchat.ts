@@ -1387,7 +1387,7 @@ async function handleRileyMessage(
       }
     }
 
-    if (displayResponse.includes('🛑') || displayResponse.includes('Decision Required')) {
+    if (shouldQueueDecisionReview(displayResponse)) {
       const target = decisionsChannel || groupchat;
       postDecisionEmbed(target, groupchat, displayResponse).catch(() => {});
     }
@@ -1845,21 +1845,8 @@ function ensureAceFirstDelegation(rileyResponse: string, userMessage: string): s
   return `${rileyResponse}\n\n${getAgentMention('developer' as AgentId)} please take the lead on this task and involve other specialists only if needed.`;
 }
 
-function hasNextStepsSection(text: string): boolean {
-  return /\bnext\s*steps?\b/i.test(text);
-}
-
-function shouldAppendNextSteps(text: string): boolean {
-  const normalized = String(text || '').toLowerCase();
-  if (!normalized.trim()) return false;
-  if (hasNextStepsSection(normalized)) return false;
-  if (/decision\s+required|\bblocked\b|waiting\s+for\s+(?:approval|input)|need\s+approval/.test(normalized)) return false;
-  return /(done|completed|complete|fixed|resolved|implemented|deployed|shipped|finished|ready)/.test(normalized);
-}
-
 function appendDefaultNextSteps(text: string): string {
-  if (!shouldAppendNextSteps(text)) return text;
-  return `${text.trim()}\n\nNext steps:\n1. Run a focused smoke test on the changed flow and confirm expected output.\n2. If results look good, deploy and post the release/check links.\n3. If you want, I can also add a regression guard so this does not recur.`;
+  return String(text || '').trim();
 }
 
 function goalNeedsRuntimeVerification(text: string): boolean {
@@ -1877,6 +1864,15 @@ function isCompletionClaim(text: string): boolean {
 function hasInteractiveEvidenceText(content: string): boolean {
   const normalized = String(content || '').toLowerCase();
   return /harness snapshot|mobile harness|capture screenshots|screenshots captured|puppeteer|playwright|visual verification|interactive flow verification|verified in app/.test(normalized);
+}
+
+function shouldQueueDecisionReview(text: string): boolean {
+  const normalized = String(text || '').toLowerCase();
+  if (!normalized.trim()) return false;
+  if (/\bdecision\b|🛑/.test(normalized)) return true;
+  if (/\boption\s*[1-5]\b|^[1-5][.)]\s+/m.test(normalized)) return true;
+  if (/\bshould we\b|\bchoose\b|\bpick\b|\bprefer\b|\btrade-?off\b/.test(normalized)) return true;
+  return false;
 }
 
 async function fetchRecentMessages(channel: any, limit = 60): Promise<Message[]> {
@@ -2414,10 +2410,8 @@ async function postDecisionEmbed(
   groupchat: TextChannel,
   rileyResponse: string
 ): Promise<void> {
-  const decisionMatch = rileyResponse.match(/🛑[\s\S]*?(?=\n\n[^1-9]|$)/);
-  if (!decisionMatch) return;
-
-  const decisionText = decisionMatch[0];
+  const decisionText = String(rileyResponse || '');
+  if (!decisionText.trim()) return;
 
   const optionRe = /^[1-5]️?⃣?\s*[.):]\s*(.+)$/gm;
   const options: string[] = [];
@@ -2432,40 +2426,45 @@ async function postDecisionEmbed(
     }
   }
 
-  const reactions = ['1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣'];
+  const numberReactions = ['1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣'];
+  const yesNoReactions = ['✅', '❌'];
+  const hasYesNoCue = /\byes\b.*\bno\b|\bapprove\b.*\breject\b|\bgo\b.*\bno-go\b|\bship\b.*\bhold\b/i.test(decisionText);
+  const usingYesNo = options.length === 0 && hasYesNoCue;
 
-  if (options.length === 0) return; // No parseable options
+  const reactionSet = usingYesNo ? yesNoReactions : numberReactions;
+  const choiceSet = usingYesNo ? ['Yes', 'No'] : options.slice(0, 5);
+
+  if (choiceSet.length === 0) return; // No parseable options
 
   const isDecisionsChannel = decisionsChannel && targetChannel.id === decisionsChannel.id;
 
   const embed = new EmbedBuilder()
-    .setTitle('🛑 Decision Required')
+    .setTitle('📋 Decision Review (Optional)')
     .setDescription(
-      options
-        .slice(0, 5)
-        .map((opt, i) => `${reactions[i]} ${opt}`)
+      choiceSet
+        .map((opt, i) => `${reactionSet[i]} ${opt}`)
         .join('\n\n')
     )
-    .setColor(0xff4444)
-    .setFooter({ text: isDecisionsChannel ? 'React to choose or type your answer here' : 'React to choose • Times out in 5 minutes' });
+    .setColor(0x3a8dff)
+    .setFooter({ text: isDecisionsChannel ? 'Work continues automatically. React to steer plan or type your preference.' : 'Work continues automatically. React to steer plan.' });
 
   const decisionMsg = await targetChannel.send({ embeds: [embed] });
 
-  for (let i = 0; i < Math.min(options.length, 5); i++) {
-    await decisionMsg.react(reactions[i]).catch(() => {});
+  for (let i = 0; i < choiceSet.length; i++) {
+    await decisionMsg.react(reactionSet[i]).catch(() => {});
   }
 
   const timeoutMs = isDecisionsChannel ? 12 * 60 * 60 * 1000 : 5 * 60 * 1000;
   const filter = (reaction: any, user: any) => {
-    return reactions.slice(0, options.length).includes(reaction.emoji.name || '') && !user.bot;
+    return reactionSet.includes(reaction.emoji.name || '') && !user.bot;
   };
 
   decisionMsg.awaitReactions({ filter, max: 1, time: timeoutMs })
     .then(async (collected) => {
       const reaction = collected.first();
       if (!reaction) return;
-      const choiceIndex = reactions.indexOf(reaction.emoji.name || '');
-      const choice = options[choiceIndex] || `Option ${choiceIndex + 1}`;
+      const choiceIndex = reactionSet.indexOf(reaction.emoji.name || '');
+      const choice = choiceSet[choiceIndex] || `Option ${choiceIndex + 1}`;
       const users = await reaction.users.fetch();
       const reactUser = users.find((u) => !u.bot);
       const userName = reactUser?.username || 'User';
@@ -2484,7 +2483,7 @@ async function postDecisionEmbed(
         await targetChannel.send(`✅ **${userName}** chose: **${choice}**`);
       }
 
-      const decisionMessage = `${userName} chose option ${choiceIndex + 1}: ${choice}`;
+      const decisionMessage = `[Plan preference from decisions reactions] ${userName} selected ${choice}. Continue execution and adjust plan accordingly.`;
       const workspaceChannel = await ensureGoalWorkspace(groupchat, userName, decisionMessage);
       await handleRileyMessage(decisionMessage, userName, undefined, groupchat, undefined, workspaceChannel);
     })
