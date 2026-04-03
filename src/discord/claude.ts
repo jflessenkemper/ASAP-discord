@@ -81,6 +81,15 @@ function isVerificationTaskPrompt(userMessage: string): boolean {
   return VERIFICATION_TASK_RE.test(trimmed);
 }
 
+function normalizeLowSignalFinalText(agentId: string, text: string, totalToolCalls: number): string {
+  const normalized = String(text || '').trim();
+  if (!normalized) return '';
+  if (agentId === 'developer' && totalToolCalls > 0 && /^(?:done|fixed|resolved|completed|all good|finished)\.?$/i.test(normalized)) {
+    return '';
+  }
+  return normalized;
+}
+
 /** Detect failed tests/typecheck outputs that warrant escalation to Pro. */
 function hasValidationFailure(toolName: string, result: string): boolean {
   if (toolName !== 'run_tests' && toolName !== 'typecheck') return false;
@@ -2228,7 +2237,7 @@ RUNTIME EFFICIENCY:
           promptBreakdown: pendingPromptBreakdown,
         },
       );
-      const finalText = response.response.text() || 'Done.';
+      const finalText = normalizeLowSignalFinalText(agent.id, response.response.text() || '', totalToolCalls);
       if (cacheKey && totalToolCalls === 0 && finalText.length <= 500) {
         setCachedResponse(cacheKey, finalText);
       }
