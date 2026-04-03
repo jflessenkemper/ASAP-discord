@@ -60,6 +60,7 @@ const DIRECT_GROUPCHAT_SHORT_PROMPT_MAX_WORDS = parseInt(process.env.DIRECT_GROU
 
 let activeGoal: string | null = null;
 let goalStatus: string | null = null;
+let activeGoalStartedAt = Date.now();
 
 const GOAL_STALL_TIMEOUT_MS = parseInt(process.env.GOAL_STALL_TIMEOUT_MS || '420000', 10);
 const GOAL_STALL_CHECK_INTERVAL_MS = parseInt(process.env.GOAL_STALL_CHECK_INTERVAL_MS || '60000', 10);
@@ -562,6 +563,7 @@ async function closeGoalWorkspace(
   activeGoalThreadId = null;
   activeGoal = null;
   goalStatus = '✅ Completed';
+  activeGoalStartedAt = Date.now();
   lastThreadCloseReviewAt = 0;
 
   if (AUTO_DEPLOY_ON_THREAD_CLOSE) {
@@ -786,6 +788,7 @@ async function ensureGoalWorkspace(groupchat: TextChannel, senderName: string, c
   });
 
   activeGoalThreadId = thread.id;
+  activeGoalStartedAt = Date.now();
   lastThreadCloseReviewAt = 0;
 
   const riley = getAgent('executive-assistant' as AgentId);
@@ -1195,6 +1198,7 @@ async function processGroupchatMessage(
   if (uniqueMentions.length > 0) {
     if (uniqueMentions.length === 1 && uniqueMentions[0] === 'executive-assistant') {
       activeGoal = content;
+      activeGoalStartedAt = Date.now();
       markGoalProgress('⏳ Riley planning...');
       await withRileyResponseWatchdog(
         workspaceChannel,
@@ -1206,6 +1210,7 @@ async function processGroupchatMessage(
     }
   } else {
     activeGoal = content;
+    activeGoalStartedAt = Date.now();
     markGoalProgress('⏳ Riley planning...');
     await withRileyResponseWatchdog(
       workspaceChannel,
@@ -1266,6 +1271,7 @@ export async function handleGoalCommand(
 ): Promise<void> {
   const senderName = member.displayName || member.user.username;
   activeGoal = description;
+  activeGoalStartedAt = Date.now();
   markGoalProgress('⏳ Planning...');
 
   const workspaceChannel = await ensureGoalWorkspace(groupchat, senderName, description);
@@ -1640,6 +1646,15 @@ async function executeActions(
           break;
         }
         case 'CLOSE_THREAD': {
+          const goalRequiresMapEvidence = requiresMapScreenshotEvidence(activeGoal || '');
+          if (goalRequiresMapEvidence) {
+            const evidenceSince = Math.max(Date.now() - 2 * 60 * 60 * 1000, activeGoalStartedAt - 60_000);
+            const hasMapEvidence = await hasRecentMapScreenshotEvidence(evidenceSince);
+            if (!hasMapEvidence) {
+              await sendAsRiley('🛑 Cannot close this thread yet. Required map screenshot evidence was not found in #📸-screenshots. Please run [ACTION:SCREENSHOTS] and include the map screen capture first.');
+              break;
+            }
+          }
           await sendAsRiley('🧵 Closing this workspace thread now that the task is complete.');
           await closeGoalWorkspace(groupchat, workspaceChannel, 'Closed by Riley action');
           break;
@@ -1836,6 +1851,41 @@ function appendDefaultNextSteps(text: string): string {
   return `${text.trim()}\n\nNext steps:\n1. Run a focused smoke test on the changed flow and confirm expected output.\n2. If results look good, deploy and post the release/check links.\n3. If you want, I can also add a regression guard so this does not recur.`;
 }
 
+function requiresMapScreenshotEvidence(text: string): boolean {
+  const normalized = String(text || '').toLowerCase();
+  if (!normalized.trim()) return false;
+  const mentionsMap = /\bmap\b|screen2-map|dive\s*in/.test(normalized);
+  const mentionsProof = /\bscreenshot|evidence|verify|verification|prove|proof|smoke\b/.test(normalized);
+  return mentionsMap && mentionsProof;
+}
+
+async function hasRecentMapScreenshotEvidence(sinceTs: number): Promise<boolean> {
+  const channels = getBotChannels();
+  const screenshots = channels?.screenshots;
+  if (!screenshots) return false;
+
+  try {
+    const recent = await screenshots.messages.fetch({ limit: 60 });
+    for (const msg of recent.values()) {
+      if (msg.createdTimestamp < sinceTs) continue;
+      const content = String(msg.content || '').toLowerCase();
+      if (/map[-\s]?screen|map[-\s]?dashboard|dive\s*in\s*map|verification.*map/.test(content)) {
+        return true;
+      }
+      for (const attachment of msg.attachments.values()) {
+        const name = String(attachment.name || '').toLowerCase();
+        if (/map[-\s]?screen|map[-\s]?dashboard|dive[-\s]?in[-\s]?map|\bmap\b.*\.png/.test(name)) {
+          return true;
+        }
+      }
+    }
+  } catch (err) {
+    console.warn('Could not verify map screenshot evidence:', err instanceof Error ? err.message : 'Unknown');
+  }
+
+  return false;
+}
+
 function shouldMirrorCompletionToGroupchat(text: string, workspaceChannel: WebhookCapableChannel, groupchat: TextChannel): boolean {
   if (workspaceChannel.id === groupchat.id) return false;
   const normalized = String(text || '').toLowerCase();
@@ -1962,6 +2012,7 @@ async function handleAgentChain(
   const consolidatedFindings: string[] = [];
   const consolidatedErrors: string[] = [];
   const rileyAlreadyCompletion = /(done|completed|complete|fixed|resolved|implemented|deployed|shipped|finished|ready)/i.test(rileyResponse);
+  const needsMapEvidence = requiresMapScreenshotEvidence(`${activeGoal || ''}\n${rileyResponse}`);
   if (aceDirected) {
     const ace = getAgent('developer' as AgentId);
     if (ace) {
@@ -2018,7 +2069,8 @@ async function handleAgentChain(
           );
         }
 
-        if (!signal?.aborted && needsQualityRetry()) {
+        const aceQualityFailed = !signal?.aborted && needsQualityRetry();
+        if (aceQualityFailed) {
           consolidatedErrors.push('Ace completion quality check failed after retries.');
         }
 
@@ -2037,8 +2089,15 @@ async function handleAgentChain(
         } else {
           const inferredSpecialists = inferSpecialistsForContext(`${rileyResponse}\n${aceResponse}`)
             .filter((id) => id !== 'developer');
-          if (inferredSpecialists.length > 0) {
-            const autoSpecialistRun = await handleSubAgents(inferredSpecialists, aceResponse, groupchat, workspaceChannel, signal);
+          const forcedFallback = aceQualityFailed
+            ? ['qa', 'ux-reviewer', 'api-reviewer']
+            : [];
+          const fallbackAgents = [...new Set([...forcedFallback, ...inferredSpecialists])];
+          if (fallbackAgents.length > 0) {
+            if (aceQualityFailed) {
+              consolidatedFindings.push('Forced specialist fallback executed due to weak Ace completion output.');
+            }
+            const autoSpecialistRun = await handleSubAgents(fallbackAgents, aceResponse, groupchat, workspaceChannel, signal);
             consolidatedFindings.push(...autoSpecialistRun.findings);
             consolidatedErrors.push(...autoSpecialistRun.errors);
           }
@@ -2067,6 +2126,18 @@ async function handleAgentChain(
     const recovered = await recoverFromAgentErrors(rileyResponse, consolidatedErrors, groupchat, workspaceChannel, signal);
     consolidatedFindings.push(...recovered.findings);
     consolidatedErrors.push(...recovered.errors);
+  }
+
+  if (!signal?.aborted && needsMapEvidence) {
+    const evidenceSince = Math.max(Date.now() - 2 * 60 * 60 * 1000, activeGoalStartedAt - 60_000);
+    const hasMapEvidence = await hasRecentMapScreenshotEvidence(evidenceSince);
+    if (!hasMapEvidence) {
+      consolidatedErrors.push('Required map screenshot evidence is missing in #📸-screenshots (expected map-screen/map-dashboard capture).');
+      const riley = getAgent('executive-assistant' as AgentId);
+      if (riley) {
+        await sendAgentMessage(workspaceChannel, riley, '🛑 Completion gate: map screenshot evidence is required but missing. I will keep this thread open until screenshots include the map screen (for example, 03-map-screen / 04-map-dashboard).');
+      }
+    }
   }
 
   if (GROUPCHAT_SUMMARY_ONLY && !signal?.aborted && (consolidatedFindings.length > 0 || consolidatedErrors.length > 0)) {
