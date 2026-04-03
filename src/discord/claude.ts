@@ -36,6 +36,7 @@ const CODE_WORK_RE = /\b(?:code|coding|implement|implementation|fix|bug|debug|re
 const TOOL_ACTION_RE = /\b(?:run|read|search|grep|inspect|check|verify|edit|change|update|deploy|build|test|commit|push|rollback|migrate|open)\b/i;
 const SIMPLE_FAST_PATH_RE = /^(?:ok(?:ay)?|yes|no|thanks?|thank you|status|summary|summari[sz]e|what happened|why|how|help|ping|continue|proceed|looks good|sounds good)\b/i;
 const DIRECT_ANSWER_ONLY_RE = /^(?:ok(?:ay)?|yes|no|thanks?|thank you|understood|sounds good|what does|what is|why is|how does|explain|summari[sz]e|clarify)\b/i;
+const VERIFICATION_TASK_RE = /\b(?:verify|verification|confirm|smoke(?:\s+test)?|evidence|prove|check(?:\s+that)?|regression|screenshot|snapshot|next\s*steps)\b/i;
 
 function normalizePromptForHeuristics(userMessage: string): string {
   return String(userMessage || '')
@@ -72,6 +73,12 @@ function isDirectAnswerOnlyPrompt(userMessage: string): boolean {
   if (!trimmed || trimmed.length > 240) return false;
   if (TOOL_ACTION_RE.test(trimmed) || isCodeWorkPrompt(trimmed)) return false;
   return DIRECT_ANSWER_ONLY_RE.test(trimmed) || /^(?:who|what|why|how)\b/i.test(trimmed);
+}
+
+function isVerificationTaskPrompt(userMessage: string): boolean {
+  const trimmed = normalizePromptForHeuristics(userMessage);
+  if (!trimmed || trimmed.length > 500) return false;
+  return VERIFICATION_TASK_RE.test(trimmed);
 }
 
 /** Detect failed tests/typecheck outputs that warrant escalation to Pro. */
@@ -137,12 +144,17 @@ function toolsForAgent(agentId: string): AnyTool[] {
 }
 
 function toolsForPrompt(agentId: string, userMessage: string): AnyTool[] {
+  const reviewTools = (COMPACT_RUNTIME_TOOL_PROMPTS ? PROMPT_REVIEW_TOOLS : REVIEW_TOOLS) as unknown as AnyTool[];
   if (isDirectAnswerOnlyPrompt(userMessage)) {
     return [];
   }
 
+  if (agentId === 'executive-assistant' && isVerificationTaskPrompt(userMessage)) {
+    return reviewTools;
+  }
+
   if (isSimpleFastPathPrompt(userMessage) && agentId !== 'executive-assistant') {
-    return (COMPACT_RUNTIME_TOOL_PROMPTS ? PROMPT_REVIEW_TOOLS : REVIEW_TOOLS) as unknown as AnyTool[];
+    return reviewTools;
   }
 
   return toolsForAgent(agentId);
@@ -1789,6 +1801,7 @@ export async function agentRespond(
     onPartialText?: (partialText: string) => Promise<void>;
     toolRoundBoost?: number;
     rileyAutoToolApprovalUsed?: boolean;
+    safetyCapSynthesisUsed?: boolean;
     disableTools?: boolean;
     priority?: 'normal' | 'voice' | 'background';
     chatSession?: ReusableAgentChatSession;
@@ -2407,6 +2420,25 @@ RUNTIME EFFICIENCY:
         ...options,
         toolRoundBoost: extension,
         rileyAutoToolApprovalUsed: true,
+      }
+    );
+  }
+
+  if (!options?.safetyCapSynthesisUsed) {
+    const synthesisPrompt = agent.id === 'executive-assistant'
+      ? `${userMessage}\n\n[System note: tool safety cap reached. Do not use tools. In one concise response, summarize what was completed, what evidence was gathered, what remains open, and finish with Next steps.]`
+      : `${userMessage}\n\n[System note: tool safety cap reached. Do not use tools. Return a concise completion summary using this exact format:\nResult: <one sentence>\nEvidence: <files/checks/outcome>\nRisk/Follow-up: <one sentence>.]`;
+    logAgentEvent(agent.id, 'response', `Starting final no-tools synthesis after tool cap (${maxToolRounds} rounds)`);
+    return agentRespond(
+      agent,
+      conversationHistory,
+      synthesisPrompt,
+      onToolUse,
+      {
+        ...options,
+        disableTools: true,
+        safetyCapSynthesisUsed: true,
+        toolRoundBoost: 0,
       }
     );
   }

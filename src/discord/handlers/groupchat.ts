@@ -1011,6 +1011,7 @@ interface AgentDispatchOptions {
   documentLine?: string;
   persistUserContent?: string;
   workspaceChannel?: WebhookCapableChannel;
+  suppressVisibleOutput?: (response: string) => boolean;
 }
 
 async function dispatchToAgent(
@@ -1038,9 +1039,13 @@ async function dispatchToAgent(
 
   if (options.signal?.aborted) return '';
 
-  await sendAgentMessage(outputChannel, agent, response);
-  if (options.workspaceChannel && options.workspaceChannel.id !== outputChannel.id) {
-    await sendAgentMessage(options.workspaceChannel, agent, response);
+  const suppressVisibleOutput = options.suppressVisibleOutput?.(response) === true;
+
+  if (!suppressVisibleOutput) {
+    await sendAgentMessage(outputChannel, agent, response);
+    if (options.workspaceChannel && options.workspaceChannel.id !== outputChannel.id) {
+      await sendAgentMessage(options.workspaceChannel, agent, response);
+    }
   }
   appendToMemory(agentId, [
     { role: 'user', content: options.persistUserContent || contextMessage },
@@ -1737,6 +1742,14 @@ function hasAceCompletionContract(text: string): boolean {
   return true;
 }
 
+function shouldSuppressAceVisibleOutput(text: string): boolean {
+  const content = String(text || '');
+  return content.trim().length < 90
+    || LOW_SIGNAL_COMPLETION_RE.test(content)
+    || isAceSelfDelegationResponse(content)
+    || !hasAceCompletionContract(content);
+}
+
 function shouldAutoDelegateToAce(userMessage: string, rileyResponse: string): boolean {
   if (parseDirectives(rileyResponse).length > 0) return false;
   const responseText = rileyResponse.toLowerCase();
@@ -1908,6 +1921,7 @@ async function handleAgentChain(
           persistUserContent: `[Riley directed]: ${rileyResponse.slice(0, 1000)}`,
           documentLine: '✅ {response}',
           workspaceChannel,
+          suppressVisibleOutput: shouldSuppressAceVisibleOutput,
         });
 
         const needsQualityRetry = () => (
@@ -1928,6 +1942,7 @@ async function handleAgentChain(
               persistUserContent: '[System quality check for Ace response detail]',
               documentLine: '✅ {response}',
               workspaceChannel,
+              suppressVisibleOutput: shouldSuppressAceVisibleOutput,
             }
           );
         }
@@ -1943,6 +1958,7 @@ async function handleAgentChain(
               persistUserContent: '[System final quality check for Ace response detail]',
               documentLine: '✅ {response}',
               workspaceChannel,
+              suppressVisibleOutput: shouldSuppressAceVisibleOutput,
             }
           );
         }
