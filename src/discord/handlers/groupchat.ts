@@ -1709,6 +1709,17 @@ function shouldFanOutAllAgents(rileyResponse: string): boolean {
 }
 
 const ACE_FIRST_TASK_RE = /\b(?:fix|inspect|investigate|check|review|test|debug|look at|look into|trace|implement|update|change|patch|deploy|smoke|regression|audit|compare|why)\b/i;
+const LOW_SIGNAL_COMPLETION_RE = /^\s*(?:done|fixed|resolved|completed|all good|finished)\.?\s*$/i;
+
+function isAceSelfDelegationResponse(text: string): boolean {
+  const normalized = String(text || '').toLowerCase();
+  if (!normalized) return false;
+  const selfMention = getAgentMention('developer' as AgentId).toLowerCase();
+  return normalized.includes('coordinate with ace')
+    || normalized.includes('investigate the `client` codebase')
+    || normalized.includes('@ace')
+    || normalized.includes(selfMention);
+}
 
 function shouldAutoDelegateToAce(userMessage: string, rileyResponse: string): boolean {
   if (parseDirectives(rileyResponse).length > 0) return false;
@@ -1840,14 +1851,33 @@ async function handleAgentChain(
         if (signal?.aborted) return;
         const aceChannel = getAgentWorkChannel('developer', groupchat);
         aceChannel.sendTyping().catch(() => {});
-        const aceContext = `[Riley directed you]: ${rileyResponse}\n\nOwn execution yourself first. Only bring in extra specialists if they are truly needed. If you do delegate, use the exact Discord mentions from this guide: ${buildAgentMentionGuide(['security-auditor', 'api-reviewer', 'dba', 'performance', 'devops', 'copywriter', 'lawyer', 'qa', 'ux-reviewer', 'ios-engineer', 'android-engineer'])}. Report back concisely when done.`;
+        const aceContext = `[Riley directed you]: ${rileyResponse}\n\nOwn execution yourself first. Only bring in extra specialists if they are truly needed. If you do delegate, use the exact Discord mentions from this guide: ${buildAgentMentionGuide(['security-auditor', 'api-reviewer', 'dba', 'performance', 'devops', 'copywriter', 'lawyer', 'qa', 'ux-reviewer', 'ios-engineer', 'android-engineer'])}.\n\nWhen you finish, do NOT reply with just "Done". Include these exact sections:\n- Result: one sentence outcome.\n- Evidence: files changed, commands/tests run, and key output.\n- Risk/Follow-up: any caveats or next checks.`;
 
-        const aceResponse = await dispatchToAgent('developer', aceContext, aceChannel, {
+        let aceResponse = await dispatchToAgent('developer', aceContext, aceChannel, {
           signal,
           persistUserContent: `[Riley directed]: ${rileyResponse.slice(0, 1000)}`,
           documentLine: '✅ {response}',
           workspaceChannel,
         });
+
+        if (!signal?.aborted && (
+          aceResponse.trim().length < 90
+          || LOW_SIGNAL_COMPLETION_RE.test(aceResponse)
+          || isAceSelfDelegationResponse(aceResponse)
+        )) {
+          aceResponse = await dispatchToAgent(
+            'developer',
+            '[System quality check] Your last update did not satisfy execution standards. Do not delegate back to Ace, do not ask others to investigate, and do not use placeholders. Execute directly and provide a concrete completion summary with these exact sections: Result, Evidence, Risk/Follow-up. Include at least one real file path and one validation command or check.',
+            aceChannel,
+            {
+              signal,
+              maxTokens: Math.max(SUBAGENT_MAX_TOKENS, 700),
+              persistUserContent: '[System quality check for Ace response detail]',
+              documentLine: '✅ {response}',
+              workspaceChannel,
+            }
+          );
+        }
 
         if (signal?.aborted) return;
         markGoalProgress('💻 Ace implementing...');
