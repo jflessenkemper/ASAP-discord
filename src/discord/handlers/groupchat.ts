@@ -1742,6 +1742,27 @@ function hasAceCompletionContract(text: string): boolean {
   return true;
 }
 
+function summarizeAceCompletionForRiley(text: string): string {
+  const content = String(text || '').trim();
+  if (!content) return 'Execution completed; evidence is available in the developer channel.';
+
+  const result = content.match(/\bresult\s*:\s*([^\n]+)/i)?.[1]?.trim();
+  const evidence = content.match(/\bevidence\s*:\s*([^\n]+)/i)?.[1]?.trim();
+  const risk = content.match(/\brisk\s*\/\s*follow-?up\s*:\s*([^\n]+)/i)?.[1]?.trim();
+
+  const parts = [
+    result ? `Result: ${result}` : null,
+    evidence ? `Evidence: ${evidence}` : null,
+    risk ? `Risk/Follow-up: ${risk}` : null,
+  ].filter(Boolean);
+
+  if (parts.length > 0) {
+    return parts.join(' | ').slice(0, 480);
+  }
+
+  return content.replace(/\s+/g, ' ').slice(0, 480);
+}
+
 function shouldSuppressAceVisibleOutput(text: string): boolean {
   const content = String(text || '');
   return content.trim().length < 90
@@ -1965,6 +1986,10 @@ async function handleAgentChain(
 
         if (!signal?.aborted && needsQualityRetry()) {
           consolidatedErrors.push('Ace completion quality check failed after retries.');
+        }
+
+        if (!signal?.aborted && hasAceCompletionContract(aceResponse)) {
+          consolidatedFindings.push(`${getAgentMention('developer' as AgentId)}: ${summarizeAceCompletionForRiley(aceResponse)}`);
         }
 
         if (signal?.aborted) return;

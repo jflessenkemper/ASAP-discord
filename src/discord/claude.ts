@@ -84,7 +84,7 @@ function isVerificationTaskPrompt(userMessage: string): boolean {
 function normalizeLowSignalFinalText(agentId: string, text: string, totalToolCalls: number): string {
   const normalized = String(text || '').trim();
   if (!normalized) return '';
-  if (agentId === 'developer' && totalToolCalls > 0 && /^(?:done|fixed|resolved|completed|all good|finished)\.?$/i.test(normalized)) {
+  if ((agentId === 'developer' || agentId === 'executive-assistant') && totalToolCalls > 0 && /^(?:done|fixed|resolved|completed|all good|finished)\.?$/i.test(normalized)) {
     return '';
   }
   return normalized;
@@ -1834,7 +1834,10 @@ export async function agentRespond(
     : agent.id === 'executive-assistant'
       ? MAX_TOOL_ROUNDS_EXECUTIVE
       : MAX_TOOL_ROUNDS;
-  const maxToolRounds = baseToolRounds + Math.max(0, options?.toolRoundBoost || 0);
+  const verificationRoundCap = (agent.id === 'executive-assistant' && isVerificationTaskPrompt(userMessage))
+    ? Math.min(baseToolRounds, 2)
+    : baseToolRounds;
+  const maxToolRounds = verificationRoundCap + Math.max(0, options?.toolRoundBoost || 0);
   let autoBudgetPassesUsed = 0;
 
   if (isCreditsExhaustedNow()) {
