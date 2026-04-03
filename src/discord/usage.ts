@@ -608,7 +608,7 @@ export function getUsageEmbed(): EmbedBuilder {
         name: '☁️ Live GCP Billed Spend',
         value: live.available && live.dailyCostUsd !== null
           ? `Today (UTC): **$${live.dailyCostUsd.toFixed(4)} ${live.currency}**\nMonth-to-date: **$${(live.monthCostUsd || 0).toFixed(4)} ${live.currency}**\nSource: Cloud Monitoring`
-          : `Unavailable right now (${live.error || 'no billing metric data yet'})`,
+          : `Estimated today (fallback): **$${estimatedGcp.toFixed(4)} USD**\nReason: ${live.error || 'Live billing metric unavailable'}\nSource: Internal usage counters`,
       },
       {
         name: '💰 Budget Gate (Today)',
@@ -638,7 +638,7 @@ export function getUsageReport(): string {
 
   const liveLine = live.available && live.dailyCostUsd !== null
     ? `☁️ Live GCP | today $${live.dailyCostUsd.toFixed(4)} ${live.currency} | mtd $${(live.monthCostUsd || 0).toFixed(4)} ${live.currency}`
-    : `☁️ Live GCP | unavailable (${live.error || 'no billing metric data yet'})`;
+    : `☁️ Live GCP | fallback est=$${estimatedGcp.toFixed(4)} USD (${live.error || 'Live billing metric unavailable'})`;
 
   const lines = [
     `📊 ASAP Usage Dashboard | reset ${usage.lastReset}`,

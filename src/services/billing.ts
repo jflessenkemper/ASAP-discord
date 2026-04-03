@@ -33,6 +33,18 @@ const billingCache: LiveBillingCache = {
 
 let auth: GoogleAuth | null = null;
 
+function normalizeBillingError(err: unknown): string {
+  const raw = err instanceof Error ? err.message : String(err || 'Failed to query live billing');
+  const lower = raw.toLowerCase();
+  if (lower.includes('cannot find metric') || lower.includes('metric(s) that match type')) {
+    return 'Cloud Monitoring billing metric is not available in this project yet.';
+  }
+  if (lower.includes('permission') || lower.includes('denied')) {
+    return 'Missing permission to read Cloud Monitoring billing metrics.';
+  }
+  return 'Live billing lookup failed; using estimated spend.';
+}
+
 function getAuth(): GoogleAuth {
   if (!auth) {
     auth = new GoogleAuth({ scopes: 'https://www.googleapis.com/auth/monitoring.read' });
@@ -140,6 +152,6 @@ export async function refreshLiveBillingSnapshot(force = false): Promise<void> {
     billingCache.updatedAtIso = new Date().toISOString();
     billingCache.error = null;
   } catch (err) {
-    billingCache.error = err instanceof Error ? err.message : 'Failed to query live billing';
+    billingCache.error = normalizeBillingError(err);
   }
 }
