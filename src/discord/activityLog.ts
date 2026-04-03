@@ -8,6 +8,13 @@ import { postAgentErrorLog } from './services/agentErrors';
  */
 
 type EventType = 'invoke' | 'tool' | 'response' | 'error' | 'rate_limit';
+let activityLogDbDisabled = false;
+
+function isPermissionDeniedError(err: unknown): boolean {
+  const code = String((err as any)?.code || '');
+  const msg = String((err as any)?.message || err || '').toLowerCase();
+  return code === '42501' || msg.includes('permission denied');
+}
 
 export function logAgentEvent(
   agentId: string,
@@ -27,6 +34,8 @@ export function logAgentEvent(
     });
   }
 
+  if (activityLogDbDisabled) return;
+
   pool.query(
     `INSERT INTO agent_activity_log (agent_id, event, detail, duration_ms, tokens_in, tokens_out)
      VALUES ($1, $2, $3, $4, $5, $6)`,
@@ -40,6 +49,11 @@ export function logAgentEvent(
     ]
   ).catch((err) => {
     const msg = err instanceof Error ? err.message : 'Unknown';
+    if (isPermissionDeniedError(err)) {
+      activityLogDbDisabled = true;
+      console.warn('Activity log DB persistence disabled due to permission error.');
+      return;
+    }
     if (err?.code !== '42P01' && !msg.includes('Cannot use a pool after calling end on the pool')) {
       console.error('Activity log write error:', msg);
     }

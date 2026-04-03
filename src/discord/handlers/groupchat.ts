@@ -1713,6 +1713,8 @@ function shouldFanOutAllAgents(rileyResponse: string): boolean {
 
 const ACE_FIRST_TASK_RE = /\b(?:fix|inspect|investigate|check|review|test|debug|look at|look into|trace|implement|update|change|patch|deploy|smoke|regression|audit|compare|why)\b/i;
 const LOW_SIGNAL_COMPLETION_RE = /^\s*(?:done|fixed|resolved|completed|all good|finished)\.?\s*$/i;
+const FILE_PATH_EVIDENCE_RE = /\b(?:[a-zA-Z0-9_.-]+\/)+[a-zA-Z0-9_.-]+\.[a-zA-Z0-9]+\b/;
+const CHECK_EVIDENCE_RE = /\b(?:npm\s+run|pnpm\s+|yarn\s+|typecheck|lint|test|build|smoke|harness|playwright|jest|tsc)\b/i;
 
 function isAceSelfDelegationResponse(text: string): boolean {
   const normalized = String(text || '').toLowerCase();
@@ -1722,6 +1724,17 @@ function isAceSelfDelegationResponse(text: string): boolean {
     || normalized.includes('investigate the `client` codebase')
     || normalized.includes('@ace')
     || normalized.includes(selfMention);
+}
+
+function hasAceCompletionContract(text: string): boolean {
+  const content = String(text || '');
+  if (!content.trim()) return false;
+  if (!/\bresult\s*:/i.test(content)) return false;
+  if (!/\bevidence\s*:/i.test(content)) return false;
+  if (!/\brisk\s*\/\s*follow-?up\s*:/i.test(content)) return false;
+  if (!FILE_PATH_EVIDENCE_RE.test(content)) return false;
+  if (!CHECK_EVIDENCE_RE.test(content)) return false;
+  return true;
 }
 
 function shouldAutoDelegateToAce(userMessage: string, rileyResponse: string): boolean {
@@ -1761,6 +1774,31 @@ function shouldMirrorCompletionToGroupchat(text: string, workspaceChannel: Webho
   if (!normalized.trim()) return false;
   if (/decision\s+required|\bblocked\b|waiting\s+for\s+(?:approval|input)|need\s+approval/.test(normalized)) return false;
   return /(done|completed|complete|fixed|resolved|implemented|deployed|shipped|finished|ready)/.test(normalized);
+}
+
+function buildChainCompletionWatchdogMessage(findings: string[], errors: string[]): string {
+  const findingBits = findings
+    .map((line) => line.replace(/\s+/g, ' ').trim())
+    .filter(Boolean)
+    .slice(0, 3)
+    .map((line) => `- ${line.slice(0, 220)}`);
+  const errorBits = errors
+    .map((line) => line.replace(/\s+/g, ' ').trim())
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((line) => `- ${line.slice(0, 220)}`);
+
+  const statusLine = errorBits.length > 0
+    ? 'Work is partially complete with follow-up required.'
+    : 'Workstream completed via Riley orchestration.';
+
+  const body = [
+    `✅ ${statusLine}`,
+    findingBits.length > 0 ? `Evidence:\n${findingBits.join('\n')}` : 'Evidence: agent execution completed; details logged in workspace channels.',
+    errorBits.length > 0 ? `Open issues:\n${errorBits.join('\n')}` : '',
+  ].filter(Boolean).join('\n\n');
+
+  return appendDefaultNextSteps(body);
 }
 
 async function recoverFromAgentErrors(
@@ -1855,6 +1893,7 @@ async function handleAgentChain(
     : [];
   const consolidatedFindings: string[] = [];
   const consolidatedErrors: string[] = [];
+  const rileyAlreadyCompletion = /(done|completed|complete|fixed|resolved|implemented|deployed|shipped|finished|ready)/i.test(rileyResponse);
   if (aceDirected) {
     const ace = getAgent('developer' as AgentId);
     if (ace) {
@@ -1871,11 +1910,14 @@ async function handleAgentChain(
           workspaceChannel,
         });
 
-        if (!signal?.aborted && (
+        const needsQualityRetry = () => (
           aceResponse.trim().length < 90
           || LOW_SIGNAL_COMPLETION_RE.test(aceResponse)
           || isAceSelfDelegationResponse(aceResponse)
-        )) {
+          || !hasAceCompletionContract(aceResponse)
+        );
+
+        if (!signal?.aborted && needsQualityRetry()) {
           aceResponse = await dispatchToAgent(
             'developer',
             '[System quality check] Your last update did not satisfy execution standards. Do not delegate back to Ace, do not ask others to investigate, and do not use placeholders. Execute directly and provide a concrete completion summary with these exact sections: Result, Evidence, Risk/Follow-up. Include at least one real file path and one validation command or check.',
@@ -1888,6 +1930,25 @@ async function handleAgentChain(
               workspaceChannel,
             }
           );
+        }
+
+        if (!signal?.aborted && needsQualityRetry()) {
+          aceResponse = await dispatchToAgent(
+            'developer',
+            '[System quality check final] Return only this format and fill it concretely:\nResult: <one sentence>\nEvidence: files=<path1,path2>; checks=<command and outcome>\nRisk/Follow-up: <one sentence>.\nNo delegation text. No placeholders.',
+            aceChannel,
+            {
+              signal,
+              maxTokens: Math.max(SUBAGENT_MAX_TOKENS, 500),
+              persistUserContent: '[System final quality check for Ace response detail]',
+              documentLine: '✅ {response}',
+              workspaceChannel,
+            }
+          );
+        }
+
+        if (!signal?.aborted && needsQualityRetry()) {
+          consolidatedErrors.push('Ace completion quality check failed after retries.');
         }
 
         if (signal?.aborted) return;
@@ -1929,6 +1990,14 @@ async function handleAgentChain(
     const riley = getAgent('executive-assistant' as AgentId);
     if (riley) {
       await sendAgentMessage(workspaceChannel, riley, buildConsolidatedAgentUpdate(consolidatedFindings, consolidatedErrors));
+
+      if (!rileyAlreadyCompletion) {
+        const watchdogSummary = buildChainCompletionWatchdogMessage(consolidatedFindings, consolidatedErrors);
+        await sendAgentMessage(workspaceChannel, riley, watchdogSummary);
+        if (workspaceChannel.id !== groupchat.id) {
+          await sendAgentMessage(groupchat, riley, `✅ Completion update: ${watchdogSummary}`);
+        }
+      }
     }
   }
 }

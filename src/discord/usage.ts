@@ -100,6 +100,19 @@ let usageLoaded = false;
 let usageDirty = false;
 let usageWriteTimer: ReturnType<typeof setTimeout> | null = null;
 let costChannel: TextChannel | null = null;
+let usageDbDisabled = false;
+
+function isPermissionDeniedError(err: unknown): boolean {
+  const code = String((err as any)?.code || '');
+  const msg = String((err as any)?.message || err || '').toLowerCase();
+  return code === '42501' || msg.includes('permission denied');
+}
+
+function disableUsageDb(reason: string): void {
+  if (usageDbDisabled) return;
+  usageDbDisabled = true;
+  console.warn(`Usage counter DB persistence disabled: ${reason}. Using in-memory counters only.`);
+}
 
 function toAgentTag(agentLabel: string): string {
   const normalized = String(agentLabel || '').toLowerCase();
@@ -131,6 +144,11 @@ function markUsageDirty(): void {
 
 export async function initUsageCounters(): Promise<void> {
   if (usageLoaded) return;
+  if (usageDbDisabled) {
+    usageLoaded = true;
+    resetIfNewDay();
+    return;
+  }
   try {
     const { rows } = await pool.query(
       'SELECT content FROM agent_memory WHERE file_name = $1 LIMIT 1',
@@ -177,6 +195,9 @@ export async function initUsageCounters(): Promise<void> {
       }
     }
   } catch (err) {
+    if (isPermissionDeniedError(err)) {
+      disableUsageDb(err instanceof Error ? err.message : 'permission denied');
+    }
     console.error('Failed to initialize usage counters:', err instanceof Error ? err.message : 'Unknown');
   } finally {
     usageLoaded = true;
@@ -186,16 +207,29 @@ export async function initUsageCounters(): Promise<void> {
 
 export async function flushUsageCounters(): Promise<void> {
   if (!usageLoaded || !usageDirty) return;
+  if (usageDbDisabled) {
+    usageDirty = false;
+    return;
+  }
   if (usageWriteTimer) {
     clearTimeout(usageWriteTimer);
     usageWriteTimer = null;
   }
   const payload = JSON.stringify(usage);
-  await pool.query(
-    `INSERT INTO agent_memory (file_name, content, updated_at) VALUES ($1, $2, NOW())
-     ON CONFLICT (file_name) DO UPDATE SET content = $2, updated_at = NOW()`,
-    [USAGE_DB_KEY, payload]
-  );
+  try {
+    await pool.query(
+      `INSERT INTO agent_memory (file_name, content, updated_at) VALUES ($1, $2, NOW())
+       ON CONFLICT (file_name) DO UPDATE SET content = $2, updated_at = NOW()`,
+      [USAGE_DB_KEY, payload]
+    );
+  } catch (err) {
+    if (isPermissionDeniedError(err)) {
+      disableUsageDb(err instanceof Error ? err.message : 'permission denied');
+      usageDirty = false;
+      return;
+    }
+    throw err;
+  }
   usageDirty = false;
 }
 

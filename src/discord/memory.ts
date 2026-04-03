@@ -35,6 +35,19 @@ const pendingWrites = new Map<string, ReturnType<typeof setTimeout>>();
 
 /** Whether initial load from DB has completed */
 let initialized = false;
+let memoryDbDisabled = false;
+
+function isPermissionDeniedError(err: unknown): boolean {
+  const code = String((err as any)?.code || '');
+  const msg = String((err as any)?.message || err || '').toLowerCase();
+  return code === '42501' || msg.includes('permission denied');
+}
+
+function disableMemoryDb(reason: string): void {
+  if (memoryDbDisabled) return;
+  memoryDbDisabled = true;
+  console.warn(`Memory DB persistence disabled: ${reason}. Using in-memory cache only.`);
+}
 
 function safeAgentId(agentId: string): string {
   return agentId.replace(/[^a-z0-9-]/gi, '');
@@ -102,6 +115,10 @@ function summaryKey(agentId: string): string {
  */
 export async function initMemory(): Promise<void> {
   if (initialized) return;
+  if (memoryDbDisabled) {
+    initialized = true;
+    return;
+  }
   try {
     const { rows } = await pool.query(
       `SELECT file_name, content FROM agent_memory WHERE file_name LIKE 'conv-%'`
@@ -133,6 +150,9 @@ export async function initMemory(): Promise<void> {
     initialized = true;
     console.log(`Memory initialized: ${rows.length} conversation(s), ${sumRows.length} summary(ies) loaded from DB`);
   } catch (err) {
+    if (isPermissionDeniedError(err)) {
+      disableMemoryDb(err instanceof Error ? err.message : 'permission denied');
+    }
     console.error('Failed to initialize memory from DB:', err instanceof Error ? err.message : 'Unknown');
     initialized = true; // Continue with empty cache rather than blocking
   }
@@ -167,12 +187,21 @@ export function saveMemory(agentId: string, history: ConversationMessage[]): voi
   pendingWrites.set(
     agentId,
     setTimeout(() => {
+      if (memoryDbDisabled) {
+        pendingWrites.delete(agentId);
+        return;
+      }
       const key = convKey(agentId);
       pool.query(
         `INSERT INTO agent_memory (file_name, content, updated_at) VALUES ($1, $2, NOW())
          ON CONFLICT (file_name) DO UPDATE SET content = $2, updated_at = NOW()`,
         [key, JSON.stringify(history)]
       ).catch((err) => {
+        if (isPermissionDeniedError(err)) {
+          disableMemoryDb(err instanceof Error ? err.message : 'permission denied');
+          pendingWrites.delete(agentId);
+          return;
+        }
         console.error(`DB write failed for ${agentId}:`, err instanceof Error ? err.message : 'Unknown');
       });
       pendingWrites.delete(agentId);
@@ -195,9 +224,14 @@ export function appendToMemory(agentId: string, messages: ConversationMessage[])
 export function clearMemory(agentId: string): void {
   memoryCache.delete(agentId);
   summaryCache.delete(agentId);
+  if (memoryDbDisabled) return;
   const cKey = convKey(agentId);
   const sKey = summaryKey(agentId);
   pool.query('DELETE FROM agent_memory WHERE file_name IN ($1, $2)', [cKey, sKey]).catch((err) => {
+    if (isPermissionDeniedError(err)) {
+      disableMemoryDb(err instanceof Error ? err.message : 'permission denied');
+      return;
+    }
     console.error(`Failed to clear memory for ${agentId}:`, err instanceof Error ? err.message : 'Unknown');
   });
 }
@@ -213,12 +247,17 @@ function loadSummary(agentId: string): string {
 /** Save a compressed summary to cache + DB */
 function saveSummary(agentId: string, summary: string): void {
   summaryCache.set(agentId, summary);
+  if (memoryDbDisabled) return;
   const key = summaryKey(agentId);
   pool.query(
     `INSERT INTO agent_memory (file_name, content, updated_at) VALUES ($1, $2, NOW())
      ON CONFLICT (file_name) DO UPDATE SET content = $2, updated_at = NOW()`,
     [key, summary]
   ).catch((err) => {
+    if (isPermissionDeniedError(err)) {
+      disableMemoryDb(err instanceof Error ? err.message : 'permission denied');
+      return;
+    }
     console.error(`Failed to save summary for ${agentId}:`, err instanceof Error ? err.message : 'Unknown');
   });
 }
@@ -346,6 +385,11 @@ export function getMemoryContext(agentId: string, maxMessages = 20): Conversatio
  */
 export async function flushPendingWrites(): Promise<void> {
   const promises: Promise<void>[] = [];
+  if (memoryDbDisabled) {
+    for (const [, timer] of pendingWrites) clearTimeout(timer);
+    pendingWrites.clear();
+    return;
+  }
   for (const [agentId, timer] of pendingWrites) {
     clearTimeout(timer);
     const cached = memoryCache.get(agentId);
@@ -357,6 +401,10 @@ export async function flushPendingWrites(): Promise<void> {
            ON CONFLICT (file_name) DO UPDATE SET content = $2, updated_at = NOW()`,
           [key, JSON.stringify(cached)]
         ).then(() => {}).catch((err) => {
+          if (isPermissionDeniedError(err)) {
+            disableMemoryDb(err instanceof Error ? err.message : 'permission denied');
+            return;
+          }
           console.error(`Flush write failed for ${agentId}:`, err instanceof Error ? err.message : 'Unknown');
         })
       );
