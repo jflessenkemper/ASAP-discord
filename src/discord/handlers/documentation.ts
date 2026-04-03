@@ -1,5 +1,6 @@
 import { TextChannel } from 'discord.js';
 import { BotChannels } from '../setup';
+import { postOpsLine } from '../services/opsFeed';
 
 /**
  * Agent self-documentation system.
@@ -28,10 +29,14 @@ export async function documentToChannel(agentId: string, summary: string): Promi
   if (!channel) return;
 
   try {
-    const timestamp = new Date().toLocaleTimeString('en-AU', { hour12: false });
-    const label = channels.agentChannels.get(agentId)?.name || agentId;
-    const entry = `📝 *[${timestamp}]* **${label}** ${summary.slice(0, 1800)}`;
-    await channel.send(entry);
+    await postOpsLine(channel, {
+      actor: agentId,
+      scope: 'agent-doc',
+      metric: 'summary',
+      delta: String(summary || '').slice(0, 600),
+      action: 'none',
+      severity: 'info',
+    });
   } catch (err) {
     console.error(`Documentation error for ${agentId}:`, err instanceof Error ? err.message : 'Unknown');
   }
@@ -51,10 +56,14 @@ export async function documentActionToChannel(
   if (!channel) return;
 
   try {
-    const timestamp = new Date().toLocaleTimeString('en-AU', { hour12: false });
-    const label = channels.agentChannels.get(agentId)?.name || agentId;
-    const entry = `📝 *[${timestamp}]* **${label} — ${title}**\n${details.slice(0, 1700)}`;
-    await channel.send(entry);
+    await postOpsLine(channel, {
+      actor: agentId,
+      scope: 'agent-doc',
+      metric: String(title || 'action').slice(0, 80),
+      delta: String(details || '').slice(0, 600),
+      action: 'none',
+      severity: 'info',
+    });
   } catch (err) {
     console.error(`Documentation error for ${agentId}:`, err instanceof Error ? err.message : 'Unknown');
   }

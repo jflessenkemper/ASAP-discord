@@ -1894,7 +1894,7 @@ async function handleDirectedMessage(
         maxTokens: SUBAGENT_MAX_TOKENS,
         memoryWindow: 6,
         signal,
-        documentLine: `Direct @mention from ${senderName}: {response}`,
+        documentLine: `direct-mention sender=${senderName} response={response}`,
         workspaceChannel,
       });
 

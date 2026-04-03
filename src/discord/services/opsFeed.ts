@@ -82,6 +82,14 @@ function sanitizeValue(value: string, maxLen = 200): string {
     .slice(0, maxLen);
 }
 
+function normalizeScopeToken(value: string, fallback = 'unknown'): string {
+  const token = String(value || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+  return token || fallback;
+}
+
 export function formatOpsLine(input: OpsLineInput): string {
   const severity = input.severity || 'info';
   const actor = toSafeToken(input.actor, 'system');
@@ -121,7 +129,7 @@ async function flushDigest(channelId: string): Promise<void> {
   const summary = summarizeDigest(entries);
   const line = formatOpsLine({
     actor: 'system',
-    scope: `digest:${state.channel.name}`,
+    scope: `digest:${normalizeScopeToken(state.channel.name, 'channel')}`,
     metric: `events=${entries.length}`,
     delta: `top=${summary}`,
     action: warnCount > 0 ? 'review warning/error entries now' : 'none',
