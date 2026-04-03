@@ -1317,7 +1317,9 @@ async function handleRileyMessage(
     if (signal?.aborted) return;
     await clearThinkingMessage();
 
-    const displayResponse = response.replace(/\[\s*action:[^\]]+\]/gi, '').trim();
+    const displayResponse = appendDefaultNextSteps(
+      response.replace(/\[\s*action:[^\]]+\]/gi, '').trim()
+    );
     markGoalProgress('🧭 Riley coordinating...');
 
     appendToMemory('executive-assistant', [
@@ -1720,6 +1722,23 @@ function shouldAutoDelegateToAce(userMessage: string, rileyResponse: string): bo
 function ensureAceFirstDelegation(rileyResponse: string, userMessage: string): string {
   if (!shouldAutoDelegateToAce(userMessage, rileyResponse)) return rileyResponse;
   return `${rileyResponse}\n\n${getAgentMention('developer' as AgentId)} please take the lead on this task and involve other specialists only if needed.`;
+}
+
+function hasNextStepsSection(text: string): boolean {
+  return /\bnext\s*steps?\b/i.test(text);
+}
+
+function shouldAppendNextSteps(text: string): boolean {
+  const normalized = String(text || '').toLowerCase();
+  if (!normalized.trim()) return false;
+  if (hasNextStepsSection(normalized)) return false;
+  if (/decision\s+required|\bblocked\b|waiting\s+for\s+(?:approval|input)|need\s+approval/.test(normalized)) return false;
+  return /(done|completed|complete|fixed|resolved|implemented|deployed|shipped|finished|ready)/.test(normalized);
+}
+
+function appendDefaultNextSteps(text: string): string {
+  if (!shouldAppendNextSteps(text)) return text;
+  return `${text.trim()}\n\nNext steps:\n1. Run a focused smoke test on the changed flow and confirm expected output.\n2. If results look good, deploy and post the release/check links.\n3. If you want, I can also add a regression guard so this does not recur.`;
 }
 
 async function recoverFromAgentErrors(
