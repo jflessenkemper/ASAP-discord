@@ -486,13 +486,21 @@ function estimateDailyCost(): { claude: number; gemini: number; elevenLabs: numb
 }
 
 function progressBar(used: number, limit: number, length: number = 20): string {
-  const ratio = Math.min(used / limit, 1);
+  if (!Number.isFinite(limit) || limit <= 0) {
+    return '⚪ n/a';
+  }
+  const ratio = Math.min(Math.max(used / limit, 0), 1);
   const filled = Math.round(ratio * length);
   const empty = length - filled;
   const bar = '█'.repeat(filled) + '░'.repeat(empty);
-  const pct = Math.round(ratio * 100);
+  const pctNum = ratio * 100;
+  const pct = pctNum >= 10
+    ? `${Math.round(pctNum)}%`
+    : pctNum >= 1
+      ? `${pctNum.toFixed(1)}%`
+      : `${pctNum.toFixed(2)}%`;
   const emoji = ratio >= 0.9 ? '🔴' : ratio >= 0.7 ? '🟡' : '🟢';
-  return `${emoji} ${bar} ${pct}%`;
+  return `${emoji} ${bar} ${pct}`;
 }
 
 function formatCompactCount(value: number): string {
