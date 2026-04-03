@@ -271,7 +271,7 @@ export async function setupChannels(guild: Guild): Promise<BotChannels> {
     OPS_CHANNELS.github,
     catOps,
     '📦 Live GitHub activity feed — commits, PRs, issues, releases',
-    `📦 **GitHub Activity Feed**\n\nThis channel shows real-time updates from the ASAP repository.\nCommits, pull requests, issues, releases, and more.`
+    '📦 GitHub activity feed posts here as one-line updates.'
   );
 
   const callLog = await ensureText(
@@ -298,7 +298,7 @@ export async function setupChannels(guild: Guild): Promise<BotChannels> {
     OPS_CHANNELS.screenshots,
     catOps,
     '📸 Automated screenshots of every app screen after each build (iPhone 17 Pro Max)',
-    `📸 **Build Screenshots**\n\nAutomated screenshots of every screen captured on iPhone 17 Pro Max viewport after each successful build.`
+    '📸 Build screenshot updates post here as one-line entries.'
   );
 
   const appUrl = process.env.FRONTEND_URL || 'https://asap-489910.australia-southeast1.run.app';
@@ -306,10 +306,7 @@ export async function setupChannels(guild: Guild): Promise<BotChannels> {
     OPS_CHANNELS.url,
     catOps,
     '🔗 Live app URL and build links — updated on every deploy',
-    `🔗 **ASAP URLs**\n\n` +
-      `🌐 **App**: ${appUrl}\n` +
-      `📦 **Cloud Build**: https://console.cloud.google.com/cloud-build/builds?project=asap-489910\n` +
-      `☁️ **Cloud Run**: https://console.cloud.google.com/run/detail/australia-southeast1/asap?project=asap-489910`
+    `🔗 App URL: ${appUrl} | Cloud Build: https://console.cloud.google.com/cloud-build/builds?project=asap-489910 | Cloud Run: https://console.cloud.google.com/run/detail/australia-southeast1/asap?project=asap-489910`
   );
 
   const terminal = await ensureText(
