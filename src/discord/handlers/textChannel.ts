@@ -233,6 +233,14 @@ export async function sendAgentMessage(
   agent: AgentConfig,
   response: string
 ): Promise<void> {
+  const normalized = String(response || '').trim();
+  if (
+    (agent.id === 'developer' || agent.id === 'executive-assistant')
+    && /^(?:done|fixed|resolved|completed|all good|finished)\.?$/i.test(normalized)
+  ) {
+    return;
+  }
+
   const rendered = renderAgentMessage(response);
   const chunks = splitMessage(rendered, 1900);
 
