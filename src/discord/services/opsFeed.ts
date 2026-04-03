@@ -1,4 +1,5 @@
 import { TextChannel } from 'discord.js';
+import { logAgentEvent } from '../activityLog';
 
 export type OpsSeverity = 'info' | 'warn' | 'error';
 
@@ -26,6 +27,7 @@ interface DigestState {
 }
 
 const digestStates = new Map<string, DigestState>();
+const OPS_INFO_TO_DB_ONLY = String(process.env.OPS_INFO_TO_DB_ONLY || 'true').toLowerCase() !== 'false';
 
 function toSafeToken(value: string, fallback: string): string {
   const token = String(value || '')
@@ -167,6 +169,11 @@ function getAlertMention(): string {
 export async function postOpsLine(channel: TextChannel, input: OpsLineInput): Promise<void> {
   const severity = input.severity || 'info';
   const line = formatOpsLine({ ...input, severity });
+
+  if (OPS_INFO_TO_DB_ONLY && severity === 'info') {
+    logAgentEvent('ops', 'response', line.slice(0, 1800));
+    return;
+  }
 
   if (shouldDigest(channel, severity)) {
     const state = scheduleDigest(channel);

@@ -69,6 +69,7 @@ const THREAD_CLOSE_REVIEW_IDLE_MS = parseInt(process.env.THREAD_CLOSE_REVIEW_IDL
 const THREAD_CLOSE_REVIEW_INTERVAL_MS = parseInt(process.env.THREAD_CLOSE_REVIEW_INTERVAL_MS || '7200000', 10);
 const THREAD_STATUS_POST_INTERVAL_MS = parseInt(process.env.THREAD_STATUS_POST_INTERVAL_MS || '3600000', 10);
 const ACTION_COMMAND_TIMEOUT_MS = parseInt(process.env.ACTION_COMMAND_TIMEOUT_MS || '120000', 10);
+const AUTO_DEPLOY_ON_THREAD_CLOSE = String(process.env.AUTO_DEPLOY_ON_THREAD_CLOSE || 'true').toLowerCase() !== 'false';
 const GOAL_THREAD_COUNTER_RE = /\bgoal[-\s]?(\d{4})\b/i;
 const APP_SERVER_ROOT = (fs.existsSync(path.join(process.cwd(), 'package.json')) && fs.existsSync(path.join(process.cwd(), 'src')))
   ? process.cwd()
@@ -562,6 +563,23 @@ async function closeGoalWorkspace(
   activeGoal = null;
   goalStatus = '✅ Completed';
   lastThreadCloseReviewAt = 0;
+
+  if (AUTO_DEPLOY_ON_THREAD_CLOSE) {
+    try {
+      const { buildId, logUrl } = await triggerCloudBuild('latest');
+      await groupchat.send(
+        `🚀 Auto rebuild triggered after thread completion (${reason}). Build: \`${buildId}\` — ${logUrl}`
+      ).catch(() => {});
+      await sendAutopilotAudit(groupchat, 'auto_rebuild_on_close', 'Triggered build after workspace thread completion.', {
+        action: 'DEPLOY',
+        buildId,
+      }).catch(() => {});
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Unknown';
+      await groupchat.send(`⚠️ Auto rebuild after thread close failed: ${msg}`).catch(() => {});
+      void postAgentErrorLog('riley:auto-deploy', 'Auto rebuild on thread close failed', { detail: msg, level: 'warn' });
+    }
+  }
 }
 
 async function maybeReviewThreadForClosure(groupchat: TextChannel): Promise<void> {
@@ -1771,6 +1789,22 @@ function shouldSuppressAceVisibleOutput(text: string): boolean {
     || !hasAceCompletionContract(content);
 }
 
+function inferSpecialistsForContext(text: string): string[] {
+  const normalized = String(text || '').toLowerCase();
+  const picks = new Set<string>();
+
+  if (/(ui|ux|screen|layout|visual|map|flow|onboarding|mobile)/.test(normalized)) picks.add('ux-reviewer');
+  if (/(test|smoke|regression|verify|qa|validation)/.test(normalized)) picks.add('qa');
+  if (/(security|auth|token|permission|vuln|owasp)/.test(normalized)) picks.add('security-auditor');
+  if (/(api|endpoint|http|route|rest|contract)/.test(normalized)) picks.add('api-reviewer');
+  if (/(db|database|schema|migration|sql|query)/.test(normalized)) picks.add('dba');
+  if (/(deploy|build|cloud run|gcp|infra|ci|cd)/.test(normalized)) picks.add('devops');
+  if (/(perf|performance|latency|slow|optimi[sz]e)/.test(normalized)) picks.add('performance');
+  if (/(copy|wording|message|text|empty state)/.test(normalized)) picks.add('copywriter');
+
+  return [...picks].slice(0, 3);
+}
+
 function shouldAutoDelegateToAce(userMessage: string, rileyResponse: string): boolean {
   if (parseDirectives(rileyResponse).length > 0) return false;
   const responseText = rileyResponse.toLowerCase();
@@ -2000,6 +2034,14 @@ async function handleAgentChain(
           const fromAce = await handleSubAgents(aceSubDirectives, aceResponse, groupchat, workspaceChannel, signal);
           consolidatedFindings.push(...fromAce.findings);
           consolidatedErrors.push(...fromAce.errors);
+        } else {
+          const inferredSpecialists = inferSpecialistsForContext(`${rileyResponse}\n${aceResponse}`)
+            .filter((id) => id !== 'developer');
+          if (inferredSpecialists.length > 0) {
+            const autoSpecialistRun = await handleSubAgents(inferredSpecialists, aceResponse, groupchat, workspaceChannel, signal);
+            consolidatedFindings.push(...autoSpecialistRun.findings);
+            consolidatedErrors.push(...autoSpecialistRun.errors);
+          }
         }
       } catch (err) {
         const msg = err instanceof Error ? err.stack || err.message : 'Unknown';

@@ -36,16 +36,24 @@ const SCREENS: Array<{ name: string; action?: (page: Page) => Promise<void>; wai
     },
   },
   {
-    name: '03-support-intake',
+    name: '03-map-screen',
     action: async (page) => {
       const btn = await page.$('text/Dive In').catch(() => null)
         || await page.$('text/Support').catch(() => null)
         || await page.$('[data-testid="dive-in"]').catch(() => null);
       if (btn) {
         await btn.click();
-        await new Promise((r) => setTimeout(r, 1500));
+        await new Promise((r) => setTimeout(r, 2200));
       }
     },
+    waitFor: '.screen2-map, .gm-style, iframe[title="ASAP map fallback"]',
+  },
+  {
+    name: '04-map-dashboard',
+    action: async (page) => {
+      await new Promise((r) => setTimeout(r, 1600));
+    },
+    waitFor: '.screen2-map, .gm-style, iframe[title="ASAP map fallback"]',
   },
 ];
 
