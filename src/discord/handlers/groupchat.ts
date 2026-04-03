@@ -1360,6 +1360,9 @@ async function handleRileyMessage(
       if (workspaceChannel.id !== rileyWorkChannel.id) {
         await sendAgentMessage(workspaceChannel, riley, displayResponse);
       }
+      if (shouldMirrorCompletionToGroupchat(displayResponse, workspaceChannel, groupchat)) {
+        await sendAgentMessage(groupchat, riley, `✅ Completion update: ${displayResponse}`);
+      }
     }
 
     const chainResponse = ensureAceFirstDelegation(response, userMessage);
@@ -1750,6 +1753,14 @@ function shouldAppendNextSteps(text: string): boolean {
 function appendDefaultNextSteps(text: string): string {
   if (!shouldAppendNextSteps(text)) return text;
   return `${text.trim()}\n\nNext steps:\n1. Run a focused smoke test on the changed flow and confirm expected output.\n2. If results look good, deploy and post the release/check links.\n3. If you want, I can also add a regression guard so this does not recur.`;
+}
+
+function shouldMirrorCompletionToGroupchat(text: string, workspaceChannel: WebhookCapableChannel, groupchat: TextChannel): boolean {
+  if (workspaceChannel.id === groupchat.id) return false;
+  const normalized = String(text || '').toLowerCase();
+  if (!normalized.trim()) return false;
+  if (/decision\s+required|\bblocked\b|waiting\s+for\s+(?:approval|input)|need\s+approval/.test(normalized)) return false;
+  return /(done|completed|complete|fixed|resolved|implemented|deployed|shipped|finished|ready)/.test(normalized);
 }
 
 async function recoverFromAgentErrors(
