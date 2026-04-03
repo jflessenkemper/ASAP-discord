@@ -40,7 +40,6 @@ export function logAgentEvent(
     ]
   ).catch((err) => {
     const msg = err instanceof Error ? err.message : 'Unknown';
-    // Table might not exist yet if migration hasn't run — silently skip
     if (err?.code !== '42P01' && !msg.includes('Cannot use a pool after calling end on the pool')) {
       console.error('Activity log write error:', msg);
     }

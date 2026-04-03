@@ -75,7 +75,6 @@ export async function transcribeVoice(audioBuffer: Buffer): Promise<string> {
     throw new Error(USE_VERTEX_AI ? 'Vertex Gemini is not configured' : 'Gemini API key not configured');
   }
 
-  // Client-side silence detection — skip silent audio before calling Gemini
   let nonSilentSamples = 0;
   const totalSamples = Math.floor(audioBuffer.length / 2);
   for (let i = 0; i < audioBuffer.length - 1; i += 2) {
@@ -134,7 +133,6 @@ export async function textToSpeech(
   language?: string
 ): Promise<Buffer> {
   const startedAt = Date.now();
-  // Prefer ElevenLabs for significantly lower latency
   if (isElevenLabsAvailable()) {
     try {
       const audio = await elevenLabsTTS(text, voiceName, language);
@@ -146,11 +144,9 @@ export async function textToSpeech(
         '[TTS] ElevenLabs failed, falling back to Gemini:',
         err instanceof Error ? err.message : String(err)
       );
-      // Fall through to Gemini below
     }
   }
 
-  // Gemini TTS fallback (also used when ElevenLabs is not configured)
   try {
     const audio = await geminiTTS(text, voiceName);
     recordTtsLatency('gemini', Date.now() - startedAt);
@@ -165,7 +161,6 @@ export async function textToSpeech(
  * Gemini TTS fallback — used when ElevenLabs key is not set.
  */
 async function geminiTTS(text: string, voiceName: string): Promise<Buffer> {
-  // Use Gemini 2.5 Flash with audio output for TTS
   const apiKey = process.env.GEMINI_API_KEY;
   if (!USE_VERTEX_AI && !apiKey) throw new Error('Gemini API key not configured');
   if (USE_VERTEX_AI && !VERTEX_PROJECT_ID) {
@@ -203,7 +198,6 @@ async function geminiTTS(text: string, voiceName: string): Promise<Buffer> {
   if (USE_VERTEX_AI) {
     data = await callVertexGenerateContent('gemini-2.5-flash-preview-tts', body);
   } else {
-    // Use the REST API directly for TTS since the SDK doesn't support audio output natively
     const response = await fetch(
       `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-tts:generateContent?key=${apiKey}`,
       {
@@ -227,7 +221,6 @@ async function geminiTTS(text: string, voiceName: string): Promise<Buffer> {
     };
   }
 
-  // Extract audio data from response
   const audioPart = data.candidates?.[0]?.content?.parts?.find(
     (p) => p.inlineData?.mimeType?.startsWith('audio/')
   );

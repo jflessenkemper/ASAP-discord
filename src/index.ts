@@ -17,16 +17,23 @@ import publicRoutes from './routes/public';
 import searchRoutes from './routes/search';
 import businessRoutes from './routes/business';
 import pool from './db/pool';
-import { startBot, stopBot } from './discord/bot';
-import { verifySignature, handleGitHubEvent } from './discord/handlers/github';
-import { captureAndPostScreenshots } from './discord/services/screenshots';
-import { getBotChannels } from './discord/bot';
-import { postAgentErrorLog } from './discord/services/agentErrors';
-import { getInboundTwiML, attachTelephonyWebSocket, isTelephonyAvailable } from './discord/services/telephony';
+import {
+  startBot,
+  stopBot,
+  verifySignature,
+  handleGitHubEvent,
+  captureAndPostScreenshots,
+  getBotChannels,
+  postAgentErrorLog,
+  getInboundTwiML,
+  attachTelephonyWebSocket,
+  isTelephonyAvailable,
+  getMetricsText,
+  PROMETHEUS_CONTENT_TYPE,
+  updateGeminiSpend,
+  getRemainingBudget,
+} from './discord/bot.single';
 import twilio from 'twilio';
-import { getMetricsText, PROMETHEUS_CONTENT_TYPE } from './discord/metrics';
-import { updateGeminiSpend } from './discord/metrics';
-import { getRemainingBudget } from './discord/usage';
 
 const app = express();
 const PORT = parseInt(process.env.PORT || '3001', 10);

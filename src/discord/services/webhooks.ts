@@ -34,7 +34,6 @@ export async function getWebhook(channel: WebhookCapableChannel): Promise<Webhoo
   const cached = webhookCache.get(base.id);
   if (cached) return cached;
 
-  // Check for existing webhook we created previously
   const existing = await base.fetchWebhooks();
   let webhook = existing.find((w) => w.name === WEBHOOK_NAME && w.owner?.id === base.client.user?.id);
 

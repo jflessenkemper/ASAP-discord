@@ -8,7 +8,6 @@ import { recordClaudeUsage, isClaudeOverLimit, isBudgetExceeded, getRemainingBud
 import { logAgentEvent } from './activityLog';
 import { recordAgentResponse, recordRateLimitHit } from './metrics';
 
-// Load project context once at startup — shared by all agents
 let PROJECT_CONTEXT = '';
 try {
   PROJECT_CONTEXT = readFileSync(join(__dirname, '../../../.github/PROJECT_CONTEXT.md'), 'utf-8');
@@ -16,7 +15,6 @@ try {
   console.warn('PROJECT_CONTEXT.md not found — agents will lack project context');
 }
 
-// Keep shared project context lean; agents should pull details from tools only when needed.
 const PROJECT_CONTEXT_MAX_CHARS = parseInt(process.env.PROJECT_CONTEXT_MAX_CHARS || '1800', 10);
 if (PROJECT_CONTEXT.length > PROJECT_CONTEXT_MAX_CHARS) {
   PROJECT_CONTEXT = PROJECT_CONTEXT.slice(0, PROJECT_CONTEXT_MAX_CHARS) + '\n\n[Project context truncated for token efficiency]';
@@ -24,11 +22,9 @@ if (PROJECT_CONTEXT.length > PROJECT_CONTEXT_MAX_CHARS) {
 const PROJECT_CONTEXT_LIGHT_MAX_CHARS = parseInt(process.env.PROJECT_CONTEXT_LIGHT_MAX_CHARS || '500', 10);
 const PROJECT_CONTEXT_LIGHT = PROJECT_CONTEXT.slice(0, PROJECT_CONTEXT_LIGHT_MAX_CHARS);
 
-// Model identifiers (env-overridable for fast runtime switching).
 const GEMINI_FLASH = process.env.GEMINI_FLASH_MODEL || 'gemini-flash-latest';
 const GEMINI_PRO = process.env.GEMINI_PRO_MODEL || 'gemini-2.5-pro';
 const ANTHROPIC_OPUS = process.env.ANTHROPIC_CODING_MODEL || 'claude-opus-4-20250514';
-// Prefer Opus for real coding work; short/status asks stay on the fast path.
 const DEFAULT_CODING_MODEL = process.env.CODING_AGENT_MODEL || ANTHROPIC_OPUS;
 const DEFAULT_FAST_MODEL = process.env.FAST_AGENT_MODEL || GEMINI_FLASH;
 const VOICE_FAST_MODEL = process.env.VOICE_FAST_MODEL || DEFAULT_FAST_MODEL;
@@ -114,7 +110,6 @@ function modelForAgent(agentId: string, userMessage: string): string {
 const LEGACY_FULL_TOOL_AGENTS = new Set(['developer', 'devops', 'executive-assistant']);
 const LIMIT_NON_RILEY_AGENTS_TO_REVIEW_TOOLS = process.env.LIMIT_NON_RILEY_AGENTS_TO_REVIEW_TOOLS === 'true';
 
-// Resilience toggles: default ON so Riley can complete fire-and-forget requests.
 const RILEY_AUTO_APPROVE_BUDGET = process.env.RILEY_AUTO_APPROVE_BUDGET !== 'false';
 const RILEY_AUTO_APPROVE_BUDGET_INCREMENT = parseFloat(process.env.RILEY_AUTO_APPROVE_BUDGET_INCREMENT_USD || '5');
 const RILEY_AUTO_APPROVE_BUDGET_MAX_PASSES = parseInt(process.env.RILEY_AUTO_APPROVE_BUDGET_MAX_PASSES || '4', 10);
@@ -185,7 +180,6 @@ function sanitizeSchemaNode(node: any): any {
 
   const out: Record<string, any> = {};
   for (const [key, value] of Object.entries(node)) {
-    // Drop verbose/non-essential JSON-schema fields to reduce tool-schema token load.
     if (key === 'title' || key === 'default' || key === 'examples' || key === '$schema') {
       continue;
     }
@@ -333,7 +327,6 @@ async function getVertexAccessToken(): Promise<string> {
 
   vertexTokenCache = {
     token,
-    // Conservative cache window; refreshed frequently enough for long-running bot process.
     expiresAtMs: now + 45 * 60_000,
   };
 
@@ -672,7 +665,6 @@ function compactHistoryContent(role: 'user' | 'assistant', content: string): str
 function trimConversationHistory(conversationHistory: ConversationMessage[]): ConversationMessage[] {
   if (conversationHistory.length === 0) return conversationHistory;
 
-  // Keep summarized long-term context if present, then recent detailed messages.
   const summaryMsg = conversationHistory.find(
     (m) => m.role === 'user' && m.content.startsWith('[Conversation Summary')
   );
@@ -694,8 +686,6 @@ function trimConversationHistory(conversationHistory: ConversationMessage[]): Co
   const compactSummary = summaryMsg ? compactHistoryContent(summaryMsg.role, summaryMsg.content) : '';
   const merged = compactSummary ? [{ ...summaryMsg!, content: compactSummary }, ...recent] : recent;
 
-  // Gemini chat history must start with a user message.
-  // Groupchat edge cases can occasionally leave an assistant-first history.
   while (merged.length > 0 && merged[0].role !== 'user') {
     merged.shift();
   }
@@ -987,7 +977,6 @@ function buildRuntimeStatusMessage(
   const lowBudget = budget.remaining < 0.5;
   const lowTokens = tokens.remaining < Math.max(200_000, Math.round(tokens.limit * 0.15));
 
-  // Keep the prompt prefix stable for better cache reuse unless headroom is genuinely low.
   if (!lowBudget && !lowTokens) {
     return userMessage;
   }
@@ -1542,7 +1531,6 @@ function releaseNextQueued(modelKey: string, lane: 'text' | 'voice' | 'backgroun
     return;
   }
 
-  // Prefer waking requests waiting on the same model first.
   const sameQueue = getModelQueue(modelKey);
   const same = sameQueue.shift();
   if (same) {
@@ -1550,7 +1538,6 @@ function releaseNextQueued(modelKey: string, lane: 'text' | 'voice' | 'backgroun
     return;
   }
 
-  // Fall back to global queue, then any other model queue.
   const globalNext = claudeQueue.shift();
   if (globalNext) {
     setTimeout(globalNext, releaseDelay);
@@ -1681,7 +1668,6 @@ function estimateMaxOutputTokens(agentId: string, userMessage: string, explicit?
     ? DEFAULT_MAX_OUTPUT_TOKENS_DEVELOPER
     : DEFAULT_MAX_OUTPUT_TOKENS;
 
-  // Fast-path: short user asks usually don't need large output budgets.
   const shortPrompt = userMessage.length <= 180;
   const appearsSimple = /^(ok|yes|no|status|ping|why|what|how|help|fix|run|test)\b/i.test(userMessage.trim());
   if (shortPrompt || appearsSimple) {
@@ -1703,7 +1689,6 @@ function resolveAdaptiveMaxOutputTokens(params: {
   const contextWindowTokens = resolveContextWindowTokensForModel(params.modelName);
   const promptTokensEstimate = Math.ceil(Math.max(0, params.promptCharsEstimate) / Math.max(1, CONTEXT_CHARS_PER_TOKEN_ESTIMATE));
 
-  // Keep healthy headroom for provider framing + tool wrappers.
   const reservedTokens = Math.max(512, Math.floor(contextWindowTokens * 0.15));
   const available = Math.max(128, contextWindowTokens - promptTokensEstimate - reservedTokens);
   const overflowPenalty = params.laneKey
@@ -1719,11 +1704,9 @@ async function withRetry<T>(fn: () => Promise<T>, retries = GEMINI_MAX_RETRIES, 
     try {
       return await fn();
     } catch (err: any) {
-      // User interruption/cancellation should stop immediately without retries
       if (isAbortError(err)) throw err;
       if (i === retries) throw err;
       const status = err?.status || err?.statusCode;
-      // Only retry on transient errors (5xx, network, 429 rate limit)
       if (status && status < 500 && status !== 429) throw err;
 
       let delay: number;
@@ -1733,7 +1716,6 @@ async function withRetry<T>(fn: () => Promise<T>, retries = GEMINI_MAX_RETRIES, 
         const halfJitter = Math.max(0, Math.floor(GEMINI_429_JITTER_MS / 2));
         const jitter = Math.floor(Math.random() * (halfJitter * 2 + 1)) - halfJitter;
         delay = Math.max(5000, GEMINI_429_PAUSE_MS + jitter);
-        // Global gate uses the upper bound (without negative jitter) so it's conservative.
         rateLimitedUntil = Math.max(rateLimitedUntil, Date.now() + Math.max(5000, GEMINI_429_PAUSE_MS + halfJitter));
         console.warn(`429 rate limited — pausing ${Math.ceil(delay / 1000)}s (±jitter, retry ${i + 1}/${retries})`);
         logAgentEvent('system', 'rate_limit', `429 — pausing ${Math.ceil(delay / 1000)}s`);
@@ -1840,7 +1822,6 @@ export async function agentRespond(
       : `⚠️ Gemini quota is exhausted right now. Automatic retries resume at ${recoveryTime}. Ask Riley to request Jordan approval for more credits before continuing.`;
   }
 
-  // Hard budget gate — auto-extend when enabled, else stop.
   if (isBudgetExceeded()) {
     if (RILEY_AUTO_APPROVE_BUDGET && autoBudgetPassesUsed < RILEY_AUTO_APPROVE_BUDGET_MAX_PASSES) {
       const approved = approveAdditionalBudget(RILEY_AUTO_APPROVE_BUDGET_INCREMENT);
@@ -1947,8 +1928,6 @@ RUNTIME EFFICIENCY:
 - Runtime budget and token status will be supplied separately in the task context.
 - Each tool call costs tokens. Prefer targeted reads, concise summaries, and the narrowest agent/tool path that can finish the job.`;
 
-  // Convert conversation history to Gemini Content format.
-  // Reused chat sessions already carry prior turns, so skip rebuilding history.
   let currentModelName = options?.modelOverride || options?.chatSession?.modelName || (isVoiceLane ? VOICE_FAST_MODEL : modelForAgent(agent.id, userMessage));
   let escalatedToPro = currentModelName === GEMINI_PRO;
 
@@ -2069,7 +2048,6 @@ RUNTIME EFFICIENCY:
     });
 
     if (!aggressive.stats.changed) {
-      // Retry with a strict one-shot tool result truncation pass when pruning did not change anything.
       const fallback = pruneContextToolResults(accumulatedHistory, currentModelName);
       if (!fallback.stats.changed) return null;
       accumulatedHistory = fallback.history;
@@ -2108,7 +2086,6 @@ RUNTIME EFFICIENCY:
     , lane);
   };
 
-  // Send initial user message
   let response;
   try {
     const historyBeforeSend = await chat.getHistory().catch(() => [] as Content[]);
@@ -2170,7 +2147,6 @@ RUNTIME EFFICIENCY:
     }
   }
 
-  // Tool-use loop
   const WRITE_TOOLS = new Set([
     'write_file', 'edit_file', 'batch_edit',
     'run_command',
@@ -2227,7 +2203,6 @@ RUNTIME EFFICIENCY:
     const functionCalls = (response.response.functionCalls() || []) as ToolCallLike[];
 
     if (functionCalls.length === 0) {
-      // No tool calls — final text response
       const usageTelemetry = extractUsageTelemetry(response.response);
       recordClaudeUsage(
         usageTelemetry.inputTokens,
@@ -2258,7 +2233,6 @@ RUNTIME EFFICIENCY:
       return finalText;
     }
 
-    // Record usage for this round with cache/prompt attribution.
     const usageTelemetry = extractUsageTelemetry(response.response);
     recordClaudeUsage(
       usageTelemetry.inputTokens,
@@ -2272,7 +2246,6 @@ RUNTIME EFFICIENCY:
       },
     );
 
-    // Separate read-only (parallel) and write (sequential) calls
     const readCalls = functionCalls.filter((c) => !WRITE_TOOLS.has(c.name));
     const writeCalls = functionCalls.filter((c) => WRITE_TOOLS.has(c.name));
 
@@ -2315,7 +2288,6 @@ RUNTIME EFFICIENCY:
       functionResponses.push(await processCall(call));
     }
 
-    // Cost-aware escalation: if tests/typecheck fail on Flash, switch to Pro
     if (
       agent.id === 'developer' &&
       !options?.modelOverride &&
@@ -2365,7 +2337,6 @@ RUNTIME EFFICIENCY:
       }
     }
 
-    // Send tool results back
     try {
       response = await withConcurrencyLimit(currentModelName, () =>
         withRetry(() => sendMessageWithOptionalStream(chat, functionResponses, options?.signal, options?.onPartialText))

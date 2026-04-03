@@ -88,8 +88,6 @@ export async function speakInVCWithOptions(
   }
 
   const stream = Readable.from(audioBuffer);
-  // ElevenLabs returns MP3, Gemini may return WAV/PCM — use Arbitrary so
-  // prism-media/FFmpeg auto-detects and transcodes to Opus for Discord.
   const resource = createAudioResource(stream, { inputType: StreamType.Arbitrary });
   console.log(`VC playback: queued ${audioBuffer.length} bytes`);
 
@@ -108,7 +106,6 @@ export async function speakInVCWithOptions(
       options?.onPlaybackStart?.();
     };
     const onIdle = () => {
-      // Ignore idle transitions before playback actually starts.
       if (!sawPlaying) return;
       cleanup();
       if (aborted) {
@@ -163,7 +160,6 @@ export function stopVCPlayback(): void {
   try {
     audioPlayer.stop(true);
   } catch {
-    // best-effort
   }
 }
 
@@ -217,13 +213,11 @@ function updateAdaptiveSilenceDuration(userId: string, audioBytes: number): void
   next.lastAudioBytes = audioBytes;
   next.turns += 1;
 
-  // Short utterances benefit from faster endpointing; long utterances need more tail tolerance.
   if (audioBytes < VOICE_MIN_AUDIO_BYTES * 2) {
     next.silenceMs = Math.max(VOICE_ENDPOINT_SILENCE_MIN_MS, next.silenceMs - 80);
   } else if (audioBytes > VOICE_MIN_AUDIO_BYTES * 6) {
     next.silenceMs = Math.min(VOICE_ENDPOINT_SILENCE_MAX_MS, next.silenceMs + 120);
   } else {
-    // Gentle decay back toward baseline.
     next.silenceMs = next.silenceMs + (VOICE_ENDPOINT_SILENCE_BASE_MS - next.silenceMs) * 0.2;
   }
 
@@ -271,7 +265,6 @@ export function listenToUser(
       end: { behavior: EndBehaviorType.AfterSilence, duration: getAdaptiveSilenceDuration(member.id) },
     });
 
-    // Decode Opus frames → PCM (s16le, 48kHz, stereo) before collecting
     let decoder: Transform;
     try {
       decoder = createOpusDecoder();
@@ -305,7 +298,6 @@ export function listenToUser(
 
       if (chunks.length > 0 && totalSize <= MAX_AUDIO_BUFFER) {
         const audioBuffer = Buffer.concat(chunks);
-        // Need at least ~0.5s of PCM audio at 48kHz stereo (192 KB/s)
         if (audioBuffer.length >= VOICE_MIN_AUDIO_BYTES) {
           updateAdaptiveSilenceDuration(member.id, audioBuffer.length);
           try {
@@ -331,7 +323,6 @@ export function listenToUser(
         console.warn(`Audio buffer exceeded ${MAX_AUDIO_BUFFER} bytes for ${member.displayName} — skipped`);
       }
 
-      // Re-subscribe for next utterance (non-recursive — just calls subscribe again)
       subscribe();
     });
 
@@ -340,7 +331,6 @@ export function listenToUser(
       if (!destroyed) subscribe();
     });
 
-    // If the Opus subscription ends, make sure the decoder also ends
     subscription.on('end', () => { decoder.end(); });
     subscription.on('error', (err: Error) => {
       console.error(`Voice subscription error for ${member.displayName}:`, err.message);
@@ -370,7 +360,6 @@ export function listenToAllMembers(
   const listeningUserIds = new Set<string>();
   let destroyed = false;
 
-  // Listen to existing members
   for (const [, member] of voiceChannel.members) {
     if (member.user.bot) continue;
     listeningUserIds.add(member.id);
@@ -378,7 +367,6 @@ export function listenToAllMembers(
     unsubscribers.push(unsub);
   }
 
-  // Listen for new members who join mid-call via the speaking event
   const onSpeaking = (userId: string) => {
     if (destroyed || listeningUserIds.has(userId)) return;
     const member = voiceChannel.members.get(userId);
@@ -428,12 +416,10 @@ export function listenToUserDeepgram(
     try {
       currentSubscription?.destroy();
     } catch {
-      // best-effort
     }
     try {
       currentDecoder?.destroy();
     } catch {
-      // best-effort
     }
     currentSubscription = null;
     currentDecoder = null;
@@ -451,8 +437,6 @@ export function listenToUserDeepgram(
   function scheduleDeepgramRetry(reason: string): void {
     if (destroyed || fallbackUnsub) return;
     const normalizedReason = reason.toLowerCase();
-    // Some transient disconnects recover poorly in long-lived sessions and cause
-    // the "one response then silence" symptom. Fail over quickly to batch STT.
     if (normalizedReason.includes('closed unexpectedly') || normalizedReason.includes('unauthorized')) {
       fallbackToGemini(reason);
       return;
@@ -508,22 +492,18 @@ export function listenToUserDeepgram(
       dgSession = session;
       deepgramRetryAttempts = 0;
 
-      // Subscribe to user's audio and pipe it to Deepgram
       function subscribe() {
         if (destroyed) return;
 
         cleanupReceiveChain();
 
         const subscription = receiver.subscribe(member.id, {
-          // AfterInactivity is more resilient than AfterSilence for some clients
-          // that send sparse/non-standard silence packets.
           end: { behavior: EndBehaviorType.AfterInactivity, duration: getAdaptiveSilenceDuration(member.id) },
         });
         currentSubscription = subscription;
         utteranceStartAt = null;
         firstTranscriptPending = true;
 
-        // Decode Opus frames → PCM before sending to Deepgram (expects linear16)
         let decoder: Transform;
         try {
           decoder = createOpusDecoder();
@@ -570,7 +550,6 @@ export function listenToUserDeepgram(
           }
         });
 
-        // When Opus subscription ends, also end the decoder
         subscription.on('end', () => { decoder.end(); });
         subscription.on('error', (err: Error) => {
           console.error(`Deepgram voice subscription error for ${member.displayName}:`, err.message);
@@ -585,7 +564,6 @@ export function listenToUserDeepgram(
     });
   }
 
-  // Start Deepgram session with timeout fallback
   const dgTimeout = setTimeout(() => {
     if (!dgSession && !destroyed && !fallbackUnsub) {
       fallbackToGemini('session start timed out');
@@ -602,12 +580,10 @@ export function listenToUserDeepgram(
     try {
       currentSubscription?.destroy();
     } catch {
-      // best-effort
     }
     try {
       currentDecoder?.destroy();
     } catch {
-      // best-effort
     }
     dgSession?.close();
     fallbackUnsub?.();
@@ -624,13 +600,11 @@ export function listenToAllMembersSmart(
   onTranscription: (transcription: VoiceTranscription) => void,
   onSpeechStart?: (member: GuildMember) => void
 ): () => void {
-  // Use Deepgram if available for real-time streaming
   if (isDeepgramAvailable()) {
     console.log('Using Deepgram real-time STT for voice transcription');
     return listenToAllMembersDeepgram(connection, voiceChannel, onTranscription, onSpeechStart);
   }
 
-  // Fall back to batch Gemini transcription
   console.log('Using Gemini batch STT for voice transcription (Deepgram not configured)');
   return listenToAllMembers(connection, voiceChannel, onTranscription, onSpeechStart);
 }

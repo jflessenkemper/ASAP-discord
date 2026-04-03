@@ -82,8 +82,6 @@ function isVoiceInputAvailable(): { ok: boolean; reason?: string } {
  * Sentence boundaries: . ! ? followed by space/end, or newlines.
  */
 function splitSentences(text: string): string[] {
-  // Handle URLs, decimals, abbreviations, and code by using a more careful pattern.
-  // First, protect URLs and common abbreviations from splitting.
   const placeholder = '\x00';
   const protected_ = text
     .replace(/https?:\/\/[^\s]+/g, (m) => m.replace(/\./g, placeholder))
@@ -114,7 +112,6 @@ async function speakPipelined(
     return;
   }
 
-  // Start TTS for first sentence
   let nextTts: Promise<Buffer> = textToSpeech(sentences[0], voice, language);
 
   for (let i = 0; i < sentences.length; i++) {
@@ -122,7 +119,6 @@ async function speakPipelined(
     const audio = await nextTts;
     if (!activeSession?.active || signal?.aborted) break;
 
-    // Prefetch next sentence's TTS while this one plays
     if (i + 1 < sentences.length) {
       nextTts = textToSpeech(sentences[i + 1], voice, language);
     }
@@ -176,12 +172,10 @@ function finalizeSpokenResponse(raw: string): string {
     lastBoundary = match.index + match[0].length;
   }
 
-  // If the model produced a partial ending, keep only completed sentences.
   if (lastBoundary >= 20) {
     return text.slice(0, lastBoundary).trim();
   }
 
-  // Single-clause fallback: preserve meaning but avoid abrupt cut-off delivery.
   return `${text}.`;
 }
 
@@ -267,7 +261,6 @@ function createLiveSpeechStreamer(
         await speakPipelined(toSpeak, voice, signal, language, onPlaybackStart);
       })
       .catch(() => {
-        // Best-effort: interruption/cleanup paths can cancel queued speech.
       });
   };
 
@@ -373,7 +366,6 @@ async function sendAsAgent(channel: TextChannel, content: string, agentId: Agent
       }
       return;
     } catch {
-      // fall through
     }
   }
   for (const chunk of chunks) {
@@ -440,7 +432,6 @@ export async function startCall(
     turnStartedAt: 0,
   };
 
-  // Heartbeat — detect disconnected voice channel
   activeSession.heartbeatTimer = setInterval(() => {
     if (!activeSession?.active) return;
     try {
@@ -472,7 +463,6 @@ export async function startCall(
         return;
       }
 
-      // Any non-disconnected state means the connection recovered.
       if (activeSession.disconnectedSince) {
         sendAsAgent(groupchat, '✅ Voice reconnected.').catch(() => {});
         void postVoiceStageLog('connection_recovered', `channel=${voiceChannel.name}`);
@@ -483,14 +473,12 @@ export async function startCall(
     }
   }, HEARTBEAT_INTERVAL);
 
-  // Log call start
   const riley = getAgent('executive-assistant' as AgentId);
 
   activeSession.transcript.push(
     `[${new Date().toLocaleTimeString()}] Call started by ${initiator.displayName}`
   );
 
-  // Voice output self-test: fail fast with a clear operator hint instead of silent VC.
   const preflightStartMs = Date.now();
   try {
     const checkAudio = await withTimeout(
@@ -542,14 +530,11 @@ export async function startCall(
   if (riley) {
     primeElevenLabsVoiceCache(riley.voice, RILEY_WARM_PHRASES).catch(() => {});
   }
-  // Listen to ALL members using best available STT (Deepgram real-time or Gemini batch)
   const unsub = listenToAllMembersSmart(
     connection,
     voiceChannel,
     (transcription) => {
       if (!activeSession?.active) return;
-      // Do not serialize turns through a single queue. New input should preempt
-      // old work immediately (handleVoiceInput aborts any in-flight turn first).
       void handleVoiceInput(transcription).catch((err) => {
         if (!isAbortLikeError(err)) {
           console.error('Voice processing error:', err instanceof Error ? err.message : 'Unknown');
@@ -566,10 +551,6 @@ export async function startCall(
     if (!activeSession?.active) return;
     const member = voiceChannel.members.get(userId);
     if (!member || member.user.bot) return;
-    // Only barge-in when Riley is actively playing TTS audio — not during the
-    // thinking/LLM phase. Interrupting the LLM call while the user waits for a
-    // response would silently abort it, creating the symptom of "chime plays but
-    // Riley never responds".
     if (!activeSession.outputActive) return;
     if (activeSession.outputStartedAt > 0) {
       const activeForMs = Date.now() - activeSession.outputStartedAt;
@@ -597,24 +578,20 @@ export async function endCall(): Promise<void> {
   session.outputStartedAt = 0;
   stopVCPlayback();
 
-  // Stop heartbeat
   if (session.heartbeatTimer) {
     clearInterval(session.heartbeatTimer);
     session.heartbeatTimer = null;
   }
 
-  // Stop all listeners
   for (const unsub of session.unsubscribers) {
     unsub();
   }
 
   session.transcript.push(`[${new Date().toLocaleTimeString()}] Call ended`);
 
-  // Leave voice channel
     recordVoiceCallEnd();
   leaveVC();
 
-  // Post transcript to call-log
   const duration = Math.round(
     (Date.now() - session.startTime.getTime()) / 1000 / 60
   );
@@ -629,7 +606,6 @@ export async function endCall(): Promise<void> {
       `\`\`\`\n${transcriptText.slice(0, 1800)}\n\`\`\``
   );
 
-  // Generate and post AI summary
   try {
     const participants = ['User', 'Riley (Executive Assistant)', 'Ace (Developer)'];
     const summary = await summarizeCall(session.transcript, participants);
@@ -700,14 +676,12 @@ async function handleVoiceInput(transcription: VoiceTranscription): Promise<void
       `turn=${turnId} user=${transcription.username} provider=${transcription.sttProvider || 'unknown'} stt_ms=${transcription.sttLatencyMs ?? -1} chars=${userText.length}`
     );
 
-    // Log to transcript
     const langTag = transcription.language && transcription.language !== 'en'
       ? ` [${transcription.language}]` : '';
     session.transcript.push(
       `[${transcription.timestamp.toLocaleTimeString()}] ${transcription.username}${langTag}: ${userText}`
     );
 
-    // Post the transcription to call log
     await session.callLog.send(`🎤 **${transcription.username}**: ${userText}`);
     await mirrorVoiceTranscript(transcription.username, userText, transcription.language);
     if (!isCurrentTurn()) return;
@@ -715,7 +689,6 @@ async function handleVoiceInput(transcription: VoiceTranscription): Promise<void
     const riley = getAgent('executive-assistant' as AgentId);
 
     if (riley) {
-      // Riley (EA) processes the input first and decides who should respond
       try {
       const rileyMemory = compactVoiceHistoryForPrompt(getMemoryContext('executive-assistant').slice(-VOICE_MEMORY_MAX_MESSAGES));
       const recentVoiceHistory = compactVoiceHistoryForPrompt(session.conversationHistory);
@@ -791,7 +764,6 @@ IMPORTANT: End on a complete sentence, never a fragment.${langHint}`;
         `[${new Date().toLocaleTimeString()}] Riley (EA): ${response}`
       );
 
-      // Do not block speech on diagnostics/network writes.
       const rileyLogAndMirror = Promise.allSettled([
         session.callLog.send(`${riley.emoji} **${riley.name}**: ${response.slice(0, 1900)}`),
         mirrorAgentResponse(riley.name, 'call-log', response),
@@ -802,7 +774,6 @@ IMPORTANT: End on a complete sentence, never a fragment.${langHint}`;
       ]);
       if (!isCurrentTurn()) return;
 
-      // Live partial speech: speak sentence chunks as they form, then flush tail.
       try {
         const rileyTtsStartMs = Date.now();
         const rileySpoke = await rileyStreamer.finalize(response);
@@ -838,7 +809,6 @@ IMPORTANT: End on a complete sentence, never a fragment.${langHint}`;
       }
       if (!isCurrentTurn()) return;
 
-      // Check which agents Riley directed.
       const directedAgents = prioritizeVoiceDirectedAgents(parseDirectedAgents(response));
       const work: Array<() => Promise<void>> = [];
 
@@ -890,7 +860,6 @@ IMPORTANT: End on a complete sentence, never a fragment.${langHint}`;
         }
       }
 
-      // Other sub-agents don't speak in VC — keep fan-out deliberately small and serialized.
       const otherAgents = directedAgents
         .filter((id) => id !== 'developer' && !VOICE_SPEAKERS.has(id))
         .slice(0, Math.max(0, VOICE_MAX_SPECIALIST_FANOUT));
@@ -965,7 +934,6 @@ function parseDirectedAgents(response: string): string[] {
   };
 
   const found = new Set<string>();
-  // Strict @name matching with word boundaries to avoid false positives
   for (const [name, id] of Object.entries(nameToId)) {
     const re = new RegExp(`@${name}\\b`, 'i');
     if (re.test(response)) {

@@ -6,12 +6,9 @@ import { documentToChannel } from './documentation';
 import { sendAgentMessage } from './textChannel';
 import { getWebhook } from '../services/webhooks';
 
-// Goals channel conversation history — persistent across restarts via DB
 const goalsHistory: ConversationMessage[] = loadMemory('goals');
 const MAX_HISTORY = 40;
 
-// Tracks whether we're waiting for a decision from the user.
-// Using a message queue to prevent race conditions on concurrent messages.
 let pendingDecision = false;
 let goalsQueue: Promise<void> = Promise.resolve();
 
@@ -36,7 +33,6 @@ export async function handleGoalsMessage(
   const content = message.content.trim();
   if (!content) return;
 
-  // Queue serializes processing — don't block the event handler
   goalsQueue = goalsQueue.then(() =>
     processGoalsMessage(message, content, goalsChannel, groupchat)
   ).catch((err) => {
@@ -70,7 +66,6 @@ async function processGoalsMessage(
 
   if (!riley || !ace) return;
 
-  // If a decision is pending, this message is the user's choice
   if (pendingDecision) {
     pendingDecision = false;
     await goalsChannel.sendTyping();
@@ -94,14 +89,12 @@ The user has made their choice. Acknowledge it briefly, then continue executing 
       ]);
       documentToChannel('executive-assistant', `Received decision from ${senderName}: "${content.slice(0, 200)}". Continuing plan.`).catch(() => {});
 
-      // Check if Riley's response contains a decision request
       if (rileyResponse.includes('🛑') || rileyResponse.includes('Decision Required')) {
         pendingDecision = true;
         trimHistory();
         return;
       }
 
-      // Now direct Ace to implement based on Riley's plan
       await executeAceStep(ace, riley, rileyResponse, senderName, goalsChannel);
       trimHistory();
 
@@ -121,7 +114,6 @@ The user has made their choice. Acknowledge it briefly, then continue executing 
 
   await goalsChannel.sendTyping();
 
-  // Riley receives the goal first and creates a plan
   const goalContext = `[GOAL from ${senderName}]: ${content}
 
 You are in the #goals channel. ${senderName} has given you a goal. Your job:
@@ -133,7 +125,6 @@ You are in the #goals channel. ${senderName} has given you a goal. Your job:
 Remember: You plan and coordinate. Start with Ace first for execution. Ace can involve Harper or other specialists only if they are actually needed.`;
 
   try {
-    // Riley creates the plan
     const rileyMemory = getMemoryContext('executive-assistant');
     const rileyResponse = await agentRespond(riley, [...rileyMemory, ...goalsHistory], goalContext, async (_toolName, summary) => {
       sendGoalsToolNotification(goalsChannel, riley, summary).catch(() => {});
@@ -149,15 +140,12 @@ Remember: You plan and coordinate. Start with Ace first for execution. Ace can i
     ]);
     documentToChannel('executive-assistant', `Received goal from ${senderName}: "${content.slice(0, 200)}". Created plan.`).catch(() => {});
 
-    // Check if Riley needs a decision before proceeding
     if (rileyResponse.includes('🛑') || rileyResponse.includes('Decision Required')) {
       pendingDecision = true;
       trimHistory();
       return;
     }
 
-    // Riley's plan is ready — direct Ace to implement first.
-    // Ace can involve Harper or any other specialist if the work actually needs it.
     await executeAceStep(ace, riley, rileyResponse, senderName, goalsChannel);
 
     trimHistory();

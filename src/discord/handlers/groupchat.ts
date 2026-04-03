@@ -38,13 +38,10 @@ import { triggerCloudBuild, listRevisions, getCurrentRevision, rollbackToRevisio
 import { captureAndPostScreenshots } from '../services/screenshots';
 import { postAgentErrorLog } from '../services/agentErrors';
 
-// Shared groupchat conversation history — persisted to disk via memory system
 let groupHistory: ConversationMessage[] = loadMemory('groupchat');
 
-// Serial message queue to prevent race conditions on groupHistory
 let messageQueue: Promise<void> = Promise.resolve();
 
-// Tracks in-flight message processing so a new message can interrupt it
 let activeAbortController: AbortController | null = null;
 let activeThinkingMessage: Message | null = null;
 let activeGoalThreadId: string | null = null;
@@ -56,11 +53,9 @@ const GROUPCHAT_PROCESS_TIMEOUT_MS = parseInt(process.env.GROUPCHAT_PROCESS_TIME
 const RILEY_NO_RESPONSE_TIMEOUT_MS = parseInt(process.env.RILEY_NO_RESPONSE_TIMEOUT_MS || '45000', 10);
 const DIRECT_GROUPCHAT_SHORT_PROMPT_MAX_WORDS = parseInt(process.env.DIRECT_GROUPCHAT_SHORT_PROMPT_MAX_WORDS || '18', 10);
 
-// Active goal tracking for /status
 let activeGoal: string | null = null;
 let goalStatus: string | null = null;
 
-// Goal stall auto-recovery: keep defaults conservative to avoid runaway token spend.
 const GOAL_STALL_TIMEOUT_MS = parseInt(process.env.GOAL_STALL_TIMEOUT_MS || '420000', 10);
 const GOAL_STALL_CHECK_INTERVAL_MS = parseInt(process.env.GOAL_STALL_CHECK_INTERVAL_MS || '60000', 10);
 const GOAL_STALL_MAX_RECOVERY_ATTEMPTS = parseInt(process.env.GOAL_STALL_MAX_RECOVERY_ATTEMPTS || '1', 10);
@@ -132,7 +127,6 @@ async function sendAutopilotAudit(
   ].filter(Boolean);
   const line = `AUTOPILOT_AUDIT ${bits.join(' ')}`;
 
-  // Keep audit trail in logs, but avoid posting noisy diagnostics in chat by default.
   console.log(line);
 
   if (process.env.AUTOPILOT_AUDIT_PUBLIC !== 'true') {
@@ -170,7 +164,6 @@ function ensureClaudeNotifications(groupchat: TextChannel): void {
           });
           return;
         } catch {
-          // fall through
         }
       }
       await targetChannel.send(content).catch(() => {});
@@ -330,7 +323,6 @@ function ensureGoalWatchdog(groupchat: TextChannel): void {
   }, GOAL_STALL_CHECK_INTERVAL_MS);
 }
 
-// Dedicated channel for overnight decision queuing (set from bot.ts)
 let decisionsChannel: TextChannel | null = null;
 
 /** Wire up the #decisions channel from bot startup. */
@@ -792,8 +784,6 @@ function parseMentionedAgentIds(text: string, allowedIds?: Set<string>): AgentId
   return [...found];
 }
 
-// Keep parent groupchat concise by default.
-// Detailed orchestration should happen inside the workspace thread.
 const GROUPCHAT_SUMMARY_ONLY = true;
 
 function formatAgentSummaryLine(line: string): string {
@@ -840,11 +830,9 @@ function buildConsolidatedAgentUpdate(findings: string[], errors: string[]): str
 function parseBudgetApproval(text: string): number | undefined | null {
   const normalized = text.toLowerCase().trim();
 
-  // Simple one-word / short confirmations — "yes", "yep", "yeah", "ok", "sure", "go", "continue", "resume", "proceed"
   const simpleYes = /^(yes|yep|yeah|yup|ok|okay|sure|go|go ahead|continue|resume|proceed|approved?|keep going|carry on|do it|let'?s? go)$/i.test(normalized);
   if (simpleYes) return undefined; // undefined → use default increment
 
-  // Must mention approval intent AND budget/spend subject, OR say standalone "approve"
   const hasApprovalWord = /(approve|approved|increase|raise|bump|add|authorise|authorize)/i.test(normalized);
   const hasBudgetWord = /(budget|spend|limit|credits?|more|extra|funds?)/i.test(normalized);
   const standaloneApprove = /^approve[sd]?[!.]*$/i.test(normalized);
@@ -929,7 +917,6 @@ export async function handleGroupchatMessage(
   ensureClaudeNotifications(groupchat);
   ensureGoalWatchdog(groupchat);
 
-  // Interrupt any in-progress response — user has already moved on
   if (activeAbortController) {
     activeAbortController.abort();
     activeAbortController = null;
@@ -939,7 +926,6 @@ export async function handleGroupchatMessage(
   const controller = new AbortController();
   activeAbortController = controller;
 
-  // Still queue to serialise history writes, but in-progress work exits early on abort
   messageQueue = messageQueue.then(async () => {
     if (controller.signal.aborted) return;
     try {
@@ -1020,12 +1006,9 @@ async function processGroupchatMessage(
     return;
   }
 
-  // Check for explicit @agent mentions — route directly
   const uniqueMentions = parseMentionedAgentIds(content);
 
   if (uniqueMentions.length > 0) {
-    // If user only mentions Riley, keep full Riley orchestration path so
-    // action tags, watchdog, and fire-and-forget behavior all run.
     if (uniqueMentions.length === 1 && uniqueMentions[0] === 'executive-assistant') {
       activeGoal = content;
       markGoalProgress('⏳ Riley planning...');
@@ -1035,11 +1018,9 @@ async function processGroupchatMessage(
         handleRileyMessage(content, senderName, message.member || undefined, groupchat, signal, workspaceChannel),
       );
     } else {
-      // User explicitly @mentioned non-Riley agents — route to them directly
       await handleDirectedMessage(content, senderName, uniqueMentions, groupchat, workspaceChannel, signal);
     }
   } else {
-    // No @mentions — goes to Riley, she coordinates
     activeGoal = content;
     markGoalProgress('⏳ Riley planning...');
     await withRileyResponseWatchdog(
@@ -1158,7 +1139,6 @@ async function handleRileyMessage(
     const rileyMemory = getMemoryContext('executive-assistant');
     const contextMessage = `[${senderName}]: ${userMessage}`;
     const aceGuide = buildAgentMentionGuide(['developer']);
-    // Inject language hint when Mandarin Chinese characters are detected (not persisted to history)
     const cjkPattern = /[\u4e00-\u9fff\u3400-\u4dbf]/;
     const textLangHint = cjkPattern.test(userMessage)
       ? '\n\n[Language detected: Mandarin Chinese. Please reply in Mandarin Chinese (简体中文).]'
@@ -1174,7 +1154,6 @@ async function handleRileyMessage(
     if (signal?.aborted) return;
     await clearThinkingMessage();
 
-    // Strip action tags before displaying to user
     const displayResponse = response.replace(/\[\s*action:[^\]]+\]/gi, '').trim();
     markGoalProgress('🧭 Riley coordinating...');
 
@@ -1189,7 +1168,6 @@ async function handleRileyMessage(
 
     if (signal?.aborted) return;
 
-    // Execute explicit tags and implied actions when Riley says actions are underway but omits tags.
     const implicitTags = inferImplicitActionTags(displayResponse);
     const actionPayload = implicitTags ? `${response}\n${implicitTags}` : response;
     if (implicitTags) {
@@ -1204,20 +1182,13 @@ async function handleRileyMessage(
     await executeActions(actionPayload, member, groupchat, workspaceChannel);
     markGoalProgress();
 
-    // Check if Riley presented a decision (🛑)
-    // Fire-and-forget: post to #decisions without blocking so Riley continues with stated assumption
     if (displayResponse.includes('🛑') || displayResponse.includes('Decision Required')) {
       const target = decisionsChannel || groupchat;
       postDecisionEmbed(target, groupchat, displayResponse).catch(() => {});
-      // Riley does NOT stop here — she proceeds with her stated assumption
     }
 
     if (signal?.aborted) return;
 
-    // Check if Riley directed Ace or other agents
-    // Post Riley's current decision/plan to both her work log and the workspace
-    // immediately so channel history and the thread stay in sync even if later
-    // delegated work stalls or errors.
     if (!signal?.aborted && displayResponse) {
       hasVisibleRileyResponse = true;
       await sendAgentMessage(rileyWorkChannel, riley, displayResponse);
@@ -1285,7 +1256,6 @@ async function executeActions(
       }
     }
 
-    // Fallback keeps action visibility even if webhook provisioning is stale.
     if ('send' in workspaceChannel) {
       await workspaceChannel.send(msg).catch(() => {});
       return;
@@ -1514,7 +1484,6 @@ async function executeActions(
             await sendAsRiley('📞 Phone system not configured (missing Twilio credentials).');
             break;
           }
-          // param format: "0436012231,0412345678" (comma-separated numbers)
           if (!param) {
             await sendAsRiley('📞 No phone numbers specified. Riley, include numbers with [ACTION:CONFERENCE:num1,num2].');
             break;
@@ -1654,7 +1623,6 @@ async function recoverFromAgentErrors(
       const wh = await getWebhook(workspaceChannel);
       await wh.send({ content: '⚠️ Ace had an error while recovering specialist failures.', username: `${ace.emoji} ${ace.name}`, avatarURL: ace.avatarUrl });
     } catch {
-      // best effort only
     }
     return { findings: [], errors: ['Ace: recovery error'] };
   }
@@ -1677,7 +1645,6 @@ async function handleAgentChain(
   if (effectiveAgents.length === 0) return;
   markGoalProgress('🧩 Coordinating specialist agents...');
 
-  // Riley now routes execution through Ace first; Ace decides whether specialists are needed.
   const aceDirected = effectiveAgents.length > 0;
   const otherDirected = RILEY_DIRECT_SPECIALISTS
     ? effectiveAgents.filter((id) => id !== 'developer')
@@ -1703,7 +1670,6 @@ async function handleAgentChain(
         if (signal?.aborted) return;
         markGoalProgress('💻 Ace implementing...');
 
-        // Ace may direct sub-agents
         const aceSubDirectives = parseDirectives(aceResponse);
         if (aceSubDirectives.length > 0) {
           const fromAce = await handleSubAgents(aceSubDirectives, aceResponse, groupchat, workspaceChannel, signal);
@@ -1724,7 +1690,6 @@ async function handleAgentChain(
     }
   }
 
-  // Handle other agents Riley directed directly (not through Ace)
   if (otherDirected.length > 0) {
     const direct = await handleSubAgents(otherDirected, rileyResponse, groupchat, workspaceChannel, signal);
     consolidatedFindings.push(...direct.findings);
@@ -1780,7 +1745,6 @@ async function handleSubAgents(
   if (validAgents.length === 0) return { findings: [], errors: [] };
   markGoalProgress('🛠️ Sub-agents running...');
 
-  // Group agents by tier
   const tiers = new Map<number, typeof validAgents>();
   for (const entry of validAgents) {
     const tier = AGENT_TIER[entry.id] ?? 99;
@@ -1788,7 +1752,6 @@ async function handleSubAgents(
     tiers.get(tier)!.push(entry);
   }
 
-  // Execute tiers in order; agents within each tier run in parallel
   const sortedTiers = [...tiers.keys()].sort((a, b) => a - b);
   const priorFindings: string[] = [];
   const errorLines: string[] = [];
@@ -1825,7 +1788,6 @@ async function handleSubAgents(
       MAX_PARALLEL_SUBAGENTS
     );
 
-    // Collect findings from this tier for the next tier
     for (let i = 0; i < tierResults.length; i++) {
       const result = tierResults[i];
       if (result.status === 'fulfilled') {
@@ -1841,7 +1803,6 @@ async function handleSubAgents(
       }
     }
 
-    // Report errors for failed agents
     for (let i = 0; i < tierResults.length; i++) {
       if (tierResults[i].status === 'rejected') {
         const { agent } = tierAgents[i];
@@ -1905,7 +1866,6 @@ async function handleDirectedMessage(
     MAX_PARALLEL_SUBAGENTS
   );
 
-  // Report errors
   for (let i = 0; i < results.length; i++) {
     if (results[i].status === 'rejected') {
       const { agent } = validAgents[i];
@@ -1941,7 +1901,6 @@ export async function handleDecisionReply(
   const content = message.content.trim();
   if (!content) return;
 
-  // Acknowledge inline so the user knows it was received
   try {
     await message.react('✅');
   } catch { /* ignore — bot may lack reaction perms */ }
@@ -1967,20 +1926,17 @@ async function postDecisionEmbed(
   groupchat: TextChannel,
   rileyResponse: string
 ): Promise<void> {
-  // Extract the decision section
   const decisionMatch = rileyResponse.match(/🛑[\s\S]*?(?=\n\n[^1-9]|$)/);
   if (!decisionMatch) return;
 
   const decisionText = decisionMatch[0];
 
-  // Extract options (lines starting with numbers or emoji numbers)
   const optionRe = /^[1-5]️?⃣?\s*[.):]\s*(.+)$/gm;
   const options: string[] = [];
   for (const match of decisionText.matchAll(optionRe)) {
     options.push(match[1].trim());
   }
 
-  // Also try "**Option X**" pattern
   if (options.length === 0) {
     const altRe = /[1-5]️⃣\s*\*\*(.+?)\*\*/g;
     for (const match of decisionText.matchAll(altRe)) {
@@ -2007,14 +1963,10 @@ async function postDecisionEmbed(
 
   const decisionMsg = await targetChannel.send({ embeds: [embed] });
 
-  // Add reaction buttons
   for (let i = 0; i < Math.min(options.length, 5); i++) {
     await decisionMsg.react(reactions[i]).catch(() => {});
   }
 
-  // Background reaction listener:
-  // - In #decisions: 12h window (overnight) — non-blocking
-  // - In groupchat fallback: 5-min window as before, but still non-blocking
   const timeoutMs = isDecisionsChannel ? 12 * 60 * 60 * 1000 : 5 * 60 * 1000;
   const filter = (reaction: any, user: any) => {
     return reactions.slice(0, options.length).includes(reaction.emoji.name || '') && !user.bot;
@@ -2044,22 +1996,17 @@ async function postDecisionEmbed(
         await targetChannel.send(`✅ **${userName}** chose: **${choice}**`);
       }
 
-      // Feed the decision back to Riley
       const decisionMessage = `${userName} chose option ${choiceIndex + 1}: ${choice}`;
       const workspaceChannel = await ensureGoalWorkspace(groupchat, userName, decisionMessage);
       await handleRileyMessage(decisionMessage, userName, undefined, groupchat, undefined, workspaceChannel);
     })
     .catch(() => {
-      // Timeout — silent, user can still reply in #decisions or groupchat
     });
 }
 
 /** Persist groupHistory to disk. Called after every interaction. */
 function persistGroupHistory(): void {
   saveMemory('groupchat', groupHistory);
-  // Trigger compression when history gets long (runs in background).
-  // compressMemory mutates the cached array in-place, and groupHistory
-  // IS that cached array, so no post-compression sync is needed.
   if (groupHistory.length >= 60) {
     compressMemory('groupchat').catch(() => {});
   }

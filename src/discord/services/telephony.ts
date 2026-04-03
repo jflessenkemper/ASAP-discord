@@ -17,7 +17,6 @@ import { agentRespond, ConversationMessage, summarizeCall } from '../claude';
 import { getAgent, AgentId } from '../agents';
 import { getMemoryContext, appendToMemory } from '../memory';
 
-// ── Config ──
 const TWILIO_ACCOUNT_SID = process.env.TWILIO_ACCOUNT_SID;
 const TWILIO_AUTH_TOKEN = process.env.TWILIO_AUTH_TOKEN;
 const TWILIO_PHONE_NUMBER = process.env.TWILIO_PHONE_NUMBER; // Australian number e.g. +61...
@@ -46,13 +45,11 @@ export function isTelephonyAvailable(): boolean {
   return !!(TWILIO_ACCOUNT_SID && TWILIO_AUTH_TOKEN && TWILIO_PHONE_NUMBER);
 }
 
-// ── Known contacts (persisted to database) ──
 import pool from '../../db/pool';
 
 const CONTACTS_DB_KEY = 'phone-contacts';
 
 function loadContacts(): Record<string, string> {
-  // Synchronous fallback — DB load happens in initContacts()
   return { '+61436012231': 'Jordan' };
 }
 
@@ -109,7 +106,6 @@ export function getKnownContacts(): Record<string, string> {
   return { ...knownContacts };
 }
 
-// ── Active phone call sessions ──
 interface PhoneSession {
   callSid: string;
   streamSid: string | null;
@@ -129,14 +125,12 @@ interface PhoneSession {
 
 const activeSessions = new Map<string, PhoneSession>();
 
-// ── TwiML for inbound calls ──
 /**
  * Returns TwiML XML that connects the caller straight to the WebSocket media stream.
  * No hold message — Riley greets via ElevenLabs TTS once the stream connects.
  */
 export function getInboundTwiML(callerNumber?: string): string {
   const wsUrl = SERVER_URL.replace(/^https?/, 'wss') + '/api/webhooks/twilio/stream';
-  // Pass caller number as a custom parameter so the WS handler can identify them
   const escXml = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
   const paramTag = callerNumber
     ? `\n      <Parameter name="callerNumber" value="${escXml(callerNumber)}" />`
@@ -163,7 +157,6 @@ export function getConferenceTwiML(conferenceName: string): string {
 </Response>`;
 }
 
-// ── WebSocket media stream handler ──
 
 /**
  * Attach the Twilio WebSocket media stream handler to an HTTP server.
@@ -201,8 +194,6 @@ export function attachTelephonyWebSocket(server: HttpServer): void {
               session.ws = ws;
               await startSessionSTT(session);
             } else {
-              // Inbound call — create session
-              // Extract caller number from custom parameters
               const callerNumber = msg.start.customParameters?.callerNumber || 'unknown';
               const callerName = identifyCaller(callerNumber);
               const confName = msg.start.customParameters?.conferenceName || null;
@@ -229,7 +220,6 @@ export function attachTelephonyWebSocket(server: HttpServer): void {
               logToDiscord(`📞 **Inbound phone call** from ${who}`);
               newSession.transcript.push(`[${new Date().toLocaleTimeString()}] Inbound call from ${who}`);
 
-              // Personalized greeting via ElevenLabs TTS (no robotic hold message)
               const greeting = callerName
                 ? `Hey ${callerName}! It's Riley. What's up?`
                 : `Hey! It's Riley. How can I help you?`;
@@ -242,13 +232,10 @@ export function attachTelephonyWebSocket(server: HttpServer): void {
             const session = sessionCallSid ? activeSessions.get(sessionCallSid) : null;
             if (!session?.active) break;
 
-            // Twilio sends base64 µ-law 8kHz mono audio
             const audioChunk = Buffer.from(msg.media.payload, 'base64');
-            // Convert µ-law to PCM s16le for Deepgram
             const pcm = mulawToPCM(audioChunk);
 
             if (session.deepgramSession) {
-              // Upsample 8kHz mono to 48kHz stereo for Deepgram (matching Discord format)
               const upsampled = upsample8kTo48kStereo(pcm);
               session.deepgramSession.send(upsampled);
             }
@@ -281,7 +268,6 @@ export function attachTelephonyWebSocket(server: HttpServer): void {
   });
 }
 
-// ── STT setup for phone sessions ──
 
 async function startSessionSTT(session: PhoneSession): Promise<void> {
   if (!isDeepgramAvailable()) {
@@ -294,7 +280,6 @@ async function startSessionSTT(session: PhoneSession): Promise<void> {
 
   session.deepgramSession = await startLiveTranscription(
     (text: string, detectedLanguage?: string) => {
-      // Accumulate fragments into full utterances
       utteranceBuffer += (utteranceBuffer ? ' ' : '') + text;
 
       if (utteranceTimer) clearTimeout(utteranceTimer);
@@ -312,7 +297,6 @@ async function startSessionSTT(session: PhoneSession): Promise<void> {
   );
 }
 
-// ── Voice input → Riley → TTS response ──
 
 async function handlePhoneInput(session: PhoneSession, text: string, language?: string): Promise<void> {
   if (!session.active || session.processing) return;
@@ -323,10 +307,8 @@ async function handlePhoneInput(session: PhoneSession, text: string, language?: 
     session.transcript.push(`[${new Date().toLocaleTimeString()}] Caller${langTag}: ${text}`);
     logToDiscord(`🎤 **Caller**: ${text}`);
 
-    // Check for end-call commands
     if (/\b(goodbye|hang up|end call|that's all|bye)\b/i.test(text)) {
       await speakToPhone(session, "Goodbye! Have a great day.");
-      // Give TTS time to play
       setTimeout(() => {
         hangUp(session.callSid).catch(console.error);
       }, 3000);
@@ -369,7 +351,6 @@ Do NOT use markdown formatting — this is spoken audio.${langHint}`;
       { role: 'assistant', content: `[Riley]: ${response}` }
     );
 
-    // Trim history
     if (session.conversationHistory.length > 40) {
       session.conversationHistory.splice(0, session.conversationHistory.length - 40);
     }
@@ -382,7 +363,6 @@ Do NOT use markdown formatting — this is spoken audio.${langHint}`;
       { role: 'assistant', content: `[Riley]: ${response}` },
     ]);
 
-    // Try to learn names from conversation (e.g. "my name is Sarah", "I'm Sarah", "this is Sarah")
     const nameMatch = text.match(/(?:my name(?:'s| is)|i'm|i am|this is|call me)\s+([A-Z][a-z]+)/i);
     if (nameMatch && session.callerNumber !== 'unknown' && session.callerNumber !== 'conference') {
       const discoveredName = nameMatch[1];
@@ -400,20 +380,16 @@ Do NOT use markdown formatting — this is spoken audio.${langHint}`;
   }
 }
 
-// ── TTS → Twilio audio ──
 
 async function speakToPhone(session: PhoneSession, text: string): Promise<void> {
   if (!session.ws || session.ws.readyState !== WebSocket.OPEN || !session.streamSid) return;
 
   try {
-    // Get MP3 from ElevenLabs (same as Discord)
     const mp3Buffer = await elevenLabsTTS(text.slice(0, 500), 'Achernar');
     if (mp3Buffer.length === 0) return;
 
-    // Convert MP3 to µ-law 8kHz for Twilio
     const mulawAudio = await mp3ToMulaw(mp3Buffer);
 
-    // Send audio in chunks (Twilio expects base64 µ-law in 20ms frames)
     const CHUNK_SIZE = 160; // 160 bytes = 20ms at 8kHz µ-law
     for (let i = 0; i < mulawAudio.length; i += CHUNK_SIZE) {
       if (session.ws.readyState !== WebSocket.OPEN) break;
@@ -425,7 +401,6 @@ async function speakToPhone(session: PhoneSession, text: string): Promise<void> 
       }));
     }
 
-    // Mark to clear the stream buffer so Twilio plays our audio immediately
     session.ws.send(JSON.stringify({
       event: 'mark',
       streamSid: session.streamSid,
@@ -436,7 +411,6 @@ async function speakToPhone(session: PhoneSession, text: string): Promise<void> 
   }
 }
 
-// ── Outbound call ──
 
 /**
  * Make an outbound call to a phone number. Riley will speak to the callee.
@@ -445,7 +419,6 @@ export async function makeOutboundCall(toNumber: string, greeting?: string): Pro
   const client = getTwilioClient();
   if (!TWILIO_PHONE_NUMBER) throw new Error('TWILIO_PHONE_NUMBER not configured');
 
-  // Normalize Australian number
   let normalized = toNumber.replace(/\s+/g, '');
   if (normalized.startsWith('0')) {
     normalized = '+61' + normalized.slice(1);
@@ -467,7 +440,6 @@ export async function makeOutboundCall(toNumber: string, greeting?: string): Pro
     twiml,
   });
 
-  // Pre-create session for this outbound call
   const callerName = identifyCaller(normalized);
   const session: PhoneSession = {
     callSid: call.sid,
@@ -490,7 +462,6 @@ export async function makeOutboundCall(toNumber: string, greeting?: string): Pro
   session.transcript.push(`[${new Date().toLocaleTimeString()}] Outbound call to ${normalized}`);
   logToDiscord(`📞 **Outbound call** to ${normalized}`);
 
-  // Queue greeting to be spoken when stream connects
   if (greeting) {
     const waitForStream = setInterval(async () => {
       if (session.ws && session.streamSid) {
@@ -517,19 +488,16 @@ export async function hangUp(callSid: string): Promise<void> {
   }
 }
 
-// ── Session lifecycle ──
 
 async function endPhoneSession(session: PhoneSession): Promise<void> {
   if (!session.active) return;
   session.active = false;
 
-  // Close Deepgram
   session.deepgramSession?.close();
 
   const duration = Math.round((Date.now() - session.startTime.getTime()) / 1000 / 60);
   session.transcript.push(`[${new Date().toLocaleTimeString()}] Call ended`);
 
-  // Post transcript to call-log
   const transcriptText = session.transcript.join('\n');
   if (callLogChannel) {
     await callLogChannel.send(
@@ -540,7 +508,6 @@ async function endPhoneSession(session: PhoneSession): Promise<void> {
       `\`\`\`\n${transcriptText.slice(0, 1800)}\n\`\`\``
     );
 
-    // AI summary
     try {
       const summary = await summarizeCall(session.transcript, ['Caller', 'Riley (Executive Assistant)']);
       await callLogChannel.send(`📝 **Summary**\n${summary}`);
@@ -557,7 +524,6 @@ async function endPhoneSession(session: PhoneSession): Promise<void> {
   activeSessions.delete(session.callSid);
 }
 
-// ── Audio conversion utilities ──
 
 /** µ-law to PCM s16le conversion table */
 const MULAW_DECODE_TABLE = new Int16Array(256);
@@ -613,7 +579,6 @@ function upsample8kTo48kStereo(pcm8k: Buffer): Buffer {
 
   for (let i = 0; i < samplesIn; i++) {
     const sample = pcm8k.readInt16LE(i * 2);
-    // Simple nearest-neighbor upsample + stereo duplication
     for (let r = 0; r < ratio; r++) {
       const outIdx = (i * ratio + r) * 4;
       out.writeInt16LE(sample, outIdx);      // Left
@@ -639,7 +604,6 @@ async function mp3ToMulaw(mp3: Buffer): Promise<Buffer> {
   try {
     writeFileSync(tmpIn, mp3);
 
-    // Convert MP3 → PCM s16le 8kHz mono using ffmpeg
     execSync(
       `ffmpeg -y -i "${tmpIn}" -ar 8000 -ac 1 -f s16le "${tmpOut}" 2>/dev/null`,
       { timeout: 10000 }
@@ -647,7 +611,6 @@ async function mp3ToMulaw(mp3: Buffer): Promise<Buffer> {
 
     const pcm = readFileSync(tmpOut);
 
-    // Convert PCM to µ-law
     const mulaw = Buffer.alloc(pcm.length / 2);
     for (let i = 0; i < mulaw.length; i++) {
       mulaw[i] = pcmSampleToMulaw(pcm.readInt16LE(i * 2));
@@ -660,7 +623,6 @@ async function mp3ToMulaw(mp3: Buffer): Promise<Buffer> {
   }
 }
 
-// ── Conference / group call support ──
 
 /**
  * Start a conference call. Riley joins as an AI participant.
@@ -675,7 +637,6 @@ export async function startConferenceCall(
 
   const confName = conferenceName || `asap-conf-${Date.now()}`;
 
-  // Call each participant and put them in the conference
   for (const raw of numbers) {
     let normalized = raw.replace(/\s+/g, '');
     if (normalized.startsWith('0')) normalized = '+61' + normalized.slice(1);
@@ -690,7 +651,6 @@ export async function startConferenceCall(
     });
   }
 
-  // Connect Riley to the conference via a media stream so she can listen + speak
   const wsUrl = SERVER_URL.replace(/^https?/, 'wss') + '/api/webhooks/twilio/stream';
   const rileyTwiml = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
@@ -711,7 +671,6 @@ export async function startConferenceCall(
     twiml: rileyTwiml,
   });
 
-  // Pre-create a session marked as conference
   const session: PhoneSession = {
     callSid: rileyCall.sid,
     streamSid: null,
@@ -765,7 +724,6 @@ export async function addToConference(conferenceName: string, phoneNumber: strin
   logToDiscord(`📞 **Added ${name}** to conference ${conferenceName}`);
 }
 
-// ── Discord logging helper ──
 
 function logToDiscord(message: string): void {
   callLogChannel?.send(message.slice(0, 2000)).catch(() => {});

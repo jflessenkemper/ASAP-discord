@@ -21,7 +21,6 @@ function getCachedTts(text: string, voiceName: string): Buffer | null {
     ttsCache.delete(key);
     return null;
   }
-  // Touch for simple LRU-ish behaviour.
   ttsCache.delete(key);
   ttsCache.set(key, entry);
   return Buffer.from(entry.buffer);
@@ -50,11 +49,9 @@ function getClient(): ElevenLabsClient {
  *  Also supports choosing voices by ElevenLabs name directly.
  *  Full catalog: https://elevenlabs.io/voice-library */
 const VOICE_ID_MAP: Record<string, string> = {
-  // ── Agent voice mappings (keyed by Gemini voice name from agents.ts) ──
   Achernar: '1u9fzC9CaZV94lApNwFM',  // Riley → ASAPCommander
   Aoede: '1u9fzC9CaZV94lApNwFM',       // Ace → ASAPCommander
 
-  // ── ElevenLabs default voices (pick by name) ──
   sarah: 'EXAVITQu4vr4xnSDxMaL',
   adam: 'pNInz6obpgDQGcFmaJgB',
   rachel: '21m00Tcm4TlvDq8ikWAM',
@@ -120,7 +117,6 @@ export async function elevenLabsTTS(
     throw new Error('Daily ElevenLabs character limit reached');
   }
 
-  // Cache short phrases only; long dynamic responses are rarely reused.
   if (text.length <= 160) {
     const cached = getCachedTts(text, voiceName);
     if (cached) return cached;
@@ -141,7 +137,6 @@ export async function elevenLabsTTS(
     },
   });
 
-  // Collect the stream into a buffer
   const chunks: Buffer[] = [];
   for await (const chunk of audio) {
     chunks.push(Buffer.from(chunk));

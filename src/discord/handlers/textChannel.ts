@@ -5,11 +5,8 @@ import { appendToMemory, getMemoryContext } from '../memory';
 import { clearWebhookCache, sendWebhookMessage, WebhookCapableChannel } from '../services/webhooks';
 import { mirrorAgentResponse } from '../services/diagnosticsWebhook';
 
-// Per-channel conversation history (in-memory, keyed by channelId)
 const conversationHistories = new Map<string, ConversationMessage[]>();
-// Per-channel message queue to prevent concurrent processing
 const channelQueues = new Map<string, Promise<void>>();
-// Per-channel abort controller so a new message can interrupt in-flight generation
 const channelAbortControllers = new Map<string, AbortController>();
 const pendingThinkingMessages = new Map<string, Message>();
 
@@ -58,7 +55,6 @@ export async function handleAgentMessage(
 ): Promise<void> {
   const channelId = message.channel.id;
 
-  // Interrupt any in-flight response in this channel so the agent listens to the latest message
   const prevController = channelAbortControllers.get(channelId);
   if (prevController) prevController.abort();
   const pending = pendingThinkingMessages.get(channelId);
@@ -92,11 +88,9 @@ async function handleAgentMessageInner(
 
   if (!userMessage) return;
 
-  // Show typing indicator
   const channel = message.channel as TextChannel;
   await channel.sendTyping();
 
-  // Visible immediate feedback while the LLM is thinking.
   let pendingThinking: Message | null = null;
   try {
     pendingThinking = await sendWebhookMessage(channel, {
@@ -106,10 +100,8 @@ async function handleAgentMessageInner(
     });
     pendingThinkingMessages.set(channelId, pendingThinking);
   } catch {
-    // Non-fatal: typing indicator already sent.
   }
 
-  // Get or create conversation history, seeded with persistent memory
   let history = conversationHistories.get(channelId);
   if (!history) {
     history = getMemoryContext(agent.id);
@@ -118,7 +110,6 @@ async function handleAgentMessageInner(
 
   try {
     const maxTokens = estimateTextMaxTokens(agent, userMessage);
-    // Inject language hint when Mandarin Chinese characters are detected (not persisted to history)
     const cjkPattern = /[\u4e00-\u9fff\u3400-\u4dbf]/;
     const textLangHint = cjkPattern.test(userMessage)
       ? '\n\n[Language detected: Mandarin Chinese. Please reply in Mandarin Chinese (简体中文).]'
@@ -165,22 +156,18 @@ async function handleAgentMessageInner(
 
       if (signal?.aborted) return;
 
-    // Update history
     history.push({ role: 'user', content: userMessage });
     history.push({ role: 'assistant', content: response });
 
-    // Trim history if too long
     if (history.length > MAX_HISTORY * 2) {
       history.splice(0, history.length - MAX_HISTORY * 2);
     }
 
-    // Persist to disk
     appendToMemory(agent.id, [
       { role: 'user', content: userMessage },
       { role: 'assistant', content: response },
     ]);
 
-    // Split response if over Discord's 2000 char limit
     if (signal?.aborted) return;
     const renderedResponse = renderAgentMessage(response);
     const canFinalizeInPlace =
@@ -321,27 +308,20 @@ function renderAgentMessage(raw: string): string {
   const withoutActionTags = raw.replace(/\[ACTION:[^\]]+\]/g, '').trim();
   if (!withoutActionTags) return '';
 
-  // Models may echo internal memory-style speaker labels (e.g. "[Liv]:").
-  // Remove a single leading label so Discord output stays natural.
   const withoutSpeakerLabel = withoutActionTags.replace(/^\s*\[[^\]\r\n]{1,40}\]:\s*/u, '');
   if (!withoutSpeakerLabel) return '';
 
-  // Reduce visual noise: strip markdown heading prefixes that make chat feel
-  // disjointed (e.g. "## Next Steps"), while keeping the line content.
   const withoutHeadings = withoutSpeakerLabel
     .replace(/^\s{0,3}#{1,6}\s+/gm, '')
     .replace(/^\s{0,3}>\s?/gm, '')
     .trim();
   if (!withoutHeadings) return '';
 
-  // Preserve code blocks verbatim; bold mentions only in normal prose.
   const segments = withoutHeadings.split(/(```[\s\S]*?```)/g);
   const formatted = segments.map((segment) => {
     if (segment.startsWith('```') && segment.endsWith('```')) return segment;
     const noHeavyBold = segment
-      // Demote bold emphasis in prose so coordination messages read naturally.
       .replace(/\*\*(?!@)([^*\n]{1,120})\*\*/g, '$1')
-      // Collapse excessive blank space.
       .replace(/\n{3,}/g, '\n\n');
     return noHeavyBold.replace(/(^|\s)@([a-z0-9-]{2,32})\b/gi, (_m, prefix, name) => {
       const resolved = resolveAgentId(name);
@@ -391,9 +371,7 @@ function splitMessage(text: string, maxLen: number): string[] {
 
   for (const line of lines) {
     if (line.length > maxLen) {
-      // Flush current chunk first
       if (chunk) { chunks.push(chunk); chunk = ''; }
-      // Sub-split oversized line at maxLen boundaries
       for (let i = 0; i < line.length; i += maxLen) {
         chunks.push(line.slice(i, i + maxLen));
       }

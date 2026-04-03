@@ -172,7 +172,6 @@ const CHANNEL_NAME_MAP: Record<string, string> = {
 };
 
 function loadSystemPrompt(agentId: string): string {
-  // Try multiple paths — Docker copies to /app/.github/agents/, local dev uses repo root
   const candidates = [
     path.join(__dirname, '..', '..', '..', '.github', 'agents', `${agentId}.agent.md`),
     path.join('/app', '.github', 'agents', `${agentId}.agent.md`),
@@ -181,11 +180,9 @@ function loadSystemPrompt(agentId: string): string {
   for (const filePath of candidates) {
     try {
       const content = fs.readFileSync(filePath, 'utf-8');
-      // Strip YAML frontmatter
       const stripped = content.replace(/^---[\s\S]*?---\n*/, '');
       return stripped.trim();
     } catch {
-      // Try next path
     }
   }
 
@@ -222,7 +219,6 @@ export function getAgents(): Map<AgentId, AgentConfig> {
   for (const id of AGENT_IDS) {
     const emoji = EMOJI_MAP[id] || '🤖';
     const systemPrompt = loadSystemPrompt(id);
-    // Track agents that fell back to default prompt
     if (systemPrompt.startsWith('You are the ')) loadErrors++;
     agentCache.set(id, {
       id,

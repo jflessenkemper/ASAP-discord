@@ -2,7 +2,6 @@ import { TextChannel, EmbedBuilder } from 'discord.js';
 import pool from '../db/pool';
 import { getLiveBillingSnapshot, refreshLiveBillingSnapshot } from '../services/billing';
 
-// ─── Daily limits (configurable via env vars) ───────────────────────────────
 const DAILY_LIMITS = {
   /** Max LLM input+output tokens per day (Gemini) */
   claudeTokens: parseInt(process.env.DAILY_LIMIT_GEMINI_LLM_TOKENS || process.env.DAILY_LIMIT_CLAUDE_TOKENS || '2000000', 10),
@@ -19,7 +18,6 @@ const DASHBOARD_UPDATE_INTERVAL_MS = 5 * 60 * 1000;
 /** Optional running Anthropic credit cap — no longer used with Gemini */
 const ANTHROPIC_CREDIT_CAP_USD = 0;
 
-// ─── Usage counters ─────────────────────────────────────────────────────────
 interface UsageCounters {
   claudeInputTokens: number;
   claudeOutputTokens: number;
@@ -166,7 +164,6 @@ export async function initUsageCounters(): Promise<void> {
         ? parsed.lastReset
         : new Date().toISOString().split('T')[0];
 
-      // Backfill older installs that only stored aggregate text-model tokens.
       if (
         usage.anthropicInputTokens === 0 &&
         usage.anthropicOutputTokens === 0 &&
@@ -242,7 +239,6 @@ function effectiveGcpSpendForBudget(estimatedGcpSpend: number): number {
     return estimatedGcpSpend;
   }
 
-  // Cloud Billing can lag by a few minutes; keep the larger value to avoid under-gating.
   return Math.max(estimatedGcpSpend, live.dailyCostUsd);
 }
 
@@ -253,7 +249,6 @@ function effectiveTotalSpendForBudget(): number {
   return effectiveGcp + estimated.elevenLabs;
 }
 
-// ─── Recording functions ────────────────────────────────────────────────────
 function isAnthropicModelName(modelName?: string): boolean {
   const key = String(modelName || '').trim().toLowerCase();
   return key.includes('claude') || key.includes('opus') || key.includes('sonnet') || key.includes('haiku');
@@ -350,7 +345,6 @@ export function recordElevenLabsUsage(chars: number): void {
   markUsageDirty();
 }
 
-// ─── Limit checks ──────────────────────────────────────────────────────────
 export function isClaudeOverLimit(): boolean {
   resetIfNewDay();
   return (usage.claudeInputTokens + usage.claudeOutputTokens) >= DAILY_LIMITS.claudeTokens;
@@ -415,15 +409,12 @@ export function setDailyBudgetLimit(
   if (!Number.isFinite(newLimitUsd) || newLimitUsd < 0) {
     throw new Error(`Invalid budget limit: ${newLimitUsd}`);
   }
-  // Apply immediately in-process
   DAILY_LIMITS.budgetUsd = newLimitUsd;
-  // Reset approvedBudgetUsd — the new limit already incorporates any desired headroom
   usage.approvedBudgetUsd = 0;
   markUsageDirty();
 
   if (persist) {
     try {
-      // Locate the .env file relative to this module's compiled location
       const path = require('path');
       const fs = require('fs');
       const envPath = path.resolve(__dirname, '../../.env');
@@ -437,7 +428,6 @@ export function setDailyBudgetLimit(
         fs.writeFileSync(envPath, contents, 'utf8');
       }
     } catch {
-      // Non-fatal — in-process change already applied
     }
   }
 
@@ -461,17 +451,11 @@ export function getClaudeTokenStatus(): { used: number; remaining: number; limit
   };
 }
 
-// ─── Cost estimates ─────────────────────────────────────────────────────────
-// These counters aggregate text-model usage across the bot.
-// Since coding work now prefers Claude Opus, use conservative Opus pricing by default
-// so the budget gate does not undercount spend. Override with env vars if the mix changes.
 const CLAUDE_INPUT_COST_PER_M = parseFloat(process.env.CLAUDE_INPUT_COST_PER_M || process.env.LLM_INPUT_COST_PER_M || '15');
 const CLAUDE_OUTPUT_COST_PER_M = parseFloat(process.env.CLAUDE_OUTPUT_COST_PER_M || process.env.LLM_OUTPUT_COST_PER_M || '75');
 const GEMINI_TEXT_INPUT_COST_PER_M = parseFloat(process.env.GEMINI_TEXT_INPUT_COST_PER_M || '0.20');
 const GEMINI_TEXT_OUTPUT_COST_PER_M = parseFloat(process.env.GEMINI_TEXT_OUTPUT_COST_PER_M || '1.27');
-// Gemini TTS/transcription calls — still cheap, but kept configurable.
 const GEMINI_COST_PER_CALL = parseFloat(process.env.GEMINI_COST_PER_CALL || '0.0001');
-// ElevenLabs — depends on plan, approximate per character.
 const ELEVENLABS_COST_PER_CHAR = parseFloat(process.env.ELEVENLABS_COST_PER_CHAR || '0.00018');
 
 function estimateRequestCostUsd(modelName: string | undefined, inputTokens: number, outputTokens: number): number {
@@ -495,7 +479,6 @@ function estimateDailyCost(): { claude: number; gemini: number; elevenLabs: numb
   return { claude, gemini, elevenLabs, total: claude + gemini + elevenLabs };
 }
 
-// ─── Progress bar helper ────────────────────────────────────────────────────
 function progressBar(used: number, limit: number, length: number = 20): string {
   const ratio = Math.min(used / limit, 1);
   const filled = Math.round(ratio * length);
@@ -559,7 +542,6 @@ export function getPromptAttributionSnapshot(): {
   };
 }
 
-// ─── Formatted usage report (embed) ─────────────────────────────────────────
 export function getUsageEmbed(): EmbedBuilder {
   resetIfNewDay();
   const totalClaudeTokens = usage.claudeInputTokens + usage.claudeOutputTokens;
@@ -705,7 +687,6 @@ export function getContextEfficiencyReport(): string {
   );
 }
 
-// ─── Limits channel auto-update ─────────────────────────────────────────────
 let limitsChannel: TextChannel | null = null;
 let dashboardMessageId: string | null = null;
 let updateInterval: ReturnType<typeof setInterval> | null = null;
@@ -725,10 +706,8 @@ export function setCostChannel(channel: TextChannel | null): void {
 export async function startDashboardUpdates(): Promise<void> {
   if (!limitsChannel) return;
 
-  // Post initial dashboard
   await updateDashboard();
 
-  // Update every 5 minutes
   updateInterval = setInterval(() => {
     updateDashboard().catch((err) =>
       console.error('Dashboard update error:', err instanceof Error ? err.message : 'Unknown')
@@ -760,31 +739,26 @@ async function updateDashboard(): Promise<void> {
 
   const embed = getUsageEmbed();
 
-  // Try to edit existing message first — avoids delete+recreate spam
   if (dashboardMessageId) {
     try {
       const existing = await limitsChannel.messages.fetch(dashboardMessageId);
       await existing.edit({ embeds: [embed] });
       return;
     } catch {
-      // Message was deleted or can't be fetched — fall through to create new one
       dashboardMessageId = null;
     }
   }
 
-  // Clear old messages and post fresh
   try {
     const messages = await limitsChannel.messages.fetch({ limit: 50 });
     if (messages.size > 0) {
       await limitsChannel.bulkDelete(messages, true).catch(async () => {
-        // bulkDelete fails on messages > 14 days old — delete individually (sequentially to respect rate limits)
         for (const m of messages.values()) {
           await m.delete().catch(() => {});
         }
       });
     }
   } catch {
-    // Ignore cleanup errors
   }
 
   const msg = await limitsChannel.send({ embeds: [embed] });

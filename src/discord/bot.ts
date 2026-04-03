@@ -97,14 +97,12 @@ export async function startBot(): Promise<void> {
         await initContacts();
       }
       await startDashboardUpdates();
-      // Startup health snapshot to bot-diagnostics webhook
       runModelHealthChecks().catch((err) => {
         const msg = err instanceof Error ? err.message : 'Unknown';
         console.error('Model health check failed:', msg);
         void postAgentErrorLog('discord:model-health', 'Model health check failed', { detail: msg, level: 'warn' });
       });
 
-      // Wire command audit to #github channel
       setCommandAuditCallback((cmd, allowed, reason) => {
         const githubChannel = configuredChannels.github;
         if (!githubChannel) return;
@@ -113,7 +111,6 @@ export async function startBot(): Promise<void> {
         githubChannel.send(`${icon} [agent:system] run_command=${truncated.replace(/\s+/g, ' ')} reason=${reason.replace(/\s+/g, ' ')}`).catch(() => {});
       });
 
-      // Wire tool audit to #terminal channel — every tool invocation from every agent
       let lastDbAuditPost = 0;
       let suppressedDbAudits = 0;
       const DB_AUDIT_POST_INTERVAL_MS = 30_000;
@@ -160,19 +157,16 @@ export async function startBot(): Promise<void> {
         terminalChannel.send(`🔧 [agent:${tag}] tool=${toolName} ${summary.replace(/\s+/g, ' ').trim()}`).catch(() => {});
       });
 
-      // Wire PR auto-review (Harper + Kane on sensitive files)
       setPRReviewCallback(async (prNumber, prTitle, changedFiles, diffSummary) => {
         await autoReviewPR(prNumber, prTitle, changedFiles, diffSummary, configuredChannels.groupchat);
       });
       console.log(`Discord channels configured in "${guild.name}"`);
 
-      // Remove any old slash commands — everything is natural language now
       await unregisterCommands(readyClient, guildId);
     } catch (err) {
       const msg = err instanceof Error ? err.stack || err.message : 'Unknown';
       console.error('Channel setup error:', err instanceof Error ? err.message : 'Unknown');
       void postAgentErrorLog('discord:startup', 'Channel setup error', { detail: msg });
-      // Fatal — bot cannot function without channels
       console.error('Bot initialization failed — destroying client');
       readyClient.destroy();
       client = null;
@@ -180,8 +174,6 @@ export async function startBot(): Promise<void> {
   });
 
   client.on(Events.MessageCreate, async (message) => {
-    // Ignore bot messages — unless it's ASAPTester.
-    // Keep a safe default so test automation survives env drift/restarts.
     const testerBotId = process.env.DISCORD_TESTER_BOT_ID || '1487426371209789450';
     if (message.author.bot && message.author.id !== testerBotId) return;
     if (!botChannels) return;
@@ -189,7 +181,6 @@ export async function startBot(): Promise<void> {
     const channelId = message.channel.id;
 
     try {
-      // Check if this is an agent text channel
       for (const [agentId, channel] of botChannels.agentChannels) {
         if (channel.id === channelId) {
           const agent = getAgentByChannelName(agentId);
@@ -200,13 +191,11 @@ export async function startBot(): Promise<void> {
         }
       }
 
-      // Check if this is the groupchat
       if (channelId === botChannels.groupchat.id) {
         await handleGroupchatMessage(message, botChannels.groupchat);
         return;
       }
 
-      // Check if this is the decisions channel — route replies to Riley
       if (channelId === botChannels.decisions.id) {
         await handleDecisionReply(message, botChannels.groupchat);
         return;

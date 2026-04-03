@@ -125,7 +125,6 @@ async function deduplicateChannel(guild: Guild, name: string): Promise<TextChann
   );
   if (matches.size <= 1) return matches.first() as TextChannel | undefined;
 
-  // Keep the oldest, delete the rest
   const sorted = [...matches.values()].sort(
     (a, b) => (a.createdTimestamp ?? 0) - (b.createdTimestamp ?? 0)
   );
@@ -147,11 +146,9 @@ async function deduplicateChannel(guild: Guild, name: string): Promise<TextChann
 export async function setupChannels(guild: Guild): Promise<BotChannels> {
   const agents = getAgents();
 
-  // Ensure caches are fresh
   await guild.channels.fetch();
   await guild.roles.fetch();
 
-  // ── One-time channel reset (set RESET_CHANNELS=true env var to trigger) ──
   if (process.env.RESET_CHANNELS === 'true') {
     console.log('🔄 RESET_CHANNELS=true — deleting all managed channels for fresh recreation...');
     const managedCategories = [CAT_MAIN, CAT_AGENTS, CAT_OPS];
@@ -160,31 +157,25 @@ export async function setupChannels(guild: Guild): Promise<BotChannels> {
         (c) => c.type === ChannelType.GuildCategory && c.name === catName
       ) as CategoryChannel | undefined;
       if (cat) {
-        // Delete all children first
         for (const child of cat.children.cache.values()) {
           try { await child.delete('Channel reset'); } catch { /* ignore */ }
         }
-        // Delete the category itself
         try { await cat.delete('Channel reset'); } catch { /* ignore */ }
       }
     }
-    // Refresh cache after deletions
     await guild.channels.fetch();
     console.log('✅ Channel reset complete — recreating...');
   }
 
-  // ── Categories ──
   const catMain = await findOrCreateCategory(guild, CAT_MAIN);
   const catAgents = await findOrCreateCategory(guild, CAT_AGENTS);
   const catOps = await findOrCreateCategory(guild, CAT_OPS);
 
-  // ── Agent roles ──
   for (const [agentId, agent] of agents) {
     const role = await ensureAgentRole(guild, agent.roleName, agent.color);
     setAgentRoleId(agentId, role.id);
   }
 
-  // ── Helper: ensure a text channel exists (deduplicate, move to correct category) ──
   async function ensureText(
     name: string,
     parent: CategoryChannel,
@@ -194,7 +185,6 @@ export async function setupChannels(guild: Guild): Promise<BotChannels> {
     let channel = await deduplicateChannel(guild, name);
 
     if (channel) {
-      // Move to correct category if needed
       if (channel.parentId !== parent.id) {
         await channel.setParent(parent, { lockPermissions: false });
       }
@@ -210,7 +200,6 @@ export async function setupChannels(guild: Guild): Promise<BotChannels> {
     return channel;
   }
 
-  // ── ASAP (main) ──
   const groupchat = await ensureText(
     MAIN_CHANNELS.groupchat,
     catMain,
@@ -237,7 +226,6 @@ export async function setupChannels(guild: Guild): Promise<BotChannels> {
     `📋 **Decisions Queue**\n\nWhen the team hits a decision point overnight, Riley posts it here instead of stopping work.\nReply to any decision with your answer — Riley will pick it up and continue.\nReact with a numbered emoji to choose from listed options.`
   );
 
-  // Voice channel under main
   let voiceChannel = guild.channels.cache.find(
     (c) => c.type === ChannelType.GuildVoice && c.name === MAIN_CHANNELS.voice
   ) as VoiceChannel | undefined;
@@ -254,7 +242,6 @@ export async function setupChannels(guild: Guild): Promise<BotChannels> {
     });
   }
 
-  // ── Agents ──
   const agentChannels = new Map<string, TextChannel>();
   for (const [agentId, agent] of agents) {
     const channel = await ensureText(
@@ -266,7 +253,6 @@ export async function setupChannels(guild: Guild): Promise<BotChannels> {
     agentChannels.set(agentId, channel);
   }
 
-  // ── Operations ──
   const github = await ensureText(
     OPS_CHANNELS.github,
     catOps,
@@ -330,7 +316,6 @@ export async function setupChannels(guild: Guild): Promise<BotChannels> {
     `🚨 **Agent Runtime Errors**\n\nCentralized Riley, sub-agent, tooling, and automation failures for later diagnosis and cleanup.`
   );
 
-  // ── Clean up old agent channels without emoji prefix ──
   const agentIds = [...agents.keys()]; // e.g. 'qa', 'developer', 'lawyer'
   for (const oldName of agentIds) {
     const oldChannel = guild.channels.cache.find(
@@ -344,7 +329,6 @@ export async function setupChannels(guild: Guild): Promise<BotChannels> {
     }
   }
 
-  // Remove accidentally-created short names from failed recoveries (security, ux, api, etc.)
   for (const ch of guild.channels.cache.values()) {
     if (ch.type !== ChannelType.GuildText) continue;
     if (LEGACY_ACCIDENTAL_CHANNELS.has(ch.name)) {
@@ -352,12 +336,10 @@ export async function setupChannels(guild: Guild): Promise<BotChannels> {
         await ch.delete('Removing accidental recovery channel');
         console.log(`  Deleted accidental channel: #${ch.name}`);
       } catch {
-        // ignore
       }
     }
   }
 
-  // ── Clean up old "ASAP Agents" category if empty ──
   const oldCat = guild.channels.cache.find(
     (c) => c.type === ChannelType.GuildCategory && c.name === 'ASAP Agents'
   );
@@ -368,7 +350,6 @@ export async function setupChannels(guild: Guild): Promise<BotChannels> {
     }
   }
 
-  // ── Pre-create webhooks for all text channels (parallel) ──
   const allTextChannels = [groupchat, threadStatus, decisions, github, callLog, limits, cost, screenshots, url, terminal, voiceErrors, agentErrors, ...agentChannels.values()];
   console.log('🔗 Pre-creating webhooks for all channels...');
   const webhookResults = await Promise.allSettled(
@@ -378,12 +359,8 @@ export async function setupChannels(guild: Guild): Promise<BotChannels> {
   if (failed > 0) console.warn(`  ⚠️ ${failed}/${allTextChannels.length} webhook(s) failed`);
   console.log('✅ Webhooks ready');
 
-  // Restrict raw bot posting in every non-Operations text channel.
-  // The bot may post directly only in Operations; everywhere else it should
-  // appear via agent webhooks/personas only.
   const botId = guild.client.user?.id;
   if (botId) {
-    // decisions channel needs bot permissions (AddReactions for option embeds)
     const opsChannels = [decisions, github, callLog, limits, cost, screenshots, url, terminal, voiceErrors, agentErrors];
     const restricted = allTextChannels.filter((channel) => !opsChannels.some((ops) => ops.id === channel.id));
     for (const ch of restricted) {
@@ -394,7 +371,6 @@ export async function setupChannels(guild: Guild): Promise<BotChannels> {
           CreatePublicThreads: false,
           CreatePrivateThreads: false,
           AddReactions: false,
-          // Keep webhook management so persona posting still works
           ManageWebhooks: true,
           ViewChannel: true,
           ReadMessageHistory: true,

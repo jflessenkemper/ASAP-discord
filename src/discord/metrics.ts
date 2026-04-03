@@ -69,7 +69,6 @@ function labelKey(labels: Record<string, string>): string {
 
 /* ─────────────────────────── instruments ─────────────────────────── */
 
-// Counters
 const voiceCallsTotal = registerCounter('asap_voice_calls_total', 'Total voice calls initiated');
 const apiCallsTotal   = registerCounter('asap_api_calls_total',   'Total outbound API calls by service and status');
 const ttsErrorsTotal  = registerCounter('asap_tts_errors_total',  'Total TTS failures by service');
@@ -77,13 +76,11 @@ const agentInvocations = registerCounter('asap_agent_invocations_total', 'Total 
 const rateLimitHits   = registerCounter('asap_rate_limit_hits_total', 'Total 429 rate-limit hits from Gemini');
 const thinkingChimesPlayed = registerCounter('asap_thinking_chimes_played_total', 'Total thinking chimes played in voice calls');
 
-// Gauges
 const voiceCallsActive = registerGauge('asap_voice_calls_active', 'Number of currently active voice calls');
 const geminiSpentUsd   = registerGauge('asap_gemini_spent_usd',   'USD spent on Gemini API today');
 const memoryUsageMb    = registerGauge('asap_memory_usage_mb',    'Heap memory usage in MB');
 const processUptimeSec = registerGauge('asap_process_uptime_seconds', 'Process uptime in seconds');
 
-// Histograms
 const ttsLatencyMs     = registerHistogram('asap_tts_latency_ms',        'TTS generation latency (ms)',            [50, 100, 200, 500, 1000, 2000, 5000]);
 const transcriptionMs  = registerHistogram('asap_transcription_latency_ms', 'Voice transcription latency (ms)',   [200, 500, 1000, 2000, 3000, 5000, 10000]);
 const agentResponseMs  = registerHistogram('asap_agent_response_time_ms', 'Agent LLM round-trip latency (ms)',    [500, 1000, 2000, 5000, 10000, 30000, 60000]);

@@ -111,8 +111,6 @@ export async function initMemory(): Promise<void> {
       try {
         const parsed = JSON.parse(row.content);
         if (Array.isArray(parsed)) {
-          // If an array already exists in cache (e.g. from module-level loadMemory),
-          // mutate it in-place so existing references (like groupHistory) stay valid
           const existing = memoryCache.get(agentId);
           if (existing) {
             existing.length = 0;
@@ -125,7 +123,6 @@ export async function initMemory(): Promise<void> {
         console.warn(`Corrupt memory for ${agentId}, skipping`);
       }
     }
-    // Also load summaries
     const { rows: sumRows } = await pool.query(
       `SELECT file_name, content FROM agent_memory WHERE file_name LIKE 'summary-%'`
     );
@@ -160,13 +157,11 @@ export function loadMemory(agentId: string): ConversationMessage[] {
 export function saveMemory(agentId: string, history: ConversationMessage[]): void {
   compactPersistedHistory(history);
 
-  // Trim in-place to preserve existing references (e.g. groupHistory)
   if (history.length > MAX_MESSAGES * 2) {
     history.splice(0, history.length - MAX_MESSAGES * 2);
   }
   memoryCache.set(agentId, history);
 
-  // Debounce DB writes — update cache immediately, write to DB after 2s of inactivity
   const existing = pendingWrites.get(agentId);
   if (existing) clearTimeout(existing);
   pendingWrites.set(
@@ -248,7 +243,6 @@ export async function compressMemory(agentId: string): Promise<void> {
     const toKeep = compactTranscriptHistory(history.slice(snapshotLen - KEEP_RECENT));
 
     const existingSummary = loadSummary(agentId);
-    // Lazy import to avoid circular dependency
     const { summarizeConversation } = await import('./claude');
 
     const formatMessages = (messages: ConversationMessage[]): string =>
@@ -300,7 +294,6 @@ export async function compressMemory(agentId: string): Promise<void> {
       return;
     }
 
-    // Preserve any messages that arrived during compression
     const currentHistory = loadMemory(agentId);
     const newMessagesSinceSnapshot = currentHistory.slice(snapshotLen);
 
@@ -373,6 +366,5 @@ export async function flushPendingWrites(): Promise<void> {
   await Promise.all(promises);
 }
 
-// Safety net: flush memory on process termination signals
 process.on('SIGTERM', () => { flushPendingWrites(); });
 process.on('SIGINT', () => { flushPendingWrites(); });

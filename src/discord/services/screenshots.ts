@@ -11,9 +11,6 @@ const CAPTURE_TIMEOUT = 90_000;
 
 /** Allowed URL patterns for screenshot targets */
 const ALLOWED_URL_PATTERNS = [
-  // Support current and historical ASAP Cloud Run URL shapes:
-  // - asap-<id>.<region>.run.app
-  // - asap-<hash>.a.run.app
   /^https:\/\/asap-[a-z0-9-]+(?:\.[a-z0-9-]+)*\.run\.app(?:[\/:?#]|$)/i,
   /^https?:\/\/localhost(:\d+)?/,
   /^https?:\/\/127\.0\.0\.1(:\d+)?/,
@@ -33,7 +30,6 @@ const SCREENS: Array<{ name: string; action?: (page: Page) => Promise<void>; wai
   },
   {
     name: '02-hero-loaded',
-    // Wait for typewriter + button to appear
     action: async (page) => {
       await page.waitForSelector('text/Dive In', { timeout: 10_000 }).catch(() => {});
       await new Promise((r) => setTimeout(r, 2000)); // Let animations settle
@@ -42,7 +38,6 @@ const SCREENS: Array<{ name: string; action?: (page: Page) => Promise<void>; wai
   {
     name: '03-support-intake',
     action: async (page) => {
-      // Click "Dive In" or "Support" button to go to screen 2
       const btn = await page.$('text/Dive In').catch(() => null)
         || await page.$('text/Support').catch(() => null)
         || await page.$('[data-testid="dive-in"]').catch(() => null);
@@ -96,11 +91,9 @@ async function navigateForScreenshot(page: Page, url: string): Promise<void> {
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     if (!msg.toLowerCase().includes('timeout')) throw err;
-    // Retry once with a slightly longer timeout and full load event.
     await page.goto(url, { waitUntil: 'load', timeout: NAV_TIMEOUT + 15000 });
   }
 
-  // Optional short network idle wait; do not fail the capture if it never idles.
   await page.waitForNetworkIdle({ idleTime: 1200, timeout: 5000 }).catch(() => {});
 }
 
@@ -113,17 +106,14 @@ async function clearChannel(channel: TextChannel): Promise<void> {
       const fetched = await channel.messages.fetch({ limit: 100 });
       if (fetched.size === 0) break;
 
-      // Try bulk delete first (only works for messages < 14 days old)
       try {
         await channel.bulkDelete(fetched, true);
       } catch {
-        // bulkDelete failed — delete individually (sequentially for rate limits)
         for (const msg of fetched.values()) {
           await msg.delete().catch(() => {});
         }
       }
 
-      // Verify progress — if nothing was deleted, stop
       const remaining = await channel.messages.fetch({ limit: 100 });
       if (remaining.size >= fetched.size) break;
     }
@@ -175,7 +165,6 @@ export async function captureAndPostScreenshots(
   captureInProgress = true;
   let page: Page | null = null;
 
-  // Overall timeout to prevent hanging forever
   const timeout = setTimeout(() => {
     if (page) page.close().catch(() => {});
     page = null;
@@ -196,12 +185,10 @@ export async function captureAndPostScreenshots(
     page = await browser.newPage();
     await page.setViewport(VIEWPORT);
 
-    // Set mobile user agent
     await page.setUserAgent(
       'Mozilla/5.0 (iPhone; CPU iPhone OS 19_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/19.0 Mobile/15E148 Safari/604.1'
     );
 
-    // Navigate with timeout-tolerant SPA strategy
     await navigateForScreenshot(page, appUrl);
     await new Promise((r) => setTimeout(r, 3000)); // Let initial animations/3D settle
 
@@ -209,17 +196,14 @@ export async function captureAndPostScreenshots(
 
     for (const screen of SCREENS) {
       try {
-        // Wait for specific element if specified
         if (screen.waitFor) {
           await page.waitForSelector(screen.waitFor, { timeout: 8000 }).catch(() => {});
         }
 
-        // Run custom action (navigation, clicks, etc.)
         if (screen.action) {
           await screen.action(page);
         }
 
-        // Capture screenshot
         const screenshot = await page.screenshot({
           type: 'png',
           fullPage: false,
@@ -239,7 +223,6 @@ export async function captureAndPostScreenshots(
       }
     }
 
-    // Post all screenshots to Discord (max 10 per message)
     for (let i = 0; i < attachments.length; i += 10) {
       await targetChannel.send({ files: attachments.slice(i, i + 10) });
     }

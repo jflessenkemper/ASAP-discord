@@ -96,13 +96,11 @@ function buildPrompt(test: AgentTestCase, roleMentions: Map<string, string>): st
 }
 
 function findGroupchat(guild: { channels: { cache: Map<string, any> } }): TextChannel | undefined {
-  // Allow explicit override via env var
   const overrideId = process.env.DISCORD_GROUPCHAT_ID;
   if (overrideId) {
     const ch = guild.channels.cache.get(overrideId);
     if (ch?.type === ChannelType.GuildText) return ch as TextChannel;
   }
-  // Fall back to name match
   for (const ch of guild.channels.cache.values()) {
     if (ch.type === ChannelType.GuildText && (ch.name as string).includes('groupchat')) {
       return ch as TextChannel;
@@ -162,8 +160,6 @@ async function testAgent(
       clearTimeout(timer);
       collector.stop('matched');
 
-      // Content may be empty without the MessageContent privileged intent.
-      // Agent webhook messages still populate content; fallback to embed description.
       const snippet =
         msg.content?.slice(0, 300) ||
         msg.embeds[0]?.description?.slice(0, 300) ||
@@ -270,11 +266,9 @@ async function run(): Promise<void> {
 
     results.push({ agent: getAgentName(test.id), passed, elapsed, snippet });
 
-    // Pause between agents to let the bot finish its response
     await new Promise((r) => setTimeout(r, 3000));
   }
 
-  // ── Summary ────────────────────────────────────────────
   const passed = results.filter((r) => r.passed).length;
   const failed = results.filter((r) => !r.passed).length;
 

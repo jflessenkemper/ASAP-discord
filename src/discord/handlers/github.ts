@@ -42,9 +42,6 @@ export async function handleGitHubEvent(
     console.error('GitHub webhook post error:', err instanceof Error ? err.message : 'Unknown');
   }
 
-  // Trigger screenshots after:
-  // 1. Successful workflow_run completion (Quality & OTA passed → app updated)
-  // 2. Successful deployment_status (GitHub Deployments API)
   const shouldScreenshot =
     (event === 'workflow_run' && payload.action === 'completed' && payload.workflow_run?.conclusion === 'success') ||
     (event === 'deployment_status' && payload.deployment_status?.state === 'success');

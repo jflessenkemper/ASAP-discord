@@ -14,28 +14,21 @@ const SENSITIVE_PATTERNS: Array<{
   agents: Array<'lawyer' | 'security-auditor'>;
   reason: string;
 }> = [
-  // Auth / identity
   { pattern: /\bauth\b/i, agents: ['security-auditor', 'lawyer'], reason: 'Authentication code' },
   { pattern: /\bpassword|bcrypt|jwt|token\b/i, agents: ['security-auditor'], reason: 'Credential handling' },
   { pattern: /middleware\/auth/i, agents: ['security-auditor'], reason: 'Auth middleware' },
 
-  // Database migrations
   { pattern: /migrations\//i, agents: ['lawyer', 'security-auditor'], reason: 'Database migration' },
 
-  // Privacy / user data
   { pattern: /\bprivacy|gdpr|consent|personal.?data|user.?data\b/i, agents: ['lawyer'], reason: 'Privacy-related code' },
   { pattern: /routes\/(auth|employees|upload)/i, agents: ['security-auditor', 'lawyer'], reason: 'User-facing route' },
 
-  // Payment / billing
   { pattern: /\bpayment|billing|invoice|stripe|charge\b/i, agents: ['lawyer', 'security-auditor'], reason: 'Payment processing' },
 
-  // Terms / legal
   { pattern: /\bterms|tos|privacy.?policy|disclaimer\b/i, agents: ['lawyer'], reason: 'Legal document' },
 
-  // Environment / secrets
   { pattern: /\.env|secret|credential/i, agents: ['security-auditor'], reason: 'Secret/credential file' },
 
-  // Docker / infra
   { pattern: /Dockerfile|cloudbuild|gcp-setup/i, agents: ['security-auditor'], reason: 'Infrastructure config' },
 ];
 
@@ -78,7 +71,6 @@ export async function autoReviewPR(
 
   const prUrl = `https://github.com/${process.env.GITHUB_REPO || 'jflessenkemper/ASAP'}/pull/${prNumber}`;
 
-  // Fire reviewer calls with concurrency limit of 3
   const reviewEntries = [...reviewers];
   const MAX_PARALLEL_REVIEWS = 3;
 
@@ -115,14 +107,11 @@ Keep your review under 300 words.`;
       const agentMemory = getMemoryContext(agentId);
       const response = await agentRespond(agent, agentMemory, reviewPrompt);
 
-      // Post review to PR
       try {
         await addPRComment(prNumber, `## ${agent.emoji} ${agent.name} — Auto-Review\n\n${response}`);
       } catch {
-        // GITHUB_TOKEN might not be set — that's fine, still post to Discord
       }
 
-      // Post to groupchat with PR link
       await groupchat.send(`${agent.emoji} **${agent.name.split(' ')[0]}** reviewed [PR #${prNumber}](${prUrl}):\n${response.slice(0, 1800)}`);
 
       await documentToChannel(agentId, `✅ Review posted for PR #${prNumber}`);

@@ -34,7 +34,6 @@ export function resolvePuppeteerExecutablePath(): string {
       return bundled;
     }
   } catch {
-    // Fall through to the explicit actionable error below.
   }
 
   throw new Error(

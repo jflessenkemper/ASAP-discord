@@ -24,9 +24,6 @@ import { getWebhook } from './services/webhooks';
 import { getAgent, AgentId } from './agents';
 import { setDailyBudgetLimit } from './usage';
 
-// ────────────────────────────────────────────
-// Discord guild reference — set from bot.ts
-// ────────────────────────────────────────────
 
 let discordGuild: Guild | null = null;
 let agentChannelResolver: ((agentId: string) => TextChannel | null) | null = null;
@@ -78,9 +75,6 @@ const MAX_WRITE_SIZE = 2 * 1024 * 1024;
 /** Max command execution time (2 min) */
 const CMD_TIMEOUT = 120_000;
 
-// ────────────────────────────────────────────
-// Path safety
-// ────────────────────────────────────────────
 
 /** Cache validated paths to avoid re-resolving. LRU-like with size cap. */
 const safePathCache = new Map<string, string>();
@@ -90,15 +84,12 @@ function safePath(relative: string): string {
   const cached = safePathCache.get(relative);
   if (cached) return cached;
 
-  // Normalize and resolve to absolute
   const resolved = path.resolve(REPO_ROOT, relative);
 
-  // Must stay inside repo root
   if (!resolved.startsWith(REPO_ROOT)) {
     throw new Error(`Path escapes repository root: ${relative}`);
   }
 
-  // Block sensitive paths
   const rel = path.relative(REPO_ROOT, resolved);
   for (const blocked of BLOCKED_PATHS) {
     if (rel === blocked || rel.startsWith(blocked + '/') || rel.startsWith(blocked + path.sep)) {
@@ -106,7 +97,6 @@ function safePath(relative: string): string {
     }
   }
 
-  // Cache result (evict oldest if full)
   if (safePathCache.size >= SAFE_PATH_CACHE_MAX) {
     const firstKey = safePathCache.keys().next().value;
     if (firstKey !== undefined) safePathCache.delete(firstKey);
@@ -116,9 +106,6 @@ function safePath(relative: string): string {
   return resolved;
 }
 
-// ────────────────────────────────────────────
-// Tool definitions for Claude tool_use
-// ────────────────────────────────────────────
 
 export const REPO_TOOLS = [
   {
@@ -390,7 +377,6 @@ export const REPO_TOOLS = [
       required: [],
     },
   },
-  // ── Discord management tools ──
   {
     name: 'list_threads',
     description:
@@ -572,7 +558,6 @@ export const REPO_TOOLS = [
       required: ['channel_name', 'category'],
     },
   },
-  // ── Observability tools ──
   {
     name: 'read_logs',
     description:
@@ -772,7 +757,6 @@ export const REPO_TOOLS = [
       required: [],
     },
   },
-  // ── GCP Infrastructure tools ──
   {
     name: 'gcp_preflight',
     description:
@@ -927,7 +911,6 @@ export const REPO_TOOLS = [
       required: [],
     },
   },
-  // ── GCP Extended ──
   {
     name: 'gcp_logs_query',
     description:
@@ -1026,7 +1009,6 @@ export const REPO_TOOLS = [
       required: [],
     },
   },
-  // ── Budget Management ──
   {
     name: 'set_daily_budget',
     description:
@@ -1046,7 +1028,6 @@ export const REPO_TOOLS = [
       required: ['limit_usd'],
     },
   },
-  // ── Web Access ──
   {
     name: 'fetch_url',
     description:
@@ -1074,7 +1055,6 @@ export const REPO_TOOLS = [
       required: ['url'],
     },
   },
-  // ── Persistent Memory ──
   {
     name: 'memory_read',
     description:
@@ -1138,7 +1118,6 @@ export const REPO_TOOLS = [
       required: [],
     },
   },
-  // ── Database Access ──
   {
     name: 'db_query_readonly',
     description:
@@ -1264,9 +1243,6 @@ export const PROMPT_REPO_TOOLS: PromptTool[] = REPO_TOOLS.map(compactToolForProm
 export const PROMPT_REVIEW_TOOLS: PromptTool[] = REVIEW_TOOLS.map(compactToolForPrompt);
 export const PROMPT_RILEY_TOOLS: PromptTool[] = RILEY_TOOLS.map(compactToolForPrompt);
 
-// ────────────────────────────────────────────
-// Tool execution
-// ────────────────────────────────────────────
 
 export async function executeTool(
   toolName: string,
@@ -1303,7 +1279,6 @@ export async function executeTool(
         return gitFileHistory(input.path, parseInt(input.limit, 10) || 10, input.line_range);
       case 'smoke_test_agents':
         return smokeTestAgents(input.agent, parseInt(input.timeout_ms, 10) || 90_000);
-      // Discord management
       case 'list_channels':
         return await discordListChannels();
       case 'list_threads':
@@ -1372,7 +1347,6 @@ export async function executeTool(
         const sessionId = context?.agentId || 'shared';
         return await mobileHarnessStop(sessionId);
       }
-      // GCP infrastructure tools
       case 'gcp_preflight':
         return await gcpPreflight();
       case 'gcp_build_image':
@@ -1409,7 +1383,6 @@ export async function executeTool(
         return await gcpVmSsh(input.command);
       case 'gcp_project_info':
         return await gcpProjectInfo();
-      // Budget management
       case 'set_daily_budget': {
         const limitUsd = Number(input.limit_usd);
         if (!Number.isFinite(limitUsd) || limitUsd < 0) {
@@ -1419,10 +1392,8 @@ export async function executeTool(
         const reason = input.reason ? ` Reason: ${input.reason}` : '';
         return `✅ Daily budget updated: $${result.previous.toFixed(2)} → $${result.current.toFixed(2)}/day.${reason}\nSpent today: $${result.spent.toFixed(4)} | Remaining: $${result.remaining.toFixed(2)}\nChange is effective immediately and persisted to .env.`;
       }
-      // Web access
       case 'fetch_url':
         return await fetchUrl(input.url, input.method, input.headers, input.body);
-      // Memory
       case 'memory_read':
         return await memoryRead(input.file);
       case 'memory_write':
@@ -1431,7 +1402,6 @@ export async function executeTool(
         return await memoryAppend(input.file, input.content);
       case 'memory_list':
         return await memoryList();
-      // Database
       case 'db_query_readonly':
         return await dbQueryReadonly(input.query, input.params);
       case 'db_query':
@@ -1526,7 +1496,6 @@ function batchEdit(edits: Array<{ path: string; old_string: string; new_string: 
 }
 
 function searchFiles(pattern: string, include?: string): string {
-  // Use execFileSync with argument array to prevent command injection.
   const includeArgs = include
     ? ['--include=' + include]
     : ['--include=*.ts', '--include=*.tsx', '--include=*.js', '--include=*.json', '--include=*.sql', '--include=*.md'];
@@ -1539,7 +1508,6 @@ function searchFiles(pattern: string, include?: string): string {
     );
     const lines = result.trim();
     if (!lines) return `No matches found for pattern: ${pattern}`;
-    // Deduplicate lines (same file+line can match multiple patterns)
     const seen = new Set<string>();
     const deduped = lines.split('\n').filter((line) => {
       const key = line.split(':').slice(0, 2).join(':');
@@ -1549,7 +1517,6 @@ function searchFiles(pattern: string, include?: string): string {
     }).slice(0, 50);
     return deduped.join('\n');
   } catch (err: unknown) {
-    // grep exits with code 1 when no matches found — not an error
     const execErr = err as { status?: number; stdout?: string };
     if (execErr.status === 1) return `No matches found for pattern: ${pattern}`;
     return `Search failed for pattern: ${pattern}`;
@@ -1573,13 +1540,11 @@ function listDirectory(relativePath: string): string {
  * Everything else is blocked by default.
  */
 const ALLOWED_COMMANDS: Array<{ prefix: string; description: string }> = [
-  // Package management
   { prefix: 'npm ',         description: 'npm scripts and installs' },
   { prefix: 'npx tsc',      description: 'TypeScript type-checking' },
   { prefix: 'npx jest',     description: 'Run tests via jest' },
   { prefix: 'npx prettier', description: 'Code formatting' },
   { prefix: 'npx eslint',   description: 'Linting' },
-  // Git (read + safe write operations)
   { prefix: 'git status',    description: 'Working tree status' },
   { prefix: 'git diff',      description: 'Show diffs' },
   { prefix: 'git log',       description: 'Commit history' },
@@ -1601,7 +1566,6 @@ const ALLOWED_COMMANDS: Array<{ prefix: string; description: string }> = [
   { prefix: 'git tag',        description: 'Manage tags' },
   { prefix: 'git blame',      description: 'Line-by-line authorship' },
   { prefix: 'git reflog',     description: 'Reference log' },
-  // Read-only system commands
   { prefix: 'grep ',   description: 'Search file contents' },
   { prefix: 'find ',   description: 'Find files' },
   { prefix: 'cat ',    description: 'Read files' },
@@ -1615,7 +1579,6 @@ const ALLOWED_COMMANDS: Array<{ prefix: string; description: string }> = [
   { prefix: 'echo ',   description: 'Echo text' },
   { prefix: 'pwd',     description: 'Print working directory' },
   { prefix: 'which ',  description: 'Locate commands' },
-  // Process & scripting
   { prefix: 'node ',          description: 'Run node scripts' },
   { prefix: 'curl ',          description: 'HTTP requests' },
   { prefix: 'wget ',          description: 'Download files' },
@@ -1642,7 +1605,6 @@ const ALLOWED_COMMANDS: Array<{ prefix: string; description: string }> = [
   { prefix: 'tree ',          description: 'Directory tree' },
   { prefix: 'du ',            description: 'Disk usage' },
   { prefix: 'df ',            description: 'Filesystem info' },
-  // GCP operations
   { prefix: 'gcloud secrets', description: 'Manage GCP secrets' },
   { prefix: 'gcloud run',     description: 'Cloud Run operations' },
   { prefix: 'gcloud builds',  description: 'Cloud Build operations' },
@@ -1655,7 +1617,6 @@ const ALLOWED_COMMANDS: Array<{ prefix: string; description: string }> = [
   { prefix: 'gcloud artifacts', description: 'Artifact Registry' },
   { prefix: 'gcloud config',  description: 'GCP config' },
   { prefix: 'gcloud compute', description: 'Compute Engine' },
-  // Docker
   { prefix: 'docker ',        description: 'Docker operations' },
 ];
 
@@ -1713,7 +1674,6 @@ export function getToolAuditCallback() { return toolAuditCallback; }
 function runCommand(command: string, cwd?: string): string {
   const trimmed = command.trim();
 
-  // Check hard blocks first
   for (const pattern of HARD_BLOCKED) {
     if (pattern.test(trimmed)) {
       const reason = 'Hard-blocked pattern detected';
@@ -1722,7 +1682,6 @@ function runCommand(command: string, cwd?: string): string {
     }
   }
 
-  // Check allowlist
   const allowed = ALLOWED_COMMANDS.find((rule) =>
     trimmed.startsWith(rule.prefix) || trimmed === rule.prefix.trim()
   );
@@ -1759,9 +1718,6 @@ function runCommand(command: string, cwd?: string): string {
   }
 }
 
-// ────────────────────────────────────────────
-// GitHub tools
-// ────────────────────────────────────────────
 
 async function gitCreateBranch(branchName: string, baseBranch?: string): Promise<string> {
   try {
@@ -1775,24 +1731,20 @@ async function ghCreatePR(title: string, body: string, head: string, base?: stri
   try {
     const pr = await createPullRequest(title, body, head, base || 'main');
 
-    // Get changed files for auto-review
     try {
       const diffOutput = execSync(`git diff --name-only ${base || 'main'}...${head}`, {
         cwd: REPO_ROOT, timeout: 10_000, encoding: 'utf-8',
       }).trim();
       const changedFiles = diffOutput.split('\n').filter(Boolean);
 
-      // Check if auto-review is needed
       const reviewers = getRequiredReviewers(changedFiles);
       if (reviewers.size > 0 && prReviewCallback) {
         const diffSummary = execSync(`git diff --stat ${base || 'main'}...${head}`, {
           cwd: REPO_ROOT, timeout: 10_000, encoding: 'utf-8',
         }).trim();
-        // Fire and forget — don't block PR creation
         prReviewCallback(pr.number, title, changedFiles, diffSummary).catch(() => {});
       }
     } catch {
-      // Git diff might fail if branches aren't fetched locally — that's OK
     }
 
     return `✅ PR #${pr.number} created: ${pr.url}`;
@@ -1802,7 +1754,6 @@ async function ghCreatePR(title: string, body: string, head: string, base?: stri
 }
 
 async function ghMergePR(prNumber: number, commitTitle?: string): Promise<string> {
-  // Run tests first — refuse to merge if tests fail
   const testResult = runTests();
   if (testResult.includes('FAIL') || testResult.includes('Command failed')) {
     return `❌ Cannot merge PR #${prNumber} — tests failed:\n${testResult.slice(0, 1000)}`;
@@ -1835,12 +1786,8 @@ async function ghListPRs(): Promise<string> {
   }
 }
 
-// ────────────────────────────────────────────
-// Test runner tool
-// ────────────────────────────────────────────
 
 function runTests(pattern?: string): string {
-  // Sanitize pattern: allow only safe characters for test path patterns
   const safePattern = pattern ? pattern.replace(/[^a-zA-Z0-9_./\-*?]/g, '') : undefined;
   const testCmd = safePattern
     ? `npm test -- --testPathPattern="${safePattern}"`
@@ -1855,7 +1802,6 @@ function runTests(pattern?: string): string {
       env: { ...process.env, NODE_ENV: 'test', CI: 'true' },
       shell: '/bin/sh',
     });
-    // Cap output to last 4000 chars to avoid flooding Claude context
     const output = result.trim();
     return output.length > 4000
       ? '... (output trimmed)\n' + output.slice(-4000)
@@ -1946,9 +1892,6 @@ function formatAge(ms: number): string {
   return `${Math.round(ms / 86_400_000)}d`;
 }
 
-// ────────────────────────────────────────────
-// Discord management tools
-// ────────────────────────────────────────────
 
 function requireGuild(): Guild {
   if (!discordGuild) throw new Error('Discord guild not available');
@@ -2138,7 +2081,6 @@ async function discordSendMessage(channelName: string, message: string, agentNam
   const resolvedUsername = agentName || (agent ? `${agent.emoji} ${agent.name}` : 'ASAP Agent');
   const resolvedAvatarUrl = agent?.avatarUrl;
 
-  // Respect Discord's 2000 char limit
   const chunks = message.match(/.{1,2000}/gs) || [message];
   try {
     const wh = await getWebhook(channel);
@@ -2150,7 +2092,6 @@ async function discordSendMessage(channelName: string, message: string, agentNam
       });
     }
   } catch {
-    // Fallback to bot identity if webhook fails
     for (const chunk of chunks) {
       await channel.send(chunk);
     }
@@ -2176,17 +2117,14 @@ async function discordClearChannelMessages(channelName: string, limit = 500): Pr
     if (fetched.size === 0) break;
 
     try {
-      // bulkDelete only removes messages newer than 14 days
       await channel.bulkDelete(fetched, true);
       deleted += fetched.size;
     } catch {
-      // Fallback: delete messages one by one (works for older messages)
       for (const msg of fetched.values()) {
         try {
           await msg.delete();
           deleted += 1;
         } catch {
-          // Ignore individual delete failures to continue best-effort cleanup
         }
       }
     }
@@ -2232,9 +2170,6 @@ async function discordMoveChannel(channelName: string, categoryName: string): Pr
   return `Moved #${channelName} to ${categoryName}`;
 }
 
-// ────────────────────────────────────────────
-// Cloud Run runtime logs
-// ────────────────────────────────────────────
 
 async function readRuntimeLogs(severity?: string, limit = 30, query?: string): Promise<string> {
   const { GoogleAuth } = await import('google-auth-library');
@@ -2252,7 +2187,6 @@ async function readRuntimeLogs(severity?: string, limit = 30, query?: string): P
 
   let filter = `resource.type="cloud_run_revision" AND resource.labels.service_name="${serviceName}" AND resource.labels.location="${region}" AND severity>="${safeSeverity}"`;
   if (query) {
-    // Sanitize query to prevent filter injection
     const safeQuery = query.replace(/["\\\n]/g, '');
     filter += ` AND textPayload=~"${safeQuery}"`;
   }
@@ -2282,9 +2216,6 @@ async function readRuntimeLogs(severity?: string, limit = 30, query?: string): P
   return lines.join('\n');
 }
 
-// ────────────────────────────────────────────
-// GitHub search
-// ────────────────────────────────────────────
 
 async function ghSearch(query: string, type: 'code' | 'issues' | 'commits'): Promise<string> {
   try {
@@ -2294,9 +2225,6 @@ async function ghSearch(query: string, type: 'code' | 'issues' | 'commits'): Pro
   }
 }
 
-// ────────────────────────────────────────────
-// Typecheck tool
-// ────────────────────────────────────────────
 
 function runTypecheck(target: 'client' | 'server' | 'both'): string {
   const results: string[] = [];
@@ -2336,9 +2264,6 @@ function runTypecheck(target: 'client' | 'server' | 'both'): string {
   return results.join('\n\n');
 }
 
-// ────────────────────────────────────────────
-// GCP Infrastructure tools
-// ────────────────────────────────────────────
 
 const GCP_PROJECT =
   process.env.GOOGLE_CLOUD_PROJECT ||
@@ -2429,7 +2354,6 @@ async function gcpPreflight(): Promise<string> {
 }
 
 async function gcpSetEnv(variables: string): Promise<string> {
-  // Validate format: KEY=VALUE pairs
   const safeVars = variables
     .split(',')
     .map(v => v.trim())
@@ -2438,7 +2362,6 @@ async function gcpSetEnv(variables: string): Promise<string> {
   if (!safeVars) return 'Invalid format. Use KEY=VALUE pairs separated by commas.';
 
   try {
-    // Use execFileSync to avoid shell injection via env var values
     const result = execFileSync('gcloud', [
       'run', 'services', 'update', GCP_SERVICE,
       `--project=${GCP_PROJECT}`,
@@ -2481,7 +2404,6 @@ async function gcpListRevisions(limit: number): Promise<string> {
 }
 
 async function gcpRollback(revision: string): Promise<string> {
-  // Validate revision name format
   const safeRevision = revision.replace(/[^a-zA-Z0-9_.-]/g, '').slice(0, 100);
   if (!safeRevision) return 'Invalid revision name.';
 
@@ -2496,19 +2418,16 @@ async function gcpRollback(revision: string): Promise<string> {
 }
 
 async function gcpSecretSet(name: string, value: string): Promise<string> {
-  // Validate secret name
   const safeName = name.replace(/[^A-Z0-9_-]/gi, '').slice(0, 100);
   if (!safeName) return 'Invalid secret name. Use alphanumeric characters, hyphens, and underscores.';
 
   try {
-    // Check if secret exists
     let exists = false;
     try {
       gcpExec(`gcloud secrets describe ${safeName} --project=${GCP_PROJECT}`);
       exists = true;
     } catch { /* doesn't exist */ }
 
-    // Use execFileSync with stdin to avoid shell injection
     const action = exists ? 'versions add' : 'create';
     const args = exists
       ? ['secrets', 'versions', 'add', safeName, `--project=${GCP_PROJECT}`, '--data-file=-']
@@ -2580,9 +2499,7 @@ async function gcpBuildStatus(limit: number): Promise<string> {
   }
 }
 
-// Cloud SQL instance name
 const GCP_SQL_INSTANCE = 'asap-db';
-// GCE VM hosting the Discord bot
 const GCP_BOT_VM = 'asap-bot-vm';
 const GCP_BOT_ZONE = 'australia-southeast1-c';
 
@@ -2597,7 +2514,6 @@ const VM_ALLOWED_PREFIXES = [
 
 async function gcpLogsQuery(filter: string, limit: number): Promise<string> {
   const safeLimit = Math.min(Math.max(limit || 50, 1), 200);
-  // filter is passed as a double-quoted shell argument — validate no shell injection
   if (/[`$\\]/.test(filter)) return '❌ Invalid characters in filter expression.';
   try {
     const result = gcpExec(
@@ -2657,12 +2573,10 @@ async function gcpSqlDescribe(): Promise<string> {
 
 async function gcpVmSsh(command: string): Promise<string> {
   const trimmed = command.trim();
-  // Allowlist check
   const allowed = VM_ALLOWED_PREFIXES.some((prefix) => trimmed.startsWith(prefix));
   if (!allowed) {
     return `❌ Command not in VM allowlist. Allowed: pm2 status/restart/logs/list, git pull/log/status/rev-parse/fetch, npm run build/ci/install, node --version, df -h, free -h, uptime.`;
   }
-  // Reject shell metacharacters to prevent injection on the remote VM
   if (/[;&|`$<>()\n\\]/.test(trimmed)) {
     return '❌ Command contains disallowed characters.';
   }
@@ -2691,20 +2605,14 @@ async function gcpProjectInfo(): Promise<string> {
   }
 }
 
-// ────────────────────────────────────────────
-// Web fetch tool
-// ────────────────────────────────────────────
 
 function fetchUrl(url: string, method?: string, headersStr?: string, body?: string): Promise<string> {
   const MAX_REDIRECTS = 5;
 
   /** Block SSRF — reject private, loopback, link-local, and metadata IPs */
   function isBlockedHostname(hostname: string): boolean {
-    // Block cloud metadata endpoints
     if (hostname === '169.254.169.254' || hostname === 'metadata.google.internal') return true;
-    // Block localhost variants
     if (hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1' || hostname === '[::1]') return true;
-    // Block private IP ranges (10.x, 172.16-31.x, 192.168.x)
     const ipMatch = hostname.match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/);
     if (ipMatch) {
       const [, a, b] = ipMatch.map(Number);
@@ -2753,7 +2661,6 @@ function fetchUrl(url: string, method?: string, headersStr?: string, body?: stri
       const req = lib.request(options, (res) => {
         const status = res.statusCode || 0;
 
-        // Handle redirects
         if ((status === 301 || status === 302 || status === 303 || status === 307 || status === 308) && res.headers.location) {
           if (redirectCount >= MAX_REDIRECTS) {
             resolve(`Error: Too many redirects (max ${MAX_REDIRECTS})`);
@@ -2807,9 +2714,6 @@ function fetchUrl(url: string, method?: string, headersStr?: string, body?: stri
   return doFetch(url, 0);
 }
 
-// ────────────────────────────────────────────
-// Persistent memory tools (database-backed)
-// ────────────────────────────────────────────
 
 function safeMemoryName(file: string): string {
   const safe = path.basename(file).replace(/[^a-zA-Z0-9_.-]/g, '');
@@ -2880,9 +2784,6 @@ async function memoryList(): Promise<string> {
   }
 }
 
-// ────────────────────────────────────────────
-// Database query tools
-// ────────────────────────────────────────────
 
 async function dbQuery(query: string, paramsStr?: string): Promise<string> {
   try {
@@ -2898,7 +2799,6 @@ async function dbQuery(query: string, paramsStr?: string): Promise<string> {
       const rows = result.rows || [];
       if (rows.length === 0) return 'Query returned 0 rows.';
 
-      // Format as table
       const cols = Object.keys(rows[0]);
       const header = cols.join(' | ');
       const separator = cols.map(() => '---').join(' | ');
@@ -2923,7 +2823,6 @@ async function dbQuery(query: string, paramsStr?: string): Promise<string> {
 }
 
 function sanitizeSql(sql: string): string {
-  // Remove line comments and block comments, then trim.
   return sql
     .replace(/--.*$/gm, '')
     .replace(/\/\*[\s\S]*?\*\//g, '')
@@ -2934,12 +2833,9 @@ function isReadOnlySql(sql: string): boolean {
   const cleaned = sanitizeSql(sql).replace(/;\s*$/, '').trim().toLowerCase();
   if (!cleaned) return false;
 
-  // Single statement only (allow one trailing semicolon handled above).
   if (cleaned.includes(';')) return false;
 
-  // Allow common read-only statements.
   if (/^(select|with|explain|show)\b/.test(cleaned)) {
-    // Block known write/mutation verbs anywhere in statement body.
     if (/\b(insert|update|delete|alter|drop|create|truncate|grant|revoke|comment|vacuum|analyze|refresh|reindex|call|do|copy)\b/.test(cleaned)) {
       return false;
     }
@@ -2969,7 +2865,6 @@ async function dbSchema(table?: string): Promise<string> {
       );
       if (rows.length === 0) return `Table "${safeTable}" not found.`;
 
-      // Also get constraints
       const { rows: constraints } = await pool.query(
         `SELECT tc.constraint_type, kcu.column_name, ccu.table_name AS references_table, ccu.column_name AS references_column
          FROM information_schema.table_constraints tc
@@ -2989,7 +2884,6 @@ async function dbSchema(table?: string): Promise<string> {
       return `Table: ${safeTable}\n${lines.join('\n')}`;
     }
 
-    // List all tables
     const { rows } = await pool.query(
       `SELECT table_name, (SELECT COUNT(*) FROM information_schema.columns c WHERE c.table_name = t.table_name AND c.table_schema = 'public') AS columns
        FROM information_schema.tables t
