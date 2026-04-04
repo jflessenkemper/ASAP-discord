@@ -18,7 +18,7 @@ import { isDeepgramAvailable, startLiveTranscription, DeepgramLiveSession } from
 
 function isTranscribableMember(member: GuildMember): boolean {
   if (!member.user.bot) return true;
-  const testerBotId = process.env.DISCORD_TESTER_BOT_ID || '';
+  const testerBotId = process.env.DISCORD_TESTER_BOT_ID || '1487426371209789450';
   return !!testerBotId && member.id === testerBotId;
 }
 
