@@ -1455,7 +1455,7 @@ async function handleRileyMessage(
 
     const response = await agentRespond(riley, [...rileyMemory, ...groupHistory], contextMessageWithLang, async (_toolName, summary) => {
       sendToolNotification(rileyWorkChannel, riley, summary).catch(() => {});
-    }, { signal, outputMode: 'machine_json' });
+    }, { signal, outputMode: 'machine_json', machineEnvelopeRaw: true });
 
     const responseEnvelope = extractAgentResponseEnvelope(response);
     const machineDelegateAgents = (responseEnvelope?.machine?.delegateAgents || [])

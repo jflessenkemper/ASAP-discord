@@ -1972,8 +1972,10 @@ export async function agentRespond(
     priority?: 'normal' | 'voice' | 'background';
     chatSession?: ReusableAgentChatSession;
     outputMode?: 'normal' | 'machine_json';
+    machineEnvelopeRaw?: boolean;
   }
 ): Promise<string> {
+  const requestedOutputMode = options?.outputMode || 'machine_json';
   const cacheEligible = isCacheablePrompt(agent.id, userMessage, conversationHistory);
   const lane = options?.priority || 'normal';
   const isVoiceLane = lane === 'voice';
@@ -2082,7 +2084,7 @@ ${workerBudgetGovernance}
     ? `\nYou can use the full repo, infra, and Discord tool surface when needed. Stay focused and avoid broad or repetitive scans.`
     : `\nYou can use the full repo, infra, and Discord tool surface when needed. Stay focused and avoid broad or repetitive scans.`;
 
-  const outputModePrompt = options?.outputMode === 'machine_json'
+  const outputModePrompt = requestedOutputMode === 'machine_json'
     ? `
 OUTPUT MODE:
 - Return ONLY valid JSON (no markdown, no code fences).
@@ -2425,10 +2427,10 @@ RUNTIME EFFICIENCY:
         },
       );
       const finalText = normalizeLowSignalFinalText(agent.id, response.response.text() || '', totalToolCalls);
-      if (options?.outputMode === 'machine_json') {
+      if (requestedOutputMode === 'machine_json') {
         const envelope = parseAgentResponseEnvelope(finalText);
         if (envelope) {
-          return JSON.stringify(envelope);
+          return options?.machineEnvelopeRaw ? JSON.stringify(envelope) : envelope.human;
         }
       }
       if (cacheKey && totalToolCalls === 0 && finalText.length <= 500) {

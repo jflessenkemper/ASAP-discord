@@ -78,7 +78,7 @@ The user has made their choice. Acknowledge it briefly, then continue executing 
       const rileyMemory = getMemoryContext('executive-assistant');
       const rileyResponseRaw = await agentRespond(riley, [...rileyMemory, ...goalsHistory], decisionContext, async (_toolName, summary) => {
         sendGoalsToolNotification(goalsChannel, riley, summary).catch(() => {});
-      }, { outputMode: 'machine_json' });
+      }, { outputMode: 'machine_json', machineEnvelopeRaw: true });
       const rileyEnvelope = extractAgentResponseEnvelope(rileyResponseRaw);
       const rileyResponse = rileyEnvelope?.human || rileyResponseRaw;
 
@@ -130,7 +130,7 @@ Remember: You plan and coordinate. Start with Ace first for execution. Ace can i
     const rileyMemory = getMemoryContext('executive-assistant');
     const rileyResponseRaw = await agentRespond(riley, [...rileyMemory, ...goalsHistory], goalContext, async (_toolName, summary) => {
       sendGoalsToolNotification(goalsChannel, riley, summary).catch(() => {});
-    }, { outputMode: 'machine_json' });
+    }, { outputMode: 'machine_json', machineEnvelopeRaw: true });
     const rileyEnvelope = extractAgentResponseEnvelope(rileyResponseRaw);
     const rileyResponse = rileyEnvelope?.human || rileyResponseRaw;
 
