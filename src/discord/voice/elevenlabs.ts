@@ -9,6 +9,15 @@ const ttsCache = new Map<string, CacheEntry>();
 const TTS_CACHE_MAX_ENTRIES = parseInt(process.env.TTS_CACHE_MAX_ENTRIES || '64', 10);
 const TTS_CACHE_TTL_MS = parseInt(process.env.TTS_CACHE_TTL_MS || '900000', 10); // 15 min
 
+function resolveVoiceId(voiceName: string): string {
+  const requested = String(voiceName || '').trim();
+  // ElevenLabs voice IDs are alphanumeric (commonly 20 chars).
+  if (/^[A-Za-z0-9]{20,}$/.test(requested)) {
+    return requested;
+  }
+  return VOICE_ID_MAP[requested] || VOICE_ID_MAP[requested.toLowerCase()] || DEFAULT_VOICE_ID;
+}
+
 function getCacheKey(text: string, voiceName: string): string {
   return `${voiceName}::${text.trim()}`;
 }
@@ -123,7 +132,7 @@ export async function elevenLabsTTS(
   }
 
   const el = getClient();
-  const voiceId = VOICE_ID_MAP[voiceName] || VOICE_ID_MAP[voiceName.toLowerCase()] || DEFAULT_VOICE_ID;
+  const voiceId = resolveVoiceId(voiceName);
 
   const audio = await el.textToSpeech.convert(voiceId, {
     text,
@@ -187,7 +196,7 @@ export async function* elevenLabsTTSStream(
   }
 
   const el = getClient();
-  const voiceId = VOICE_ID_MAP[voiceName] || VOICE_ID_MAP[voiceName.toLowerCase()] || DEFAULT_VOICE_ID;
+  const voiceId = resolveVoiceId(voiceName);
 
   const audio = await el.textToSpeech.convert(voiceId, {
     text,

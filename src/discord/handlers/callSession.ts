@@ -332,6 +332,7 @@ export interface CallSession {
   lastDuplicateNoticeAt: number;
   pendingBargeIn: boolean;
   turnStartedAt: number;
+  rileyVoiceName: string;
 }
 
 let activeSession: CallSession | null = null;
@@ -413,6 +414,13 @@ export async function startCall(
 
   const joinStartMs = Date.now();
   const connection = await joinVC(voiceChannel);
+
+  const testerBotId = process.env.DISCORD_TESTER_BOT_ID || '1487426371209789450';
+  const testerVoiceId = process.env.ASAPTESTER_DISCORD_VOICE_ID || 'lsgXALPNLFUcQfT1dmP1';
+  const isTesterInitiated = initiator.user.id === testerBotId;
+  const riley = getAgent('executive-assistant' as AgentId);
+  const selectedRileyVoice = isTesterInitiated ? testerVoiceId : (riley?.voice || 'Achernar');
+
   await postVoiceStageLog(
     'join_vc',
     `channel=${voiceChannel.name} join_ms=${Date.now() - joinStartMs} initiator=${initiator.displayName}`
@@ -441,6 +449,7 @@ export async function startCall(
     lastDuplicateNoticeAt: 0,
     pendingBargeIn: false,
     turnStartedAt: 0,
+    rileyVoiceName: selectedRileyVoice,
   };
 
   activeSession.heartbeatTimer = setInterval(() => {
@@ -517,8 +526,6 @@ export async function startCall(
     connection.receiver.speaking.off('start', onSpeakingStart);
   });
 
-  const riley = getAgent('executive-assistant' as AgentId);
-
   activeSession.transcript.push(
     `[${new Date().toLocaleTimeString()}] Call started by ${initiator.displayName}`
   );
@@ -539,7 +546,7 @@ export async function startCall(
     void (async () => {
       try {
         const checkAudio = await withTimeout(
-          textToSpeech(`Hello ${initiator.displayName}.`),
+          textToSpeech(`Hello ${initiator.displayName}.`, selectedRileyVoice),
           VOICE_PREFLIGHT_TIMEOUT_MS,
           'TTS preflight'
         );
@@ -565,9 +572,7 @@ export async function startCall(
   }
 
   await postVoiceStageLog('call_started', `channel=${voiceChannel.name} total_startup_ms=${Date.now() - callStartMs}`);
-  if (riley) {
-    primeElevenLabsVoiceCache(riley.voice, RILEY_WARM_PHRASES).catch(() => {});
-  }
+  primeElevenLabsVoiceCache(selectedRileyVoice, RILEY_WARM_PHRASES).catch(() => {});
 }
 
 /**
@@ -738,7 +743,7 @@ Keep your spoken response very brief (normally 1-2 short sentences) — you're i
 IMPORTANT: End on a complete sentence, never a fragment.${langHint}`;
 
       const rileyStreamer = createLiveSpeechStreamer(
-        riley.voice,
+        session.rileyVoiceName,
         signal,
         isCurrentTurn,
         turnId,
@@ -807,7 +812,7 @@ IMPORTANT: End on a complete sentence, never a fragment.${langHint}`;
         if (!rileySpoke && isCurrentTurn() && !signal.aborted) {
           await speakPipelined(
             response,
-            riley.voice,
+            session.rileyVoiceName,
             signal,
             transcription.language,
             () => {
