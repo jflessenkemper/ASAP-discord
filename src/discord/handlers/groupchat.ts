@@ -1456,7 +1456,7 @@ async function handleRileyMessage(
         { action: implicitTags.replace(/\s+/g, ',') }
       );
     }
-    await executeActions(actionPayload, member, groupchat, workspaceChannel);
+    await executeActions(actionPayload, member, groupchat, workspaceChannel, userMessage);
     markGoalProgress();
 
     const verificationRequired = goalNeedsRuntimeVerification(activeGoal || userMessage || response);
@@ -1528,7 +1528,8 @@ async function executeActions(
   response: string,
   member: GuildMember | undefined,
   groupchat: TextChannel,
-  workspaceChannel: WebhookCapableChannel
+  workspaceChannel: WebhookCapableChannel,
+  userMessage?: string,
 ): Promise<void> {
   const actionRe = /\[\s*action:(\w+)(?::([^\]]*))?\]/gi;
   const actions = [...response.matchAll(actionRe)];
@@ -1618,6 +1619,12 @@ async function executeActions(
           break;
         }
         case 'URLS': {
+          const linkIntent = /\b(url|urls|link|links|asap links|app url|share url|cloud run|cloud build)\b/i.test(String(userMessage || activeGoal || ''));
+          if (!linkIntent && String(param || '').trim().toLowerCase() !== 'force') {
+            await sendAsRiley('🔗 Skipped link posting because no explicit link request was detected.');
+            break;
+          }
+
           const now = Date.now();
           if (now - lastUrlsActionAt < URL_ACTION_COOLDOWN_MS) {
             await sendAsRiley('🔗 Links were posted recently. Skipping duplicate link blast in groupchat.');
