@@ -16,10 +16,20 @@ import prism from 'prism-media';
 import { transcribeVoice } from './tts';
 import { isDeepgramAvailable, startLiveTranscription, DeepgramLiveSession } from './deepgram';
 
+const DEFAULT_TESTER_BOT_ID = '1487426371209789450';
+
+function isTesterBotId(userId: string): boolean {
+  const configured = String(process.env.DISCORD_TESTER_BOT_ID || '')
+    .split(',')
+    .map((id) => id.trim())
+    .filter(Boolean);
+  const allowed = new Set([DEFAULT_TESTER_BOT_ID, ...configured]);
+  return allowed.has(userId);
+}
+
 function isTranscribableMember(member: GuildMember): boolean {
   if (!member.user.bot) return true;
-  const testerBotId = process.env.DISCORD_TESTER_BOT_ID || '1487426371209789450';
-  return !!testerBotId && member.id === testerBotId;
+  return isTesterBotId(member.id);
 }
 
 let currentConnection: VoiceConnection | null = null;

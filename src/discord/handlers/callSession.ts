@@ -39,6 +39,16 @@ const VOICE_CONTEXT_SUMMARY_MAX_CHARS = parseInt(process.env.VOICE_CONTEXT_SUMMA
 const VOICE_FILLER_ONLY_RE = /^(?:uh+|um+|hmm+|mm+|ah+|er+|uh huh|huh|hmm okay|okay|ok|yeah|yep|nah|nope)[.!?\s]*$/i;
 const RILEY_WARM_PHRASES = ['One moment.', 'Let me check.', 'I am on it.', 'Here is what I found.', 'Done.'];
 const VOICE_TURN_WATCHDOG_MS = parseInt(process.env.VOICE_TURN_WATCHDOG_MS || '20000', 10);
+const DEFAULT_TESTER_BOT_ID = '1487426371209789450';
+
+function isTesterBotId(userId: string): boolean {
+  const configured = String(process.env.DISCORD_TESTER_BOT_ID || '')
+    .split(',')
+    .map((id) => id.trim())
+    .filter(Boolean);
+  const allowed = new Set([DEFAULT_TESTER_BOT_ID, ...configured]);
+  return allowed.has(userId);
+}
 
 let voiceErrorChannel: TextChannel | null = null;
 
@@ -402,9 +412,8 @@ export async function startCall(
   const joinStartMs = Date.now();
   const connection = await joinVC(voiceChannel);
 
-  const testerBotId = process.env.DISCORD_TESTER_BOT_ID || '1487426371209789450';
   const testerVoiceId = process.env.ASAPTESTER_DISCORD_VOICE_ID || 'lsgXALPNLFUcQfT1dmP1';
-  const isTesterInitiated = initiator.user.id === testerBotId;
+  const isTesterInitiated = isTesterBotId(initiator.user.id);
   const riley = getAgent('executive-assistant' as AgentId);
   const selectedRileyVoice = isTesterInitiated ? testerVoiceId : (riley?.voice || 'Achernar');
 

@@ -78,6 +78,16 @@ const APP_SERVER_ROOT = (fs.existsSync(path.join(process.cwd(), 'package.json'))
 const APP_REPO_ROOT = path.resolve(APP_SERVER_ROOT, '..');
 let lastGoalProgressAt = Date.now();
 let goalRecoveryAttempts = 0;
+const DEFAULT_TESTER_BOT_ID = '1487426371209789450';
+
+function isTesterBotId(userId: string): boolean {
+  const configured = String(process.env.DISCORD_TESTER_BOT_ID || '')
+    .split(',')
+    .map((id) => id.trim())
+    .filter(Boolean);
+  const allowed = new Set([DEFAULT_TESTER_BOT_ID, ...configured]);
+  return allowed.has(userId);
+}
 let lastThreadCloseReviewAt = 0;
 let lastThreadStatusPostAt = 0;
 let goalSequenceInitialized = false;
@@ -962,9 +972,8 @@ async function handleDirectVoiceActionIfRequested(message: Message, content: str
   const stripped = stripMentionsForIntent(content);
   const testerPromptMatch = stripped.match(/^(?:hey|hi|yo)?\s*(?:riley|asap)?\s*[,!:;-]?\s*(?:please\s+)?(?:inject|simulate|test)\s+(?:voice|transcript)\s*(?::|-)\s*(.{1,260})$/i);
   if (testerPromptMatch) {
-    const testerBotId = process.env.DISCORD_TESTER_BOT_ID || '1487426371209789450';
     const injectionEnabled = String(process.env.VOICE_TEST_INJECTION_ENABLED || 'false').toLowerCase() === 'true';
-    const isAuthorized = message.author.id === testerBotId || injectionEnabled;
+    const isAuthorized = isTesterBotId(message.author.id) || injectionEnabled;
     if (!isAuthorized) {
       await groupchat.send('🛑 Voice transcript injection is restricted to ASAPTester unless VOICE_TEST_INJECTION_ENABLED=true.').catch(() => {});
       return true;

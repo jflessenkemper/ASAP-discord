@@ -36,6 +36,16 @@ import { getThreadStatusOpsLine } from './handlers/groupchat';
  */
 let client: Client | null = null;
 let botChannels: BotChannels | null = null;
+const DEFAULT_TESTER_BOT_ID = '1487426371209789450';
+
+function isTesterBotId(userId: string): boolean {
+  const configured = String(process.env.DISCORD_TESTER_BOT_ID || '')
+    .split(',')
+    .map((id) => id.trim())
+    .filter(Boolean);
+  const allowed = new Set([DEFAULT_TESTER_BOT_ID, ...configured]);
+  return allowed.has(userId);
+}
 
 /**
  * Get the current bot channels (used by webhook route).
@@ -207,8 +217,7 @@ export async function startBot(): Promise<void> {
   client.on(Events.MessageCreate, async (message) => {
     // Ignore bot traffic except the dedicated smoke-test bot so e2e tests can
     // still exercise the same production routing path.
-    const testerBotId = process.env.DISCORD_TESTER_BOT_ID || '1487426371209789450';
-    if (message.author.bot && message.author.id !== testerBotId) return;
+    if (message.author.bot && !isTesterBotId(message.author.id)) return;
     if (!botChannels) return;
 
     const channelId = message.channel.id;
