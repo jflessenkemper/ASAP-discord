@@ -25,8 +25,6 @@ const MAX_CALL_HISTORY = 40;
 const VOICE_PREFLIGHT_TIMEOUT_MS = parseInt(process.env.VOICE_PREFLIGHT_TIMEOUT_MS || '15000', 10);
 const VOICE_STARTUP_SELFTEST_ENABLED = String(process.env.VOICE_STARTUP_SELFTEST_ENABLED || 'false').toLowerCase() === 'true';
 const VOICE_MAX_TOKENS_RILEY = parseInt(process.env.VOICE_MAX_TOKENS_RILEY || '220', 10);
-const VOICE_MAX_TOKENS_ACE = parseInt(process.env.VOICE_MAX_TOKENS_ACE || '180', 10);
-const VOICE_MAX_TOKENS_SPECIALIST = parseInt(process.env.VOICE_MAX_TOKENS_SPECIALIST || '140', 10);
 const VOICE_STREAM_PARTIAL_MIN_CHARS = parseInt(process.env.VOICE_STREAM_PARTIAL_MIN_CHARS || '16', 10);
 const VOICE_STREAM_FORCE_CHARS = parseInt(process.env.VOICE_STREAM_FORCE_CHARS || '60', 10);
 const VOICE_INTERRUPT_MIN_OUTPUT_ACTIVE_MS = parseInt(process.env.VOICE_INTERRUPT_MIN_OUTPUT_ACTIVE_MS || '700', 10);
@@ -35,7 +33,6 @@ const VOICE_DUPLICATE_WINDOW_MS = parseInt(process.env.VOICE_DUPLICATE_WINDOW_MS
 const VOICE_STAGE_LOGS_ENABLED = process.env.VOICE_STAGE_LOGS_ENABLED !== 'false';
 const VOICE_HISTORY_MAX_MESSAGES = parseInt(process.env.VOICE_HISTORY_MAX_MESSAGES || '10', 10);
 const VOICE_MEMORY_MAX_MESSAGES = parseInt(process.env.VOICE_MEMORY_MAX_MESSAGES || '8', 10);
-const VOICE_MAX_SPECIALIST_FANOUT = parseInt(process.env.VOICE_MAX_SPECIALIST_FANOUT || '1', 10);
 const VOICE_CONTEXT_MAX_CHARS = parseInt(process.env.VOICE_CONTEXT_MAX_CHARS || '3800', 10);
 const VOICE_CONTEXT_MESSAGE_MAX_CHARS = parseInt(process.env.VOICE_CONTEXT_MESSAGE_MAX_CHARS || '550', 10);
 const VOICE_CONTEXT_SUMMARY_MAX_CHARS = parseInt(process.env.VOICE_CONTEXT_SUMMARY_MAX_CHARS || '900', 10);
@@ -190,16 +187,6 @@ function finalizeSpokenResponse(raw: string): string {
   }
 
   return `${text}.`;
-}
-
-function prioritizeVoiceDirectedAgents(agentIds: string[]): string[] {
-  const priority = ['developer', 'qa', 'security-auditor', 'api-reviewer', 'dba', 'performance', 'devops', 'ux-reviewer', 'copywriter', 'lawyer', 'ios-engineer', 'android-engineer'];
-  const unique = [...new Set(agentIds.filter(Boolean))];
-  return unique.sort((a, b) => {
-    const aIdx = priority.indexOf(a);
-    const bIdx = priority.indexOf(b);
-    return (aIdx === -1 ? 999 : aIdx) - (bIdx === -1 ? 999 : bIdx);
-  });
 }
 
 function trimVoiceText(content: string, maxChars: number): string {
@@ -618,7 +605,7 @@ export async function endCall(): Promise<void> {
   );
 
   try {
-    const participants = ['User', 'Riley (Executive Assistant)', 'Ace (Developer)'];
+    const participants = ['User', 'Riley (Executive Assistant)'];
     const summary = await summarizeCall(session.transcript, participants);
 
     await session.callLog.send(`📝 **Summary**\n${summary}`);
@@ -730,14 +717,9 @@ async function handleVoiceInput(transcription: VoiceTranscription): Promise<void
 You are in a voice call. ${transcription.username} just spoke. Your job:
 1. Interpret what they want
 2. If it's a question you can answer directly, answer it
-3. If it requires implementation, direct Ace (Developer) specifically
-4. If it requires domain expertise, name which agent(s) should respond (e.g., "Kane, review this for security" or "Elena, what's the best schema?")
-5. If you need their input, present options clearly
+3. Keep responses directly actionable for the caller
 
-IMPORTANT: In your response, if you want Ace or another specialist to act, prefer exact Discord role mentions when available. If role mentions are not provided in context, use canonical handles like "@ace" or "@kane".
-IMPORTANT: Default to @ace only. Add at most one extra specialist unless a second specialist is clearly necessary.
-
-IMPORTANT: Only you speak in voice. If you direct Ace or any other agent, they respond in text only.
+IMPORTANT: This call is Riley-only. Do not delegate to Ace or any other specialist during live voice.
 
 Keep your spoken response very brief (normally 1-2 short sentences) — you're in a voice call, not a text chat.
 IMPORTANT: End on a complete sentence, never a fragment.${langHint}`;
@@ -841,97 +823,6 @@ IMPORTANT: End on a complete sentence, never a fragment.${langHint}`;
       }
       if (!isCurrentTurn()) return;
 
-      const directedAgents = prioritizeVoiceDirectedAgents(parseDirectedAgents(response));
-      const work: Array<() => Promise<void>> = [];
-
-      if (directedAgents.includes('developer')) {
-        const ace = getAgent('developer' as AgentId);
-        if (ace && session.active) {
-          work.push(async () => {
-            try {
-              const aceMemory = getMemoryContext('developer').slice(-VOICE_MEMORY_MAX_MESSAGES);
-              const compactSessionHistory = compactVoiceHistoryForPrompt(session.conversationHistory);
-              const aceResponse = await agentRespond(
-                ace,
-                [...compactVoiceHistoryForPrompt(aceMemory), ...compactSessionHistory],
-                `[Riley directed you in voice call]: ${response}\n\n[Original voice from ${transcription.username}]: ${userText}`,
-                undefined,
-                {
-                  signal,
-                  maxTokens: VOICE_MAX_TOKENS_ACE,
-                  priority: 'voice',
-                }
-              );
-              if (!isCurrentTurn() || !aceResponse.trim()) return;
-
-              session.conversationHistory.push({
-                role: 'assistant',
-                content: `[Ace]: ${aceResponse}`,
-              });
-
-              if (session.conversationHistory.length > MAX_CALL_HISTORY) {
-                session.conversationHistory.splice(0, session.conversationHistory.length - MAX_CALL_HISTORY);
-              }
-              session.transcript.push(
-                `[${new Date().toLocaleTimeString()}] Ace (Developer): ${aceResponse}`
-              );
-
-              await session.callLog.send(`${ace.emoji} **Ace**: ${aceResponse.slice(0, 1900)}`);
-              await mirrorAgentResponse(ace.name, 'call-log', aceResponse);
-              appendToMemory('developer', [
-                { role: 'user', content: `[Directed by Riley for voice call]: ${userText.slice(0, 500)}` },
-                { role: 'assistant', content: `[Ace]: ${aceResponse}` },
-              ]);
-              await documentToChannel('developer', `Responded in voice call: ${aceResponse.slice(0, 300)}`);
-            } catch (err) {
-              if (!isCurrentTurn()) return;
-              if (isAbortLikeError(err)) return;
-              console.error('Ace voice response error:', err instanceof Error ? err.message : 'Unknown');
-            }
-          });
-        }
-      }
-
-      const otherAgents = directedAgents
-        .filter((id) => id !== 'developer' && !VOICE_SPEAKERS.has(id))
-        .slice(0, Math.max(0, VOICE_MAX_SPECIALIST_FANOUT));
-      for (const agentId of otherAgents) {
-        const agent = getAgent(agentId as AgentId);
-        if (!agent) continue;
-
-        work.push(async () => {
-          const agentMemory = compactVoiceHistoryForPrompt(getMemoryContext(agentId).slice(-VOICE_MEMORY_MAX_MESSAGES));
-          const compactSessionHistory = compactVoiceHistoryForPrompt(session.conversationHistory);
-          try {
-            const agentResponse = await agentRespond(
-              agent,
-              [...agentMemory, ...compactSessionHistory],
-              `[Riley directed you during voice call]: ${response}\n[Original from ${transcription.username}]: ${userText}`,
-              undefined,
-              { signal, maxTokens: VOICE_MAX_TOKENS_SPECIALIST, priority: 'voice' }
-            );
-            if (!isCurrentTurn() || !agentResponse.trim()) return;
-            await sendAsAgent(session.groupchat, agentResponse.slice(0, 1900), agentId as AgentId);
-            await mirrorAgentResponse(agent.name, 'groupchat', agentResponse);
-            appendToMemory(agentId, [
-              { role: 'user', content: `[Voice call directive]: ${userText.slice(0, 500)}` },
-              { role: 'assistant', content: `[${agent.name}]: ${agentResponse}` },
-            ]);
-            await documentToChannel(agentId, `Responded in text during VC: ${agentResponse.slice(0, 300)}`);
-          } catch (err) {
-            if (!isCurrentTurn()) return;
-            if (isAbortLikeError(err)) return;
-            console.error(`${agent.name} text response error:`, err instanceof Error ? err.message : 'Unknown');
-          }
-        });
-      }
-
-      if (work.length > 0) {
-        void Promise.allSettled(work.map(async (task) => {
-          if (!activeSession?.active) return;
-          await task();
-        })).catch(() => {});
-      }
       } catch (err) {
         if (!isCurrentTurn()) return;
         if (isAbortLikeError(err)) return;
@@ -963,26 +854,6 @@ IMPORTANT: End on a complete sentence, never a fragment.${langHint}`;
       session.turnStartedAt = 0;
     }
   }
-}
-
-/** Parse agent IDs that Riley directed in her response */
-function parseDirectedAgents(response: string): string[] {
-  const nameToId: Record<string, string> = {
-    ace: 'developer', max: 'qa', sophie: 'ux-reviewer',
-    kane: 'security-auditor', raj: 'api-reviewer', elena: 'dba',
-    kai: 'performance', jude: 'devops', liv: 'copywriter', harper: 'lawyer',
-    mia: 'ios-engineer', leo: 'android-engineer',
-  };
-
-  const found = new Set<string>();
-  for (const [name, id] of Object.entries(nameToId)) {
-    const re = new RegExp(`@${name}\\b`, 'i');
-    if (re.test(response)) {
-      found.add(id);
-    }
-  }
-
-  return [...found];
 }
 
 export function isCallActive(): boolean {

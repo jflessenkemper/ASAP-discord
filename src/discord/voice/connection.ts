@@ -16,6 +16,12 @@ import prism from 'prism-media';
 import { transcribeVoice } from './tts';
 import { isDeepgramAvailable, startLiveTranscription, DeepgramLiveSession } from './deepgram';
 
+function isTranscribableMember(member: GuildMember): boolean {
+  if (!member.user.bot) return true;
+  const testerBotId = process.env.DISCORD_TESTER_BOT_ID || '';
+  return !!testerBotId && member.id === testerBotId;
+}
+
 let currentConnection: VoiceConnection | null = null;
 let audioPlayer: AudioPlayer | null = null;
 let isCleaningUp = false;
@@ -361,7 +367,7 @@ export function listenToAllMembers(
   let destroyed = false;
 
   for (const [, member] of voiceChannel.members) {
-    if (member.user.bot) continue;
+    if (!isTranscribableMember(member)) continue;
     listeningUserIds.add(member.id);
     const unsub = listenToUser(connection, member, onTranscription, onSpeechStart);
     unsubscribers.push(unsub);
@@ -370,7 +376,7 @@ export function listenToAllMembers(
   const onSpeaking = (userId: string) => {
     if (destroyed || listeningUserIds.has(userId)) return;
     const member = voiceChannel.members.get(userId);
-    if (!member || member.user.bot) return;
+    if (!member || !isTranscribableMember(member)) return;
     listeningUserIds.add(userId);
     const unsub = listenToUser(connection, member, onTranscription, onSpeechStart);
     unsubscribers.push(unsub);
@@ -623,7 +629,7 @@ function listenToAllMembersDeepgram(
   let destroyed = false;
 
   for (const [, member] of voiceChannel.members) {
-    if (member.user.bot) continue;
+    if (!isTranscribableMember(member)) continue;
     listeningUserIds.add(member.id);
     const unsub = listenToUserDeepgram(connection, member, onTranscription, onSpeechStart);
     unsubscribers.push(unsub);
@@ -632,7 +638,7 @@ function listenToAllMembersDeepgram(
   const onSpeaking = (userId: string) => {
     if (destroyed || listeningUserIds.has(userId)) return;
     const member = voiceChannel.members.get(userId);
-    if (!member || member.user.bot) return;
+    if (!member || !isTranscribableMember(member)) return;
     listeningUserIds.add(userId);
     const unsub = listenToUserDeepgram(connection, member, onTranscription, onSpeechStart);
     unsubscribers.push(unsub);
