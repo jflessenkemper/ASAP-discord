@@ -288,7 +288,7 @@ export async function startBot(): Promise<void> {
       }
 
       if (channelId === botChannels.groupchat.id) {
-        if (isTesterBotId(message.author.id) && isCallActive()) {
+        if (isTesterBotId(message.author.id)) {
           const testerSpeech = getTesterSpeechBridgeText(message.content);
           if (testerSpeech) {
             const injected = await injectVoiceTranscriptForTesting({
