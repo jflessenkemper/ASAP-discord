@@ -528,7 +528,7 @@ export async function startCall(
 
   const sttNote = isDeepgramAvailable()
     ? ''
-    : '\n⚠️ Real-time STT unavailable (Deepgram not configured) — using Gemini batch mode (~1-2s latency).';
+    : '\n⚠️ Real-time STT is currently unavailable — using Gemini batch mode (~1-2s latency).';
   await sendAsAgent(
     groupchat,
     `✅ **Voice call started**\n` +
