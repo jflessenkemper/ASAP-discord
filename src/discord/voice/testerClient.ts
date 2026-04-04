@@ -113,7 +113,7 @@ export async function speakAsTesterInVoice(text: string, language?: string): Pro
     throw new Error('Tester speech text is empty.');
   }
 
-  const testerVoice = process.env.ASAPTESTER_DISCORD_VOICE_ID || 'lsgXALPNLFUcQfT1dmP1';
+  const testerVoice = process.env.ASAPTESTER_VOICE_NAME || 'Achernar';
   const audio = await textToSpeech(trimmed, testerVoice, language);
   const resource = createAudioResource(Readable.from(audio), { inputType: StreamType.Arbitrary });
 
