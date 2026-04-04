@@ -2856,7 +2856,7 @@ export async function summarizeCall(
   }
 
   const model = createModel(GEMINI_FLASH, {
-    systemInstruction: 'You are a concise meeting summarizer. Produce a clear summary with key points, decisions, and action items. Format for Discord markdown. Keep under 1900 characters.',
+    systemInstruction: 'You are a concise meeting summarizer. Produce a clear summary with key points, decisions, and action items. Format for Discord markdown. Keep under 1900 characters. Use only the provided participant names; do not introduce extra participants that are not explicitly listed.',
   });
 
   const result = await withConcurrencyLimit(GEMINI_FLASH, () =>
