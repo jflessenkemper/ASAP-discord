@@ -1139,6 +1139,23 @@ export async function handleGroupchatMessage(
 ): Promise<void> {
   const content = message.content.trim();
   if (!content) return;
+
+  // Fast-path direct commands before queue orchestration to avoid abort races
+  // between back-to-back control messages (e.g. join then inject test voice).
+  if (await handleDirectOpsActionIfRequested(content, groupchat)) {
+    markGoalProgress('⚡ Quick ops action handled directly');
+    return;
+  }
+  if (await handleDirectVoiceActionIfRequested(message, content, groupchat)) {
+    markGoalProgress('📞 Voice action handled directly');
+    return;
+  }
+  if (isLikelyVoiceCommandIntent(content)) {
+    await sendQuickRileyMessage(groupchat, '📞 Voice command detected. Say "Riley join voice call" or "Riley leave voice call" and I will handle it directly without opening a workspace thread.');
+    markGoalProgress('📞 Voice intent handled without workspace thread');
+    return;
+  }
+
   ensureClaudeNotifications(groupchat);
   ensureGoalWatchdog(groupchat);
 
