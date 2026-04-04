@@ -25,6 +25,7 @@ import { setTelephonyChannels, isTelephonyAvailable, initContacts } from './serv
 import { runModelHealthChecks } from './services/modelHealth';
 import { flushAllOpsDigests, postOpsLine } from './services/opsFeed';
 import { getThreadStatusOpsLine } from './handlers/groupchat';
+import pool from '../db/pool';
 
 /**
  * Discord runtime bootstrap.
@@ -37,6 +38,8 @@ import { getThreadStatusOpsLine } from './handlers/groupchat';
 let client: Client | null = null;
 let botChannels: BotChannels | null = null;
 const DEFAULT_TESTER_BOT_ID = '1487426371209789450';
+let dedupeTableReady = false;
+let lastDedupePruneAt = 0;
 
 function isTesterBotId(userId: string): boolean {
   const configured = String(process.env.DISCORD_TESTER_BOT_ID || '')
@@ -45,6 +48,33 @@ function isTesterBotId(userId: string): boolean {
     .filter(Boolean);
   const allowed = new Set([DEFAULT_TESTER_BOT_ID, ...configured]);
   return allowed.has(userId);
+}
+
+async function ensureDedupeTable(): Promise<void> {
+  if (dedupeTableReady) return;
+  await pool.query(
+    `CREATE TABLE IF NOT EXISTS discord_message_dedupe (
+      message_id TEXT PRIMARY KEY,
+      claimed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`
+  );
+  dedupeTableReady = true;
+}
+
+async function claimDiscordMessage(messageId: string): Promise<boolean> {
+  await ensureDedupeTable();
+  const res = await pool.query(
+    'INSERT INTO discord_message_dedupe (message_id) VALUES ($1) ON CONFLICT DO NOTHING RETURNING message_id',
+    [messageId]
+  );
+
+  const now = Date.now();
+  if (now - lastDedupePruneAt > 60 * 60 * 1000) {
+    lastDedupePruneAt = now;
+    void pool.query("DELETE FROM discord_message_dedupe WHERE claimed_at < NOW() - INTERVAL '3 days'").catch(() => {});
+  }
+
+  return (res.rowCount || 0) > 0;
 }
 
 function getTesterSpeechBridgeText(content: string): string | null {
@@ -227,6 +257,12 @@ export async function startBot(): Promise<void> {
     // still exercise the same production routing path.
     if (message.author.bot && !isTesterBotId(message.author.id)) return;
     if (!botChannels) return;
+
+    const claimed = await claimDiscordMessage(message.id).catch((err) => {
+      console.warn('Discord message dedupe check failed:', err instanceof Error ? err.message : 'Unknown');
+      return true;
+    });
+    if (!claimed) return;
 
     const channelId = message.channel.id;
 
