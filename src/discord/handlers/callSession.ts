@@ -5,6 +5,7 @@ import { agentRespond, ConversationMessage, summarizeCall, ReusableAgentChatSess
 import { textToSpeech } from '../voice/tts';
 import { primeElevenLabsVoiceCache } from '../voice/elevenlabs';
 import { joinVC, leaveVC, speakInVC, speakInVCWithOptions, stopVCPlayback, listenToAllMembersSmart, getConnection, VoiceTranscription } from '../voice/connection';
+import { joinTesterVoiceChannel, leaveTesterVoiceChannel } from '../voice/testerClient';
 import { appendToMemory, getMemoryContext } from '../memory';
 import { documentToChannel } from './documentation';
 import { isGeminiOverLimit } from '../usage';
@@ -415,6 +416,8 @@ export async function startCall(
 
   const testerVoiceId = process.env.ASAPTESTER_DISCORD_VOICE_ID || 'lsgXALPNLFUcQfT1dmP1';
   const isTesterInitiated = isTesterBotId(initiator.user.id);
+  const forceTesterJoin = String(process.env.ASAPTESTER_FORCE_JOIN_VOICE || 'false').toLowerCase() === 'true';
+  const shouldJoinTesterVoice = isTesterInitiated || forceTesterJoin;
   const riley = getAgent('executive-assistant' as AgentId);
   const selectedRileyVoice = isTesterInitiated ? testerVoiceId : (riley?.voice || 'Achernar');
 
@@ -448,6 +451,18 @@ export async function startCall(
     turnStartedAt: 0,
     rileyVoiceName: selectedRileyVoice,
   };
+
+  if (shouldJoinTesterVoice) {
+    try {
+      const testerJoinStartMs = Date.now();
+      await joinTesterVoiceChannel(voiceChannel);
+      await postVoiceStageLog('tester_join_vc', `channel=${voiceChannel.name} join_ms=${Date.now() - testerJoinStartMs}`);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Unknown error';
+      await postVoiceStageLog('tester_join_vc_failed', `channel=${voiceChannel.name} error=${msg}`, 'warn');
+      await sendAsAgent(groupchat, `⚠️ ASAPTester could not join voice: ${msg}`);
+    }
+  }
 
   activeSession.heartbeatTimer = setInterval(() => {
     if (!activeSession?.active) return;
@@ -598,6 +613,7 @@ export async function endCall(): Promise<void> {
   session.transcript.push(`[${new Date().toLocaleTimeString()}] Call ended`);
 
     recordVoiceCallEnd();
+  leaveTesterVoiceChannel();
   leaveVC();
 
   const duration = Math.round(
