@@ -44,6 +44,9 @@ const recentUnhandledRejections = new Map<string, { ts: number; skipped: number 
 function normalizeErrorDetail(detail: string): string {
   return detail
     .replace(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z/g, '<ts>')
+    .replace(/0x[0-9a-f]+/gi, '<hex>')
+    .replace(/:\d+:\d+/g, ':<line>:<col>')
+    .replace(/\s+at\s+[^(]+\([^)]*\)/g, ' at <stack-frame>')
     .replace(/\b\d{16,}\b/g, '<snowflake>')
     .replace(/\s+/g, ' ')
     .trim()
@@ -52,8 +55,8 @@ function normalizeErrorDetail(detail: string): string {
 
 function isExpectedVoiceIpDiscoveryDisconnect(detail: string): boolean {
   const d = detail.toLowerCase();
-  return d.includes('cannot perform ip discovery - socket closed')
-    && (d.includes('@discordjs/voice') || d.includes('discordjs/voice') || d.includes('voice'));
+  const ipDiscoverySocketClosed = /cannot\s+perform\s+ip\s+discovery[\s\S]{0,120}socket\s+closed/i.test(d);
+  return ipDiscoverySocketClosed;
 }
 
 function shouldLogUnhandledRejection(detail: string): { shouldLog: boolean; skipped: number } {

@@ -944,10 +944,18 @@ function detectDirectVoiceAction(text: string): 'join' | 'leave' | null {
 function isLikelyVoiceCommandIntent(text: string): boolean {
   const normalized = stripMentionsForIntent(text).toLowerCase();
   if (!normalized) return false;
+  if (normalized.length > 220) return false;
+
   const hasVoiceTarget = /\b(?:voice|vc|voice\s+chat|voice\s+channel|call)\b/.test(normalized);
   const hasVoiceVerb = /\b(?:join|start|open|connect|enter|hop\s+in|jump\s+in|leave|end|stop|disconnect|hang\s*up|drop)\b/.test(normalized);
   const hasAssistantCue = /\b(?:riley|asap)\b/.test(normalized);
-  return hasVoiceTarget && hasVoiceVerb && hasAssistantCue;
+
+  if (hasVoiceTarget && hasVoiceVerb && hasAssistantCue) return true;
+
+  // Treat short imperative voice commands as direct voice intent, even
+  // without assistant name, to avoid accidentally spawning workspace threads.
+  const directImperative = /^(?:please\s+)?(?:join|start|open|connect|enter|hop\s+in(?:to)?|jump\s+in(?:to)?|leave|end|stop|disconnect|hang\s*up|drop)\b/.test(normalized);
+  return hasVoiceTarget && hasVoiceVerb && directImperative;
 }
 
 async function handleDirectVoiceActionIfRequested(message: Message, content: string, groupchat: TextChannel): Promise<boolean> {
