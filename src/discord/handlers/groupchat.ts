@@ -990,7 +990,7 @@ async function handleDirectVoiceActionIfRequested(message: Message, content: str
     });
 
     if (!result.ok) {
-      await groupchat.send(`⚠️ Tester speech injection failed: ${result.reason || 'unknown error'}`).catch(() => {});
+      await groupchat.send(`⚠️ ASAPTester voice turn failed: ${result.reason || 'unknown error'}`).catch(() => {});
       return true;
     }
 

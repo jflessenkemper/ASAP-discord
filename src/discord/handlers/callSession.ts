@@ -24,10 +24,13 @@ const VOICE_DISCONNECT_GRACE_MS = 45 * 1000;
 /** Max conversation history in a call */
 const MAX_CALL_HISTORY = 40;
 const VOICE_PREFLIGHT_TIMEOUT_MS = parseInt(process.env.VOICE_PREFLIGHT_TIMEOUT_MS || '15000', 10);
+const VOICE_LOW_LATENCY_MODE = String(process.env.VOICE_LOW_LATENCY_MODE || 'false').toLowerCase() === 'true';
+const VOICE_DISABLE_CALL_LOG = String(process.env.VOICE_DISABLE_CALL_LOG || (VOICE_LOW_LATENCY_MODE ? 'true' : 'false')).toLowerCase() === 'true';
+const VOICE_DISABLE_TRANSCRIPT_SUMMARY = String(process.env.VOICE_DISABLE_TRANSCRIPT_SUMMARY || (VOICE_LOW_LATENCY_MODE ? 'true' : 'false')).toLowerCase() === 'true';
 const VOICE_STARTUP_SELFTEST_ENABLED = String(process.env.VOICE_STARTUP_SELFTEST_ENABLED || 'false').toLowerCase() === 'true';
-const VOICE_MAX_TOKENS_RILEY = parseInt(process.env.VOICE_MAX_TOKENS_RILEY || '220', 10);
-const VOICE_STREAM_PARTIAL_MIN_CHARS = parseInt(process.env.VOICE_STREAM_PARTIAL_MIN_CHARS || '16', 10);
-const VOICE_STREAM_FORCE_CHARS = parseInt(process.env.VOICE_STREAM_FORCE_CHARS || '60', 10);
+const VOICE_MAX_TOKENS_RILEY = parseInt(process.env.VOICE_MAX_TOKENS_RILEY || (VOICE_LOW_LATENCY_MODE ? '120' : '220'), 10);
+const VOICE_STREAM_PARTIAL_MIN_CHARS = parseInt(process.env.VOICE_STREAM_PARTIAL_MIN_CHARS || (VOICE_LOW_LATENCY_MODE ? '10' : '16'), 10);
+const VOICE_STREAM_FORCE_CHARS = parseInt(process.env.VOICE_STREAM_FORCE_CHARS || (VOICE_LOW_LATENCY_MODE ? '36' : '60'), 10);
 const VOICE_INTERRUPT_MIN_OUTPUT_ACTIVE_MS = parseInt(process.env.VOICE_INTERRUPT_MIN_OUTPUT_ACTIVE_MS || '700', 10);
 const VOICE_MIN_INPUT_CHARS = parseInt(process.env.VOICE_MIN_INPUT_CHARS || '3', 10);
 const VOICE_DUPLICATE_WINDOW_MS = parseInt(process.env.VOICE_DUPLICATE_WINDOW_MS || '1200', 10);
@@ -528,9 +531,11 @@ export async function startCall(
     connection.receiver.speaking.off('start', onSpeakingStart);
   });
 
-  activeSession.transcript.push(
-    `[${new Date().toLocaleTimeString()}] Call started by ${initiator.displayName}`
-  );
+  if (!VOICE_DISABLE_CALL_LOG) {
+    activeSession.transcript.push(
+      `[${new Date().toLocaleTimeString()}] Call started by ${initiator.displayName}`
+    );
+  }
 
   const sttNote = isDeepgramAvailable()
     ? ''
@@ -600,7 +605,9 @@ export async function endCall(): Promise<void> {
     unsub();
   }
 
-  session.transcript.push(`[${new Date().toLocaleTimeString()}] Call ended`);
+  if (!VOICE_DISABLE_CALL_LOG) {
+    session.transcript.push(`[${new Date().toLocaleTimeString()}] Call ended`);
+  }
 
     recordVoiceCallEnd();
   leaveTesterVoiceChannel();
@@ -610,27 +617,30 @@ export async function endCall(): Promise<void> {
     (Date.now() - session.startTime.getTime()) / 1000 / 60
   );
 
-  const transcriptText = session.transcript.join('\n');
-
   await postVoiceStageLog('call_ended', `duration_min=${duration}`);
-
-  await session.callLog.send(
-    `📋 **Call Log — ${session.startTime.toLocaleDateString()} ${session.startTime.toLocaleTimeString()}**\n` +
-      `Duration: ${duration} minutes\n\n` +
-      `\`\`\`\n${transcriptText.slice(0, 1800)}\n\`\`\``
-  );
-
-  try {
-    const participants = ['User', 'Riley (Executive Assistant)'];
-    const summary = await summarizeCall(session.transcript, participants);
-
-    await session.callLog.send(`📝 **Summary**\n${summary}`);
-    await sendAsAgent(
-      session.groupchat,
-      `📞 **Call ended** (${duration} min)\nSummary posted in <#${session.callLog.id}>`
+  if (!VOICE_DISABLE_CALL_LOG) {
+    const transcriptText = session.transcript.join('\n');
+    await session.callLog.send(
+      `📋 **Call Log — ${session.startTime.toLocaleDateString()} ${session.startTime.toLocaleTimeString()}**\n` +
+        `Duration: ${duration} minutes\n\n` +
+        `\`\`\`\n${transcriptText.slice(0, 1800)}\n\`\`\``
     );
-  } catch (err) {
-    console.error('Call summary error:', err instanceof Error ? err.message : 'Unknown');
+  }
+
+  if (!VOICE_DISABLE_TRANSCRIPT_SUMMARY && !VOICE_DISABLE_CALL_LOG) {
+    try {
+      const participants = ['User', 'Riley (Executive Assistant)'];
+      const summary = await summarizeCall(session.transcript, participants);
+      await session.callLog.send(`📝 **Summary**\n${summary}`);
+      await sendAsAgent(
+        session.groupchat,
+        `📞 **Call ended** (${duration} min)\nSummary posted in <#${session.callLog.id}>`
+      );
+    } catch (err) {
+      console.error('Call summary error:', err instanceof Error ? err.message : 'Unknown');
+      await sendAsAgent(session.groupchat, `📞 **Call ended** (${duration} min)`);
+    }
+  } else {
     await sendAsAgent(session.groupchat, `📞 **Call ended** (${duration} min)`);
   }
 
@@ -711,12 +721,13 @@ async function handleVoiceInput(transcription: VoiceTranscription): Promise<void
 
     const langTag = transcription.language && transcription.language !== 'en'
       ? ` [${transcription.language}]` : '';
-    session.transcript.push(
-      `[${transcription.timestamp.toLocaleTimeString()}] ${transcription.username}${langTag}: ${userText}`
-    );
-
-    await session.callLog.send(`🎤 **${transcription.username}**: ${userText}`);
-    await mirrorVoiceTranscript(transcription.username, userText, transcription.language);
+    if (!VOICE_DISABLE_CALL_LOG) {
+      session.transcript.push(
+        `[${transcription.timestamp.toLocaleTimeString()}] ${transcription.username}${langTag}: ${userText}`
+      );
+      await session.callLog.send(`🎤 **${transcription.username}**: ${userText}`);
+      await mirrorVoiceTranscript(transcription.username, userText, transcription.language);
+    }
     if (!isCurrentTurn()) return;
 
     const riley = getAgent('executive-assistant' as AgentId);
@@ -789,18 +800,23 @@ IMPORTANT: End on a complete sentence, never a fragment.${langHint}`;
       });
       session.conversationHistory.push({ role: 'assistant', content: `[Riley]: ${response}` });
 
-      session.transcript.push(
-        `[${new Date().toLocaleTimeString()}] Riley (EA): ${response}`
-      );
-
-      const rileyLogAndMirror = Promise.allSettled([
-        session.callLog.send(`${riley.emoji} **${riley.name}**: ${response.slice(0, 1900)}`),
-        mirrorAgentResponse(riley.name, 'call-log', response),
-      ]);
-      appendToMemory('executive-assistant', [
-        { role: 'user', content: `[Voice from ${transcription.username}]: ${userText}` },
-        { role: 'assistant', content: `[Riley]: ${response}` },
-      ]);
+      const rileyLogAndMirror = VOICE_DISABLE_CALL_LOG
+        ? Promise.resolve([])
+        : Promise.allSettled([
+            session.callLog.send(`${riley.emoji} **${riley.name}**: ${response.slice(0, 1900)}`),
+            mirrorAgentResponse(riley.name, 'call-log', response),
+          ]);
+      if (!VOICE_DISABLE_CALL_LOG) {
+        session.transcript.push(
+          `[${new Date().toLocaleTimeString()}] Riley (EA): ${response}`
+        );
+      }
+      if (!VOICE_LOW_LATENCY_MODE) {
+        appendToMemory('executive-assistant', [
+          { role: 'user', content: `[Voice from ${transcription.username}]: ${userText}` },
+          { role: 'assistant', content: `[Riley]: ${response}` },
+        ]);
+      }
       if (!isCurrentTurn()) return;
 
       try {
