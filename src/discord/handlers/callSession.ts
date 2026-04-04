@@ -229,6 +229,58 @@ function compactVoiceHistoryForPrompt(history: ConversationMessage[]): Conversat
   return next;
 }
 
+function extractVoiceToTextHandoffInstruction(text: string): string | null {
+  const normalized = String(text || '').trim();
+  if (!normalized) return null;
+
+  const explicitPatterns: RegExp[] = [
+    /(?:send|pass|forward)\s+(?:this\s+)?(?:to\s+)?(?:text\s+riley|riley\s+text|groupchat|the\s+text\s+channel)\s*[:,-]?\s*(.+)$/i,
+    /(?:text\s+riley|riley\s+text)\s*[:,-]\s*(.+)$/i,
+    /riley\s*(?:please\s*)?(?:create|open|start|add)\s*(?:a\s+)?(?:text\s+)?(?:task|todo|follow\s*up)\s*[:,-]?\s*(.+)$/i,
+    /riley\s*(?:please\s*)?(?:note|remember)\s*(?:this)?\s*(?:in\s+text|for\s+text)?\s*[:,-]?\s*(.+)$/i,
+  ];
+
+  for (const pattern of explicitPatterns) {
+    const match = normalized.match(pattern);
+    if (!match?.[1]) continue;
+    const instruction = String(match[1]).trim();
+    if (instruction.length >= 4) return instruction;
+  }
+
+  return null;
+}
+
+async function handoffVoiceInstructionToTextRiley(
+  session: CallSession,
+  transcription: VoiceTranscription,
+  instruction: string,
+): Promise<boolean> {
+  const trimmed = String(instruction || '').trim();
+  if (!trimmed) return false;
+
+  try {
+    const mod = await import('./groupchat');
+    if (typeof mod.handoffVoiceInstructionToRileyText !== 'function') {
+      return false;
+    }
+
+    await mod.handoffVoiceInstructionToRileyText(trimmed, transcription.username, session.groupchat);
+    await postVoiceStageLog('voice_text_handoff', `user=${transcription.username} chars=${trimmed.length}`);
+    await sendAsAgent(session.groupchat, `📝 Voice handoff queued for Riley text: "${trimmed.slice(0, 180)}"`);
+    if (!VOICE_DISABLE_CALL_LOG) {
+      session.transcript.push(
+        `[${new Date().toLocaleTimeString()}] System: queued voice handoff to Riley text — ${trimmed}`
+      );
+    }
+    return true;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : 'Unknown handoff error';
+    await postVoiceStageLog('voice_text_handoff_failed', `user=${transcription.username} error=${msg}`, 'warn');
+    await sendAsAgent(session.groupchat, `⚠️ Voice handoff to Riley text failed: ${msg}`);
+    return false;
+  }
+}
+
 function createLiveSpeechStreamer(
   voice: string,
   signal: AbortSignal,
@@ -691,6 +743,11 @@ async function handleVoiceInput(transcription: VoiceTranscription): Promise<void
   const userText = (transcription.text || '').trim();
   if (userText.length < VOICE_MIN_INPUT_CHARS) return;
   if (VOICE_FILLER_ONLY_RE.test(userText)) return;
+
+  const textHandoffInstruction = extractVoiceToTextHandoffInstruction(userText);
+  if (textHandoffInstruction) {
+    await handoffVoiceInstructionToTextRiley(session, transcription, textHandoffInstruction);
+  }
 
   const fingerprint = userText
     .toLowerCase()

@@ -1568,6 +1568,29 @@ async function handleRileyMessage(
 }
 
 /**
+ * Internal bridge: accept a voice-call instruction and run it through Riley's
+ * normal text orchestration flow (workspace thread + agent chain).
+ */
+export async function handoffVoiceInstructionToRileyText(
+  instruction: string,
+  senderName: string,
+  groupchat: TextChannel
+): Promise<void> {
+  const cleanInstruction = String(instruction || '').trim();
+  if (!cleanInstruction) return;
+
+  const workspaceChannel = await ensureGoalWorkspace(groupchat, senderName || 'Voice', cleanInstruction);
+  await handleRileyMessage(
+    `[Voice handoff from ${senderName || 'Voice user'}]: ${cleanInstruction}`,
+    senderName || 'Voice user',
+    undefined,
+    groupchat,
+    undefined,
+    workspaceChannel,
+  );
+}
+
+/**
  * Parse and execute [ACTION:xxx] tags from Riley's response.
  */
 async function executeActions(
