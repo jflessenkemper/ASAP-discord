@@ -1539,10 +1539,14 @@ async function executeActions(
 
   /** Send a message as Riley via webhook, fallback to bot if webhook fails */
   async function sendAsRiley(msg: string): Promise<void> {
+    const safeMsg = workspaceChannel.id === groupchat.id
+      ? String(msg || '').replace(/https?:\/\/\S+/gi, '[see #url]')
+      : msg;
+
     if (riley) {
       try {
         const wh = await getWebhook(workspaceChannel);
-        await wh.send({ content: msg, username: `${riley.emoji} ${riley.name}`, avatarURL: riley.avatarUrl });
+        await wh.send({ content: safeMsg, username: `${riley.emoji} ${riley.name}`, avatarURL: riley.avatarUrl });
         return;
       } catch (err) {
         console.warn('Webhook send failed for Riley action response:', err instanceof Error ? err.message : 'Unknown');
@@ -1550,11 +1554,11 @@ async function executeActions(
     }
 
     if ('send' in workspaceChannel) {
-      await workspaceChannel.send(msg).catch(() => {});
+      await workspaceChannel.send(safeMsg).catch(() => {});
       return;
     }
     const rileyChannel = getAgentWorkChannel('executive-assistant', groupchat);
-    await rileyChannel.send(msg).catch(() => {});
+    await rileyChannel.send(safeMsg).catch(() => {});
   }
 
   for (const [, action, param] of actions) {
