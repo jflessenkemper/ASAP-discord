@@ -253,6 +253,16 @@ export async function startBot(): Promise<void> {
   });
 
   client.on(Events.MessageCreate, async (message) => {
+    if (botChannels && message.channel.id === botChannels.groupchat.id) {
+      const linkSpam = message.author.bot
+        && /🔗\s*\*\*ASAP Links\*\*|Cloud Build\*\*:\s*https?:\/\//i.test(String(message.content || ''));
+      if (linkSpam) {
+        await message.delete().catch(() => {});
+        await botChannels.groupchat.send('🔗 Detailed links are available in #url.').catch(() => {});
+        return;
+      }
+    }
+
     // Ignore bot traffic except the dedicated smoke-test bot so e2e tests can
     // still exercise the same production routing path.
     if (message.author.bot && !isTesterBotId(message.author.id)) return;
