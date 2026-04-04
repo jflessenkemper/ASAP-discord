@@ -123,12 +123,8 @@ function modelForAgent(agentId: string, userMessage: string): string {
 }
 
 /**
- * Riley gets a deliberately smaller coordination/ops tool surface.
- * Everyone else defaults to full repo tools; set LIMIT_NON_RILEY_AGENTS_TO_REVIEW_TOOLS=true
- * to restore the older review-only restriction for non-core agents.
+ * All agents have full tool access.
  */
-const LEGACY_FULL_TOOL_AGENTS = new Set(['developer', 'devops', 'executive-assistant']);
-const LIMIT_NON_RILEY_AGENTS_TO_REVIEW_TOOLS = process.env.LIMIT_NON_RILEY_AGENTS_TO_REVIEW_TOOLS === 'true';
 
 const RILEY_AUTO_APPROVE_BUDGET = process.env.RILEY_AUTO_APPROVE_BUDGET !== 'false';
 const RILEY_AUTO_APPROVE_BUDGET_INCREMENT = parseFloat(process.env.RILEY_AUTO_APPROVE_BUDGET_INCREMENT_USD || '5');
@@ -138,37 +134,22 @@ const RILEY_TOKEN_OVERRUN_ALLOWANCE = parseInt(process.env.RILEY_TOKEN_OVERRUN_A
 type AnyTool = { name: string; description: string; input_schema: any };
 
 function hasFullRepoToolAccess(agentId: string): boolean {
-  return agentId !== 'executive-assistant'
-    && (!LIMIT_NON_RILEY_AGENTS_TO_REVIEW_TOOLS || LEGACY_FULL_TOOL_AGENTS.has(agentId));
+  void agentId;
+  return true;
 }
 
 function toolsForAgent(agentId: string): AnyTool[] {
   const repoTools = (COMPACT_RUNTIME_TOOL_PROMPTS ? PROMPT_REPO_TOOLS : REPO_TOOLS) as unknown as AnyTool[];
-  const reviewTools = (COMPACT_RUNTIME_TOOL_PROMPTS ? PROMPT_REVIEW_TOOLS : REVIEW_TOOLS) as unknown as AnyTool[];
-  const rileyTools = (COMPACT_RUNTIME_TOOL_PROMPTS ? PROMPT_RILEY_TOOLS : RILEY_TOOLS) as unknown as AnyTool[];
-
-  if (agentId === 'executive-assistant') {
-    return rileyTools;
-  }
-  if (LIMIT_NON_RILEY_AGENTS_TO_REVIEW_TOOLS) {
-    return hasFullRepoToolAccess(agentId) ? repoTools : reviewTools;
-  }
+  void agentId;
   return repoTools;
 }
 
 function toolsForPrompt(agentId: string, userMessage: string): AnyTool[] {
-  const reviewTools = (COMPACT_RUNTIME_TOOL_PROMPTS ? PROMPT_REVIEW_TOOLS : REVIEW_TOOLS) as unknown as AnyTool[];
   if (isDirectAnswerOnlyPrompt(userMessage)) {
     return [];
   }
 
-  if (agentId === 'executive-assistant' && isVerificationTaskPrompt(userMessage)) {
-    return reviewTools;
-  }
-
-  if (isSimpleFastPathPrompt(userMessage) && agentId !== 'executive-assistant') {
-    return reviewTools;
-  }
+  void agentId;
 
   return toolsForAgent(agentId);
 }
@@ -2027,11 +2008,9 @@ GOVERNANCE:
 ${workerBudgetGovernance}
 `;
 
-  const toolsSection = agent.id === 'executive-assistant'
-    ? `\nYou have a deliberately lean coordination/ops tool set. Prefer delegating code edits, deployments, and destructive changes to the best specialist instead of doing them yourself.`
-    : hasFullRepoTools
-      ? `\nYou can use the full repo, infra, and Discord tool surface when needed. Stay focused and avoid broad or repetitive scans.`
-      : `\nYou can use analysis tools plus operational testing tools (GCP, screenshots, and mobile harness). Repository write tools remain restricted.`;
+  const toolsSection = hasFullRepoTools
+    ? `\nYou can use the full repo, infra, and Discord tool surface when needed. Stay focused and avoid broad or repetitive scans.`
+    : `\nYou can use the full repo, infra, and Discord tool surface when needed. Stay focused and avoid broad or repetitive scans.`;
 
   const systemPrompt = `${agent.systemPrompt}
 
@@ -2399,57 +2378,8 @@ RUNTIME EFFICIENCY:
       totalToolCalls++;
       const args = call.args as Record<string, string>;
 
-      if (CODE_WRITE_TOOLS.has(call.name) && agent.id !== 'developer') {
-        const blocked = `Blocked: ${call.name} is restricted to Ace (developer). Delegate code edits to @ace.`;
-        logAgentEvent(agent.id, 'tool', blocked, { durationMs: Date.now() - toolStart });
-        if (onToolUse) await onToolUse(call.name, blocked);
-        return {
-          functionResponse: {
-            name: call.name,
-            ...(isAnthropicModel(currentModelName) && call.id ? { toolUseId: call.id } : {}),
-            response: { output: blocked },
-          },
-        } as Part;
-      }
-
-      if (CODE_WRITE_TOOLS.has(call.name) && agent.id === 'developer' && !isOpusModel(currentModelName)) {
-        const blocked = `Blocked: ${call.name} requires Opus. Current model is ${currentModelName}. Switch Ace to Opus before changing code.`;
-        logAgentEvent(agent.id, 'tool', blocked, { durationMs: Date.now() - toolStart });
-        if (onToolUse) await onToolUse(call.name, blocked);
-        return {
-          functionResponse: {
-            name: call.name,
-            ...(isAnthropicModel(currentModelName) && call.id ? { toolUseId: call.id } : {}),
-            response: { output: blocked },
-          },
-        } as Part;
-      }
-
       if (call.name === 'run_command' && isPotentiallyMutatingCommand((args as any)?.command || '')) {
-        if (agent.id !== 'developer') {
-          const blocked = 'Blocked: mutating run_command is restricted to Ace (developer). Delegate implementation changes to @ace.';
-          logAgentEvent(agent.id, 'tool', blocked, { durationMs: Date.now() - toolStart });
-          if (onToolUse) await onToolUse(call.name, blocked);
-          return {
-            functionResponse: {
-              name: call.name,
-              ...(isAnthropicModel(currentModelName) && call.id ? { toolUseId: call.id } : {}),
-              response: { output: blocked },
-            },
-          } as Part;
-        }
-        if (!isOpusModel(currentModelName)) {
-          const blocked = `Blocked: mutating run_command requires Ace on Opus. Current model is ${currentModelName}.`;
-          logAgentEvent(agent.id, 'tool', blocked, { durationMs: Date.now() - toolStart });
-          if (onToolUse) await onToolUse(call.name, blocked);
-          return {
-            functionResponse: {
-              name: call.name,
-              ...(isAnthropicModel(currentModelName) && call.id ? { toolUseId: call.id } : {}),
-              response: { output: blocked },
-            },
-          } as Part;
-        }
+        // Allowed for all agents; keep only safety checks elsewhere.
       }
 
       const result = await executeTool(call.name, args, { agentId: agent.id });

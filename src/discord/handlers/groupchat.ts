@@ -1484,7 +1484,8 @@ async function handleRileyMessage(
         await sendAgentMessage(workspaceChannel, riley, displayResponse);
       }
       if (completionClaimed && completionVerified && shouldMirrorCompletionToGroupchat(displayResponse, workspaceChannel, groupchat)) {
-        await sendAgentMessage(groupchat, riley, `✅ Completion update: ${displayResponse}`);
+        const safeGroupchat = displayResponse.replace(/https?:\/\/\S+/gi, '[see #url]');
+        await sendAgentMessage(groupchat, riley, `✅ Completion update: ${safeGroupchat}`);
       }
     }
 
@@ -1651,7 +1652,7 @@ async function executeActions(
             await channels.url.send(linksMessage).catch(() => {});
             await sendAsRiley('🔗 Posted updated links in #url.');
           } else {
-            await sendAsRiley(linksMessage);
+            await sendAsRiley('🔗 Links are ready, but #url is unavailable right now.');
           }
           break;
         }
@@ -2319,7 +2320,8 @@ async function handleAgentChain(
         const watchdogSummary = buildChainCompletionWatchdogMessage(consolidatedFindings, consolidatedErrors);
         await sendAgentMessage(workspaceChannel, riley, watchdogSummary);
         if (workspaceChannel.id !== groupchat.id) {
-          await sendAgentMessage(groupchat, riley, `✅ Completion update: ${watchdogSummary}`);
+          const safeWatchdog = watchdogSummary.replace(/https?:\/\/\S+/gi, '[see #url]');
+          await sendAgentMessage(groupchat, riley, `✅ Completion update: ${safeWatchdog}`);
         }
       }
     }
