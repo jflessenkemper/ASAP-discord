@@ -71,6 +71,7 @@ const THREAD_CLOSE_REVIEW_INTERVAL_MS = parseInt(process.env.THREAD_CLOSE_REVIEW
 const THREAD_STATUS_POST_INTERVAL_MS = parseInt(process.env.THREAD_STATUS_POST_INTERVAL_MS || '3600000', 10);
 const ACTION_COMMAND_TIMEOUT_MS = parseInt(process.env.ACTION_COMMAND_TIMEOUT_MS || '120000', 10);
 const AUTO_DEPLOY_ON_THREAD_CLOSE = String(process.env.AUTO_DEPLOY_ON_THREAD_CLOSE || 'true').toLowerCase() !== 'false';
+const URL_ACTION_COOLDOWN_MS = parseInt(process.env.URL_ACTION_COOLDOWN_MS || '1800000', 10);
 const GOAL_THREAD_COUNTER_RE = /\bgoal[-\s]?(\d{4})\b/i;
 const APP_SERVER_ROOT = (fs.existsSync(path.join(process.cwd(), 'package.json')) && fs.existsSync(path.join(process.cwd(), 'src')))
   ? process.cwd()
@@ -78,6 +79,7 @@ const APP_SERVER_ROOT = (fs.existsSync(path.join(process.cwd(), 'package.json'))
 const APP_REPO_ROOT = path.resolve(APP_SERVER_ROOT, '..');
 let lastGoalProgressAt = Date.now();
 let goalRecoveryAttempts = 0;
+let lastUrlsActionAt = 0;
 const DEFAULT_TESTER_BOT_ID = '1487426371209789450';
 
 function isTesterBotId(userId: string): boolean {
@@ -1417,7 +1419,8 @@ async function handleRileyMessage(
       : '';
     const mentionGuide = `\n\n[Delegation default: start with ${aceGuide}. Ace can bring in other specialists only if needed.]`;
     const threadCloseGuide = `\n\n[Keep the workspace thread updated briefly. Include [ACTION:CLOSE_THREAD] only when the task is fully complete.]`;
-    const contextMessageWithLang = `${textLangHint ? `${contextMessage}${textLangHint}` : contextMessage}${mentionGuide}${threadCloseGuide}`;
+    const decisionGuide = '\n\n[Decision policy: only ask the user for MAJOR decisions (prod risk, security/privacy, rollback/no-rollback, schema/data-loss risk, spend increase, legal/compliance impact). For routine implementation choices, decide and proceed.]';
+    const contextMessageWithLang = `${textLangHint ? `${contextMessage}${textLangHint}` : contextMessage}${mentionGuide}${threadCloseGuide}${decisionGuide}`;
 
     const response = await agentRespond(riley, [...rileyMemory, ...groupHistory], contextMessageWithLang, async (_toolName, summary) => {
       sendToolNotification(rileyWorkChannel, riley, summary).catch(() => {});
@@ -1615,6 +1618,13 @@ async function executeActions(
           break;
         }
         case 'URLS': {
+          const now = Date.now();
+          if (now - lastUrlsActionAt < URL_ACTION_COOLDOWN_MS) {
+            await sendAsRiley('🔗 Links were posted recently. Skipping duplicate link blast in groupchat.');
+            break;
+          }
+          lastUrlsActionAt = now;
+
           const appUrl = process.env.FRONTEND_URL || 'https://asap-489910.australia-southeast1.run.app';
           const projectId = process.env.GCS_PROJECT_ID || 'asap-489910';
           const region = process.env.CLOUD_RUN_REGION || 'australia-southeast1';
@@ -1622,13 +1632,20 @@ async function executeActions(
           await sendAutopilotAudit(groupchat, 'action_executed', 'ASAP links were posted.', {
             action: 'URLS',
           });
-          await sendAsRiley(
+          const linksMessage =
             `🔗 **ASAP Links**\n\n` +
             `🌐 **App**: ${appUrl}\n` +
             `📦 **Cloud Build**: https://console.cloud.google.com/cloud-build/builds?project=${projectId}\n` +
             `☁️ **Cloud Run**: https://console.cloud.google.com/run/detail/${region}/asap?project=${projectId}\n` +
-            `📊 **Logs**: https://console.cloud.google.com/logs/query?project=${projectId}`
-          );
+            `📊 **Logs**: https://console.cloud.google.com/logs/query?project=${projectId}`;
+
+          const channels = getBotChannels();
+          if (channels?.url) {
+            await channels.url.send(linksMessage).catch(() => {});
+            await sendAsRiley('🔗 Posted updated links in #url.');
+          } else {
+            await sendAsRiley(linksMessage);
+          }
           break;
         }
         case 'STATUS': {
@@ -1975,9 +1992,11 @@ function hasInteractiveEvidenceText(content: string): boolean {
 function shouldQueueDecisionReview(text: string): boolean {
   const normalized = String(text || '').toLowerCase();
   if (!normalized.trim()) return false;
-  if (/\bdecision\b|🛑/.test(normalized)) return true;
-  if (/\boption\s*[1-5]\b|^[1-5][.)]\s+/m.test(normalized)) return true;
-  if (/\bshould we\b|\bchoose\b|\bpick\b|\bprefer\b|\btrade-?off\b/.test(normalized)) return true;
+  // Queue only major/blocking decisions to avoid interrupting routine execution.
+  if (!/\bdecision\b|🛑|\bblocked\b|\bapproval\b|\bescalat(?:e|ion)\b|\bgo\s*\/\s*no-?go\b/.test(normalized)) return false;
+  if (/\bminor\b|\bnit\b|\bnice to have\b|\bcosmetic\b/.test(normalized)) return false;
+  if (/\b(option\s*[1-5]|yes\s*\/\s*no|approve\s*\/\s*reject|ship\s*\/\s*hold)\b/.test(normalized)) return true;
+  if (/\b(prod|production|security|rollback|schema|migration|budget|spend|customer impact|outage|data loss|compliance)\b/.test(normalized)) return true;
   return false;
 }
 
