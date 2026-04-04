@@ -1047,11 +1047,12 @@ async function handleDirectVoiceActionIfRequested(message: Message, content: str
       await groupchat.send('📞 Riley is already in voice.').catch(() => {});
       return true;
     }
-    if (!message.member) {
+    const member = message.member || await message.guild?.members.fetch(message.author.id).catch(() => null);
+    if (!member) {
       await groupchat.send('📞 I need you to be in the server to join voice.').catch(() => {});
       return true;
     }
-    await startCall(channels.voiceChannel, groupchat, channels.callLog, message.member);
+    await startCall(channels.voiceChannel, groupchat, channels.callLog, member);
     return true;
   }
 
