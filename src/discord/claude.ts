@@ -24,7 +24,7 @@ const PROJECT_CONTEXT_LIGHT = PROJECT_CONTEXT.slice(0, PROJECT_CONTEXT_LIGHT_MAX
 
 const GEMINI_FLASH = process.env.GEMINI_FLASH_MODEL || 'gemini-flash-latest';
 const GEMINI_PRO = process.env.GEMINI_PRO_MODEL || 'gemini-2.5-pro';
-const ANTHROPIC_OPUS = process.env.ANTHROPIC_CODING_MODEL || 'claude-opus-4-20250514';
+const ANTHROPIC_OPUS = process.env.ANTHROPIC_CODING_MODEL || 'claude-opus-4-6';
 const DEFAULT_CODING_MODEL = process.env.CODING_AGENT_MODEL || ANTHROPIC_OPUS;
 const DEFAULT_FAST_MODEL = process.env.FAST_AGENT_MODEL || GEMINI_FLASH;
 const VOICE_FAST_MODEL = process.env.VOICE_FAST_MODEL || DEFAULT_FAST_MODEL;
@@ -268,6 +268,11 @@ let vertexTokenCache: { token: string; expiresAtMs: number } | null = null;
 const USE_VERTEX_AI = process.env.GEMINI_USE_VERTEX_AI === 'true';
 const VERTEX_PROJECT_ID = process.env.VERTEX_PROJECT_ID || process.env.GOOGLE_CLOUD_PROJECT || process.env.GCLOUD_PROJECT || '';
 const VERTEX_LOCATION = process.env.VERTEX_LOCATION || 'us-central1';
+const VERTEX_ANTHROPIC_LOCATION = process.env.VERTEX_ANTHROPIC_LOCATION || process.env.VERTEX_PARTNER_LOCATION || VERTEX_LOCATION;
+const VERTEX_ANTHROPIC_FALLBACK_LOCATIONS = (process.env.VERTEX_ANTHROPIC_FALLBACK_LOCATIONS || 'us-east5,us-east1')
+  .split(',')
+  .map((value) => value.trim())
+  .filter(Boolean);
 const VERTEX_ANTHROPIC_VERSION = process.env.VERTEX_ANTHROPIC_VERSION || 'vertex-2023-10-16';
 const PARTNER_MODEL_CACHE_ENABLED = process.env.PARTNER_MODEL_CACHE_ENABLED !== 'false';
 
@@ -319,18 +324,79 @@ function userContentFromPayload(payload: string | Part[]): Content {
   return { role: 'user', parts: payload as any } as Content;
 }
 
-function makeVertexError(status: number, bodyText: string): Error & { status: number; statusCode: number } {
-  const err = new Error(`Vertex Gemini error: HTTP ${status} ${bodyText.slice(0, 400)}`) as Error & { status: number; statusCode: number };
+function parseRetryAfterMs(headerValue: string | null): number | undefined {
+  if (!headerValue) return undefined;
+  const seconds = Number(headerValue);
+  if (Number.isFinite(seconds) && seconds > 0) {
+    return Math.floor(seconds * 1000);
+  }
+  const timestamp = Date.parse(headerValue);
+  if (Number.isFinite(timestamp) && timestamp > 0) {
+    return Math.max(0, timestamp - Date.now());
+  }
+  return undefined;
+}
+
+function makeVertexError(status: number, bodyText: string, retryAfterMs?: number): Error & { status: number; statusCode: number; retryAfterMs?: number } {
+  const err = new Error(`Vertex Gemini error: HTTP ${status} ${bodyText.slice(0, 400)}`) as Error & { status: number; statusCode: number; retryAfterMs?: number };
   err.status = status;
   err.statusCode = status;
+  if (retryAfterMs && retryAfterMs > 0) {
+    err.retryAfterMs = retryAfterMs;
+  }
   return err;
 }
 
-function makeVertexAnthropicError(status: number, bodyText: string): Error & { status: number; statusCode: number } {
-  const err = new Error(`Vertex Anthropic error: HTTP ${status} ${bodyText.slice(0, 400)}`) as Error & { status: number; statusCode: number };
+function makeVertexAnthropicError(
+  status: number,
+  bodyText: string,
+  retryAfterMs?: number,
+  location?: string,
+): Error & { status: number; statusCode: number; retryAfterMs?: number; location?: string } {
+  const locationDetail = location ? ` [${location}]` : '';
+  const err = new Error(`Vertex Anthropic error${locationDetail}: HTTP ${status} ${bodyText.slice(0, 400)}`) as Error & {
+    status: number;
+    statusCode: number;
+    retryAfterMs?: number;
+    location?: string;
+  };
   err.status = status;
   err.statusCode = status;
+  if (retryAfterMs && retryAfterMs > 0) {
+    err.retryAfterMs = retryAfterMs;
+  }
+  if (location) {
+    err.location = location;
+  }
   return err;
+}
+
+function uniqueLocations(locations: string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const location of locations) {
+    const normalized = String(location || '').trim();
+    if (!normalized || seen.has(normalized)) continue;
+    seen.add(normalized);
+    out.push(normalized);
+  }
+  return out;
+}
+
+function preferredAnthropicLocations(modelName: string): string[] {
+  const normalizedModel = String(modelName || '').toLowerCase();
+  if (normalizedModel.includes('opus-4-6')) {
+    return uniqueLocations(['us-east5', VERTEX_ANTHROPIC_LOCATION, ...VERTEX_ANTHROPIC_FALLBACK_LOCATIONS]);
+  }
+  return uniqueLocations([VERTEX_ANTHROPIC_LOCATION, ...VERTEX_ANTHROPIC_FALLBACK_LOCATIONS]);
+}
+
+function shouldTryAnotherAnthropicLocation(status: number, bodyText: string): boolean {
+  const msg = String(bodyText || '').toLowerCase();
+  if (status === 429) return true;
+  if (status === 404) return true;
+  if (status === 400 && (msg.includes('not servable') || msg.includes('not found'))) return true;
+  return false;
 }
 
 async function getVertexAccessToken(): Promise<string> {
@@ -381,7 +447,7 @@ async function callVertexGenerateContent(
 
   if (!res.ok) {
     const bodyText = await res.text();
-    throw makeVertexError(res.status, bodyText);
+    throw makeVertexError(res.status, bodyText, parseRetryAfterMs(res.headers.get('retry-after')));
   }
 
   return res.json();
@@ -397,23 +463,42 @@ async function callVertexAnthropicRawPredict(
   }
 
   const token = await getVertexAccessToken();
-  const endpoint = `https://${VERTEX_LOCATION}-aiplatform.googleapis.com/v1/projects/${VERTEX_PROJECT_ID}/locations/${VERTEX_LOCATION}/publishers/anthropic/models/${encodeURIComponent(modelName)}:rawPredict`;
-  const res = await fetch(endpoint, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${token}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(body),
-    signal,
-  });
+  const locations = preferredAnthropicLocations(modelName);
+  let lastErr: Error | null = null;
 
-  if (!res.ok) {
+  for (let index = 0; index < locations.length; index += 1) {
+    const location = locations[index];
+    const endpoint = `https://${location}-aiplatform.googleapis.com/v1/projects/${VERTEX_PROJECT_ID}/locations/${location}/publishers/anthropic/models/${encodeURIComponent(modelName)}:rawPredict`;
+    const res = await fetch(endpoint, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(body),
+      signal,
+    });
+
+    if (res.ok) {
+      return res.json();
+    }
+
     const bodyText = await res.text();
-    throw makeVertexAnthropicError(res.status, bodyText);
+    const retryAfterMs = parseRetryAfterMs(res.headers.get('retry-after'));
+    const err = makeVertexAnthropicError(res.status, bodyText, retryAfterMs, location);
+    const hasNextLocation = index < locations.length - 1;
+    if (hasNextLocation && shouldTryAnotherAnthropicLocation(res.status, bodyText)) {
+      lastErr = err;
+      continue;
+    }
+
+    throw err;
   }
 
-  return res.json();
+  if (lastErr) {
+    throw lastErr;
+  }
+  throw new Error('Vertex Anthropic request failed before any location attempt');
 }
 
 function makeResponseLikeFromVertex(raw: any): ModelResponseLike {
@@ -840,7 +925,7 @@ const GEMINI_MAX_RETRIES = parseInt(process.env.GEMINI_MAX_RETRIES || '1', 10);
 const GEMINI_RETRY_BASE_DELAY_MS = parseInt(process.env.GEMINI_RETRY_BASE_DELAY_MS || '1500', 10);
 const GEMINI_429_PAUSE_MS = parseInt(process.env.GEMINI_429_PAUSE_MS || '25000', 10);
 const GEMINI_429_JITTER_MS = parseInt(process.env.GEMINI_429_JITTER_MS || '5000', 10);
-const RATE_LIMIT_FAST_FAIL_ON_429 = process.env.RATE_LIMIT_FAST_FAIL_ON_429 !== 'false';
+const RATE_LIMIT_FAST_FAIL_ON_429 = process.env.RATE_LIMIT_FAST_FAIL_ON_429 === 'true';
 const GEMINI_RATE_LIMIT_FUSE_HITS = parseInt(process.env.GEMINI_RATE_LIMIT_FUSE_HITS || '6', 10);
 const GEMINI_RATE_LIMIT_FUSE_WINDOW_MS = parseInt(process.env.GEMINI_RATE_LIMIT_FUSE_WINDOW_MS || '180000', 10);
 const GEMINI_RATE_LIMIT_FUSE_COOLDOWN_MS = parseInt(process.env.GEMINI_RATE_LIMIT_FUSE_COOLDOWN_MS || '600000', 10);
@@ -1070,6 +1155,12 @@ function isGeminiRateLimitError(err: any): boolean {
   const msg = String(err?.message || err || '').toLowerCase();
   const status = err?.status || err?.statusCode;
   return status === 429 || msg.includes('rate limit') || msg.includes('too many requests');
+}
+
+function isAnthropicRateLimitError(err: any): boolean {
+  const msg = String(err?.message || err || '').toLowerCase();
+  const status = err?.status || err?.statusCode;
+  return status === 429 || msg.includes('online_prediction_input_tokens_per_minute') || msg.includes('resource exhausted');
 }
 
 function isContextOverflowError(err: any): boolean {
@@ -1748,10 +1839,12 @@ async function withRetry<T>(fn: () => Promise<T>, retries = GEMINI_MAX_RETRIES, 
       if (status === 429) {
         recordRateLimitHit();
         registerRateLimitHit();
+        const retryAfterMs = Number(err?.retryAfterMs || 0);
         const halfJitter = Math.max(0, Math.floor(GEMINI_429_JITTER_MS / 2));
         const jitter = Math.floor(Math.random() * (halfJitter * 2 + 1)) - halfJitter;
-        delay = Math.max(5000, GEMINI_429_PAUSE_MS + jitter);
-        rateLimitedUntil = Math.max(rateLimitedUntil, Date.now() + Math.max(5000, GEMINI_429_PAUSE_MS + halfJitter));
+        const basePause = retryAfterMs > 0 ? retryAfterMs : GEMINI_429_PAUSE_MS;
+        delay = Math.max(5000, basePause + jitter);
+        rateLimitedUntil = Math.max(rateLimitedUntil, Date.now() + Math.max(5000, basePause + halfJitter));
         console.warn(`429 rate limited — pausing ${Math.ceil(delay / 1000)}s (±jitter, retry ${i + 1}/${retries})`);
         logAgentEvent('system', 'rate_limit', `429 — pausing ${Math.ceil(delay / 1000)}s`);
         if (RATE_LIMIT_FAST_FAIL_ON_429) throw err;
@@ -2164,6 +2257,12 @@ RUNTIME EFFICIENCY:
       response = await withConcurrencyLimit(currentModelName, () =>
         withRetry(() => sendMessageWithOptionalStream(chat, runtimeUserMessage, options?.signal, options?.onPartialText))
       , lane);
+    } else if (isAnthropicModel(currentModelName) && isAnthropicRateLimitError(err) && agent.id !== 'developer') {
+      logAgentEvent(agent.id, 'error', 'Anthropic rate limited — falling back to Gemini Flash');
+      await swapToModel(DEFAULT_FAST_MODEL, history);
+      response = await withConcurrencyLimit(currentModelName, () =>
+        withRetry(() => sendMessageWithOptionalStream(chat, runtimeUserMessage, options?.signal, options?.onPartialText))
+      , lane);
     } else if (isGeminiRateLimitError(err)) {
       const recoverAt = Math.max(rateLimitedUntil, Date.now() + GEMINI_429_PAUSE_MS);
       return `⏳ Gemini is currently rate-limited (throughput), not out of credit. Please retry after ${formatRecoveryTime(recoverAt)} or reduce parallel requests.`;
@@ -2464,6 +2563,15 @@ RUNTIME EFFICIENCY:
         logAgentEvent(agent.id, 'error', 'Anthropic auth failed mid-loop — falling back to Gemini Pro');
         const accumulatedHistory = await chat.getHistory();
         await swapToModel(GEMINI_PRO, accumulatedHistory);
+        response = await withConcurrencyLimit(currentModelName, () =>
+          withRetry(() => sendMessageWithOptionalStream(chat, functionResponses, options?.signal, options?.onPartialText))
+        , lane);
+        continue;
+      }
+      if (isAnthropicModel(currentModelName) && isAnthropicRateLimitError(err) && agent.id !== 'developer') {
+        logAgentEvent(agent.id, 'error', 'Anthropic rate limited mid-loop — falling back to Gemini Flash');
+        const accumulatedHistory = await chat.getHistory();
+        await swapToModel(DEFAULT_FAST_MODEL, accumulatedHistory);
         response = await withConcurrencyLimit(currentModelName, () =>
           withRetry(() => sendMessageWithOptionalStream(chat, functionResponses, options?.signal, options?.onPartialText))
         , lane);

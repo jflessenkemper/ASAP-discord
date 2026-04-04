@@ -9,15 +9,48 @@ interface CheckResult {
   detail: string;
 }
 
-const ANTHROPIC_MODELS = ['claude-sonnet-4-20250514', 'claude-opus-4-20250514'];
+const ANTHROPIC_MODELS = ['claude-sonnet-4-6', 'claude-opus-4-6'];
 const GEMINI_TEXT_MODEL = 'gemini-flash-latest';
 const GEMINI_TTS_MODEL = 'gemini-2.5-flash-preview-tts';
 const USE_VERTEX_ANTHROPIC = process.env.ANTHROPIC_USE_VERTEX_AI === 'true' || process.env.OPUS_USE_VERTEX_AI === 'true';
 const VERTEX_PROJECT_ID = process.env.VERTEX_PROJECT_ID || process.env.GOOGLE_CLOUD_PROJECT || process.env.GCLOUD_PROJECT || '';
 const VERTEX_LOCATION = process.env.VERTEX_LOCATION || 'us-central1';
+const VERTEX_ANTHROPIC_LOCATION = process.env.VERTEX_ANTHROPIC_LOCATION || process.env.VERTEX_PARTNER_LOCATION || VERTEX_LOCATION;
+const VERTEX_ANTHROPIC_FALLBACK_LOCATIONS = (process.env.VERTEX_ANTHROPIC_FALLBACK_LOCATIONS || 'us-east5,us-east1')
+  .split(',')
+  .map((value) => value.trim())
+  .filter(Boolean);
 const VERTEX_ANTHROPIC_VERSION = process.env.VERTEX_ANTHROPIC_VERSION || 'vertex-2023-10-16';
 let vertexAuth: GoogleAuth | null = null;
 let lockClient: PoolClient | null = null;
+
+function uniqueLocations(locations: string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const location of locations) {
+    const normalized = String(location || '').trim();
+    if (!normalized || seen.has(normalized)) continue;
+    seen.add(normalized);
+    out.push(normalized);
+  }
+  return out;
+}
+
+function preferredAnthropicLocations(modelName: string): string[] {
+  const normalizedModel = String(modelName || '').toLowerCase();
+  if (normalizedModel.includes('opus-4-6')) {
+    return uniqueLocations(['us-east5', VERTEX_ANTHROPIC_LOCATION, ...VERTEX_ANTHROPIC_FALLBACK_LOCATIONS]);
+  }
+  return uniqueLocations([VERTEX_ANTHROPIC_LOCATION, ...VERTEX_ANTHROPIC_FALLBACK_LOCATIONS]);
+}
+
+function shouldTryAnotherLocation(status: number, bodyText: string): boolean {
+  const msg = String(bodyText || '').toLowerCase();
+  if (status === 429) return true;
+  if (status === 404) return true;
+  if (status === 400 && (msg.includes('not servable') || msg.includes('not found'))) return true;
+  return false;
+}
 
 async function getVertexAccessToken(): Promise<string> {
   if (!vertexAuth) {
@@ -79,29 +112,40 @@ async function checkAnthropic(): Promise<CheckResult> {
     }
 
     const modelName = process.env.ANTHROPIC_CODING_MODEL || ANTHROPIC_MODELS[1];
-    const endpoint = `https://${VERTEX_LOCATION}-aiplatform.googleapis.com/v1/projects/${VERTEX_PROJECT_ID}/locations/${VERTEX_LOCATION}/publishers/anthropic/models/${encodeURIComponent(modelName)}:rawPredict`;
-
     try {
       const token = await getVertexAccessToken();
-      const res = await fetchWithTimeout(endpoint, {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          anthropic_version: VERTEX_ANTHROPIC_VERSION,
-          model: modelName,
-          max_tokens: 8,
-          messages: [{ role: 'user', content: [{ type: 'text', text: 'health check: respond with ok' }] }],
-        }),
-      }, 15000);
+      const locations = preferredAnthropicLocations(modelName);
+      let lastFailure = 'request failed';
 
-      if (!res.ok) {
+      for (let index = 0; index < locations.length; index += 1) {
+        const location = locations[index];
+        const endpoint = `https://${location}-aiplatform.googleapis.com/v1/projects/${VERTEX_PROJECT_ID}/locations/${location}/publishers/anthropic/models/${encodeURIComponent(modelName)}:rawPredict`;
+        const res = await fetchWithTimeout(endpoint, {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            anthropic_version: VERTEX_ANTHROPIC_VERSION,
+            model: modelName,
+            max_tokens: 8,
+            messages: [{ role: 'user', content: [{ type: 'text', text: 'health check: respond with ok' }] }],
+          }),
+        }, 15000);
+
+        if (res.ok) {
+          return { name: 'Anthropic', ok: true, detail: `Vertex partner model reachable: ${modelName} in ${location}` };
+        }
+
         const body = await safeText(res);
-        return { name: 'Anthropic', ok: false, detail: `Vertex HTTP ${res.status} ${body.slice(0, 120)}` };
+        lastFailure = `Vertex HTTP ${res.status} (${location}) ${body.slice(0, 120)}`;
+        if (index < locations.length - 1 && shouldTryAnotherLocation(res.status, body)) {
+          continue;
+        }
+        return { name: 'Anthropic', ok: false, detail: lastFailure };
       }
-      return { name: 'Anthropic', ok: true, detail: `Vertex partner model reachable: ${modelName}` };
+      return { name: 'Anthropic', ok: false, detail: lastFailure };
     } catch (err) {
       return { name: 'Anthropic', ok: false, detail: err instanceof Error ? err.message : 'request failed' };
     }
