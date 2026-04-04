@@ -411,8 +411,6 @@ export async function startCall(
     return;
   }
 
-  await sendAsAgent(groupchat, `📞 Connecting Riley to **${voiceChannel.name}** and running voice preflight...`);
-
   const joinStartMs = Date.now();
   const connection = await joinVC(voiceChannel);
   await postVoiceStageLog(

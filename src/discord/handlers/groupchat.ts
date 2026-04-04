@@ -941,6 +941,15 @@ function detectDirectVoiceAction(text: string): 'join' | 'leave' | null {
   return null;
 }
 
+function isLikelyVoiceCommandIntent(text: string): boolean {
+  const normalized = stripMentionsForIntent(text).toLowerCase();
+  if (!normalized) return false;
+  const hasVoiceTarget = /\b(?:voice|vc|voice\s+chat|voice\s+channel|call)\b/.test(normalized);
+  const hasVoiceVerb = /\b(?:join|start|open|connect|enter|hop\s+in|jump\s+in|leave|end|stop|disconnect|hang\s*up|drop)\b/.test(normalized);
+  const hasAssistantCue = /\b(?:riley|asap)\b/.test(normalized);
+  return hasVoiceTarget && hasVoiceVerb && hasAssistantCue;
+}
+
 async function handleDirectVoiceActionIfRequested(message: Message, content: string, groupchat: TextChannel): Promise<boolean> {
   const action = detectDirectVoiceAction(content);
   if (!action) return false;
@@ -1155,6 +1164,12 @@ async function processGroupchatMessage(
 
   if (await handleDirectVoiceActionIfRequested(message, content, groupchat)) {
     markGoalProgress('📞 Voice action handled directly');
+    return;
+  }
+
+  if (isLikelyVoiceCommandIntent(content)) {
+    await sendQuickRileyMessage(groupchat, '📞 Voice command detected. Say "Riley join voice call" or "Riley leave voice call" and I will handle it directly without opening a workspace thread.');
+    markGoalProgress('📞 Voice intent handled without workspace thread');
     return;
   }
 
