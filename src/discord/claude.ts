@@ -855,6 +855,75 @@ export interface ConversationMessage {
   content: string;
 }
 
+export interface AgentMachinePayload {
+  delegateAgents?: string[];
+  actionTags?: string[];
+  notes?: string;
+}
+
+export interface AgentResponseEnvelope {
+  human: string;
+  machine?: AgentMachinePayload;
+}
+
+function normalizeAgentResponseEnvelope(value: unknown): AgentResponseEnvelope | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const obj = value as Record<string, unknown>;
+  const human = String(obj.human || '').trim();
+  if (!human) return null;
+
+  const machineRaw = obj.machine;
+  if (!machineRaw || typeof machineRaw !== 'object' || Array.isArray(machineRaw)) {
+    return { human };
+  }
+
+  const machineObj = machineRaw as Record<string, unknown>;
+  const delegateAgents = Array.isArray(machineObj.delegateAgents)
+    ? machineObj.delegateAgents.map((v) => String(v || '').trim()).filter(Boolean)
+    : undefined;
+  const actionTags = Array.isArray(machineObj.actionTags)
+    ? machineObj.actionTags.map((v) => String(v || '').trim()).filter(Boolean)
+    : undefined;
+  const notes = typeof machineObj.notes === 'string' ? machineObj.notes.trim() : undefined;
+
+  const machine: AgentMachinePayload = {};
+  if (delegateAgents && delegateAgents.length > 0) machine.delegateAgents = delegateAgents;
+  if (actionTags && actionTags.length > 0) machine.actionTags = actionTags;
+  if (notes) machine.notes = notes;
+
+  if (Object.keys(machine).length === 0) return { human };
+  return { human, machine };
+}
+
+function parseAgentResponseEnvelope(text: string): AgentResponseEnvelope | null {
+  const raw = String(text || '').trim();
+  if (!raw) return null;
+
+  const candidates: string[] = [raw];
+  const fenced = raw.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  if (fenced?.[1]) candidates.push(fenced[1].trim());
+
+  const firstBrace = raw.indexOf('{');
+  const lastBrace = raw.lastIndexOf('}');
+  if (firstBrace >= 0 && lastBrace > firstBrace) {
+    candidates.push(raw.slice(firstBrace, lastBrace + 1));
+  }
+
+  for (const candidate of candidates) {
+    try {
+      const parsed = JSON.parse(candidate);
+      const normalized = normalizeAgentResponseEnvelope(parsed);
+      if (normalized) return normalized;
+    } catch {
+    }
+  }
+  return null;
+}
+
+export function extractAgentResponseEnvelope(text: string): AgentResponseEnvelope | null {
+  return parseAgentResponseEnvelope(text);
+}
+
 /** Max tool-use iterations before forcing a text response. Lower defaults help stop runaway loops. */
 const MAX_TOOL_ROUNDS = parseInt(process.env.MAX_TOOL_ROUNDS || '18', 10);
 const MAX_TOOL_ROUNDS_DEVELOPER = parseInt(process.env.MAX_TOOL_ROUNDS_DEVELOPER || '28', 10);
@@ -1902,6 +1971,7 @@ export async function agentRespond(
     disableTools?: boolean;
     priority?: 'normal' | 'voice' | 'background';
     chatSession?: ReusableAgentChatSession;
+    outputMode?: 'normal' | 'machine_json';
   }
 ): Promise<string> {
   const cacheEligible = isCacheablePrompt(agent.id, userMessage, conversationHistory);
@@ -2012,6 +2082,24 @@ ${workerBudgetGovernance}
     ? `\nYou can use the full repo, infra, and Discord tool surface when needed. Stay focused and avoid broad or repetitive scans.`
     : `\nYou can use the full repo, infra, and Discord tool surface when needed. Stay focused and avoid broad or repetitive scans.`;
 
+  const outputModePrompt = options?.outputMode === 'machine_json'
+    ? `
+OUTPUT MODE:
+- Return ONLY valid JSON (no markdown, no code fences).
+- JSON schema:
+  {
+    "human": "normal human-readable reply text",
+    "machine": {
+      "delegateAgents": ["developer", "qa"],
+      "actionTags": ["[ACTION:DEPLOY]"],
+      "notes": "optional short machine note"
+    }
+  }
+- Keep "human" as natural teammate language for people.
+- Keep machine arrays concise; omit fields when empty.
+`
+    : '';
+
   const systemPrompt = `${agent.systemPrompt}
 
 <project_context>
@@ -2037,7 +2125,7 @@ Tooling: Ace owns tool readiness. Check .github/AGENT_TOOLING_STATUS.md first. I
 ${governanceSection}
 RUNTIME EFFICIENCY:
 - Runtime budget and token status will be supplied separately in the task context.
-- Each tool call costs tokens. Prefer targeted reads, concise summaries, and the narrowest agent/tool path that can finish the job.`;
+- Each tool call costs tokens. Prefer targeted reads, concise summaries, and the narrowest agent/tool path that can finish the job.${outputModePrompt}`;
 
   let currentModelName = options?.modelOverride || options?.chatSession?.modelName || (isVoiceLane ? VOICE_FAST_MODEL : modelForAgent(agent.id, userMessage));
   let escalatedToPro = currentModelName === GEMINI_PRO;
@@ -2337,6 +2425,12 @@ RUNTIME EFFICIENCY:
         },
       );
       const finalText = normalizeLowSignalFinalText(agent.id, response.response.text() || '', totalToolCalls);
+      if (options?.outputMode === 'machine_json') {
+        const envelope = parseAgentResponseEnvelope(finalText);
+        if (envelope) {
+          return JSON.stringify(envelope);
+        }
+      }
       if (cacheKey && totalToolCalls === 0 && finalText.length <= 500) {
         setCachedResponse(cacheKey, finalText);
       }

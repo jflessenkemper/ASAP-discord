@@ -12,7 +12,7 @@ import {
   resolveAgentId,
   resolveAgentIdByRoleId,
 } from '../agents';
-import { agentRespond, clearGeminiQuotaFuse, ConversationMessage, getContextRuntimeReport, getGeminiQuotaFuseStatus, setQuotaFuseNotifyCallback, setRateLimitNotifyCallback } from '../claude';
+import { agentRespond, clearGeminiQuotaFuse, ConversationMessage, extractAgentResponseEnvelope, getContextRuntimeReport, getGeminiQuotaFuseStatus, setQuotaFuseNotifyCallback, setRateLimitNotifyCallback } from '../claude';
 import { appendToMemory, getMemoryContext, loadMemory, saveMemory, clearMemory, compressMemory } from '../memory';
 import { documentToChannel } from './documentation';
 import { sendAgentMessage, clearHistory } from './textChannel';
@@ -1455,29 +1455,43 @@ async function handleRileyMessage(
 
     const response = await agentRespond(riley, [...rileyMemory, ...groupHistory], contextMessageWithLang, async (_toolName, summary) => {
       sendToolNotification(rileyWorkChannel, riley, summary).catch(() => {});
-    }, { signal });
+    }, { signal, outputMode: 'machine_json' });
+
+    const responseEnvelope = extractAgentResponseEnvelope(response);
+    const machineDelegateAgents = (responseEnvelope?.machine?.delegateAgents || [])
+      .map((id) => resolveAgentId(id))
+      .filter((id): id is AgentId => Boolean(id));
+    const machineActionTags = (responseEnvelope?.machine?.actionTags || [])
+      .map((tag) => String(tag || '').trim())
+      .filter((tag) => /^\[ACTION:[^\]]+\]$/i.test(tag));
+    const machineRoutingSuffix = machineDelegateAgents.length > 0
+      ? `\n\n${machineDelegateAgents.map((id) => getAgentMention(id)).join(' ')} please take the lead on this task and involve other specialists only if needed.`
+      : '';
+    const orchestrationResponse = `${responseEnvelope?.human || response}${machineRoutingSuffix}`.trim();
 
     if (signal?.aborted) return;
     await clearThinkingMessage();
 
     let displayResponse = appendDefaultNextSteps(
-      response.replace(/\[\s*action:[^\]]+\]/gi, '').trim()
+      (responseEnvelope?.human || response).replace(/\[\s*action:[^\]]+\]/gi, '').trim()
     );
     markGoalProgress('🧭 Riley coordinating...');
 
     appendToMemory('executive-assistant', [
       { role: 'user', content: contextMessage },
-      { role: 'assistant', content: `[Riley]: ${response}` },
+      { role: 'assistant', content: `[Riley]: ${orchestrationResponse}` },
     ]);
 
     groupHistory.push({ role: 'user', content: contextMessage });
-    groupHistory.push({ role: 'assistant', content: `[Riley]: ${response}` });
+    groupHistory.push({ role: 'assistant', content: `[Riley]: ${orchestrationResponse}` });
     persistGroupHistory();
 
     if (signal?.aborted) return;
 
     const implicitTags = inferImplicitActionTags(displayResponse);
-    const actionPayload = implicitTags ? `${response}\n${implicitTags}` : response;
+    const machineTagsBlock = machineActionTags.join('\n');
+    const actionPayloadBase = orchestrationResponse;
+    const actionPayload = [actionPayloadBase, machineTagsBlock, implicitTags].filter(Boolean).join('\n');
     if (implicitTags) {
       await sendAgentMessage(rileyWorkChannel, riley, 'Autopilot: executing the requested operational actions now.');
       await sendAutopilotAudit(
@@ -1520,7 +1534,7 @@ async function handleRileyMessage(
       }
     }
 
-    const chainResponse = ensureAceFirstDelegation(response, userMessage);
+    const chainResponse = ensureAceFirstDelegation(orchestrationResponse, userMessage);
     await handleAgentChain(chainResponse, groupchat, workspaceChannel, signal);
 
     markGoalProgress('✅ Riley cycle completed');

@@ -1,6 +1,6 @@
 import { Message, TextChannel } from 'discord.js';
 import { getAgent, AgentId, AgentConfig } from '../agents';
-import { agentRespond, ConversationMessage } from '../claude';
+import { agentRespond, ConversationMessage, extractAgentResponseEnvelope } from '../claude';
 import { appendToMemory, getMemoryContext, loadMemory, saveMemory, compressMemory } from '../memory';
 import { documentToChannel } from './documentation';
 import { sendAgentMessage } from './textChannel';
@@ -76,9 +76,11 @@ The user has made their choice. Acknowledge it briefly, then continue executing 
 
     try {
       const rileyMemory = getMemoryContext('executive-assistant');
-      const rileyResponse = await agentRespond(riley, [...rileyMemory, ...goalsHistory], decisionContext, async (_toolName, summary) => {
+      const rileyResponseRaw = await agentRespond(riley, [...rileyMemory, ...goalsHistory], decisionContext, async (_toolName, summary) => {
         sendGoalsToolNotification(goalsChannel, riley, summary).catch(() => {});
-      });
+      }, { outputMode: 'machine_json' });
+      const rileyEnvelope = extractAgentResponseEnvelope(rileyResponseRaw);
+      const rileyResponse = rileyEnvelope?.human || rileyResponseRaw;
 
       await sendAgentMessage(goalsChannel, riley, rileyResponse);
       goalsHistory.push({ role: 'user', content: `[${senderName} decision]: ${content}` });
@@ -126,9 +128,11 @@ Remember: You plan and coordinate. Start with Ace first for execution. Ace can i
 
   try {
     const rileyMemory = getMemoryContext('executive-assistant');
-    const rileyResponse = await agentRespond(riley, [...rileyMemory, ...goalsHistory], goalContext, async (_toolName, summary) => {
+    const rileyResponseRaw = await agentRespond(riley, [...rileyMemory, ...goalsHistory], goalContext, async (_toolName, summary) => {
       sendGoalsToolNotification(goalsChannel, riley, summary).catch(() => {});
-    });
+    }, { outputMode: 'machine_json' });
+    const rileyEnvelope = extractAgentResponseEnvelope(rileyResponseRaw);
+    const rileyResponse = rileyEnvelope?.human || rileyResponseRaw;
 
     await sendAgentMessage(goalsChannel, riley, rileyResponse);
 
