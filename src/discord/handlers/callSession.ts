@@ -457,6 +457,7 @@ export async function startCall(
       const testerJoinStartMs = Date.now();
       await joinTesterVoiceChannel(voiceChannel);
       await postVoiceStageLog('tester_join_vc', `channel=${voiceChannel.name} join_ms=${Date.now() - testerJoinStartMs}`);
+      await sendAsAgent(groupchat, `🧪 ASAPTester joined **${voiceChannel.name}** as a real voice participant.`);
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Unknown error';
       await postVoiceStageLog('tester_join_vc_failed', `channel=${voiceChannel.name} error=${msg}`, 'warn');
