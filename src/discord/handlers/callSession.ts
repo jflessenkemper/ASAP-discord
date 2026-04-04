@@ -324,6 +324,7 @@ export interface CallSession {
   pendingBargeIn: boolean;
   turnStartedAt: number;
   rileyVoiceName: string;
+  previousBotNickname: string | null;
 }
 
 let activeSession: CallSession | null = null;
@@ -375,6 +376,30 @@ async function sendAsAgent(channel: TextChannel, content: string, agentId: Agent
   }
   for (const chunk of chunks) {
     await channel.send(chunk).catch(() => {});
+  }
+}
+
+async function setBotNicknameForCall(voiceChannel: VoiceChannel): Promise<string | null> {
+  const member = voiceChannel.guild.members.me;
+  if (!member) return null;
+  const previous = member.nickname ?? null;
+  const desired = String(process.env.VOICE_BOT_NICKNAME_RILEY || 'Riley').trim() || 'Riley';
+  if ((member.displayName || '').trim() === desired) {
+    return previous;
+  }
+  try {
+    await member.setNickname(desired, 'ASAP voice call active');
+  } catch {
+  }
+  return previous;
+}
+
+async function restoreBotNicknameAfterCall(voiceChannel: VoiceChannel, previousNickname: string | null): Promise<void> {
+  const member = voiceChannel.guild.members.me;
+  if (!member) return;
+  try {
+    await member.setNickname(previousNickname, 'ASAP voice call ended');
+  } catch {
   }
 }
 
@@ -442,7 +467,10 @@ export async function startCall(
     pendingBargeIn: false,
     turnStartedAt: 0,
     rileyVoiceName: selectedRileyVoice,
+    previousBotNickname: null,
   };
+
+  activeSession.previousBotNickname = await setBotNicknameForCall(voiceChannel);
 
   if (shouldJoinTesterVoice) {
     try {
@@ -604,6 +632,8 @@ export async function endCall(): Promise<void> {
   for (const unsub of session.unsubscribers) {
     unsub();
   }
+
+  await restoreBotNicknameAfterCall(session.voiceChannel, session.previousBotNickname);
 
   if (!VOICE_DISABLE_CALL_LOG) {
     session.transcript.push(`[${new Date().toLocaleTimeString()}] Call ended`);

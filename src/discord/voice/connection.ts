@@ -35,6 +35,7 @@ function isTranscribableMember(member: GuildMember): boolean {
 let currentConnection: VoiceConnection | null = null;
 let audioPlayer: AudioPlayer | null = null;
 let isCleaningUp = false;
+const VOICE_REALTIME_MODE = String(process.env.VOICE_REALTIME_MODE || 'true').toLowerCase() !== 'false';
 
 /**
  * Join a voice channel and return the connection.
@@ -206,6 +207,9 @@ export interface VoiceTranscription {
 }
 
 function getSttProviderPreference(): 'deepgram' | 'elevenlabs' | 'gemini' {
+  if (VOICE_REALTIME_MODE && isDeepgramAvailable()) {
+    return 'deepgram';
+  }
   const configured = String(process.env.VOICE_STT_PROVIDER || '').trim().toLowerCase();
   if (configured === 'elevenlabs') return 'elevenlabs';
   if (configured === 'gemini') return 'gemini';
