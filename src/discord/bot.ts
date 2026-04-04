@@ -12,7 +12,7 @@ import { setCommandAuditCallback, setPRReviewCallback, setDiscordGuild, setToolA
 import { autoReviewPR } from './handlers/review';
 import { handleGroupchatMessage } from './handlers/groupchat';
 import { setDecisionsChannel, setThreadStatusChannel, handleDecisionReply } from './handlers/groupchat';
-import { endCall, isCallActive } from './handlers/callSession';
+import { endCall, isCallActive, injectVoiceTranscriptForTesting } from './handlers/callSession';
 import { setVoiceErrorChannel } from './handlers/callSession';
 import { setBotChannels } from './handlers/documentation';
 import { setAgentErrorChannel, postAgentErrorLog } from './services/agentErrors';
@@ -45,6 +45,14 @@ function isTesterBotId(userId: string): boolean {
     .filter(Boolean);
   const allowed = new Set([DEFAULT_TESTER_BOT_ID, ...configured]);
   return allowed.has(userId);
+}
+
+function getTesterSpeechBridgeText(content: string): string | null {
+  const normalized = String(content || '').trim();
+  if (!normalized) return null;
+  const match = normalized.match(/^(?:riley\s+)?(?:tester\s+)?(?:say|voice|speak)\s*(?::|-)\s*(.{1,260})$/i);
+  if (!match) return null;
+  return match[1].trim() || null;
 }
 
 /**
@@ -234,6 +242,23 @@ export async function startBot(): Promise<void> {
       }
 
       if (channelId === botChannels.groupchat.id) {
+        if (isTesterBotId(message.author.id) && isCallActive()) {
+          const testerSpeech = getTesterSpeechBridgeText(message.content);
+          if (testerSpeech) {
+            const injected = await injectVoiceTranscriptForTesting({
+              userId: message.author.id,
+              username: message.member?.displayName || message.author.username || 'ASAPTester',
+              text: testerSpeech,
+            });
+            if (injected.ok) {
+              await botChannels.groupchat.send(`🧪 Tester speech injected into voice turn: "${testerSpeech.slice(0, 120)}"`).catch(() => {});
+            } else {
+              await botChannels.groupchat.send(`⚠️ Tester speech injection failed: ${injected.reason || 'unknown error'}`).catch(() => {});
+            }
+            return;
+          }
+        }
+
         await handleGroupchatMessage(message, botChannels.groupchat);
         return;
       }
