@@ -121,6 +121,7 @@ interface PhoneSession {
   processing: boolean;
   active: boolean;
   conferenceName: string | null;
+  ttsVoiceName: string;
 }
 
 const activeSessions = new Map<string, PhoneSession>();
@@ -212,6 +213,7 @@ export function attachTelephonyWebSocket(server: HttpServer): void {
                 processing: false,
                 active: true,
                 conferenceName: confName,
+                ttsVoiceName: process.env.TELEPHONY_RILEY_VOICE_NAME || 'Achernar',
               };
               activeSessions.set(callSid, newSession);
               await startSessionSTT(newSession);
@@ -385,7 +387,7 @@ async function speakToPhone(session: PhoneSession, text: string): Promise<void> 
   if (!session.ws || session.ws.readyState !== WebSocket.OPEN || !session.streamSid) return;
 
   try {
-    const mp3Buffer = await elevenLabsTTS(text.slice(0, 500), 'Achernar');
+    const mp3Buffer = await elevenLabsTTS(text.slice(0, 500), session.ttsVoiceName || 'Achernar');
     if (mp3Buffer.length === 0) return;
 
     const mulawAudio = await mp3ToMulaw(mp3Buffer);
@@ -456,6 +458,7 @@ export async function makeOutboundCall(toNumber: string, greeting?: string): Pro
     processing: false,
     active: true,
     conferenceName: null,
+    ttsVoiceName: process.env.TELEPHONY_RILEY_VOICE_NAME || 'Achernar',
   };
   activeSessions.set(call.sid, session);
 
@@ -474,6 +477,20 @@ export async function makeOutboundCall(toNumber: string, greeting?: string): Pro
   }
 
   return call.sid;
+}
+
+/**
+ * Make an outbound test call using the ASAPTester voice profile.
+ * This is useful for scripted voice smoke tests that should sound distinct
+ * from Riley's normal voice.
+ */
+export async function makeAsapTesterCall(toNumber: string, greeting?: string): Promise<string> {
+  const callSid = await makeOutboundCall(toNumber, greeting || "Hey, this is ASAPTester running a voice check before handing over to Riley.");
+  const session = activeSessions.get(callSid);
+  if (session) {
+    session.ttsVoiceName = process.env.ASAPTESTER_VOICE_NAME || 'Aoede';
+  }
+  return callSid;
 }
 
 /**
@@ -686,6 +703,7 @@ export async function startConferenceCall(
     processing: false,
     active: true,
     conferenceName: confName,
+    ttsVoiceName: process.env.TELEPHONY_RILEY_VOICE_NAME || 'Achernar',
   };
   activeSessions.set(rileyCall.sid, session);
 

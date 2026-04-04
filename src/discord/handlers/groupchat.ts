@@ -17,7 +17,7 @@ import { appendToMemory, getMemoryContext, loadMemory, saveMemory, clearMemory, 
 import { documentToChannel } from './documentation';
 import { sendAgentMessage, clearHistory } from './textChannel';
 import { startCall, endCall, isCallActive } from './callSession';
-import { makeOutboundCall, startConferenceCall, isTelephonyAvailable } from '../services/telephony';
+import { makeOutboundCall, makeAsapTesterCall, startConferenceCall, isTelephonyAvailable } from '../services/telephony';
 import { getBotChannels } from '../bot';
 import { approveAdditionalBudget, getContextEfficiencyReport, getUsageReport, refreshLiveBillingData, refreshUsageDashboard } from '../usage';
 import { getWebhook, sendWebhookMessage, WebhookCapableChannel } from '../services/webhooks';
@@ -1716,6 +1716,32 @@ async function executeActions(
             await sendAsRiley(`📞 Calling ${phoneNumber}...`);
           } catch (err) {
             await sendAsRiley(`❌ Call failed: ${err instanceof Error ? err.message : 'Unknown'}`);
+          }
+          break;
+        }
+        case 'TEST_CALL': {
+          if (!isTelephonyAvailable()) {
+            await sendAsRiley('📞 Phone system not configured (missing Twilio credentials).');
+            break;
+          }
+          if (!param) {
+            await sendAsRiley('📞 No phone number specified. Use [ACTION:TEST_CALL:number].');
+            break;
+          }
+          const verifiedNumbers = (process.env.TWILIO_VERIFIED_NUMBERS || '0436012231')
+            .split(',')
+            .map((n) => n.trim())
+            .filter(Boolean);
+          const phoneNumber = param.trim();
+          if (!verifiedNumbers.includes(phoneNumber)) {
+            await sendAsRiley(`📞 ${phoneNumber} is not in the verified list for this Twilio account. Verified numbers: ${verifiedNumbers.join(', ')}`);
+            break;
+          }
+          try {
+            await makeAsapTesterCall(phoneNumber);
+            await sendAsRiley(`🧪📞 ASAPTester voice check calling ${phoneNumber}...`);
+          } catch (err) {
+            await sendAsRiley(`❌ ASAPTester test call failed: ${err instanceof Error ? err.message : 'Unknown'}`);
           }
           break;
         }
