@@ -863,3 +863,47 @@ export function isCallActive(): boolean {
 export function getActiveSession(): CallSession | null {
   return activeSession;
 }
+
+interface VoiceTestInjection {
+  userId: string;
+  username: string;
+  text: string;
+  language?: string;
+}
+
+/**
+ * Deterministically inject a transcript turn into the live voice pipeline.
+ * Used for bot-to-bot smoke tests when Discord bot audio cannot be transcribed.
+ */
+export async function injectVoiceTranscriptForTesting(input: VoiceTestInjection): Promise<{ ok: boolean; reason?: string }> {
+  if (!activeSession?.active) {
+    return { ok: false, reason: 'No active voice call.' };
+  }
+
+  const text = String(input.text || '').trim();
+  if (!text) {
+    return { ok: false, reason: 'Transcript text is empty.' };
+  }
+
+  const username = String(input.username || '').trim() || 'ASAPTester';
+  const userId = String(input.userId || '').trim() || 'asaptester';
+
+  await postVoiceStageLog('stt_injected', `user=${username} chars=${text.length}`);
+
+  try {
+    await handleVoiceInput({
+      userId,
+      username,
+      text,
+      timestamp: new Date(),
+      language: input.language,
+      sttLatencyMs: 0,
+      sttProvider: 'deepgram',
+    });
+    return { ok: true };
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : 'Unknown injection failure';
+    await postVoiceStageLog('stt_injected_failed', `user=${username} error=${reason}`, 'warn');
+    return { ok: false, reason };
+  }
+}

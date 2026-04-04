@@ -16,7 +16,7 @@ import { agentRespond, clearGeminiQuotaFuse, ConversationMessage, getContextRunt
 import { appendToMemory, getMemoryContext, loadMemory, saveMemory, clearMemory, compressMemory } from '../memory';
 import { documentToChannel } from './documentation';
 import { sendAgentMessage, clearHistory } from './textChannel';
-import { startCall, endCall, isCallActive } from './callSession';
+import { startCall, endCall, isCallActive, injectVoiceTranscriptForTesting } from './callSession';
 import { makeOutboundCall, makeAsapTesterCall, startConferenceCall, isTelephonyAvailable } from '../services/telephony';
 import { getBotChannels } from '../bot';
 import { approveAdditionalBudget, getContextEfficiencyReport, getUsageReport, refreshLiveBillingData, refreshUsageDashboard } from '../usage';
@@ -959,6 +959,37 @@ function isLikelyVoiceCommandIntent(text: string): boolean {
 }
 
 async function handleDirectVoiceActionIfRequested(message: Message, content: string, groupchat: TextChannel): Promise<boolean> {
+  const stripped = stripMentionsForIntent(content);
+  const testerPromptMatch = stripped.match(/^(?:hey|hi|yo)?\s*(?:riley|asap)?\s*[,!:;-]?\s*(?:please\s+)?(?:inject|simulate|test)\s+(?:voice|transcript)\s*(?::|-)\s*(.{1,260})$/i);
+  if (testerPromptMatch) {
+    const testerBotId = process.env.DISCORD_TESTER_BOT_ID || '1487426371209789450';
+    const injectionEnabled = String(process.env.VOICE_TEST_INJECTION_ENABLED || 'false').toLowerCase() === 'true';
+    const isAuthorized = message.author.id === testerBotId || injectionEnabled;
+    if (!isAuthorized) {
+      await groupchat.send('🛑 Voice transcript injection is restricted to ASAPTester unless VOICE_TEST_INJECTION_ENABLED=true.').catch(() => {});
+      return true;
+    }
+    if (!isCallActive()) {
+      await groupchat.send('📞 No active voice call. Start one first, then inject transcript text.').catch(() => {});
+      return true;
+    }
+
+    const injectedText = testerPromptMatch[1].trim();
+    const result = await injectVoiceTranscriptForTesting({
+      userId: message.author.id,
+      username: message.member?.displayName || message.author.username || 'ASAPTester',
+      text: injectedText,
+    });
+
+    if (!result.ok) {
+      await groupchat.send(`⚠️ Voice test injection failed: ${result.reason || 'unknown error'}`).catch(() => {});
+      return true;
+    }
+
+    await groupchat.send(`🧪 Injected test transcript: "${injectedText.slice(0, 120)}"`).catch(() => {});
+    return true;
+  }
+
   const action = detectDirectVoiceAction(content);
   if (!action) return false;
 
