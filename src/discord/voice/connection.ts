@@ -13,7 +13,7 @@ import {
 import { VoiceBasedChannel, GuildMember } from 'discord.js';
 import { Readable, Transform } from 'stream';
 import prism from 'prism-media';
-import { transcribeVoice } from './tts';
+import { transcribeVoiceDetailed } from './tts';
 import { isDeepgramAvailable, startLiveTranscription, DeepgramLiveSession } from './deepgram';
 
 const DEFAULT_TESTER_BOT_ID = '1487426371209789450';
@@ -202,7 +202,14 @@ export interface VoiceTranscription {
   /** Approximate end-to-end STT latency for this utterance. */
   sttLatencyMs?: number;
   /** STT provider used for this transcript. */
-  sttProvider?: 'deepgram' | 'gemini';
+  sttProvider?: 'deepgram' | 'gemini' | 'elevenlabs';
+}
+
+function getSttProviderPreference(): 'deepgram' | 'elevenlabs' | 'gemini' {
+  const configured = String(process.env.VOICE_STT_PROVIDER || '').trim().toLowerCase();
+  if (configured === 'elevenlabs') return 'elevenlabs';
+  if (configured === 'gemini') return 'gemini';
+  return 'deepgram';
 }
 
 /** Max consecutive resubscribes before giving up (prevents infinite loop on broken streams) */
@@ -317,7 +324,8 @@ export function listenToUser(
         if (audioBuffer.length >= VOICE_MIN_AUDIO_BYTES) {
           updateAdaptiveSilenceDuration(member.id, audioBuffer.length);
           try {
-            const text = await transcribeVoice(audioBuffer);
+            const result = await transcribeVoiceDetailed(audioBuffer);
+            const text = result.text;
             if (text && !destroyed) {
               onTranscription({
                 userId: member.id,
@@ -325,7 +333,7 @@ export function listenToUser(
                 text,
                 timestamp: new Date(),
                 sttLatencyMs: utteranceStartAt ? Date.now() - utteranceStartAt : undefined,
-                sttProvider: 'gemini',
+                sttProvider: result.provider,
               });
             }
           } catch (err) {
@@ -616,9 +624,16 @@ export function listenToAllMembersSmart(
   onTranscription: (transcription: VoiceTranscription) => void,
   onSpeechStart?: (member: GuildMember) => void
 ): () => void {
-  if (isDeepgramAvailable()) {
+  const preference = getSttProviderPreference();
+
+  if (preference === 'deepgram' && isDeepgramAvailable()) {
     console.log('Using Deepgram real-time STT for voice transcription');
     return listenToAllMembersDeepgram(connection, voiceChannel, onTranscription, onSpeechStart);
+  }
+
+  if (preference === 'elevenlabs') {
+    console.log('Using ElevenLabs batch STT for voice transcription');
+    return listenToAllMembers(connection, voiceChannel, onTranscription, onSpeechStart);
   }
 
   console.log('Using Gemini batch STT for voice transcription (Deepgram not configured)');

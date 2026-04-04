@@ -139,8 +139,7 @@ export function recordTtsLatency(service: 'elevenlabs' | 'gemini', latencyMs: nu
   observeHistogram(ttsLatencyMs, latencyMs, { service });
 }
 
-/** Call after each voice transcription with the elapsed ms. */
-export function recordTranscriptionLatency(service: 'deepgram' | 'gemini', latencyMs: number): void {
+export function recordTranscriptionLatency(service: 'deepgram' | 'gemini' | 'elevenlabs', latencyMs: number): void {
   observeHistogram(transcriptionMs, latencyMs, { service });
 }
 
