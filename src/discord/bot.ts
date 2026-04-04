@@ -12,7 +12,7 @@ import { setCommandAuditCallback, setPRReviewCallback, setDiscordGuild, setToolA
 import { autoReviewPR } from './handlers/review';
 import { handleGroupchatMessage } from './handlers/groupchat';
 import { setDecisionsChannel, setThreadStatusChannel, handleDecisionReply } from './handlers/groupchat';
-import { endCall, isCallActive, injectVoiceTranscriptForTesting } from './handlers/callSession';
+import { endCall, isCallActive, processTesterVoiceTurnForCall } from './handlers/callSession';
 import { setVoiceErrorChannel } from './handlers/callSession';
 import { setBotChannels } from './handlers/documentation';
 import { setAgentErrorChannel, postAgentErrorLog } from './services/agentErrors';
@@ -292,15 +292,16 @@ export async function startBot(): Promise<void> {
         if (isTesterBotId(message.author.id)) {
           const testerSpeech = getTesterSpeechBridgeText(message.content);
           if (testerSpeech) {
-            const injected = await injectVoiceTranscriptForTesting({
+            const injected = await processTesterVoiceTurnForCall({
               userId: message.author.id,
               username: message.member?.displayName || message.author.username || 'ASAPTester',
               text: testerSpeech,
             });
             if (injected.ok) {
-              await botChannels.groupchat.send(`🧪 Tester speech injected into voice turn [${RUNTIME_INSTANCE_TAG}]: "${testerSpeech.slice(0, 120)}"`).catch(() => {});
+              const modeLabel = injected.mode === 'voice' ? 'ASAPTester spoke in voice' : 'Tester speech injected into voice turn';
+              await botChannels.groupchat.send(`🧪 ${modeLabel} [${RUNTIME_INSTANCE_TAG}]: "${testerSpeech.slice(0, 120)}"`).catch(() => {});
             } else {
-              await botChannels.groupchat.send(`⚠️ Tester speech injection failed [${RUNTIME_INSTANCE_TAG}]: ${injected.reason || 'unknown error'}`).catch(() => {});
+              await botChannels.groupchat.send(`⚠️ ASAPTester voice turn failed [${RUNTIME_INSTANCE_TAG}]: ${injected.reason || 'unknown error'}`).catch(() => {});
             }
             return;
           }
