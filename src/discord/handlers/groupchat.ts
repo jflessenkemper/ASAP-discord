@@ -938,18 +938,12 @@ function detectDirectVoiceAction(text: string): 'join' | 'leave' | null {
   const words = normalized.split(/\s+/).filter(Boolean);
   if (words.length > 20 || normalized.length > 180) return null;
 
-  const lead = String.raw`(?:hey|hi|yo)?\s*(?:riley|asap)?\s*[,!:;-]?\s*(?:please\s+)?(?:can you\s+|could you\s+|will you\s+)?`;
-  const joinPattern = new RegExp(
-    String.raw`^${lead}(?:join|start|open|connect|enter|hop\s+in(?:to)?|jump\s+in(?:to)?)\b[\w\s-]{0,40}\b(?:voice|vc|call|voice\s+chat|voice\s+channel)\b`,
-    'i',
-  );
-  const leavePattern = new RegExp(
-    String.raw`^${lead}(?:leave|end|stop|disconnect|hang\s*up|drop)\b[\w\s-]{0,40}\b(?:voice|vc|call|voice\s+chat|voice\s+channel)?\b`,
-    'i',
-  );
+  const joinVerb = /\b(?:join|start|open|connect|enter|hop\s+in(?:to)?|jump\s+in(?:to)?)\b/i.test(normalized);
+  const leaveVerb = /\b(?:leave|end|stop|disconnect|hang\s*up|drop)\b/i.test(normalized);
+  const voiceTarget = /\b(?:voice|vc|call|voice\s+chat|voice\s+channel)\b/i.test(normalized);
 
-  if (joinPattern.test(normalized)) return 'join';
-  if (leavePattern.test(normalized) || /^(?:leave|end call|hang up|disconnect)$/i.test(normalized)) return 'leave';
+  if (joinVerb && voiceTarget) return 'join';
+  if (leaveVerb && (voiceTarget || /^(?:leave|end call|hang up|disconnect)$/i.test(normalized))) return 'leave';
   return null;
 }
 
