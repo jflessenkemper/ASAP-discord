@@ -38,6 +38,7 @@ import pool from '../db/pool';
 let client: Client | null = null;
 let botChannels: BotChannels | null = null;
 const DEFAULT_TESTER_BOT_ID = '1487426371209789450';
+const RUNTIME_INSTANCE_TAG = (process.env.RUNTIME_INSTANCE_TAG || process.env.HOSTNAME || `pid-${process.pid}`).slice(0, 80);
 let dedupeTableReady = false;
 let lastDedupePruneAt = 0;
 
@@ -297,9 +298,9 @@ export async function startBot(): Promise<void> {
               text: testerSpeech,
             });
             if (injected.ok) {
-              await botChannels.groupchat.send(`🧪 Tester speech injected into voice turn: "${testerSpeech.slice(0, 120)}"`).catch(() => {});
+              await botChannels.groupchat.send(`🧪 Tester speech injected into voice turn [${RUNTIME_INSTANCE_TAG}]: "${testerSpeech.slice(0, 120)}"`).catch(() => {});
             } else {
-              await botChannels.groupchat.send(`⚠️ Tester speech injection failed: ${injected.reason || 'unknown error'}`).catch(() => {});
+              await botChannels.groupchat.send(`⚠️ Tester speech injection failed [${RUNTIME_INSTANCE_TAG}]: ${injected.reason || 'unknown error'}`).catch(() => {});
             }
             return;
           }

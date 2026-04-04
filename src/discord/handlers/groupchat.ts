@@ -953,6 +953,14 @@ function detectDirectVoiceAction(text: string): 'join' | 'leave' | null {
   return null;
 }
 
+function getSpeechBridgeText(text: string): string | null {
+  const normalized = stripMentionsForIntent(text);
+  if (!normalized) return null;
+  const match = normalized.match(/^(?:riley\s+)?(?:tester\s+)?(?:say|voice|speak)\s*(?::|-)\s*(.{1,260})$/i);
+  if (!match) return null;
+  return String(match[1] || '').trim() || null;
+}
+
 function isLikelyVoiceCommandIntent(text: string): boolean {
   const normalized = stripMentionsForIntent(text).toLowerCase();
   if (!normalized) return false;
@@ -972,6 +980,30 @@ function isLikelyVoiceCommandIntent(text: string): boolean {
 
 async function handleDirectVoiceActionIfRequested(message: Message, content: string, groupchat: TextChannel): Promise<boolean> {
   const stripped = stripMentionsForIntent(content);
+  const speechBridgeText = getSpeechBridgeText(stripped);
+  if (speechBridgeText) {
+    const injectionEnabled = String(process.env.VOICE_TEST_INJECTION_ENABLED || 'false').toLowerCase() === 'true';
+    const isAuthorized = isTesterBotId(message.author.id) || injectionEnabled;
+    if (!isAuthorized) {
+      await groupchat.send('🛑 Voice speech bridge is restricted to ASAPTester unless VOICE_TEST_INJECTION_ENABLED=true.').catch(() => {});
+      return true;
+    }
+
+    const result = await injectVoiceTranscriptForTesting({
+      userId: message.author.id,
+      username: message.member?.displayName || message.author.username || 'ASAPTester',
+      text: speechBridgeText,
+    });
+
+    if (!result.ok) {
+      await groupchat.send(`⚠️ Tester speech injection failed: ${result.reason || 'unknown error'}`).catch(() => {});
+      return true;
+    }
+
+    await groupchat.send(`🧪 Tester speech injected into voice turn: "${speechBridgeText.slice(0, 120)}"`).catch(() => {});
+    return true;
+  }
+
   const testerPromptMatch = stripped.match(/^(?:hey|hi|yo)?\s*(?:riley|asap)?\s*[,!:;-]?\s*(?:please\s+)?(?:inject|simulate|test)\s+(?:voice|transcript)\s*(?::|-)\s*(.{1,260})$/i);
   if (testerPromptMatch) {
     const injectionEnabled = String(process.env.VOICE_TEST_INJECTION_ENABLED || 'false').toLowerCase() === 'true';

@@ -8,6 +8,7 @@ interface AgentErrorExtra {
 }
 
 let agentErrorChannel: TextChannel | null = null;
+const RUNTIME_INSTANCE_TAG = (process.env.RUNTIME_INSTANCE_TAG || process.env.HOSTNAME || `pid-${process.pid}`).slice(0, 80);
 
 export function setAgentErrorChannel(channel: TextChannel | null): void {
   agentErrorChannel = channel;
@@ -22,7 +23,8 @@ export async function postAgentErrorLog(
 
   const level = extra?.level || 'error';
   const severity = level === 'error' ? 'error' : level === 'warn' ? 'warn' : 'info';
-  const detail = extra?.detail ? `detail=${sanitize(extra.detail, 420)}` : 'detail=none';
+  const detailBody = extra?.detail ? sanitize(extra.detail, 420) : 'none';
+  const detail = `instance=${sanitize(RUNTIME_INSTANCE_TAG, 80)} detail=${detailBody}`;
   const action = severity === 'error'
     ? 'inspect stack trace and recover service'
     : severity === 'warn'

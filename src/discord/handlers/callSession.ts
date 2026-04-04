@@ -40,6 +40,7 @@ const VOICE_FILLER_ONLY_RE = /^(?:uh+|um+|hmm+|mm+|ah+|er+|uh huh|huh|hmm okay|o
 const RILEY_WARM_PHRASES = ['One moment.', 'Let me check.', 'I am on it.', 'Here is what I found.', 'Done.'];
 const VOICE_TURN_WATCHDOG_MS = parseInt(process.env.VOICE_TURN_WATCHDOG_MS || '20000', 10);
 const DEFAULT_TESTER_BOT_ID = '1487426371209789450';
+const RUNTIME_INSTANCE_TAG = (process.env.RUNTIME_INSTANCE_TAG || process.env.HOSTNAME || `pid-${process.pid}`).slice(0, 80);
 
 function isTesterBotId(userId: string): boolean {
   const configured = String(process.env.DISCORD_TESTER_BOT_ID || '')
@@ -67,7 +68,7 @@ async function postVoiceStageLog(stage: string, detail: string, level: 'info' | 
     actor: 'system',
     scope: `voice:${stage}`,
     metric: 'voice-stage',
-    delta: detail,
+    delta: `instance=${RUNTIME_INSTANCE_TAG} ${detail}`,
     action,
     severity: level,
   });
