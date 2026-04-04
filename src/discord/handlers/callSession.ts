@@ -10,6 +10,7 @@ import { appendToMemory, getMemoryContext } from '../memory';
 import { documentToChannel } from './documentation';
 import { isGeminiOverLimit } from '../usage';
 import { isDeepgramAvailable } from '../voice/deepgram';
+import { isElevenLabsRealtimeAvailable } from '../voice/elevenlabsRealtime';
 import { postDiagnostic, mirrorAgentResponse, mirrorVoiceTranscript } from '../services/diagnosticsWebhook';
 import { getWebhook } from '../services/webhooks';
 import { recordVoiceCallStart, recordVoiceCallEnd } from '../metrics';
@@ -92,12 +93,13 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): 
 }
 
 function isVoiceInputAvailable(): { ok: boolean; reason?: string } {
+  if (isElevenLabsRealtimeAvailable()) return { ok: true };
   if (isDeepgramAvailable()) return { ok: true };
   if (!process.env.GEMINI_API_KEY) {
-    return { ok: false, reason: 'Deepgram is not configured and Gemini API key is missing.' };
+    return { ok: false, reason: 'ElevenLabs realtime STT is not configured and Gemini API key is missing.' };
   }
   if (isGeminiOverLimit()) {
-    return { ok: false, reason: 'Deepgram is not configured and Gemini transcription quota is exhausted.' };
+    return { ok: false, reason: 'ElevenLabs realtime STT is not configured and Gemini transcription quota is exhausted.' };
   }
   return { ok: true };
 }
@@ -423,7 +425,7 @@ export async function startCall(
     await sendAsAgent(
       groupchat,
       `⚠️ I can't join voice yet because listening is unavailable: ${inputReady.reason} ` +
-      `Configure Deepgram (preferred) or restore Gemini transcription before joining.`
+      `Configure ElevenLabs realtime STT (preferred) or restore Gemini transcription before joining.`
     );
     return;
   }
@@ -565,9 +567,11 @@ export async function startCall(
     );
   }
 
-  const sttNote = isDeepgramAvailable()
-    ? ''
-    : '\n⚠️ Real-time STT is currently unavailable — using Gemini batch mode (~1-2s latency).';
+  const sttNote = isElevenLabsRealtimeAvailable()
+    ? '\n🎙️ ElevenLabs realtime STT is active.'
+    : isDeepgramAvailable()
+      ? '\n⚠️ ElevenLabs realtime STT unavailable — using Deepgram realtime fallback.'
+      : '\n⚠️ Realtime STT unavailable — using Gemini batch mode (~1-2s latency).';
   await sendAsAgent(
     groupchat,
     `✅ **Voice call started**\n` +
@@ -1006,7 +1010,7 @@ export async function injectVoiceTranscriptForTesting(input: VoiceTestInjection)
       timestamp: new Date(),
       language: input.language,
       sttLatencyMs: 0,
-      sttProvider: 'deepgram',
+      sttProvider: 'elevenlabs',
     });
     return { ok: true };
   } catch (err) {

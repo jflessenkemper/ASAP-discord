@@ -15,6 +15,7 @@ import { Readable, Transform } from 'stream';
 import prism from 'prism-media';
 import { transcribeVoiceDetailed } from './tts';
 import { isDeepgramAvailable, startLiveTranscription, DeepgramLiveSession } from './deepgram';
+import { startElevenLabsRealtimeTranscription, ElevenLabsRealtimeSession, isElevenLabsRealtimeAvailable } from './elevenlabsRealtime';
 
 const DEFAULT_TESTER_BOT_ID = '1487426371209789450';
 
@@ -207,13 +208,16 @@ export interface VoiceTranscription {
 }
 
 function getSttProviderPreference(): 'deepgram' | 'elevenlabs' | 'gemini' {
+  if (VOICE_REALTIME_MODE && isElevenLabsRealtimeAvailable()) {
+    return 'elevenlabs';
+  }
   if (VOICE_REALTIME_MODE && isDeepgramAvailable()) {
     return 'deepgram';
   }
   const configured = String(process.env.VOICE_STT_PROVIDER || '').trim().toLowerCase();
   if (configured === 'elevenlabs') return 'elevenlabs';
   if (configured === 'gemini') return 'gemini';
-  return 'deepgram';
+  return 'elevenlabs';
 }
 
 /** Max consecutive resubscribes before giving up (prevents infinite loop on broken streams) */
@@ -619,6 +623,205 @@ export function listenToUserDeepgram(
 }
 
 /**
+ * Real-time listener using ElevenLabs streaming STT.
+ */
+export function listenToUserElevenLabsRealtime(
+  connection: VoiceConnection,
+  member: GuildMember,
+  onTranscription: (transcription: VoiceTranscription) => void,
+  onSpeechStart?: (member: GuildMember) => void
+): () => void {
+  let destroyed = false;
+  let elSession: ElevenLabsRealtimeSession | null = null;
+  let fallbackUnsub: (() => void) | null = null;
+  let currentSubscription: Readable | null = null;
+  let currentDecoder: Transform | null = null;
+  let realtimeRetryAttempts = 0;
+  let retryTimer: ReturnType<typeof setTimeout> | null = null;
+  let utteranceStartAt: number | null = null;
+  let firstTranscriptPending = false;
+
+  const receiver = connection.receiver;
+
+  function cleanupReceiveChain(): void {
+    try {
+      currentSubscription?.destroy();
+    } catch {
+    }
+    try {
+      currentDecoder?.destroy();
+    } catch {
+    }
+    currentSubscription = null;
+    currentDecoder = null;
+  }
+
+  function fallbackToBatch(reason: string): void {
+    if (destroyed || fallbackUnsub) return;
+    console.warn(`ElevenLabs realtime unavailable for ${member.displayName} — ${reason}. Falling back to batch STT`);
+    cleanupReceiveChain();
+    elSession?.close();
+    elSession = null;
+    fallbackUnsub = listenToUser(connection, member, onTranscription);
+  }
+
+  function scheduleRetry(reason: string): void {
+    if (destroyed || fallbackUnsub) return;
+    const normalizedReason = reason.toLowerCase();
+    if (normalizedReason.includes('unauthorized') || normalizedReason.includes('quota')) {
+      fallbackToBatch(reason);
+      return;
+    }
+    if (realtimeRetryAttempts >= MAX_DEEPGRAM_SESSION_RETRIES) {
+      fallbackToBatch(reason);
+      return;
+    }
+
+    const delayMs = 1000 * Math.pow(2, realtimeRetryAttempts);
+    realtimeRetryAttempts += 1;
+    cleanupReceiveChain();
+    elSession?.close();
+    elSession = null;
+    console.warn(`Retrying ElevenLabs realtime for ${member.displayName} in ${delayMs}ms (${realtimeRetryAttempts}/${MAX_DEEPGRAM_SESSION_RETRIES}) — ${reason}`);
+    if (retryTimer) clearTimeout(retryTimer);
+    retryTimer = setTimeout(() => {
+      retryTimer = null;
+      if (!destroyed && !fallbackUnsub) {
+        startSession();
+      }
+    }, delayMs);
+  }
+
+  function startSession(): void {
+    startElevenLabsRealtimeTranscription(
+      (text, detectedLanguage) => {
+        if (!destroyed && text.trim()) {
+          const sttLatencyMs = firstTranscriptPending && utteranceStartAt
+            ? Date.now() - utteranceStartAt
+            : undefined;
+          firstTranscriptPending = false;
+          onTranscription({
+            userId: member.id,
+            username: member.displayName,
+            text: text.trim(),
+            timestamp: new Date(),
+            language: detectedLanguage,
+            sttLatencyMs,
+            sttProvider: 'elevenlabs',
+          });
+        }
+      },
+      (err) => {
+        console.error(`ElevenLabs realtime error for ${member.displayName}:`, err.message);
+        scheduleRetry(err.message);
+      }
+    ).then((session) => {
+      if (destroyed || fallbackUnsub) {
+        session.close();
+        return;
+      }
+      elSession = session;
+      realtimeRetryAttempts = 0;
+
+      function subscribe() {
+        if (destroyed) return;
+
+        cleanupReceiveChain();
+
+        const subscription = receiver.subscribe(member.id, {
+          end: { behavior: EndBehaviorType.AfterInactivity, duration: getAdaptiveSilenceDuration(member.id) },
+        });
+        currentSubscription = subscription;
+        utteranceStartAt = null;
+        firstTranscriptPending = true;
+
+        let decoder: Transform;
+        try {
+          decoder = createOpusDecoder();
+        } catch (err) {
+          console.error(`Opus decoder error for ${member.displayName}:`, err instanceof Error ? err.message : 'Unknown');
+          return;
+        }
+        currentDecoder = decoder;
+        subscription.pipe(decoder);
+
+        let speechStartNotified = false;
+
+        decoder.on('data', (chunk: Buffer) => {
+          if (utteranceStartAt === null) {
+            utteranceStartAt = Date.now();
+          }
+          if (!speechStartNotified) {
+            speechStartNotified = true;
+            onSpeechStart?.(member);
+          }
+          if (!destroyed && elSession) {
+            elSession.send(chunk);
+          }
+        });
+
+        decoder.on('end', () => {
+          if (utteranceStartAt !== null) {
+            const approxBytes = Math.max(VOICE_MIN_AUDIO_BYTES, Math.floor((Date.now() - utteranceStartAt) * 192));
+            updateAdaptiveSilenceDuration(member.id, approxBytes);
+          }
+          if (!destroyed) {
+            setTimeout(() => {
+              if (!destroyed) subscribe();
+            }, 120);
+          }
+        });
+
+        decoder.on('error', (err: Error) => {
+          console.error(`ElevenLabs realtime decoder error for ${member.displayName}:`, err.message);
+          if (!destroyed) {
+            setTimeout(() => {
+              if (!destroyed) subscribe();
+            }, 250);
+          }
+        });
+
+        subscription.on('end', () => { decoder.end(); });
+        subscription.on('error', (err: Error) => {
+          console.error(`ElevenLabs realtime voice subscription error for ${member.displayName}:`, err.message);
+          decoder.end();
+        });
+      }
+
+      subscribe();
+    }).catch((err) => {
+      console.error(`Failed to start ElevenLabs realtime for ${member.displayName}:`, err instanceof Error ? err.message : 'Unknown');
+      scheduleRetry(err instanceof Error ? err.message : 'startup failure');
+    });
+  }
+
+  const startTimeout = setTimeout(() => {
+    if (!elSession && !destroyed && !fallbackUnsub) {
+      fallbackToBatch('session start timed out');
+    }
+  }, 10_000);
+
+  startSession();
+
+  return () => {
+    destroyed = true;
+    if (retryTimer) clearTimeout(retryTimer);
+    clearTimeout(startTimeout);
+    cleanupReceiveChain();
+    try {
+      currentSubscription?.destroy();
+    } catch {
+    }
+    try {
+      currentDecoder?.destroy();
+    } catch {
+    }
+    elSession?.close();
+    fallbackUnsub?.();
+  };
+}
+
+/**
  * Listen to all members using the best available STT.
  * Prefers Deepgram (real-time) over Gemini (batch) for lower latency.
  */
@@ -629,6 +832,11 @@ export function listenToAllMembersSmart(
   onSpeechStart?: (member: GuildMember) => void
 ): () => void {
   const preference = getSttProviderPreference();
+
+  if (preference === 'elevenlabs' && VOICE_REALTIME_MODE && isElevenLabsRealtimeAvailable()) {
+    console.log('Using ElevenLabs real-time STT for voice transcription');
+    return listenToAllMembersElevenLabsRealtime(connection, voiceChannel, onTranscription, onSpeechStart);
+  }
 
   if (preference === 'deepgram' && isDeepgramAvailable()) {
     console.log('Using Deepgram real-time STT for voice transcription');
@@ -670,6 +878,40 @@ function listenToAllMembersDeepgram(
     if (!member || !isTranscribableMember(member)) return;
     listeningUserIds.add(userId);
     const unsub = listenToUserDeepgram(connection, member, onTranscription, onSpeechStart);
+    unsubscribers.push(unsub);
+  };
+  connection.receiver.speaking.on('start', onSpeaking);
+
+  return () => {
+    destroyed = true;
+    connection.receiver.speaking.off('start', onSpeaking);
+    for (const unsub of unsubscribers) unsub();
+  };
+}
+
+function listenToAllMembersElevenLabsRealtime(
+  connection: VoiceConnection,
+  voiceChannel: VoiceBasedChannel,
+  onTranscription: (transcription: VoiceTranscription) => void,
+  onSpeechStart?: (member: GuildMember) => void
+): () => void {
+  const unsubscribers: Array<() => void> = [];
+  const listeningUserIds = new Set<string>();
+  let destroyed = false;
+
+  for (const [, member] of voiceChannel.members) {
+    if (!isTranscribableMember(member)) continue;
+    listeningUserIds.add(member.id);
+    const unsub = listenToUserElevenLabsRealtime(connection, member, onTranscription, onSpeechStart);
+    unsubscribers.push(unsub);
+  }
+
+  const onSpeaking = (userId: string) => {
+    if (destroyed || listeningUserIds.has(userId)) return;
+    const member = voiceChannel.members.get(userId);
+    if (!member || !isTranscribableMember(member)) return;
+    listeningUserIds.add(userId);
+    const unsub = listenToUserElevenLabsRealtime(connection, member, onTranscription, onSpeechStart);
     unsubscribers.push(unsub);
   };
   connection.receiver.speaking.on('start', onSpeaking);
