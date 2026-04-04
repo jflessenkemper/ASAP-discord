@@ -82,6 +82,36 @@ if (IS_CLOUD_RUN) {
 }
 // Discord voice requires UDP. Cloud Run is HTTP-only, so force-disable bot there.
 const DISCORD_BOT_ENABLED = !IS_CLOUD_RUN && process.env.DISCORD_BOT_ENABLED !== 'false';
+const DISCORD_BOT_LOCK_KEY = parseInt(process.env.DISCORD_BOT_LOCK_KEY || '842021', 10);
+let botLockClient: { query: (sql: string, params?: unknown[]) => Promise<{ rows: Array<{ locked?: boolean }> }>; release: () => void } | null = null;
+
+async function acquireDiscordBotLock(): Promise<boolean> {
+  const client = await pool.connect();
+  try {
+    const res = await client.query('SELECT pg_try_advisory_lock($1) AS locked', [DISCORD_BOT_LOCK_KEY]);
+    const locked = !!res.rows?.[0]?.locked;
+    if (!locked) {
+      client.release();
+      return false;
+    }
+    botLockClient = client;
+    return true;
+  } catch (err) {
+    client.release();
+    throw err;
+  }
+}
+
+async function releaseDiscordBotLock(): Promise<void> {
+  if (!botLockClient) return;
+  try {
+    await botLockClient.query('SELECT pg_advisory_unlock($1)', [DISCORD_BOT_LOCK_KEY]);
+  } catch {
+  } finally {
+    botLockClient.release();
+    botLockClient = null;
+  }
+}
 
 process.on('unhandledRejection', (reason) => {
   const detail = reason instanceof Error ? reason.stack || reason.message : String(reason);
@@ -367,9 +397,18 @@ const server = app.listen(PORT, () => {
 
     // Run the Discord bot only on the dedicated voice-capable host.
     if (DISCORD_BOT_ENABLED) {
-      startBot().catch((err) => {
-        console.error('Discord bot startup error:', err instanceof Error ? err.message : 'Unknown');
-      });
+      try {
+        const lockAcquired = await acquireDiscordBotLock();
+        if (!lockAcquired) {
+          console.log('Discord bot startup skipped: lock held by another instance');
+        } else {
+          startBot().catch((err) => {
+            console.error('Discord bot startup error:', err instanceof Error ? err.message : 'Unknown');
+          });
+        }
+      } catch (err) {
+        console.error('Discord bot lock acquisition failed:', err instanceof Error ? err.message : 'Unknown');
+      }
     } else {
       const reason = IS_CLOUD_RUN
         ? 'Cloud Run runtime detected (UDP unavailable for Discord voice)'
@@ -401,6 +440,7 @@ function shutdown(signal: string) {
   clearInterval(cleanupInterval);
   server.close(async () => {
     await stopBot().catch(() => {});
+    await releaseDiscordBotLock().catch(() => {});
     await pool.end();
     console.log('Server shut down');
     process.exit(0);
