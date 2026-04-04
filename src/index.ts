@@ -37,6 +37,42 @@ import { loadRuntimeSecrets } from './services/runtimeSecrets';
 const app = express();
 const PORT = parseInt(process.env.PORT || '3001', 10);
 const IS_CLOUD_RUN = !!process.env.K_SERVICE || !!process.env.K_REVISION;
+const UNHANDLED_REJECTION_DEDUPE_MS = parseInt(process.env.UNHANDLED_REJECTION_DEDUPE_MS || '60000', 10);
+
+const recentUnhandledRejections = new Map<string, { ts: number; skipped: number }>();
+
+function normalizeErrorDetail(detail: string): string {
+  return detail
+    .replace(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z/g, '<ts>')
+    .replace(/\b\d{16,}\b/g, '<snowflake>')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 600);
+}
+
+function isExpectedVoiceIpDiscoveryDisconnect(detail: string): boolean {
+  const d = detail.toLowerCase();
+  return d.includes('cannot perform ip discovery - socket closed')
+    && (d.includes('@discordjs/voice') || d.includes('discordjs/voice') || d.includes('voice'));
+}
+
+function shouldLogUnhandledRejection(detail: string): { shouldLog: boolean; skipped: number } {
+  const key = normalizeErrorDetail(detail);
+  const now = Date.now();
+  const previous = recentUnhandledRejections.get(key);
+  if (!previous) {
+    recentUnhandledRejections.set(key, { ts: now, skipped: 0 });
+    return { shouldLog: true, skipped: 0 };
+  }
+  if (now - previous.ts < UNHANDLED_REJECTION_DEDUPE_MS) {
+    previous.skipped += 1;
+    recentUnhandledRejections.set(key, previous);
+    return { shouldLog: false, skipped: previous.skipped };
+  }
+  const skipped = previous.skipped;
+  recentUnhandledRejections.set(key, { ts: now, skipped: 0 });
+  return { shouldLog: true, skipped };
+}
 
 if (IS_CLOUD_RUN) {
   app.set('trust proxy', 1);
@@ -46,8 +82,23 @@ const DISCORD_BOT_ENABLED = !IS_CLOUD_RUN && process.env.DISCORD_BOT_ENABLED !==
 
 process.on('unhandledRejection', (reason) => {
   const detail = reason instanceof Error ? reason.stack || reason.message : String(reason);
+
+  if (isExpectedVoiceIpDiscoveryDisconnect(detail)) {
+    const { shouldLog, skipped } = shouldLogUnhandledRejection(`voice-ip-discovery:${detail}`);
+    if (shouldLog) {
+      console.warn(`[VOICE] Suppressed expected transient voice disconnect rejection${skipped > 0 ? ` (repeated ${skipped}x)` : ''}`);
+    }
+    return;
+  }
+
+  const { shouldLog, skipped } = shouldLogUnhandledRejection(detail);
+  if (!shouldLog) return;
+
   console.error('Unhandled rejection:', detail);
-  void postAgentErrorLog('process:unhandledRejection', 'Unhandled promise rejection', { detail });
+  const detailWithDedup = skipped > 0
+    ? `${detail} [dedupe_skipped=${skipped}]`
+    : detail;
+  void postAgentErrorLog('process:unhandledRejection', 'Unhandled promise rejection', { detail: detailWithDedup });
 });
 
 process.on('uncaughtException', (err) => {
