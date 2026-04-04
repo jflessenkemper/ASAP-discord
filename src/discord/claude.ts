@@ -122,6 +122,11 @@ function modelForAgent(agentId: string, userMessage: string): string {
   return DEFAULT_FAST_MODEL;
 }
 
+function shouldFallbackToOpus(modelName: string): boolean {
+  if (!DEFAULT_CODING_MODEL || !isAnthropicModel(DEFAULT_CODING_MODEL)) return false;
+  return !isAnthropicModel(modelName);
+}
+
 /**
  * All agents have full tool access.
  */
@@ -2131,6 +2136,7 @@ RUNTIME EFFICIENCY:
 
   let currentModelName = options?.modelOverride || options?.chatSession?.modelName || (isVoiceLane ? VOICE_FAST_MODEL : modelForAgent(agent.id, userMessage));
   let escalatedToPro = currentModelName === GEMINI_PRO;
+  let opusFallbackUsed = false;
 
   const trimmedHistory = options?.chatSession?.chat ? [] : trimConversationHistory(conversationHistory);
   let history: Content[] = trimmedHistory.map((msg) => ({
@@ -2329,6 +2335,27 @@ RUNTIME EFFICIENCY:
     } else if (isAnthropicModel(currentModelName) && isAnthropicRateLimitError(err) && agent.id !== 'developer') {
       logAgentEvent(agent.id, 'error', 'Anthropic rate limited — falling back to Gemini Flash');
       await swapToModel(DEFAULT_FAST_MODEL, history);
+      response = await withConcurrencyLimit(currentModelName, () =>
+        withRetry(() => sendMessageWithOptionalStream(chat, runtimeUserMessage, options?.signal, options?.onPartialText))
+      , lane);
+    } else if (isGeminiRateLimitError(err) && !opusFallbackUsed && shouldFallbackToOpus(currentModelName)) {
+      opusFallbackUsed = true;
+      logAgentEvent(agent.id, 'error', `Gemini rate limited — falling back to ${DEFAULT_CODING_MODEL}`);
+      await swapToModel(DEFAULT_CODING_MODEL, history);
+      response = await withConcurrencyLimit(currentModelName, () =>
+        withRetry(() => sendMessageWithOptionalStream(chat, runtimeUserMessage, options?.signal, options?.onPartialText))
+      , lane);
+    } else if (isGeminiQuotaError(err) && !opusFallbackUsed && shouldFallbackToOpus(currentModelName)) {
+      opusFallbackUsed = true;
+      logAgentEvent(agent.id, 'error', `Gemini quota exhausted — falling back to ${DEFAULT_CODING_MODEL}`);
+      await swapToModel(DEFAULT_CODING_MODEL, history);
+      response = await withConcurrencyLimit(currentModelName, () =>
+        withRetry(() => sendMessageWithOptionalStream(chat, runtimeUserMessage, options?.signal, options?.onPartialText))
+      , lane);
+    } else if (isGeminiAuthError(err) && !opusFallbackUsed && shouldFallbackToOpus(currentModelName)) {
+      opusFallbackUsed = true;
+      logAgentEvent(agent.id, 'error', `Gemini auth/config issue — falling back to ${DEFAULT_CODING_MODEL}`);
+      await swapToModel(DEFAULT_CODING_MODEL, history);
       response = await withConcurrencyLimit(currentModelName, () =>
         withRetry(() => sendMessageWithOptionalStream(chat, runtimeUserMessage, options?.signal, options?.onPartialText))
       , lane);
@@ -2598,6 +2625,36 @@ RUNTIME EFFICIENCY:
         logAgentEvent(agent.id, 'error', 'Anthropic rate limited mid-loop — falling back to Gemini Flash');
         const accumulatedHistory = await chat.getHistory();
         await swapToModel(DEFAULT_FAST_MODEL, accumulatedHistory);
+        response = await withConcurrencyLimit(currentModelName, () =>
+          withRetry(() => sendMessageWithOptionalStream(chat, functionResponses, options?.signal, options?.onPartialText))
+        , lane);
+        continue;
+      }
+      if (isGeminiRateLimitError(err) && !opusFallbackUsed && shouldFallbackToOpus(currentModelName)) {
+        opusFallbackUsed = true;
+        logAgentEvent(agent.id, 'error', `Gemini rate limited mid-loop — falling back to ${DEFAULT_CODING_MODEL}`);
+        const accumulatedHistory = await chat.getHistory();
+        await swapToModel(DEFAULT_CODING_MODEL, accumulatedHistory);
+        response = await withConcurrencyLimit(currentModelName, () =>
+          withRetry(() => sendMessageWithOptionalStream(chat, functionResponses, options?.signal, options?.onPartialText))
+        , lane);
+        continue;
+      }
+      if (isGeminiQuotaError(err) && !opusFallbackUsed && shouldFallbackToOpus(currentModelName)) {
+        opusFallbackUsed = true;
+        logAgentEvent(agent.id, 'error', `Gemini quota exhausted mid-loop — falling back to ${DEFAULT_CODING_MODEL}`);
+        const accumulatedHistory = await chat.getHistory();
+        await swapToModel(DEFAULT_CODING_MODEL, accumulatedHistory);
+        response = await withConcurrencyLimit(currentModelName, () =>
+          withRetry(() => sendMessageWithOptionalStream(chat, functionResponses, options?.signal, options?.onPartialText))
+        , lane);
+        continue;
+      }
+      if (isGeminiAuthError(err) && !opusFallbackUsed && shouldFallbackToOpus(currentModelName)) {
+        opusFallbackUsed = true;
+        logAgentEvent(agent.id, 'error', `Gemini auth/config issue mid-loop — falling back to ${DEFAULT_CODING_MODEL}`);
+        const accumulatedHistory = await chat.getHistory();
+        await swapToModel(DEFAULT_CODING_MODEL, accumulatedHistory);
         response = await withConcurrencyLimit(currentModelName, () =>
           withRetry(() => sendMessageWithOptionalStream(chat, functionResponses, options?.signal, options?.onPartialText))
         , lane);
