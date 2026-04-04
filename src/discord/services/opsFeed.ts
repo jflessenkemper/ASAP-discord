@@ -27,7 +27,29 @@ interface DigestState {
 }
 
 const digestStates = new Map<string, DigestState>();
-const OPS_INFO_TO_DB_ONLY = String(process.env.OPS_INFO_TO_DB_ONLY || 'true').toLowerCase() !== 'false';
+const OPS_FEED_DB_ENABLED = String(process.env.OPS_FEED_DB_ENABLED || 'true').toLowerCase() !== 'false';
+const OPS_FEED_DISCORD_ENABLED = String(process.env.OPS_FEED_DISCORD_ENABLED || 'true').toLowerCase() !== 'false';
+
+function severityRank(severity: OpsSeverity): number {
+  if (severity === 'error') return 3;
+  if (severity === 'warn') return 2;
+  return 1;
+}
+
+function resolveDiscordMinSeverity(): OpsSeverity | 'none' {
+  const raw = String(process.env.OPS_FEED_DISCORD_MIN_SEVERITY || 'error').trim().toLowerCase();
+  if (raw === 'none' || raw === 'off' || raw === 'disabled') return 'none';
+  if (raw === 'warn' || raw === 'warning') return 'warn';
+  if (raw === 'info') return 'info';
+  return 'error';
+}
+
+function shouldPostToDiscord(severity: OpsSeverity): boolean {
+  if (!OPS_FEED_DISCORD_ENABLED) return false;
+  const minSeverity = resolveDiscordMinSeverity();
+  if (minSeverity === 'none') return false;
+  return severityRank(severity) >= severityRank(minSeverity);
+}
 
 function toSafeToken(value: string, fallback: string): string {
   const token = String(value || '')
@@ -170,8 +192,11 @@ export async function postOpsLine(channel: TextChannel, input: OpsLineInput): Pr
   const severity = input.severity || 'info';
   const line = formatOpsLine({ ...input, severity });
 
-  if (OPS_INFO_TO_DB_ONLY && severity === 'info') {
+  if (OPS_FEED_DB_ENABLED) {
     logAgentEvent('ops', 'response', line.slice(0, 1800));
+  }
+
+  if (!shouldPostToDiscord(severity)) {
     return;
   }
 
