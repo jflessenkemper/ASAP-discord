@@ -16,7 +16,7 @@ import { agentRespond, clearGeminiQuotaFuse, ConversationMessage, getContextRunt
 import { appendToMemory, getMemoryContext, loadMemory, saveMemory, clearMemory, compressMemory } from '../memory';
 import { documentToChannel } from './documentation';
 import { sendAgentMessage, clearHistory } from './textChannel';
-import { startCall, endCall, isCallActive, injectVoiceTranscriptForTesting } from './callSession';
+import { startCall, endCall, isCallActive, injectVoiceTranscriptForTesting, processTesterVoiceTurnForCall } from './callSession';
 import { makeOutboundCall, makeAsapTesterCall, startConferenceCall, isTelephonyAvailable } from '../services/telephony';
 import { getBotChannels } from '../bot';
 import { approveAdditionalBudget, getContextEfficiencyReport, getUsageReport, refreshLiveBillingData, refreshUsageDashboard } from '../usage';
@@ -983,7 +983,7 @@ async function handleDirectVoiceActionIfRequested(message: Message, content: str
       return true;
     }
 
-    const result = await injectVoiceTranscriptForTesting({
+    const result = await processTesterVoiceTurnForCall({
       userId: message.author.id,
       username: message.member?.displayName || message.author.username || 'ASAPTester',
       text: speechBridgeText,
@@ -994,7 +994,11 @@ async function handleDirectVoiceActionIfRequested(message: Message, content: str
       return true;
     }
 
-    await groupchat.send(`🧪 Tester speech injected into voice turn: "${speechBridgeText.slice(0, 120)}"`).catch(() => {});
+    if (result.mode === 'voice') {
+      await groupchat.send(`🧪 ASAPTester spoke in voice: "${speechBridgeText.slice(0, 120)}"`).catch(() => {});
+    } else {
+      await groupchat.send(`🧪 Tester speech injected into voice turn: "${speechBridgeText.slice(0, 120)}"`).catch(() => {});
+    }
     return true;
   }
 

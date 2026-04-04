@@ -1,10 +1,23 @@
 import { Client, GatewayIntentBits, VoiceBasedChannel } from 'discord.js';
-import { entersState, joinVoiceChannel, VoiceConnection, VoiceConnectionStatus } from '@discordjs/voice';
+import {
+  entersState,
+  joinVoiceChannel,
+  VoiceConnection,
+  VoiceConnectionStatus,
+  createAudioPlayer,
+  createAudioResource,
+  AudioPlayer,
+  AudioPlayerStatus,
+  StreamType,
+} from '@discordjs/voice';
+import { Readable } from 'stream';
+import { textToSpeech } from './tts';
 
 let testerClient: Client | null = null;
 let testerReady = false;
 let testerReadyPromise: Promise<void> | null = null;
 let testerVoiceConnection: VoiceConnection | null = null;
+let testerAudioPlayer: AudioPlayer | null = null;
 
 function isEnabled(): boolean {
   return String(process.env.ASAPTESTER_VOICE_CLIENT_ENABLED || 'true').toLowerCase() !== 'false';
@@ -81,14 +94,78 @@ export async function joinTesterVoiceChannel(channel: VoiceBasedChannel): Promis
     guildId: guild.id,
     adapterCreator: guild.voiceAdapterCreator,
     selfDeaf: true,
-    selfMute: true,
+    selfMute: false,
   });
 
   await entersState(connection, VoiceConnectionStatus.Ready, 10000);
+  testerAudioPlayer = createAudioPlayer();
+  connection.subscribe(testerAudioPlayer);
   testerVoiceConnection = connection;
 }
 
+export async function speakAsTesterInVoice(text: string, language?: string): Promise<void> {
+  if (!testerVoiceConnection || !testerAudioPlayer) {
+    throw new Error('ASAPTester is not connected to voice.');
+  }
+
+  const trimmed = String(text || '').trim();
+  if (!trimmed) {
+    throw new Error('Tester speech text is empty.');
+  }
+
+  const testerVoice = process.env.ASAPTESTER_DISCORD_VOICE_ID || 'lsgXALPNLFUcQfT1dmP1';
+  const audio = await textToSpeech(trimmed, testerVoice, language);
+  const resource = createAudioResource(Readable.from(audio), { inputType: StreamType.Arbitrary });
+
+  await new Promise<void>((resolve, reject) => {
+    const player = testerAudioPlayer;
+    if (!player) {
+      reject(new Error('Tester audio player is unavailable.'));
+      return;
+    }
+
+    let started = false;
+    const timeout = setTimeout(() => {
+      cleanup();
+      reject(new Error(started ? 'Tester playback timed out.' : 'Tester playback did not start in time.'));
+    }, 20000);
+
+    const cleanup = () => {
+      clearTimeout(timeout);
+      player.off(AudioPlayerStatus.Playing, onPlaying);
+      player.off(AudioPlayerStatus.Idle, onIdle);
+      player.off('error', onError);
+    };
+
+    const onPlaying = () => {
+      started = true;
+    };
+    const onIdle = () => {
+      if (!started) return;
+      cleanup();
+      resolve();
+    };
+    const onError = (err: Error) => {
+      cleanup();
+      reject(err);
+    };
+
+    player.on(AudioPlayerStatus.Playing, onPlaying);
+    player.on(AudioPlayerStatus.Idle, onIdle);
+    player.on('error', onError);
+    player.play(resource);
+  });
+}
+
 export function leaveTesterVoiceChannel(): void {
+  if (testerAudioPlayer) {
+    try {
+      testerAudioPlayer.stop(true);
+    } catch {
+    } finally {
+      testerAudioPlayer = null;
+    }
+  }
   if (!testerVoiceConnection) return;
   try {
     testerVoiceConnection.destroy();

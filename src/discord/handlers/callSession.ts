@@ -5,7 +5,7 @@ import { agentRespond, ConversationMessage, summarizeCall, ReusableAgentChatSess
 import { textToSpeech } from '../voice/tts';
 import { primeElevenLabsVoiceCache } from '../voice/elevenlabs';
 import { joinVC, leaveVC, speakInVC, speakInVCWithOptions, stopVCPlayback, listenToAllMembersSmart, getConnection, VoiceTranscription } from '../voice/connection';
-import { joinTesterVoiceChannel, leaveTesterVoiceChannel } from '../voice/testerClient';
+import { joinTesterVoiceChannel, leaveTesterVoiceChannel, speakAsTesterInVoice } from '../voice/testerClient';
 import { appendToMemory, getMemoryContext } from '../memory';
 import { documentToChannel } from './documentation';
 import { isGeminiOverLimit } from '../usage';
@@ -186,17 +186,6 @@ function finalizeSpokenResponse(raw: string): string {
 
   const hasTerminalPunctuation = /[.!?)]\s*$/.test(text);
   if (hasTerminalPunctuation) return text;
-
-  let lastBoundary = -1;
-  const re = /[.!?]+(?:\s+|$)/g;
-  let match: RegExpExecArray | null;
-  while ((match = re.exec(text)) !== null) {
-    lastBoundary = match.index + match[0].length;
-  }
-
-  if (lastBoundary >= 20) {
-    return text.slice(0, lastBoundary).trim();
-  }
 
   return `${text}.`;
 }
@@ -896,6 +885,52 @@ interface VoiceTestInjection {
   username: string;
   text: string;
   language?: string;
+}
+
+interface TesterVoiceTurnInput {
+  userId: string;
+  username: string;
+  text: string;
+  language?: string;
+}
+
+export async function processTesterVoiceTurnForCall(input: TesterVoiceTurnInput): Promise<{ ok: boolean; mode?: 'voice' | 'injected'; reason?: string }> {
+  if (!activeSession?.active) {
+    return { ok: false, reason: 'No active voice call.' };
+  }
+
+  const text = String(input.text || '').trim();
+  if (!text) {
+    return { ok: false, reason: 'Transcript text is empty.' };
+  }
+
+  const preferRealVoice = String(process.env.ASAPTESTER_REAL_VOICE_TURNS || 'true').toLowerCase() !== 'false';
+  const allowInjectionFallback = String(process.env.ASAPTESTER_REAL_VOICE_FALLBACK_INJECTION || 'true').toLowerCase() !== 'false';
+
+  if (preferRealVoice) {
+    try {
+      await speakAsTesterInVoice(text, input.language);
+      await postVoiceStageLog('tester_voice_played', `user=${input.username} chars=${text.length}`);
+      return { ok: true, mode: 'voice' };
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : 'Unknown tester voice playback error';
+      await postVoiceStageLog('tester_voice_play_failed', `user=${input.username} error=${reason}`, 'warn');
+      if (!allowInjectionFallback) {
+        return { ok: false, reason };
+      }
+    }
+  }
+
+  const injected = await injectVoiceTranscriptForTesting({
+    userId: input.userId,
+    username: input.username,
+    text,
+    language: input.language,
+  });
+  if (!injected.ok) {
+    return { ok: false, reason: injected.reason || 'Failed to inject tester transcript.' };
+  }
+  return { ok: true, mode: 'injected' };
 }
 
 /**
