@@ -2107,6 +2107,12 @@ OUTPUT MODE:
 `
     : '';
 
+  const upgradesChannelRule = `
+UPGRADES CHANNEL:
+- When you notice a better way to work, a blocker that should be removed, or a worthwhile enhancement to your job/functionality, post a concise note to #🆙-upgrades using send_channel_message.
+- Keep upgrades posts short and actionable: problem, proposed upgrade, expected benefit, and what implementation support is needed.
+`;
+
   const systemPrompt = `${agent.systemPrompt}
 
 <project_context>
@@ -2129,7 +2135,9 @@ Never dump long tool output. Summarize the important result only.
 Never start your visible reply with your own name, a role label, or bracketed speaker text such as "[Liv]:" or "Riley:".
 Describe your role and capabilities plainly. Never call yourself "supreme", say you have "absolute authority", or claim unrestricted control. Do not exaggerate authority, status, or trust relationships.
 Tooling: Ace owns tool readiness. Check .github/AGENT_TOOLING_STATUS.md first. If tooling looks stale or a required tool may not be ready, coordinate with @ace before relying on it.
+Knowledge recall: for any non-trivial task, start with repo_memory_search before broad read/search sweeps. If results are stale or missing, run repo_memory_index first, then continue.
 ${governanceSection}
+${upgradesChannelRule}
 RUNTIME EFFICIENCY:
 - Runtime budget and token status will be supplied separately in the task context.
 - Each tool call costs tokens. Prefer targeted reads, concise summaries, and the narrowest agent/tool path that can finish the job.${outputModePrompt}`;

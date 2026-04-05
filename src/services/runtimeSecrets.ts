@@ -2,6 +2,18 @@ import { GoogleAuth } from 'google-auth-library';
 
 const PROJECT_ID = process.env.GOOGLE_CLOUD_PROJECT || process.env.GCLOUD_PROJECT || process.env.GCS_PROJECT_ID || '';
 const SECRET_SCOPE = ['https://www.googleapis.com/auth/cloud-platform'];
+let secretManagerDisabled = false;
+let missingAdcWarned = false;
+
+function isSecretManagerEnabled(): boolean {
+  const raw = String(process.env.RUNTIME_SECRET_MANAGER_ENABLED ?? 'true').trim().toLowerCase();
+  return !['0', 'false', 'no', 'off'].includes(raw);
+}
+
+function isMissingAdcError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err || '');
+  return msg.toLowerCase().includes('could not load the default credentials');
+}
 
 function resolveSecretName(envVar: string): string {
   const override = process.env[`${envVar}_SECRET_NAME`];
@@ -43,6 +55,8 @@ async function readSecret(projectId: string, secretName: string): Promise<string
 async function ensureEnvFromSecret(envVar: 'DEEPGRAM_API_KEY' | 'ELEVENLABS_API_KEY'): Promise<void> {
   if (process.env[envVar]) return;
   if (!PROJECT_ID) return;
+  if (!isSecretManagerEnabled()) return;
+  if (secretManagerDisabled) return;
 
   const secretName = resolveSecretName(envVar);
   try {
@@ -54,6 +68,14 @@ async function ensureEnvFromSecret(envVar: 'DEEPGRAM_API_KEY' | 'ELEVENLABS_API_
     process.env[envVar] = value;
     console.log(`Loaded ${envVar} from Secret Manager (${secretName})`);
   } catch (err) {
+    if (isMissingAdcError(err)) {
+      secretManagerDisabled = true;
+      if (!missingAdcWarned) {
+        missingAdcWarned = true;
+        console.warn('Skipping Secret Manager runtime loads: ADC is not configured on this host.');
+      }
+      return;
+    }
     const msg = err instanceof Error ? err.message : 'Unknown';
     console.warn(`Could not load ${envVar} from Secret Manager: ${msg}`);
   }

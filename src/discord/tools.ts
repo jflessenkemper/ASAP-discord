@@ -3,6 +3,7 @@ import path from 'path';
 import { execSync, execFileSync } from 'child_process';
 import https from 'https';
 import http from 'http';
+import { createHash } from 'crypto';
 import {
   Guild,
   ChannelType,
@@ -37,7 +38,7 @@ export function setAgentChannelResolver(cb: (agentId: string) => TextChannel | n
 }
 
 /** Channels that must never be deleted by agents (canonical key form). */
-const PROTECTED_CHANNEL_KEYS = ['groupchat', 'voice', 'github', 'call-log', 'limits', 'screenshots', 'url', 'terminal'];
+const PROTECTED_CHANNEL_KEYS = ['groupchat', 'voice', 'github', 'upgrades', 'call-log', 'limits', 'screenshots', 'url', 'terminal'];
 
 function toChannelProtectionKey(name: string): string {
   return String(name || '').toLowerCase().replace(/^[^a-z0-9]+/, '');
@@ -409,7 +410,7 @@ export const REPO_TOOLS = [
   {
     name: 'delete_channel',
     description:
-      'Permanently delete a Discord channel by name. Cannot delete protected channels (groupchat, voice, github, call-log, limits). NEVER use this for "reset/clear" requests — use clear_channel_messages instead.',
+      'Permanently delete a Discord channel by name. Cannot delete protected channels (groupchat, voice, github, upgrades, call-log, limits). NEVER use this for "reset/clear" requests — use clear_channel_messages instead.',
     input_schema: {
       type: 'object' as const,
       properties: {
@@ -1119,6 +1120,71 @@ export const REPO_TOOLS = [
     },
   },
   {
+    name: 'repo_memory_index',
+    description:
+      'Build or refresh a persistent searchable index of repository files in PostgreSQL. Use this before deep implementation work to reduce repeated file reads across agents.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        mode: {
+          type: 'string',
+          description: 'Indexing mode: "incremental" (default) or "full".',
+        },
+        max_files: {
+          type: 'number',
+          description: 'Optional file cap for one run (default: 1200, max: 4000).',
+        },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'repo_memory_search',
+    description:
+      'Search the persistent repo/OSS knowledge index using full-text retrieval. Returns the most relevant chunks with source paths so agents can target reads.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        query: {
+          type: 'string',
+          description: 'Natural-language or keyword query.',
+        },
+        limit: {
+          type: 'number',
+          description: 'Optional result limit (default: 8, max: 20).',
+        },
+        source: {
+          type: 'string',
+          description: 'Optional source filter: "repo", "oss", or "all" (default: all).',
+        },
+      },
+      required: ['query'],
+    },
+  },
+  {
+    name: 'repo_memory_add_oss',
+    description:
+      'Persist external/open-source knowledge notes into the searchable index so agents can reuse them later.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        title: {
+          type: 'string',
+          description: 'Short OSS note title, e.g. "discordjs-rate-limits".',
+        },
+        content: {
+          type: 'string',
+          description: 'Knowledge content to store.',
+        },
+        tags: {
+          type: 'string',
+          description: 'Optional comma-separated tags, e.g. "discord.js,rate-limit,webhooks".',
+        },
+      },
+      required: ['title', 'content'],
+    },
+  },
+  {
     name: 'db_query_readonly',
     description:
       'Execute a read-only SQL query (SELECT/CTE/EXPLAIN/SHOW) against the ASAP PostgreSQL database. Any write/mutation SQL is blocked.',
@@ -1181,6 +1247,7 @@ export const REPO_TOOLS = [
 const REVIEW_TOOL_NAMES = new Set([
   'read_file', 'search_files', 'list_directory', 'fetch_url',
   'db_query_readonly', 'db_schema', 'memory_read', 'memory_list',
+  'repo_memory_index', 'repo_memory_search', 'repo_memory_add_oss',
   'run_tests', 'typecheck', 'git_file_history', 'smoke_test_agents', 'list_threads',
   'capture_screenshots',
   'mobile_harness_start', 'mobile_harness_step', 'mobile_harness_snapshot', 'mobile_harness_stop',
@@ -1197,6 +1264,7 @@ export const REVIEW_TOOLS = REPO_TOOLS.filter((t) => REVIEW_TOOL_NAMES.has(t.nam
 const RILEY_TOOL_NAMES = new Set([
   'read_file', 'search_files', 'list_directory', 'fetch_url',
   'memory_read', 'memory_write', 'memory_append', 'memory_list',
+  'repo_memory_index', 'repo_memory_search', 'repo_memory_add_oss',
   'run_tests', 'typecheck', 'git_file_history', 'smoke_test_agents',
   'list_threads', 'list_channels', 'send_channel_message', 'clear_channel_messages',
   'read_logs', 'github_search', 'capture_screenshots',
@@ -1402,6 +1470,12 @@ export async function executeTool(
         return await memoryAppend(input.file, input.content);
       case 'memory_list':
         return await memoryList();
+      case 'repo_memory_index':
+        return await repoMemoryIndex(input.mode, parseInt(input.max_files, 10) || 1200);
+      case 'repo_memory_search':
+        return await repoMemorySearch(input.query, parseInt(input.limit, 10) || 8, input.source);
+      case 'repo_memory_add_oss':
+        return await repoMemoryAddOss(input.title, input.content, input.tags);
       case 'db_query_readonly':
         return await dbQueryReadonly(input.query, input.params);
       case 'db_query':
@@ -2177,8 +2251,17 @@ async function readRuntimeLogs(severity?: string, limit = 30, query?: string): P
   const serviceName = process.env.CLOUD_RUN_SERVICE || 'asap';
   const region = process.env.CLOUD_RUN_REGION || 'australia-southeast1';
 
-  const auth = new GoogleAuth({ scopes: 'https://www.googleapis.com/auth/logging.read' });
-  const client = await auth.getClient();
+  let client: any;
+  try {
+    const auth = new GoogleAuth({ scopes: 'https://www.googleapis.com/auth/logging.read' });
+    client = await auth.getClient();
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err || 'Unknown');
+    if (msg.toLowerCase().includes('could not load the default credentials')) {
+      return 'Cloud Logging access is unavailable on this host because Google ADC is not configured. Run `gcloud auth application-default login`, set GOOGLE_APPLICATION_CREDENTIALS, or use gcp_logs_query if gcloud CLI auth is already active.';
+    }
+    return `Cloud Logging auth failed: ${msg}`;
+  }
 
   const safeSeverity = ['DEFAULT', 'INFO', 'WARNING', 'ERROR'].includes((severity || '').toUpperCase())
     ? (severity || 'WARNING').toUpperCase()
@@ -2781,6 +2864,525 @@ async function memoryList(): Promise<string> {
     }).join('\n');
   } catch (err) {
     return `Error listing memory: ${err instanceof Error ? err.message : 'Unknown'}`;
+  }
+}
+
+const REPO_MEMORY_DEFAULT_MAX_FILES = 1200;
+const REPO_MEMORY_MAX_FILES_HARD = 4000;
+const REPO_MEMORY_MAX_FILE_BYTES = 220_000;
+const REPO_MEMORY_CHUNK_CHARS = 2400;
+const REPO_MEMORY_DEFAULT_LIMIT = 8;
+const REPO_MEMORY_LIMIT_HARD = 20;
+let repoMemoryDbDisabled = false;
+const repoMemoryFileHashCache = new Map<string, string>();
+const repoMemoryChunkCache = new Map<string, string>();
+const repoMemoryStateCache = new Map<string, string>();
+let repoMemoryCacheLoaded = false;
+const REPO_MEMORY_CACHE_DIR = path.join(REPO_ROOT, '.agent-memory-repo');
+const REPO_MEMORY_CACHE_FILE = path.join(REPO_MEMORY_CACHE_DIR, 'repo-memory-cache.json');
+const REPO_MEMORY_SKIP_DIRS = new Set([
+  '.git', 'node_modules', 'dist', 'build', '.next', '.expo', '.turbo', 'coverage', '.cache', '.idea', '.vscode', 'ios/build', 'android/build',
+]);
+const REPO_MEMORY_SKIP_FILE_RE = /\.(png|jpg|jpeg|gif|webp|ico|bmp|tiff|woff2?|ttf|otf|eot|mp3|wav|ogg|m4a|mp4|mov|avi|zip|gz|tar|pdf|jar|keystore|db|sqlite)$/i;
+const REPO_MEMORY_INCLUDE_EXT = new Set([
+  '.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.json', '.md', '.yml', '.yaml', '.sql', '.sh', '.txt', '.env.example', '.tf', '.toml', '.ini', '.xml', '.html', '.css', '.scss',
+]);
+
+function normalizeRepoPath(absPath: string): string {
+  return path.relative(REPO_ROOT, absPath).split(path.sep).join('/');
+}
+
+function shouldIndexRepoFile(relPath: string, stat: fs.Stats): boolean {
+  if (!stat.isFile()) return false;
+  if (stat.size <= 0 || stat.size > REPO_MEMORY_MAX_FILE_BYTES) return false;
+  if (REPO_MEMORY_SKIP_FILE_RE.test(relPath)) return false;
+  const base = path.basename(relPath).toLowerCase();
+  if (base === '.env' || base.startsWith('.env.')) return false;
+  const ext = path.extname(relPath).toLowerCase();
+  if (REPO_MEMORY_INCLUDE_EXT.has(ext)) return true;
+  if (base === 'dockerfile' || base.endsWith('.mdx')) return true;
+  return false;
+}
+
+function listRepoFilesForIndex(maxFiles: number): string[] {
+  const out: string[] = [];
+  const stack: string[] = [REPO_ROOT];
+
+  while (stack.length > 0 && out.length < maxFiles) {
+    const cur = stack.pop()!;
+    let entries: fs.Dirent[] = [];
+    try {
+      entries = fs.readdirSync(cur, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+
+    for (const entry of entries) {
+      if (out.length >= maxFiles) break;
+      const abs = path.join(cur, entry.name);
+      const rel = normalizeRepoPath(abs);
+      if (!rel || rel.startsWith('..')) continue;
+
+      if (entry.isDirectory()) {
+        if (REPO_MEMORY_SKIP_DIRS.has(rel) || REPO_MEMORY_SKIP_DIRS.has(entry.name)) continue;
+        if (entry.name.startsWith('.') && entry.name !== '.github') continue;
+        stack.push(abs);
+        continue;
+      }
+
+      if (!entry.isFile()) continue;
+      let stat: fs.Stats;
+      try {
+        stat = fs.statSync(abs);
+      } catch {
+        continue;
+      }
+      if (!shouldIndexRepoFile(rel, stat)) continue;
+      out.push(abs);
+    }
+  }
+
+  return out.sort((a, b) => a.localeCompare(b));
+}
+
+function chunkTextBySize(text: string, maxChars: number): string[] {
+  const normalized = String(text || '').replace(/\r\n/g, '\n');
+  if (!normalized.trim()) return [];
+  const lines = normalized.split('\n');
+  const chunks: string[] = [];
+  let buf = '';
+
+  for (const line of lines) {
+    const candidate = buf ? `${buf}\n${line}` : line;
+    if (candidate.length <= maxChars) {
+      buf = candidate;
+      continue;
+    }
+
+    if (buf.trim()) chunks.push(buf.trim());
+    if (line.length <= maxChars) {
+      buf = line;
+    } else {
+      for (let i = 0; i < line.length; i += maxChars) {
+        const part = line.slice(i, i + maxChars).trim();
+        if (part) chunks.push(part);
+      }
+      buf = '';
+    }
+  }
+
+  if (buf.trim()) chunks.push(buf.trim());
+  return chunks;
+}
+
+function hashText(text: string): string {
+  return createHash('sha1').update(text).digest('hex');
+}
+
+function normalizeOssTags(raw?: string): string[] {
+  return String(raw || '')
+    .split(',')
+    .map((v) => v.trim().toLowerCase())
+    .filter(Boolean)
+    .slice(0, 16);
+}
+
+function ensureRepoMemoryCacheLoaded(): void {
+  if (repoMemoryCacheLoaded) return;
+  repoMemoryCacheLoaded = true;
+
+  try {
+    if (!fs.existsSync(REPO_MEMORY_CACHE_FILE)) return;
+    const raw = fs.readFileSync(REPO_MEMORY_CACHE_FILE, 'utf-8');
+    const parsed = JSON.parse(raw) as {
+      fileHashes?: Record<string, string>;
+      chunks?: Record<string, string>;
+      state?: Record<string, string>;
+    };
+    for (const [k, v] of Object.entries(parsed.fileHashes || {})) {
+      repoMemoryFileHashCache.set(k, String(v));
+    }
+    for (const [k, v] of Object.entries(parsed.chunks || {})) {
+      repoMemoryChunkCache.set(k, String(v));
+    }
+    for (const [k, v] of Object.entries(parsed.state || {})) {
+      repoMemoryStateCache.set(k, String(v));
+    }
+  } catch {
+  }
+}
+
+function flushRepoMemoryCacheToDisk(): void {
+  try {
+    fs.mkdirSync(REPO_MEMORY_CACHE_DIR, { recursive: true });
+    const payload = {
+      fileHashes: Object.fromEntries(repoMemoryFileHashCache.entries()),
+      chunks: Object.fromEntries(repoMemoryChunkCache.entries()),
+      state: Object.fromEntries(repoMemoryStateCache.entries()),
+      savedAt: new Date().toISOString(),
+    };
+    fs.writeFileSync(REPO_MEMORY_CACHE_FILE, JSON.stringify(payload), 'utf-8');
+  } catch {
+  }
+}
+
+function repoMemoryIndexCache(mode: 'incremental' | 'full', maxFiles: number): string {
+  ensureRepoMemoryCacheLoaded();
+  const started = Date.now();
+  const files = listRepoFilesForIndex(maxFiles);
+  const seen = new Set<string>();
+  let scanned = 0;
+  let changed = 0;
+  let skipped = 0;
+  let chunksUpserted = 0;
+
+  for (const absPath of files) {
+    const relPath = normalizeRepoPath(absPath);
+    seen.add(relPath);
+    scanned += 1;
+
+    let content = '';
+    try {
+      content = fs.readFileSync(absPath, 'utf-8');
+    } catch {
+      skipped += 1;
+      continue;
+    }
+
+    const fileHash = hashText(content);
+    const prevHash = repoMemoryFileHashCache.get(relPath);
+    if (mode !== 'full' && prevHash && prevHash === fileHash) {
+      skipped += 1;
+      continue;
+    }
+
+    changed += 1;
+    const prefix = `repoidx:repo:${relPath}:`;
+    for (const key of repoMemoryChunkCache.keys()) {
+      if (key.startsWith(prefix)) repoMemoryChunkCache.delete(key);
+    }
+
+    const chunks = chunkTextBySize(content, REPO_MEMORY_CHUNK_CHARS);
+    for (let i = 0; i < chunks.length; i++) {
+      repoMemoryChunkCache.set(`repoidx:repo:${relPath}:${i}`, chunks[i]);
+      chunksUpserted += 1;
+    }
+
+    repoMemoryFileHashCache.set(relPath, fileHash);
+  }
+
+  let removed = 0;
+  for (const oldPath of Array.from(repoMemoryFileHashCache.keys())) {
+    if (seen.has(oldPath)) continue;
+    removed += 1;
+    repoMemoryFileHashCache.delete(oldPath);
+    const prefix = `repoidx:repo:${oldPath}:`;
+    for (const key of repoMemoryChunkCache.keys()) {
+      if (key.startsWith(prefix)) repoMemoryChunkCache.delete(key);
+    }
+  }
+
+  repoMemoryStateCache.set('repoidx:state', JSON.stringify({
+    mode,
+    scanned,
+    changed,
+    skipped,
+    removed,
+    chunksUpserted,
+    completedAt: new Date().toISOString(),
+    storage: 'in-memory-fallback',
+  }));
+  flushRepoMemoryCacheToDisk();
+
+  const elapsed = Date.now() - started;
+  return `Repo index updated (${mode}, fallback-cache): scanned=${scanned}, changed=${changed}, skipped=${skipped}, removed=${removed}, chunks=${chunksUpserted}, elapsed=${elapsed}ms.`;
+}
+
+function repoMemorySearchCache(query: string, limit: number, source: 'repo' | 'oss' | 'all'): string {
+  ensureRepoMemoryCacheLoaded();
+  const q = query.toLowerCase();
+  const rows: Array<{ key: string; snippet: string; score: number }> = [];
+
+  for (const [key, content] of repoMemoryChunkCache.entries()) {
+    const isRepo = key.startsWith('repoidx:repo:');
+    const isOss = key.startsWith('repoidx:oss:');
+    if (source === 'repo' && !isRepo) continue;
+    if (source === 'oss' && !isOss) continue;
+    const hay = `${key}\n${content}`.toLowerCase();
+    if (!hay.includes(q)) continue;
+    const score = (content.toLowerCase().match(new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g')) || []).length + (key.toLowerCase().includes(q) ? 2 : 0);
+    rows.push({ key, snippet: content.slice(0, 420), score });
+  }
+
+  rows.sort((a, b) => b.score - a.score || a.key.localeCompare(b.key));
+  const top = rows.slice(0, limit);
+  if (top.length === 0) return 'No repo memory hits found. Run repo_memory_index first, or broaden the query.';
+
+  const lines = top.map((r, idx) => {
+    const sourceType = r.key.startsWith('repoidx:oss:') ? 'oss' : 'repo';
+    const shortKey = r.key.replace(/^repoidx:(repo|oss):/, '');
+    const snippet = r.snippet.replace(/\s+/g, ' ').trim();
+    return `${idx + 1}. [${sourceType}] ${shortKey} (rank=${r.score.toFixed(3)})\n   ${snippet}`;
+  });
+  return `Repo memory results for "${query}":\n${lines.join('\n')}`.slice(0, 4000);
+}
+
+function repoMemoryAddOssCache(title: string, content: string, tagsRaw?: string): string {
+  ensureRepoMemoryCacheLoaded();
+  const sourcePath = title.toLowerCase().replace(/\s+/g, '-');
+  const chunks = chunkTextBySize(content, REPO_MEMORY_CHUNK_CHARS);
+  const tags = normalizeOssTags(tagsRaw);
+  const prefix = `repoidx:oss:${sourcePath}:`;
+
+  for (const key of repoMemoryChunkCache.keys()) {
+    if (key.startsWith(prefix)) repoMemoryChunkCache.delete(key);
+  }
+  for (let i = 0; i < chunks.length; i++) {
+    const withTags = tags.length > 0 ? `[tags:${tags.join(', ')}]\n${chunks[i]}` : chunks[i];
+    repoMemoryChunkCache.set(`repoidx:oss:${sourcePath}:${i}`, withTags);
+  }
+  flushRepoMemoryCacheToDisk();
+
+  return `Stored OSS knowledge: ${sourcePath} (${chunks.length} chunk(s), fallback-cache).`;
+}
+
+async function repoMemoryIndex(modeRaw?: string, maxFilesRaw?: number): Promise<string> {
+  const mode = String(modeRaw || 'incremental').toLowerCase() === 'full' ? 'full' : 'incremental';
+  const maxFiles = Math.min(REPO_MEMORY_MAX_FILES_HARD, Math.max(100, Number(maxFilesRaw) || REPO_MEMORY_DEFAULT_MAX_FILES));
+  if (repoMemoryDbDisabled) {
+    return repoMemoryIndexCache(mode, maxFiles);
+  }
+
+  const pool = (await import('../db/pool')).default;
+  const started = Date.now();
+  const files = listRepoFilesForIndex(maxFiles);
+
+  const repoFileKey = (relPath: string): string => `repoidx:file:repo:${relPath}`;
+  const repoChunkPrefix = (relPath: string): string => `repoidx:repo:${relPath}:`;
+  const stateKey = 'repoidx:state';
+
+  let client: any | null = null;
+  try {
+    client = await pool.connect();
+    await client.query('BEGIN');
+
+    const existingRes = await client.query(
+      `SELECT file_name, content FROM agent_memory WHERE file_name LIKE 'repoidx:file:repo:%'`
+    );
+    const existing = new Map<string, string>();
+    for (const row of existingRes.rows) {
+      const relPath = row.file_name.replace(/^repoidx:file:repo:/, '');
+      existing.set(relPath, String(row.content || ''));
+    }
+    const seen = new Set<string>();
+
+    let scanned = 0;
+    let changed = 0;
+    let chunksUpserted = 0;
+    let skipped = 0;
+
+    for (const absPath of files) {
+      const relPath = normalizeRepoPath(absPath);
+      seen.add(relPath);
+      scanned += 1;
+
+      let content = '';
+      try {
+        content = fs.readFileSync(absPath, 'utf-8');
+      } catch {
+        skipped += 1;
+        continue;
+      }
+
+      const fileHash = hashText(content);
+      const prevHash = existing.get(relPath);
+      if (mode !== 'full' && prevHash && prevHash === fileHash) {
+        skipped += 1;
+        continue;
+      }
+
+      changed += 1;
+      const chunks = chunkTextBySize(content, REPO_MEMORY_CHUNK_CHARS);
+      await client.query(
+        `DELETE FROM agent_memory WHERE file_name LIKE $1`,
+        [`${repoChunkPrefix(relPath)}%`]
+      );
+
+      for (let i = 0; i < chunks.length; i++) {
+        const chunk = chunks[i];
+        await client.query(
+          `INSERT INTO agent_memory (file_name, content, updated_at)
+           VALUES ($1, $2, NOW())
+           ON CONFLICT (file_name)
+           DO UPDATE SET content = EXCLUDED.content, updated_at = NOW()`,
+          [`repoidx:repo:${relPath}:${i}`, chunk]
+        );
+        chunksUpserted += 1;
+      }
+
+      await client.query(
+        `INSERT INTO agent_memory (file_name, content, updated_at)
+         VALUES ($1, $2, NOW())
+         ON CONFLICT (file_name)
+         DO UPDATE SET content = EXCLUDED.content, updated_at = NOW()`,
+        [repoFileKey(relPath), fileHash]
+      );
+    }
+
+    let removed = 0;
+    for (const oldPath of existing.keys()) {
+      if (seen.has(oldPath)) continue;
+      removed += 1;
+      await client.query(`DELETE FROM agent_memory WHERE file_name LIKE $1`, [`${repoChunkPrefix(oldPath)}%`]);
+      await client.query(`DELETE FROM agent_memory WHERE file_name = $1`, [repoFileKey(oldPath)]);
+    }
+
+    await client.query(
+      `INSERT INTO agent_memory (file_name, content, updated_at)
+       VALUES ($1, $2, NOW())
+       ON CONFLICT (file_name)
+       DO UPDATE SET content = EXCLUDED.content, updated_at = NOW()`,
+      [
+        stateKey,
+        JSON.stringify({
+        mode,
+        scanned,
+        changed,
+        skipped,
+        removed,
+        chunksUpserted,
+        completedAt: new Date().toISOString(),
+        }),
+      ]
+    );
+
+    await client.query('COMMIT');
+    const elapsed = Date.now() - started;
+    return `Repo index updated (${mode}): scanned=${scanned}, changed=${changed}, skipped=${skipped}, removed=${removed}, chunks=${chunksUpserted}, elapsed=${elapsed}ms.`;
+  } catch (err) {
+    if (client) {
+      try { await client.query('ROLLBACK'); } catch { }
+    }
+    repoMemoryDbDisabled = true;
+    return repoMemoryIndexCache(mode, maxFiles);
+  } finally {
+    if (client) client.release();
+  }
+}
+
+async function repoMemorySearch(query: string, limitRaw?: number, sourceRaw?: string): Promise<string> {
+  const q = String(query || '').trim();
+  if (!q) return 'Query is required.';
+
+  const safeLimit = Math.min(REPO_MEMORY_LIMIT_HARD, Math.max(1, Number(limitRaw) || REPO_MEMORY_DEFAULT_LIMIT));
+  const source = String(sourceRaw || 'all').toLowerCase();
+  const sourceFilter: 'repo' | 'oss' | 'all' = source === 'repo' || source === 'oss' ? source : 'all';
+  if (repoMemoryDbDisabled) {
+    return repoMemorySearchCache(q, safeLimit, sourceFilter);
+  }
+
+  const pool = (await import('../db/pool')).default;
+
+  try {
+    const prefixFilter = sourceFilter === 'repo'
+      ? `file_name LIKE 'repoidx:repo:%'`
+      : sourceFilter === 'oss'
+        ? `file_name LIKE 'repoidx:oss:%'`
+        : `(file_name LIKE 'repoidx:repo:%' OR file_name LIKE 'repoidx:oss:%')`;
+
+    const { rows } = await pool.query(
+      `SELECT file_name,
+              LEFT(content, 420) AS snippet,
+              ts_rank_cd(to_tsvector('english', content), plainto_tsquery('english', $1)) AS rank,
+              updated_at
+       FROM agent_memory
+       WHERE ${prefixFilter}
+         AND (
+           to_tsvector('english', content) @@ plainto_tsquery('english', $1)
+           OR content ILIKE '%' || $1 || '%'
+           OR file_name ILIKE '%' || $1 || '%'
+         )
+       ORDER BY rank DESC NULLS LAST, updated_at DESC
+       LIMIT $2`,
+      [q, safeLimit]
+    );
+
+    if (rows.length === 0) {
+      return 'No repo memory hits found. Run repo_memory_index first, or broaden the query.';
+    }
+
+    const lines = rows.map((r: any, idx: number) => {
+      const snippet = String(r.snippet || '').replace(/\s+/g, ' ').trim();
+      const rank = Number(r.rank || 0).toFixed(3);
+      const key = String(r.file_name || '');
+      const sourceType = key.startsWith('repoidx:oss:') ? 'oss' : 'repo';
+      const shortKey = key.replace(/^repoidx:(repo|oss):/, '');
+      return `${idx + 1}. [${sourceType}] ${shortKey} (rank=${rank})\n   ${snippet}`;
+    });
+    return `Repo memory results for "${q}":\n${lines.join('\n')}`.slice(0, 4000);
+  } catch (err) {
+    repoMemoryDbDisabled = true;
+    return repoMemorySearchCache(q, safeLimit, sourceFilter);
+  }
+}
+
+async function repoMemoryAddOss(title: string, content: string, tagsRaw?: string): Promise<string> {
+  const cleanTitle = String(title || '').trim().slice(0, 120).replace(/[^a-zA-Z0-9_.:/ -]/g, '');
+  const cleanContent = String(content || '').trim();
+  if (!cleanTitle) return 'Title is required.';
+  if (!cleanContent) return 'Content is required.';
+
+  if (repoMemoryDbDisabled) {
+    return repoMemoryAddOssCache(cleanTitle, cleanContent, tagsRaw);
+  }
+
+  const pool = (await import('../db/pool')).default;
+
+  const sourcePath = cleanTitle.toLowerCase().replace(/\s+/g, '-');
+  const chunks = chunkTextBySize(cleanContent, REPO_MEMORY_CHUNK_CHARS);
+  if (chunks.length === 0) return 'Content is empty after normalization.';
+  const fileHash = hashText(cleanContent);
+  const tags = normalizeOssTags(tagsRaw);
+  const metaPrefix = `repoidx:ossmeta:${sourcePath}`;
+  const chunkPrefix = `repoidx:oss:${sourcePath}:`;
+  const metaKey = `${metaPrefix}:file`;
+
+  let client: any | null = null;
+  try {
+    client = await pool.connect();
+    await client.query('BEGIN');
+    await client.query(`DELETE FROM agent_memory WHERE file_name LIKE $1`, [`${chunkPrefix}%`]);
+
+    for (let i = 0; i < chunks.length; i++) {
+      const chunk = chunks[i];
+      const withTags = tags.length > 0 ? `[tags:${tags.join(', ')}]\n${chunk}` : chunk;
+      await client.query(
+        `INSERT INTO agent_memory (file_name, content, updated_at)
+         VALUES ($1, $2, NOW())
+         ON CONFLICT (file_name)
+         DO UPDATE SET content = EXCLUDED.content, updated_at = NOW()`,
+        [`repoidx:oss:${sourcePath}:${i}`, withTags]
+      );
+    }
+
+    await client.query(
+      `INSERT INTO agent_memory (file_name, content, updated_at)
+       VALUES ($1, $2, NOW())
+       ON CONFLICT (file_name)
+       DO UPDATE SET content = EXCLUDED.content, updated_at = NOW()`,
+      [metaKey, JSON.stringify({ title: cleanTitle, tags, fileHash, chunks: chunks.length })]
+    );
+
+    await client.query('COMMIT');
+    return `Stored OSS knowledge: ${sourcePath} (${chunks.length} chunk(s)).`;
+  } catch (err) {
+    if (client) {
+      try { await client.query('ROLLBACK'); } catch { }
+    }
+    repoMemoryDbDisabled = true;
+    return repoMemoryAddOssCache(cleanTitle, cleanContent, tagsRaw);
+  } finally {
+    if (client) client.release();
   }
 }
 
