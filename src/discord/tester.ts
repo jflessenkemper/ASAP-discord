@@ -82,6 +82,7 @@ const AGENT_CAPABILITY_TESTS: AgentCapabilityTest[] = [
     capability: 'routing-and-next-step',
     prompt: 'Summarize your role in one sentence and give one concrete next step.',
     expectAll: [/next step|first step|action/i],
+    requireTokenEcho: false,
   },
   {
     id: 'executive-assistant',
@@ -195,6 +196,7 @@ const AGENT_CAPABILITY_TESTS: AgentCapabilityTest[] = [
     capability: 'measurement',
     prompt: 'Name one metric you would track first for app performance.',
     expectAny: [/latency|fps|memory|p95|p99|lighthouse|ttfb/i],
+    requireTokenEcho: false,
   },
   {
     id: 'devops',

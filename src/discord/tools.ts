@@ -1979,6 +1979,25 @@ function findGroupchatChannel(guild: Guild): TextChannel | null {
   return channel ? channel as TextChannel : null;
 }
 
+function findTextChannelByFlexibleName(guild: Guild, channelName: string): TextChannel | undefined {
+  const raw = String(channelName || '').trim();
+  if (!raw) return undefined;
+  const normalized = raw.toLowerCase();
+  const key = toChannelProtectionKey(normalized);
+
+  const exact = guild.channels.cache.find(
+    (c) => c.type === ChannelType.GuildText && c.name.toLowerCase() === normalized
+  ) as TextChannel | undefined;
+  if (exact) return exact;
+
+  const byKey = guild.channels.cache.find(
+    (c) => c.type === ChannelType.GuildText && toChannelProtectionKey(c.name) === key
+  ) as TextChannel | undefined;
+  if (byKey) return byKey;
+
+  return undefined;
+}
+
 async function discordListChannels(): Promise<string> {
   const guild = requireGuild();
   await guild.channels.fetch();
@@ -2086,9 +2105,7 @@ async function discordDeleteChannel(channelName: string, reason: string): Promis
     return `Cannot delete protected channel: #${channelName}`;
   }
 
-  const channel = guild.channels.cache.find(
-    (c) => c.type === ChannelType.GuildText && c.name === channelName
-  );
+  const channel = findTextChannelByFlexibleName(guild, channelName);
   if (!channel) return `Channel not found: #${channelName}`;
 
   await channel.delete(reason);
@@ -2134,9 +2151,7 @@ async function discordRenameChannel(oldName: string, newName: string): Promise<s
 async function discordSetTopic(channelName: string, topic: string): Promise<string> {
   const guild = requireGuild();
 
-  const channel = guild.channels.cache.find(
-    (c) => c.type === ChannelType.GuildText && c.name === channelName
-  ) as TextChannel | undefined;
+  const channel = findTextChannelByFlexibleName(guild, channelName);
   if (!channel) return `Channel not found: #${channelName}`;
 
   await channel.setTopic(topic);
@@ -2146,9 +2161,7 @@ async function discordSetTopic(channelName: string, topic: string): Promise<stri
 async function discordSendMessage(channelName: string, message: string, agentName?: string, agentId?: string): Promise<string> {
   const guild = requireGuild();
 
-  const channel = guild.channels.cache.find(
-    (c) => c.type === ChannelType.GuildText && c.name === channelName
-  ) as TextChannel | undefined;
+  const channel = findTextChannelByFlexibleName(guild, channelName);
   if (!channel) return `Channel not found: #${channelName}`;
 
   const agent = agentId ? getAgent(agentId as AgentId) : null;
@@ -2177,9 +2190,7 @@ async function discordClearChannelMessages(channelName: string, limit = 500): Pr
   const guild = requireGuild();
   const maxDelete = Math.min(Math.max(limit, 1), 2000);
 
-  const channel = guild.channels.cache.find(
-    (c) => c.type === ChannelType.GuildText && c.name === channelName
-  ) as TextChannel | undefined;
+  const channel = findTextChannelByFlexibleName(guild, channelName);
   if (!channel) return `Channel not found: #${channelName}`;
 
   let deleted = 0;
