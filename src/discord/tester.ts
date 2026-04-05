@@ -294,6 +294,12 @@ function getCapabilityAttempts(): number {
   return Math.min(Math.max(1, Math.floor(value)), 4);
 }
 
+function getBudgetBoostAmount(): number {
+  const value = Number(process.env.DISCORD_SMOKE_BUDGET_BOOST ?? '80');
+  if (!Number.isFinite(value) || value <= 0) return 0;
+  return Math.min(Math.max(10, Math.floor(value)), 1000);
+}
+
 function makeToken(agentId: string, capability: string): string {
   const left = agentId.replace(/[^a-z0-9]/gi, '').slice(0, 8).toUpperCase() || 'AGENT';
   const right = capability.replace(/[^a-z0-9]/gi, '').slice(0, 8).toUpperCase() || 'CAP';
@@ -815,6 +821,7 @@ async function run(): Promise<void> {
   const runVoiceActive = shouldRunActiveVoiceCallCheck();
   const runPostSuccessAction = shouldRunPostSuccessResetAndAnnounce();
   const capabilityAttempts = getCapabilityAttempts();
+  const budgetBoostAmount = getBudgetBoostAmount();
   const agentFilter = process.argv.find((a) => a.startsWith('--agent='))?.slice('--agent='.length);
 
   if (!token) throw new Error('Missing DISCORD_TEST_BOT_TOKEN');
@@ -870,8 +877,14 @@ async function run(): Promise<void> {
   console.log(`Voice bridge check    : ${runVoiceBridge ? 'enabled' : 'disabled'}`);
   console.log(`Voice active-call     : ${runVoiceActive ? 'enabled' : 'disabled'}`);
   console.log(`Capability attempts   : ${capabilityAttempts}`);
+  console.log(`Budget boost          : ${budgetBoostAmount > 0 ? `$${budgetBoostAmount}` : 'disabled'}`);
   console.log(`Post-success reset+announce: ${runPostSuccessAction ? 'enabled' : 'disabled'}`);
   if (agentFilter) console.log(`Filter                : --agent=${agentFilter}`);
+
+  if (budgetBoostAmount > 0) {
+    await groupchat.send(`approve budget $${budgetBoostAmount} for smoke test run`).catch(() => {});
+    await sleep(1500);
+  }
 
   const roleMentions = new Map<string, string>();
   for (const test of AGENT_CAPABILITY_TESTS) {

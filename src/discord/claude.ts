@@ -2111,6 +2111,7 @@ OUTPUT MODE:
 UPGRADES CHANNEL:
 - When you notice a better way to work, a blocker that should be removed, or a worthwhile enhancement to your job/functionality, post a concise note to #🆙-upgrades using send_channel_message.
 - Keep upgrades posts short and actionable: problem, proposed upgrade, expected benefit, and what implementation support is needed.
+- If you detect token waste (repeated broad scans, redundant tool calls, oversized outputs) or low token headroom, post at least one token-optimization recommendation to #🆙-upgrades before finishing.
 `;
 
   const systemPrompt = `${agent.systemPrompt}
