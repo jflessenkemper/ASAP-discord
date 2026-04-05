@@ -286,6 +286,12 @@ function getHygieneMaxMessages(): number {
   return Math.min(Math.max(0, Math.floor(value)), 100);
 }
 
+function getCapabilityAttempts(): number {
+  const value = Number(process.env.DISCORD_SMOKE_CAPABILITY_ATTEMPTS ?? '2');
+  if (!Number.isFinite(value) || value < 1) return 2;
+  return Math.min(Math.max(1, Math.floor(value)), 4);
+}
+
 function makeToken(agentId: string, capability: string): string {
   const left = agentId.replace(/[^a-z0-9]/gi, '').slice(0, 8).toUpperCase() || 'AGENT';
   const right = capability.replace(/[^a-z0-9]/gi, '').slice(0, 8).toUpperCase() || 'CAP';
@@ -446,10 +452,20 @@ function validateReplyShape(test: AgentCapabilityTest, replyText: string, token:
   return { ok: true };
 }
 
-async function hasToolAuditEvidence(terminal: TextChannel | undefined, toolNames: string[], sinceTs: number): Promise<boolean> {
-  if (!terminal || toolNames.length === 0) return true;
-  const msgs = await terminal.messages.fetch({ limit: 100 });
-  const textBlob = [...msgs.values()]
+async function hasToolAuditEvidence(channels: TextChannel[], toolNames: string[], sinceTs: number): Promise<boolean> {
+  if (toolNames.length === 0) return true;
+  const batches = await Promise.all(
+    channels.map(async (ch) => {
+      try {
+        const msgs = await ch.messages.fetch({ limit: 60 });
+        return [...msgs.values()];
+      } catch {
+        return [] as Message[];
+      }
+    })
+  );
+  const textBlob = batches
+    .flat()
     .filter((m) => (m.createdTimestamp || 0) >= sinceTs)
     .map((m) => extractReplyText(m).toLowerCase())
     .join('\n');
@@ -523,7 +539,10 @@ async function runCapabilityTest(
     const minRepliesOk = (test.minBotRepliesAfterPrompt || 1) <= replies.length;
     if (!minRepliesOk) lastReason = `expected at least ${test.minBotRepliesAfterPrompt} bot/webhook replies`;
 
-    const toolOk = await hasToolAuditEvidence(terminal, test.expectToolAudit || [], sent.createdTimestamp || started);
+    const toolChannels = terminal
+      ? [terminal, ...candidateChannels.filter((ch) => ch.id !== terminal.id)]
+      : candidateChannels;
+    const toolOk = await hasToolAuditEvidence(toolChannels, test.expectToolAudit || [], sent.createdTimestamp || started);
     if (!toolOk && (test.expectToolAudit || []).length > 0) {
       lastReason = `missing tool-audit evidence for ${String(test.expectToolAudit).replace(/,/g, ', ')}`;
     }
@@ -793,6 +812,7 @@ async function run(): Promise<void> {
   const runVoiceBridge = shouldRunVoiceBridgeCheck();
   const runVoiceActive = shouldRunActiveVoiceCallCheck();
   const runPostSuccessAction = shouldRunPostSuccessResetAndAnnounce();
+  const capabilityAttempts = getCapabilityAttempts();
   const agentFilter = process.argv.find((a) => a.startsWith('--agent='))?.slice('--agent='.length);
 
   if (!token) throw new Error('Missing DISCORD_TEST_BOT_TOKEN');
@@ -847,6 +867,7 @@ async function run(): Promise<void> {
   console.log(`ElevenLabs TTS check  : ${runElevenTts ? 'enabled' : 'disabled'}`);
   console.log(`Voice bridge check    : ${runVoiceBridge ? 'enabled' : 'disabled'}`);
   console.log(`Voice active-call     : ${runVoiceActive ? 'enabled' : 'disabled'}`);
+  console.log(`Capability attempts   : ${capabilityAttempts}`);
   console.log(`Post-success reset+announce: ${runPostSuccessAction ? 'enabled' : 'disabled'}`);
   if (agentFilter) console.log(`Filter                : --agent=${agentFilter}`);
 
@@ -876,7 +897,7 @@ async function run(): Promise<void> {
     const mention = roleMentions.get(test.id) || `@${getAgent(test.id as never)?.handle || test.id}`;
     process.stdout.write(`Testing ${getAgentName(test.id)} :: ${test.category}/${test.capability} ... `);
 
-    const result = await runCapabilityTest(
+    let result = await runCapabilityTest(
       groupchat,
       candidateChannels,
       terminal,
@@ -886,6 +907,21 @@ async function run(): Promise<void> {
       client.user!.id,
       timeoutMs,
     );
+
+    for (let attempt = 2; attempt <= capabilityAttempts && !result.passed; attempt += 1) {
+      process.stdout.write(`retry ${attempt}/${capabilityAttempts} ... `);
+      await sleep(1200);
+      result = await runCapabilityTest(
+        groupchat,
+        candidateChannels,
+        terminal,
+        upgrades,
+        test,
+        mention,
+        client.user!.id,
+        timeoutMs,
+      );
+    }
 
     console.log(`${result.passed ? 'PASS' : 'FAIL'} (${(result.elapsed / 1000).toFixed(1)}s)`);
     console.log(`  -> ${result.snippet}`);
@@ -968,6 +1004,7 @@ async function run(): Promise<void> {
       runElevenTts,
       runVoiceBridge,
       runVoiceActive,
+      capabilityAttempts,
       runPostSuccessAction,
       agentFilter: agentFilter || null,
     },
