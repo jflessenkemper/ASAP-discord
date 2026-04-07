@@ -17,6 +17,7 @@ const DEFAULT_PUBLIC_APP_URL = 'https://asap-489910.australia-southeast1.run.app
 const CAT_MAIN = 'ASAP';
 const CAT_AGENTS = 'Agents';
 const CAT_OPS = 'Operations';
+const CAT_PERSONAL = '👤-jflessenkemper-personal';
 
 const MAIN_CHANNELS = {
   groupchat: '💬-groupchat',
@@ -37,6 +38,10 @@ const OPS_CHANNELS = {
   terminal: '💻-terminal',
   voiceErrors: '🧯-voice-errors',
   agentErrors: '🚨-agent-errors',
+} as const;
+
+const PERSONAL_CHANNELS = {
+  careerOps: '💼-career-ops',
 } as const;
 
 const LEGACY_ACCIDENTAL_CHANNELS = new Set([
@@ -86,6 +91,7 @@ export interface BotChannels {
   terminal: TextChannel;
   voiceErrors: TextChannel;
   agentErrors: TextChannel;
+  careerOps: TextChannel;
   voiceChannel: VoiceChannel;
 }
 
@@ -296,6 +302,7 @@ async function deduplicateChannel(guild: Guild, name: string): Promise<TextChann
  *   ASAP        — groupchat, voice
  *   Agents      — per-agent work log channels
  *   Operations  — github, upgrades, call-log, limits
+ *   Personal    — owner-specific channels (for example career ops)
  *
  * Cleans up duplicate channels left from previous runs.
  */
@@ -307,7 +314,7 @@ export async function setupChannels(guild: Guild): Promise<BotChannels> {
 
   if (process.env.RESET_CHANNELS === 'true') {
     console.log('🔄 RESET_CHANNELS=true — deleting all managed channels for fresh recreation...');
-    const managedCategories = [CAT_MAIN, CAT_AGENTS, CAT_OPS];
+    const managedCategories = [CAT_MAIN, CAT_AGENTS, CAT_OPS, CAT_PERSONAL];
     for (const catName of managedCategories) {
       const cat = guild.channels.cache.find(
         (c) => c.type === ChannelType.GuildCategory && c.name === catName
@@ -326,6 +333,7 @@ export async function setupChannels(guild: Guild): Promise<BotChannels> {
   const catMain = await findOrCreateCategory(guild, CAT_MAIN);
   const catAgents = await findOrCreateCategory(guild, CAT_AGENTS);
   const catOps = await findOrCreateCategory(guild, CAT_OPS);
+  const catPersonal = await findOrCreateCategory(guild, CAT_PERSONAL);
 
   for (const [agentId, agent] of agents) {
     const role = await ensureAgentRole(guild, agent.roleName, agent.color);
@@ -503,6 +511,13 @@ export async function setupChannels(guild: Guild): Promise<BotChannels> {
     `🚨 **Agent Runtime Errors**\n\nCentralized Riley, sub-agent, tooling, and automation failures for later diagnosis and cleanup.`
   );
 
+  const careerOps = await ensureText(
+    PERSONAL_CHANNELS.careerOps,
+    catPersonal,
+    '💼 Career operations command center: role targets, pipeline, outreach, applications, and weekly goals',
+    `💼 **Career Ops**\n\nUse this channel to run your job search pipeline with Riley: role targeting, shortlist scoring, tailored CV generation, outreach drafts, and application tracking.`
+  );
+
   const agentIds = [...agents.keys()]; // e.g. 'qa', 'developer', 'lawyer'
   for (const oldName of agentIds) {
     const oldChannel = guild.channels.cache.find(
@@ -537,7 +552,7 @@ export async function setupChannels(guild: Guild): Promise<BotChannels> {
     }
   }
 
-  const allTextChannels = [groupchat, threadStatus, decisions, github, upgrades, tools, callLog, limits, cost, screenshots, url, terminal, voiceErrors, agentErrors, ...agentChannels.values()];
+  const allTextChannels = [groupchat, threadStatus, decisions, github, upgrades, tools, callLog, limits, cost, screenshots, url, terminal, voiceErrors, agentErrors, careerOps, ...agentChannels.values()];
   console.log('🔗 Pre-creating webhooks for all channels...');
   const webhookResults = await Promise.allSettled(
     allTextChannels.map((channel) => getWebhook(channel))
@@ -548,7 +563,7 @@ export async function setupChannels(guild: Guild): Promise<BotChannels> {
 
   const botId = guild.client.user?.id;
   if (botId) {
-    const opsChannels = [decisions, github, upgrades, tools, callLog, limits, cost, screenshots, url, terminal, voiceErrors, agentErrors];
+    const opsChannels = [decisions, github, upgrades, tools, callLog, limits, cost, screenshots, url, terminal, voiceErrors, agentErrors, careerOps];
     const restricted = allTextChannels.filter((channel) => !opsChannels.some((ops) => ops.id === channel.id));
     for (const ch of restricted) {
       try {
@@ -584,5 +599,5 @@ export async function setupChannels(guild: Guild): Promise<BotChannels> {
     console.log(`🔒 Restricted raw bot posting in ${restricted.length} non-Operations channel(s)`);
   }
 
-  return { agentChannels, groupchat, threadStatus, decisions, github, upgrades, tools, callLog, limits, cost, screenshots, url, terminal, voiceErrors, agentErrors, voiceChannel };
+  return { agentChannels, groupchat, threadStatus, decisions, github, upgrades, tools, callLog, limits, cost, screenshots, url, terminal, voiceErrors, agentErrors, careerOps, voiceChannel };
 }
