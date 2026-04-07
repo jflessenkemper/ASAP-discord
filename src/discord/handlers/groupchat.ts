@@ -659,11 +659,17 @@ async function closeGoalWorkspace(
   }
 
   if (thread && !thread.archived) {
+    const finalThreadName = String(thread.name || 'workspace');
     await sendWebhookMessage(thread, {
       content: `✅ Task complete. Closing this workspace thread (${reason}).`,
       username: '📋 Riley (Executive Assistant)',
     }).catch(() => {});
     await thread.setArchived(true, reason).catch(() => {});
+
+    if (decisionsChannel) {
+      const summary = `📋 Decision log: closed workspace ${thread.id ? `<#${thread.id}>` : `"${finalThreadName}"`} (${reason}).`;
+      await decisionsChannel.send(summary.slice(0, 1800)).catch(() => {});
+    }
   }
 
   activeGoalThreadId = null;
@@ -916,6 +922,8 @@ async function ensureGoalWorkspace(groupchat: TextChannel, senderName: string, c
       avatarURL: riley.avatarUrl,
     }).catch(() => {});
   }
+
+  await groupchat.send(`🧵 Created workspace thread: <#${thread.id}>`).catch(() => {});
 
   return thread;
 }

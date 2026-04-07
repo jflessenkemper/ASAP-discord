@@ -95,6 +95,19 @@ export interface BotChannels {
   voiceChannel: VoiceChannel;
 }
 
+interface ChannelContract {
+  owner: string;
+  cadence: string;
+  staleAlert: string;
+}
+
+function applyChannelContract(topic: string, contract?: ChannelContract): string {
+  const base = String(topic || '').trim();
+  if (!contract) return base.slice(0, 1024);
+  const suffix = ` | owner=${contract.owner}; cadence=${contract.cadence}; stale=${contract.staleAlert}`;
+  return `${base}${suffix}`.slice(0, 1024);
+}
+
 function buildToolsChannelSummary(): string {
   const coreRuntimeTools = [
     'read_file',
@@ -337,20 +350,25 @@ export async function setupChannels(guild: Guild): Promise<BotChannels> {
     name: string,
     parent: CategoryChannel,
     topic: string,
-    welcomeMessage?: string
+    welcomeMessage?: string,
+    contract?: ChannelContract,
   ): Promise<TextChannel> {
+    const desiredTopic = applyChannelContract(topic, contract);
     let channel = await deduplicateChannel(guild, name);
 
     if (channel) {
       if (channel.parentId !== parent.id) {
         await channel.setParent(parent, { lockPermissions: false });
       }
+      if ((channel.topic || '') !== desiredTopic) {
+        await channel.setTopic(desiredTopic).catch(() => {});
+      }
     } else {
       channel = await guild.channels.create({
         name,
         type: ChannelType.GuildText,
         parent,
-        topic,
+        topic: desiredTopic,
       });
       if (welcomeMessage) {
         for (const chunk of splitDiscordMessage(welcomeMessage)) {
@@ -377,7 +395,8 @@ export async function setupChannels(guild: Guild): Promise<BotChannels> {
     MAIN_CHANNELS.threadStatus,
     catOps,
     '🧵 Riley posts a fresh hourly summary of open workspace threads and close-ready items.',
-    '🧵 Thread status snapshots post here.'
+    '🧵 Thread status snapshots post here.',
+    { owner: 'riley', cadence: 'hourly', staleAlert: '2h' }
   );
 
   const decisions = await ensureText(
@@ -429,21 +448,24 @@ export async function setupChannels(guild: Guild): Promise<BotChannels> {
     OPS_CHANNELS.github,
     catOps,
     '📦 Live GitHub activity feed — commits, PRs, issues, releases',
-    '📦 GitHub activity feed posts here as one-line updates.'
+    '📦 GitHub activity feed posts here as one-line updates.',
+    { owner: 'riley', cadence: 'on-event', staleAlert: '24h' }
   );
 
   const upgrades = await ensureText(
     OPS_CHANNELS.upgrades,
     catOps,
     '🆙 Agent-proposed upgrades: better ways of working, blockers to remove, and worthwhile capability enhancements',
-    '🆙 Agents can post upgrade ideas, blockers to remove, and automation/tooling enhancements here for Jordan to approve.'
+    '🆙 Agents can post upgrade ideas, blockers to remove, and automation/tooling enhancements here for Jordan to approve.',
+    { owner: 'riley', cadence: 'daily-triage', staleAlert: '48h' }
   );
 
   const tools = await ensureText(
     OPS_CHANNELS.tools,
     catOps,
     '🧰 Agent capabilities and runtime tool access summary',
-    buildToolsChannelSummary()
+    buildToolsChannelSummary(),
+    { owner: 'ace', cadence: 'on-change', staleAlert: '7d' }
   );
   await refreshToolsChannelPost(tools);
 
@@ -451,27 +473,32 @@ export async function setupChannels(guild: Guild): Promise<BotChannels> {
     OPS_CHANNELS.callLog,
     catMain,
     '📋 Automatic transcripts and summaries of voice calls',
-    '📋 Voice call transcripts and summaries post here.'
+    '📋 Voice call transcripts and summaries post here.',
+    { owner: 'riley', cadence: 'on-call', staleAlert: '7d' }
   );
 
   const limits = await ensureText(
     OPS_CHANNELS.limits,
     catOps,
-    '📊 Gemini/GCP usage, quotas, and estimated spend — refreshed every 5 minutes'
+    '📊 Gemini/GCP usage, quotas, and estimated spend — refreshed every 5 minutes',
+    undefined,
+    { owner: 'jude', cadence: '5m', staleAlert: '20m' }
   );
 
   const cost = await ensureText(
     OPS_CHANNELS.cost,
     catOps,
     '💸 Per-action spend feed by agent (model, tokens, estimated USD)',
-    '💸 One-line agent cost feed posts here.'
+    '💸 One-line agent cost feed posts here.',
+    { owner: 'jude', cadence: 'on-request', staleAlert: '24h' }
   );
 
   const screenshots = await ensureText(
     OPS_CHANNELS.screenshots,
     catMain,
     '📸 Automated screenshots of every app screen after each build (iPhone 17 Pro Max)',
-    '📸 Build screenshot updates post here as one-line entries.'
+    '📸 Build screenshot updates post here as one-line entries.',
+    { owner: 'ace', cadence: 'on-deploy', staleAlert: '7d' }
   );
 
   const appUrl = resolvePublicAppUrl();
@@ -479,7 +506,8 @@ export async function setupChannels(guild: Guild): Promise<BotChannels> {
     OPS_CHANNELS.url,
     catMain,
     '🔗 Live app URL and build links — updated on every deploy',
-    `🔗 App URL: ${appUrl} | Cloud Build: https://console.cloud.google.com/cloud-build/builds?project=asap-489910 | Cloud Run: https://console.cloud.google.com/run/detail/australia-southeast1/asap?project=asap-489910`
+    `🔗 App URL: ${appUrl} | Cloud Build: https://console.cloud.google.com/cloud-build/builds?project=asap-489910 | Cloud Run: https://console.cloud.google.com/run/detail/australia-southeast1/asap?project=asap-489910`,
+    { owner: 'jude', cadence: 'on-deploy', staleAlert: '72h' }
   );
   await refreshUrlChannelPost(url, appUrl);
 
@@ -487,28 +515,32 @@ export async function setupChannels(guild: Guild): Promise<BotChannels> {
     OPS_CHANNELS.terminal,
     catOps,
     '💻 Live feed of all tool calls made by agents — file ops, git, commands, searches',
-    '💻 One-line tool activity feed posts here.'
+    '💻 One-line tool activity feed posts here.',
+    { owner: 'ace', cadence: 'on-tool-call', staleAlert: '2h' }
   );
 
   const voiceErrors = await ensureText(
     OPS_CHANNELS.voiceErrors,
     catOps,
     '🧯 Voice runtime errors and per-stage latency logs (ms) for live debugging',
-    `🧯 **Voice Runtime Logs**\n\nLive voice pipeline telemetry and failures.\nStages include STT, Riley LLM, TTS/playback, sub-agent fan-out, and total turn latency.`
+    `🧯 **Voice Runtime Logs**\n\nLive voice pipeline telemetry and failures.\nStages include STT, Riley LLM, TTS/playback, sub-agent fan-out, and total turn latency.`,
+    { owner: 'riley', cadence: 'on-error', staleAlert: '7d' }
   );
 
   const agentErrors = await ensureText(
     OPS_CHANNELS.agentErrors,
     catOps,
     '🚨 Central runtime and agent error feed for postmortems and rapid fixes',
-    `🚨 **Agent Runtime Errors**\n\nCentralized Riley, sub-agent, tooling, and automation failures for later diagnosis and cleanup.`
+    `🚨 **Agent Runtime Errors**\n\nCentralized Riley, sub-agent, tooling, and automation failures for later diagnosis and cleanup.`,
+    { owner: 'riley', cadence: 'on-error', staleAlert: '7d' }
   );
 
   const careerOps = await ensureText(
     PERSONAL_CHANNELS.careerOps,
     catPersonal,
     '💼 Career operations command center: role targets, pipeline, outreach, applications, and weekly goals',
-    `💼 **Career Ops**\n\nUse this channel to run your job search pipeline with Riley: role targeting, shortlist scoring, tailored CV generation, outreach drafts, and application tracking.`
+    `💼 **Career Ops**\n\nUse this channel to run your job search pipeline with Riley: role targeting, shortlist scoring, tailored CV generation, outreach drafts, and application tracking.`,
+    { owner: 'jflessenkemper', cadence: 'daily', staleAlert: '14d' }
   );
 
   const agentIds = [...agents.keys()]; // e.g. 'qa', 'developer', 'lawyer'
@@ -590,6 +622,38 @@ export async function setupChannels(guild: Guild): Promise<BotChannels> {
       }
     }
     console.log(`🔒 Restricted raw bot posting in ${restricted.length} non-Operations channel(s)`);
+
+    const hardenSensitive = String(process.env.DISCORD_HARDEN_SENSITIVE_CHANNELS || 'true').toLowerCase() !== 'false';
+    if (hardenSensitive) {
+      const sensitiveChannels = [terminal, voiceErrors, agentErrors, limits, cost, callLog, upgrades, careerOps];
+      const everyoneRoleId = guild.roles.everyone.id;
+      const ownerId = guild.ownerId;
+
+      for (const channel of sensitiveChannels) {
+        try {
+          await channel.permissionOverwrites.edit(everyoneRoleId, {
+            ViewChannel: false,
+          });
+          await channel.permissionOverwrites.edit(botId, {
+            ViewChannel: true,
+            ReadMessageHistory: true,
+            SendMessages: true,
+            SendMessagesInThreads: true,
+          });
+          await channel.permissionOverwrites.edit(ownerId, {
+            ViewChannel: true,
+            ReadMessageHistory: true,
+            SendMessages: true,
+            SendMessagesInThreads: true,
+            ManageMessages: true,
+            ManageThreads: true,
+          });
+        } catch (err) {
+          console.warn(`Failed to harden permissions in #${channel.name}:`, err instanceof Error ? err.message : 'Unknown');
+        }
+      }
+      console.log(`🔐 Applied sensitive channel ACL hardening to ${sensitiveChannels.length} channel(s)`);
+    }
   }
 
   return { agentChannels, groupchat, threadStatus, decisions, github, upgrades, tools, callLog, limits, cost, screenshots, url, terminal, voiceErrors, agentErrors, careerOps, voiceChannel };

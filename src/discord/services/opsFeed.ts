@@ -75,7 +75,7 @@ function digestIntervalMs(): number {
 function shouldDigest(channel: TextChannel, severity: OpsSeverity): boolean {
   if (severity !== 'info') return false;
   const name = String(channel.name || '').toLowerCase();
-  return name.includes('cost');
+  return name.includes('cost') || name.includes('terminal');
 }
 
 function severityEmoji(severity: OpsSeverity): string {

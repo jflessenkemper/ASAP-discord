@@ -4,6 +4,8 @@ import {
   Events,
   Partials,
   ChatInputCommandInteraction,
+  Message,
+  TextChannel,
 } from 'discord.js';
 
 import pool from '../db/pool';
@@ -41,10 +43,195 @@ import { setLimitsChannel, setCostChannel, startDashboardUpdates, stopDashboardU
  */
 let client: Client | null = null;
 let botChannels: BotChannels | null = null;
+let channelHeartbeatTimer: ReturnType<typeof setInterval> | null = null;
+let upgradesTriageTimer: ReturnType<typeof setInterval> | null = null;
+const staleAlertDedupe = new Map<string, number>();
 const DEFAULT_TESTER_BOT_ID = '1487426371209789450';
 const RUNTIME_INSTANCE_TAG = (process.env.RUNTIME_INSTANCE_TAG || process.env.HOSTNAME || `pid-${process.pid}`).slice(0, 80);
 let dedupeTableReady = false;
 let lastDedupePruneAt = 0;
+const CHANNEL_HEARTBEAT_INTERVAL_MS = Math.max(5 * 60 * 1000, parseInt(process.env.CHANNEL_HEARTBEAT_INTERVAL_MS || '1800000', 10));
+const STALE_ALERT_COOLDOWN_MS = Math.max(10 * 60 * 1000, parseInt(process.env.CHANNEL_STALE_ALERT_COOLDOWN_MS || '7200000', 10));
+const UPGRADES_TRIAGE_INTERVAL_MS = Math.max(30 * 60 * 1000, parseInt(process.env.UPGRADES_TRIAGE_INTERVAL_MS || '21600000', 10));
+const UPGRADES_TRIAGE_MARKER = '[UPGRADES_TRIAGE_V1]';
+
+type ChannelFeedContract = {
+  key: string;
+  channel: TextChannel;
+  cadence: string;
+  staleMs: number;
+};
+
+function formatAge(ms: number): string {
+  if (!Number.isFinite(ms) || ms <= 0) return '0m';
+  if (ms < 60_000) return `${Math.max(1, Math.round(ms / 1000))}s`;
+  if (ms < 3_600_000) return `${Math.round(ms / 60_000)}m`;
+  if (ms < 86_400_000) return `${Math.round(ms / 3_600_000)}h`;
+  return `${Math.round(ms / 86_400_000)}d`;
+}
+
+function getFeedContracts(channels: BotChannels): ChannelFeedContract[] {
+  return [
+    { key: 'thread-status', channel: channels.threadStatus, cadence: 'hourly', staleMs: 2 * 60 * 60 * 1000 },
+    { key: 'limits', channel: channels.limits, cadence: '5m', staleMs: 20 * 60 * 1000 },
+    { key: 'terminal', channel: channels.terminal, cadence: 'on-tool-call', staleMs: 2 * 60 * 60 * 1000 },
+    { key: 'upgrades', channel: channels.upgrades, cadence: 'daily-triage', staleMs: 48 * 60 * 60 * 1000 },
+    { key: 'url', channel: channels.url, cadence: 'on-deploy', staleMs: 72 * 60 * 60 * 1000 },
+  ];
+}
+
+async function latestChannelMessageTimestamp(channel: TextChannel): Promise<number | null> {
+  const messages = await channel.messages.fetch({ limit: 1 }).catch(() => null);
+  const latest = messages?.first();
+  return latest?.createdTimestamp || null;
+}
+
+async function runChannelHeartbeat(channels: BotChannels): Promise<void> {
+  const contracts = getFeedContracts(channels);
+  const now = Date.now();
+  const parts: string[] = [];
+
+  for (const contract of contracts) {
+    const ts = await latestChannelMessageTimestamp(contract.channel);
+    const age = ts ? now - ts : Number.POSITIVE_INFINITY;
+    const stale = !ts || age > contract.staleMs;
+    parts.push(`${stale ? '⚠️' : '✅'}${contract.key}:${ts ? formatAge(age) : 'none'}`);
+
+    if (stale) {
+      const lastAlert = staleAlertDedupe.get(contract.key) || 0;
+      if (now - lastAlert >= STALE_ALERT_COOLDOWN_MS) {
+        staleAlertDedupe.set(contract.key, now);
+        await postAgentErrorLog('discord:feed-stale', `Feed stale: ${contract.key}`, {
+          level: 'warn',
+          detail: `channel=#${contract.channel.name} cadence=${contract.cadence} age=${ts ? formatAge(age) : 'no-messages'} threshold=${formatAge(contract.staleMs)}`,
+        });
+      }
+    }
+  }
+
+  await postOpsLine(channels.threadStatus, {
+    actor: 'executive-assistant',
+    scope: 'channel-heartbeat',
+    metric: `feeds=${contracts.length}`,
+    delta: parts.join(' | '),
+    action: 'none',
+    severity: parts.some((p) => p.startsWith('⚠️')) ? 'warn' : 'info',
+  });
+}
+
+function normalizeUpgradeText(raw: string): string {
+  return String(raw || '')
+    .replace(/SMOKE_[A-Z0-9_]+/g, ' ')
+    .replace(/https?:\/\/\S+/g, ' ')
+    .replace(/[`*_>#]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function classifyUpgrade(text: string): 'accepted' | 'deferred' | 'needs-info' | 'not-actionable' {
+  const normalized = text.toLowerCase();
+  const hasStructured = normalized.includes('problem') && (normalized.includes('proposed') || normalized.includes('upgrade'));
+  const hasBenefit = normalized.includes('benefit') || normalized.includes('expected');
+  if (hasStructured && hasBenefit) return 'accepted';
+  if (normalized.length < 50) return 'needs-info';
+  if (/manual|external|optional|later|future/.test(normalized)) return 'deferred';
+  if (/token|security|csp|audit|dependency|workflow|automation|cache|stale|heartbeat/.test(normalized)) return 'accepted';
+  if (normalized.split(' ').length < 8) return 'not-actionable';
+  return 'needs-info';
+}
+
+type UpgradeDigestEntry = {
+  key: string;
+  sample: string;
+  label: 'accepted' | 'deferred' | 'needs-info' | 'not-actionable';
+  count: number;
+  lastTs: number;
+};
+
+function mergeUpgradeEntry(entries: UpgradeDigestEntry[], candidate: Omit<UpgradeDigestEntry, 'count' | 'lastTs'>, ts: number): void {
+  const normalized = candidate.key;
+  const existing = entries.find((entry) => entry.key.includes(normalized) || normalized.includes(entry.key));
+  if (existing) {
+    existing.count += 1;
+    existing.lastTs = Math.max(existing.lastTs, ts);
+    if (candidate.sample.length > existing.sample.length) {
+      existing.sample = candidate.sample;
+      existing.label = candidate.label;
+    }
+    return;
+  }
+  entries.push({ ...candidate, count: 1, lastTs: ts });
+}
+
+async function runUpgradesTriage(channels: BotChannels): Promise<void> {
+  const upgrades = channels.upgrades;
+  const messages = await upgrades.messages.fetch({ limit: 100 }).catch(() => null);
+  if (!messages || messages.size === 0) return;
+
+  const botId = upgrades.client.user?.id;
+  let triageMessage: Message | null = null;
+  const entries: UpgradeDigestEntry[] = [];
+
+  for (const msg of messages.values()) {
+    const content = [
+      String(msg.content || ''),
+      ...(msg.embeds || []).map((embed) => `${embed.title || ''} ${embed.description || ''}`),
+    ].join(' ').trim();
+
+    if (!content) continue;
+    if (botId && msg.author.id === botId && content.includes(UPGRADES_TRIAGE_MARKER)) {
+      triageMessage = msg;
+      continue;
+    }
+
+    const cleaned = normalizeUpgradeText(content);
+    if (!cleaned) continue;
+    const key = cleaned.toLowerCase().replace(/[^a-z0-9\s-]/g, '').slice(0, 140);
+    const label = classifyUpgrade(cleaned);
+    mergeUpgradeEntry(entries, { key, sample: cleaned.slice(0, 220), label }, msg.createdTimestamp || Date.now());
+  }
+
+  const top = entries
+    .sort((a, b) => b.count - a.count || b.lastTs - a.lastTs)
+    .slice(0, 10);
+
+  const lines = [
+    UPGRADES_TRIAGE_MARKER,
+    '**Upgrades Backlog (auto-triaged)**',
+    `Updated: ${new Date().toISOString()}`,
+    'Labels: accepted | deferred | needs-info | not-actionable',
+    '',
+    ...(top.length > 0
+      ? top.map((entry, idx) => `${idx + 1}. [${entry.label}] (x${entry.count}, ${formatAge(Date.now() - entry.lastTs)} ago) ${entry.sample}`)
+      : ['1. [needs-info] No upgrades captured yet.']),
+  ];
+
+  const payload = lines.join('\n').slice(0, 1900);
+  if (triageMessage) {
+    await triageMessage.edit(payload).catch(() => {});
+  } else {
+    triageMessage = await upgrades.send(payload).catch(() => null);
+  }
+
+  if (triageMessage && !triageMessage.pinned) {
+    await triageMessage.pin().catch(() => {});
+  }
+}
+
+function startOpsMonitors(channels: BotChannels): void {
+  if (channelHeartbeatTimer) clearInterval(channelHeartbeatTimer);
+  if (upgradesTriageTimer) clearInterval(upgradesTriageTimer);
+
+  channelHeartbeatTimer = setInterval(() => {
+    void runChannelHeartbeat(channels).catch(() => {});
+  }, CHANNEL_HEARTBEAT_INTERVAL_MS);
+  upgradesTriageTimer = setInterval(() => {
+    void runUpgradesTriage(channels).catch(() => {});
+  }, UPGRADES_TRIAGE_INTERVAL_MS);
+
+  void runChannelHeartbeat(channels).catch(() => {});
+  void runUpgradesTriage(channels).catch(() => {});
+}
 
 function decodeBotIdFromToken(token: string): string | null {
   try {
@@ -261,6 +448,7 @@ export async function startBot(): Promise<void> {
       console.log(`Discord channels configured in "${guild.name}"`);
 
       await registerCommands(readyClient, guildId);
+      startOpsMonitors(configuredChannels);
     } catch (err) {
       const msg = err instanceof Error ? err.stack || err.message : 'Unknown';
       console.error('Channel setup error:', err instanceof Error ? err.message : 'Unknown');
@@ -377,6 +565,14 @@ export async function startBot(): Promise<void> {
  * Gracefully shut down the Discord bot.
  */
 export async function stopBot(): Promise<void> {
+  if (channelHeartbeatTimer) {
+    clearInterval(channelHeartbeatTimer);
+    channelHeartbeatTimer = null;
+  }
+  if (upgradesTriageTimer) {
+    clearInterval(upgradesTriageTimer);
+    upgradesTriageTimer = null;
+  }
   stopDashboardUpdates();
   setCommandAuditCallback(() => {});
   setToolAuditCallback(() => {});
