@@ -76,7 +76,7 @@ async function readSecret(projectId: string, secretName: string): Promise<string
   }
 }
 
-async function ensureEnvFromSecret(envVar: 'DEEPGRAM_API_KEY' | 'ELEVENLABS_API_KEY' | 'DISCORD_TEST_BOT_TOKEN' | 'GEMINI_API_KEY' | 'ANTHROPIC_API_KEY'): Promise<void> {
+async function ensureEnvFromSecret(envVar: 'DEEPGRAM_API_KEY' | 'ELEVENLABS_API_KEY' | 'DISCORD_TEST_BOT_TOKEN' | 'GEMINI_API_KEY' | 'ANTHROPIC_API_KEY' | 'GITHUB_TOKEN'): Promise<void> {
   if (process.env[envVar]) return;
   if (!PROJECT_ID) return;
   if (!isSecretManagerEnabled()) return;
@@ -116,4 +116,5 @@ export async function loadRuntimeSecrets(): Promise<void> {
   await ensureEnvFromSecret('DEEPGRAM_API_KEY');
   await ensureEnvFromSecret('ELEVENLABS_API_KEY');
   await ensureEnvFromSecret('DISCORD_TEST_BOT_TOKEN');
+  await ensureEnvFromSecret('GITHUB_TOKEN');
 }

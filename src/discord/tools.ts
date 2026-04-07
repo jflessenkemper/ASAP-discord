@@ -99,10 +99,12 @@ const TOOL_RESULT_CACHE_TTL_MS = Math.max(1_000, Number(process.env.TOOL_RESULT_
 const TOOL_RESULT_CACHE_MAX_ENTRIES = Math.max(200, Number(process.env.TOOL_RESULT_CACHE_MAX_ENTRIES || '2000'));
 const HOT_SEARCH_INDEX_TTL_MS = Math.max(5_000, Number(process.env.HOT_SEARCH_INDEX_TTL_MS || '120000'));
 const HOT_SEARCH_INDEX_MAX_CHUNKS = Math.max(200, Number(process.env.HOT_SEARCH_INDEX_MAX_CHUNKS || '5000'));
+const DB_SCHEMA_CACHE_TTL_MS = Math.max(30_000, Number(process.env.DB_SCHEMA_CACHE_TTL_MS || '300000'));
 
 type ToolCacheEntry = { result: string; expiresAt: number };
 const toolResultCache = new Map<string, ToolCacheEntry>();
 const toolInFlight = new Map<string, Promise<string>>();
+const dbSchemaCache = new Map<string, ToolCacheEntry>();
 
 type HotSearchChunk = { path: string; text: string; textLower: string; tokens: Set<string> };
 let hotSearchIndexBuiltAt = 0;
@@ -3902,6 +3904,12 @@ async function dbQueryReadonly(query: string, paramsStr?: string): Promise<strin
 
 async function dbSchema(table?: string): Promise<string> {
   try {
+    const cacheKey = String(table || '__all__').toLowerCase();
+    const cached = dbSchemaCache.get(cacheKey);
+    if (cached && cached.expiresAt > Date.now()) {
+      return `${cached.result}\n\n(cache: hit)`;
+    }
+
     const pool = (await import('../db/pool')).default;
 
     if (table) {
@@ -3930,7 +3938,9 @@ async function dbSchema(table?: string): Promise<string> {
         return `  ${r.column_name}: ${r.data_type}${nullable}${def}${cstr}`;
       });
 
-      return `Table: ${safeTable}\n${lines.join('\n')}`;
+      const result = `Table: ${safeTable}\n${lines.join('\n')}`;
+      dbSchemaCache.set(cacheKey, { result, expiresAt: Date.now() + DB_SCHEMA_CACHE_TTL_MS });
+      return result;
     }
 
     const { rows } = await pool.query(
@@ -3940,7 +3950,9 @@ async function dbSchema(table?: string): Promise<string> {
        ORDER BY table_name`
     );
     if (rows.length === 0) return 'No tables found in public schema.';
-    return rows.map((r: any) => `📋 ${r.table_name} (${r.columns} columns)`).join('\n');
+    const result = rows.map((r: any) => `📋 ${r.table_name} (${r.columns} columns)`).join('\n');
+    dbSchemaCache.set(cacheKey, { result, expiresAt: Date.now() + DB_SCHEMA_CACHE_TTL_MS });
+    return result;
   } catch (err) {
     return `Schema error: ${err instanceof Error ? err.message : 'Unknown'}`;
   }
