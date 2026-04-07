@@ -588,7 +588,7 @@ export async function setupChannels(guild: Guild): Promise<BotChannels> {
 
   const botId = guild.client.user?.id;
   if (botId) {
-    const opsChannels = [decisions, github, upgrades, tools, callLog, limits, cost, screenshots, url, terminal, voiceErrors, agentErrors, careerOps];
+    const opsChannels = [threadStatus, decisions, github, upgrades, tools, callLog, limits, cost, screenshots, url, terminal, voiceErrors, agentErrors, careerOps];
     const restricted = allTextChannels.filter((channel) => !opsChannels.some((ops) => ops.id === channel.id));
     for (const ch of restricted) {
       try {
