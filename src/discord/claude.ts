@@ -327,6 +327,7 @@ const VERTEX_ANTHROPIC_FALLBACK_LOCATIONS = (process.env.VERTEX_ANTHROPIC_FALLBA
   .filter(Boolean);
 const VERTEX_ANTHROPIC_VERSION = process.env.VERTEX_ANTHROPIC_VERSION || 'vertex-2023-10-16';
 const PARTNER_MODEL_CACHE_ENABLED = process.env.PARTNER_MODEL_CACHE_ENABLED !== 'false';
+let warnedVertexAnthropicMissingProject = false;
 
 type ToolCallLike = { name: string; args: object; id?: string };
 
@@ -862,11 +863,15 @@ function createVertexAnthropicModel(
 
 function createModel(modelName: string, options: { systemInstruction?: string; tools?: Tool[]; rawTools?: AnyTool[]; generationConfig?: Record<string, any> }): ModelLike {
   const canUseVertex = USE_VERTEX_AI && !vertexAuthUnavailable;
-  const canUseVertexAnthropic = USE_VERTEX_ANTHROPIC && !vertexAuthUnavailable;
+  const canUseVertexAnthropic = USE_VERTEX_ANTHROPIC && !vertexAuthUnavailable && !!VERTEX_PROJECT_ID;
   const nonAnthropicFallbackModel = getNonAnthropicFallbackModel(GEMINI_PRO);
 
   if (isAnthropicModel(modelName)) {
     if (!canUseVertexAnthropic) {
+      if (USE_VERTEX_ANTHROPIC && !VERTEX_PROJECT_ID && !warnedVertexAnthropicMissingProject) {
+        warnedVertexAnthropicMissingProject = true;
+        console.warn('Vertex Anthropic disabled: VERTEX_PROJECT_ID/GOOGLE_CLOUD_PROJECT is not set; falling back to Gemini.');
+      }
       if (VERTEX_OPUS_ONLY_MODE) {
         throw new Error('Vertex Anthropic unavailable while VERTEX_OPUS_ONLY_MODE=true');
       }
