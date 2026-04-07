@@ -5,6 +5,7 @@ import path from 'path';
 import cors from 'cors';
 import helmet from 'helmet';
 import cookieParser from 'cookie-parser';
+import healthRoutes from './routes/health';
 import authRoutes from './routes/auth';
 import jobRoutes from './routes/jobs';
 import locationRoutes from './routes/location';
@@ -280,6 +281,7 @@ app.use('/api/shop', shopRoutes);
 app.use('/api/favorites', favoritesRoutes);
 app.use('/api/public', publicRoutes);
 app.use('/api/search', searchRoutes);
+app.use('/api/health', healthRoutes);
 
 // GitHub webhook endpoint
 app.post('/api/webhooks/github', express.json({ limit: '1mb' }), (req, res) => {

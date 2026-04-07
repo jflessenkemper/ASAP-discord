@@ -9,6 +9,7 @@ import { uploadEvidence } from '../services/storage';
 
 const router = Router();
 
+/* This rate limiter prevents abuse on the job creation endpoint. Ace edit 2 */
 const createJobLimiter = rateLimit({
   windowMs: 60 * 1000,
   max: 5,
