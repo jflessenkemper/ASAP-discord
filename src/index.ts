@@ -1,21 +1,13 @@
 import 'dotenv/config';
-import express from 'express';
 import { existsSync } from 'fs';
 import path from 'path';
-import cors from 'cors';
-import helmet from 'helmet';
+
 import cookieParser from 'cookie-parser';
-import healthRoutes from './routes/health';
-import authRoutes from './routes/auth';
-import jobRoutes from './routes/jobs';
-import locationRoutes from './routes/location';
-import mapkitRoutes from './routes/mapkit';
-import fuelRoutes from './routes/fuel';
-import shopRoutes from './routes/shop';
-import favoritesRoutes from './routes/favorites';
-import publicRoutes from './routes/public';
-import searchRoutes from './routes/search';
-import userRoutes from './routes/users';
+import cors from 'cors';
+import express from 'express';
+import helmet from 'helmet';
+import twilio from 'twilio';
+
 import pool from './db/pool';
 import {
   startBot,
@@ -33,7 +25,16 @@ import {
   updateGeminiSpend,
   getRemainingBudget,
 } from './discord/bot.single';
-import twilio from 'twilio';
+import authRoutes from './routes/auth';
+import favoritesRoutes from './routes/favorites';
+import fuelRoutes from './routes/fuel';
+import healthRoutes from './routes/health';
+import jobRoutes from './routes/jobs';
+import locationRoutes from './routes/location';
+import mapkitRoutes from './routes/mapkit';
+import publicRoutes from './routes/public';
+import searchRoutes from './routes/search';
+import shopRoutes from './routes/shop';
 import { loadRuntimeSecrets } from './services/runtimeSecrets';
 
 const app = express();

@@ -1,5 +1,6 @@
-import nodemailer from 'nodemailer';
 import { randomInt } from 'crypto';
+
+import nodemailer from 'nodemailer';
 
 const transporter = nodemailer.createTransport({
   service: 'gmail',

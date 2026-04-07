@@ -81,9 +81,9 @@ describe('deepgram.ts — recordGeminiUsage must NOT be called for transcription
 
   it('does NOT call recordGeminiUsage when a Deepgram transcript fires', async () => {
     // Capture the Transcript event listener registered on the mock live connection
-    const eventListeners: Record<string, Function> = {};
+    const eventListeners: Record<string, (...args: unknown[]) => void> = {};
     const mockConnection = {
-      on: jest.fn((event: string, cb: Function) => { eventListeners[event] = cb; }),
+      on: jest.fn((event: string, cb: (...args: unknown[]) => void) => { eventListeners[event] = cb; }),
       getReadyState: jest.fn().mockReturnValue(1),
       send: jest.fn(),
       requestClose: jest.fn(),

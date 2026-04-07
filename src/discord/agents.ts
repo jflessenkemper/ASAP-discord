@@ -31,7 +31,7 @@ const VOICE_MAP: Record<string, string> = {
   performance: 'Orus',
   devops: 'Vale',
   copywriter: 'Zephyr',
-  developer: 'Aoede',
+  developer: 'Achernar',
   lawyer: 'Sulafat',
   'executive-assistant': 'Achernar',
   'ios-engineer': 'Enceladus',

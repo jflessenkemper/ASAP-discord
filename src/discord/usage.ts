@@ -1,6 +1,8 @@
 import { TextChannel, EmbedBuilder } from 'discord.js';
+
 import pool from '../db/pool';
 import { getLiveBillingSnapshot, refreshLiveBillingSnapshot } from '../services/billing';
+
 import { formatOpsLine, postOpsLine } from './services/opsFeed';
 
 const DAILY_LIMITS = {
@@ -15,9 +17,6 @@ const DAILY_LIMITS = {
 };
 const DEFAULT_BUDGET_APPROVAL_INCREMENT_USD = parseFloat(process.env.BUDGET_APPROVAL_INCREMENT_USD || '5.00');
 const DASHBOARD_UPDATE_INTERVAL_MS = 5 * 60 * 1000;
-
-/** Optional running Anthropic credit cap — no longer used with Gemini */
-const ANTHROPIC_CREDIT_CAP_USD = 0;
 
 interface UsageCounters {
   claudeInputTokens: number;

@@ -1,29 +1,25 @@
-import { TextChannel, VoiceChannel, GuildMember } from 'discord.js';
 import { VoiceConnectionStatus } from '@discordjs/voice';
+import { TextChannel, VoiceChannel, GuildMember } from 'discord.js';
+
 import { getAgent, AgentId } from '../agents';
 import { agentRespond, ConversationMessage, summarizeCall, ReusableAgentChatSession } from '../claude';
-import { textToSpeech } from '../voice/tts';
-import { primeElevenLabsVoiceCache } from '../voice/elevenlabs';
-import { joinVC, leaveVC, speakInVC, speakInVCWithOptions, stopVCPlayback, listenToAllMembersSmart, getConnection, VoiceTranscription } from '../voice/connection';
-import { joinTesterVoiceChannel, leaveTesterVoiceChannel, speakAsTesterInVoice } from '../voice/testerClient';
 import { appendToMemory, getMemoryContext } from '../memory';
-import { documentToChannel } from './documentation';
-import { isGeminiOverLimit } from '../usage';
-import { isDeepgramAvailable } from '../voice/deepgram';
-import { isElevenLabsRealtimeAvailable } from '../voice/elevenlabsRealtime';
-import { postDiagnostic, mirrorAgentResponse, mirrorVoiceTranscript } from '../services/diagnosticsWebhook';
-import { getWebhook } from '../services/webhooks';
 import { recordVoiceCallStart, recordVoiceCallEnd } from '../metrics';
+import { postDiagnostic, mirrorAgentResponse, mirrorVoiceTranscript } from '../services/diagnosticsWebhook';
 import { postOpsLine } from '../services/opsFeed';
-
-/** Only Riley (EA) speaks in voice calls */
-const VOICE_SPEAKERS = new Set(['executive-assistant']);
+import { getWebhook } from '../services/webhooks';
+import { isGeminiOverLimit } from '../usage';
+import { joinVC, leaveVC, speakInVC, speakInVCWithOptions, stopVCPlayback, listenToAllMembersSmart, getConnection, VoiceTranscription } from '../voice/connection';
+import { isDeepgramAvailable } from '../voice/deepgram';
+import { primeElevenLabsVoiceCache } from '../voice/elevenlabs';
+import { getElevenLabsConvaiReply, isElevenLabsConvaiEnabled } from '../voice/elevenlabsConvai';
+import { isElevenLabsRealtimeAvailable } from '../voice/elevenlabsRealtime';
+import { joinTesterVoiceChannel, leaveTesterVoiceChannel, speakAsTesterInVoice } from '../voice/testerClient';
+import { textToSpeech } from '../voice/tts';
 
 /** Heartbeat interval to detect stale connections (every 2 minutes) */
 const HEARTBEAT_INTERVAL = 20 * 1000;
 const VOICE_DISCONNECT_GRACE_MS = 45 * 1000;
-/** Max conversation history in a call */
-const MAX_CALL_HISTORY = 40;
 const VOICE_PREFLIGHT_TIMEOUT_MS = parseInt(process.env.VOICE_PREFLIGHT_TIMEOUT_MS || '15000', 10);
 const VOICE_LOW_LATENCY_MODE = String(process.env.VOICE_LOW_LATENCY_MODE || 'false').toLowerCase() === 'true';
 const VOICE_DISABLE_CALL_LOG = String(process.env.VOICE_DISABLE_CALL_LOG || (VOICE_LOW_LATENCY_MODE ? 'true' : 'false')).toLowerCase() === 'true';
@@ -46,6 +42,10 @@ const RILEY_WARM_PHRASES = ['One moment.', 'Let me check.', 'I am on it.', 'Here
 const VOICE_TURN_WATCHDOG_MS = parseInt(process.env.VOICE_TURN_WATCHDOG_MS || '20000', 10);
 const DEFAULT_TESTER_BOT_ID = '1487426371209789450';
 const RUNTIME_INSTANCE_TAG = (process.env.RUNTIME_INSTANCE_TAG || process.env.HOSTNAME || `pid-${process.pid}`).slice(0, 80);
+const VOICE_LIFECYCLE_DEDUPE_MS = parseInt(process.env.VOICE_LIFECYCLE_DEDUPE_MS || '15000', 10);
+
+let callStartInProgress = false;
+const lifecycleNoticeLastSentAt = new Map<string, number>();
 
 function decodeBotIdFromToken(token: string): string | null {
   try {
@@ -289,8 +289,16 @@ async function handoffVoiceInstructionToTextRiley(
     return true;
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'Unknown handoff error';
+    let userReason = 'a temporary backend issue occurred. Please try again in a few seconds.';
+    if (/no active voice call/i.test(msg)) {
+      userReason = 'there is no active voice call right now.';
+    } else if (/timeout|timed out/i.test(msg)) {
+      userReason = 'the handoff timed out. Please retry with a shorter instruction.';
+    } else if (/abort/i.test(msg)) {
+      userReason = 'the previous request was interrupted by a newer one.';
+    }
     await postVoiceStageLog('voice_text_handoff_failed', `user=${transcription.username} error=${msg}`, 'warn');
-    await sendAsAgent(session.groupchat, `⚠️ Voice handoff to Riley text failed: ${msg}`);
+    await sendAsAgent(session.groupchat, `⚠️ Voice handoff to Riley text failed: ${userReason}`);
     return false;
   }
 }
@@ -447,6 +455,15 @@ async function sendAsAgent(channel: TextChannel, content: string, agentId: Agent
   }
 }
 
+async function sendLifecycleNoticeOnce(channel: TextChannel, key: string, content: string): Promise<void> {
+  const now = Date.now();
+  const dedupeKey = `${channel.id}:${key}`;
+  const prev = lifecycleNoticeLastSentAt.get(dedupeKey) || 0;
+  if (now - prev < VOICE_LIFECYCLE_DEDUPE_MS) return;
+  lifecycleNoticeLastSentAt.set(dedupeKey, now);
+  await sendAsAgent(channel, content);
+}
+
 async function setBotNicknameForCall(voiceChannel: VoiceChannel): Promise<string | null> {
   const member = voiceChannel.guild.members.me;
   if (!member) return null;
@@ -465,9 +482,16 @@ async function setBotNicknameForCall(voiceChannel: VoiceChannel): Promise<string
 async function restoreBotNicknameAfterCall(voiceChannel: VoiceChannel, previousNickname: string | null): Promise<void> {
   const member = voiceChannel.guild.members.me;
   if (!member) return;
+  const fallback = String(process.env.VOICE_BOT_NICKNAME_DEFAULT || 'As Soon As Possible').trim() || 'As Soon As Possible';
+  const desired = previousNickname ?? fallback;
   try {
-    await member.setNickname(previousNickname, 'ASAP voice call ended');
-  } catch {
+    if ((member.displayName || '').trim() === desired) {
+      return;
+    }
+    await member.setNickname(desired, 'ASAP voice call ended');
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : 'Unknown';
+    console.warn(`Failed to restore bot nickname to "${desired}": ${msg}`);
   }
 }
 
@@ -481,8 +505,15 @@ export async function startCall(
   initiator: GuildMember
 ): Promise<void> {
   const callStartMs = Date.now();
+  if (callStartInProgress) {
+    await sendLifecycleNoticeOnce(groupchat, `start_in_progress:${voiceChannel.id}`, '📞 A call start is already being processed. Please wait a few seconds.');
+    return;
+  }
+
+  callStartInProgress = true;
+  try {
   if (activeSession?.active) {
-    await sendAsAgent(groupchat, '⚠️ A call is already in progress. Say `LEAVE` to end it first.');
+    await sendLifecycleNoticeOnce(groupchat, `already_active:${voiceChannel.id}`, '⚠️ A call is already in progress. Say `LEAVE` to end it first.');
     return;
   }
 
@@ -569,7 +600,7 @@ export async function startCall(
           activeSession.disconnectedSince = Date.now();
           console.warn('Voice connection temporarily disconnected — waiting for recovery');
           void postVoiceStageLog('connection_disconnected', `channel=${voiceChannel.name}`, 'warn');
-          sendAsAgent(groupchat, '⚠️ Voice connection interrupted — reconnecting for up to 45 seconds.').catch(() => {});
+          sendLifecycleNoticeOnce(groupchat, `reconnecting:${voiceChannel.id}`, '⚠️ Voice connection interrupted — reconnecting for up to 45 seconds.').catch(() => {});
           return;
         }
 
@@ -585,7 +616,7 @@ export async function startCall(
       }
 
       if (activeSession.disconnectedSince) {
-        sendAsAgent(groupchat, '✅ Voice reconnected.').catch(() => {});
+        sendLifecycleNoticeOnce(groupchat, `reconnected:${voiceChannel.id}`, '✅ Voice reconnected.').catch(() => {});
         void postVoiceStageLog('connection_recovered', `channel=${voiceChannel.name}`);
       }
       activeSession.disconnectedSince = null;
@@ -633,13 +664,14 @@ export async function startCall(
     );
   }
 
-  const sttNote = isElevenLabsRealtimeAvailable()
+  const sttNote = (String(process.env.VOICE_REALTIME_MODE || 'true').toLowerCase() !== 'false' && isElevenLabsRealtimeAvailable())
     ? '\n🎙️ ElevenLabs realtime STT is active.'
     : isDeepgramAvailable()
       ? '\n⚠️ ElevenLabs realtime STT unavailable — using Deepgram realtime fallback.'
       : '\n⚠️ Realtime STT unavailable — using Gemini batch mode (~1-2s latency).';
-  await sendAsAgent(
+  await sendLifecycleNoticeOnce(
     groupchat,
+    `started:${voiceChannel.id}`,
     `✅ **Voice call started**\n` +
       `Initiated by **${initiator.displayName}**\n` +
       `${riley?.emoji || '📋'} **Riley** is on the line and listening now.\n\n` +
@@ -678,6 +710,9 @@ export async function startCall(
 
   await postVoiceStageLog('call_started', `channel=${voiceChannel.name} total_startup_ms=${Date.now() - callStartMs}`);
   primeElevenLabsVoiceCache(selectedRileyVoice, RILEY_WARM_PHRASES).catch(() => {});
+  } finally {
+    callStartInProgress = false;
+  }
 }
 
 /**
@@ -798,7 +833,7 @@ async function handleVoiceInput(transcription: VoiceTranscription): Promise<void
 
   let firstTokenLogged = false;
   let firstAudioLogged = false;
-  let sttFinalMs = Number.isFinite(transcription.sttLatencyMs) ? Number(transcription.sttLatencyMs) : -1;
+  const sttFinalMs = Number.isFinite(transcription.sttLatencyMs) ? Number(transcription.sttLatencyMs) : -1;
   let firstTokenMs = -1;
   let firstAudioMs = -1;
   let watchdogTimer: ReturnType<typeof setTimeout> | null = null;
@@ -839,6 +874,69 @@ async function handleVoiceInput(transcription: VoiceTranscription): Promise<void
 
     if (riley) {
       try {
+      if (isElevenLabsConvaiEnabled()) {
+        try {
+          const convaiStartMs = Date.now();
+          const responseRaw = await getElevenLabsConvaiReply(userText, transcription.language);
+          if (!firstTokenLogged && responseRaw.trim()) {
+            firstTokenLogged = true;
+            firstTokenMs = Date.now() - turnStartMs;
+            await postVoiceStageLog('riley_first_token', `turn=${turnId} token_ms=${firstTokenMs}`);
+          }
+
+          const response = finalizeSpokenResponse(responseRaw);
+          await postVoiceStageLog(
+            'riley_convai',
+            `turn=${turnId} convai_ms=${Date.now() - convaiStartMs} raw_chars=${responseRaw.length} final_chars=${response.length}`
+          );
+
+          if (!isCurrentTurn() || !response.trim()) return;
+
+          session.conversationHistory.push({
+            role: 'user',
+            content: `[Voice from ${transcription.username}]: ${userText}`,
+          });
+          session.conversationHistory.push({ role: 'assistant', content: `[Riley]: ${response}` });
+
+          const rileyLogAndMirror = VOICE_DISABLE_CALL_LOG
+            ? Promise.resolve([])
+            : Promise.allSettled([
+                session.callLog.send(`${riley.emoji} **${riley.name}**: ${response.slice(0, 1900)}`),
+                mirrorAgentResponse(riley.name, 'call-log', response),
+              ]);
+          if (!VOICE_DISABLE_CALL_LOG) {
+            session.transcript.push(
+              `[${new Date().toLocaleTimeString()}] Riley (EA): ${response}`
+            );
+          }
+
+          if (!isCurrentTurn()) return;
+
+          const rileyTtsStartMs = Date.now();
+          await speakPipelined(
+            response,
+            session.rileyVoiceName,
+            signal,
+            transcription.language,
+            () => {
+              if (firstAudioLogged) return;
+              firstAudioLogged = true;
+              firstAudioMs = Date.now() - turnStartMs;
+              void postVoiceStageLog('riley_first_audio', `turn=${turnId} audio_ms=${firstAudioMs}`);
+            }
+          );
+          await rileyLogAndMirror;
+          await postVoiceStageLog('riley_tts', `turn=${turnId} tts_play_ms=${Date.now() - rileyTtsStartMs}`);
+          return;
+        } catch (convaiErr) {
+          await postVoiceStageLog(
+            'riley_convai_failed',
+            `turn=${turnId} error=${convaiErr instanceof Error ? convaiErr.message : 'Unknown'}`,
+            'warn'
+          );
+        }
+      }
+
       const rileyMemory = compactVoiceHistoryForPrompt(getMemoryContext('executive-assistant').slice(-VOICE_MEMORY_MAX_MESSAGES));
       const recentVoiceHistory = compactVoiceHistoryForPrompt(session.conversationHistory);
       const langHint = transcription.language && transcription.language !== 'en'

@@ -1,6 +1,7 @@
+import { createHash } from 'crypto';
 import fs from 'fs';
 import path from 'path';
-import { createHash } from 'crypto';
+
 import puppeteer, { Browser, Page } from 'puppeteer';
 
 interface CaptureTarget {

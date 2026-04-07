@@ -1,9 +1,10 @@
-import { Router, Request, Response } from 'express';
+import { Router, Response } from 'express';
 import rateLimit from 'express-rate-limit';
+
+import pool from '../db/pool';
+import { AuthRequest, requireAuth } from '../middleware/auth';
 import { getBestPricesByType } from '../services/fuel';
 import { summarizeFuelPrices } from '../services/gemini';
-import { AuthRequest, requireAuth } from '../middleware/auth';
-import pool from '../db/pool';
 
 const router = Router();
 

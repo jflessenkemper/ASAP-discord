@@ -1,5 +1,7 @@
-import { GoogleAuth } from 'google-auth-library';
 import { execFileSync } from 'child_process';
+
+import { GoogleAuth } from 'google-auth-library';
+
 import { ensureGoogleCredentials, getGoogleCredentialBootstrapState } from './googleCredentials';
 
 const PROJECT_ID = process.env.GOOGLE_CLOUD_PROJECT || process.env.GCLOUD_PROJECT || process.env.GCS_PROJECT_ID || '';

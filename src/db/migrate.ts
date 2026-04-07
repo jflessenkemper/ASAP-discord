@@ -1,6 +1,7 @@
 import 'dotenv/config';
 import fs from 'fs';
 import path from 'path';
+
 import pool from './pool';
 
 async function migrate() {

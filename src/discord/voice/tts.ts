@@ -1,9 +1,11 @@
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import { GoogleAuth } from 'google-auth-library';
-import { recordGeminiUsage, isGeminiOverLimit } from '../usage';
-import { elevenLabsTTS, isElevenLabsAvailable } from './elevenlabs';
-import { recordTtsError, recordTtsLatency, recordTranscriptionLatency } from '../metrics';
+
 import { ensureGoogleCredentials, getAccessTokenViaGcloud } from '../../services/googleCredentials';
+import { recordTtsError, recordTtsLatency, recordTranscriptionLatency } from '../metrics';
+import { recordGeminiUsage, isGeminiOverLimit } from '../usage';
+
+import { elevenLabsTTS, isElevenLabsAvailable } from './elevenlabs';
 
 const USE_VERTEX_AI = process.env.GEMINI_USE_VERTEX_AI === 'true';
 const VERTEX_PROJECT_ID = process.env.VERTEX_PROJECT_ID || process.env.GOOGLE_CLOUD_PROJECT || process.env.GCLOUD_PROJECT || '';

@@ -1,8 +1,9 @@
-import { Router, Request, Response } from 'express';
+import appleSignin from 'apple-signin-auth';
 import bcrypt from 'bcryptjs';
+import { Router, Request, Response } from 'express';
 import rateLimit from 'express-rate-limit';
 import { OAuth2Client } from 'google-auth-library';
-import appleSignin from 'apple-signin-auth';
+
 import pool from '../db/pool';
 import { createSession, invalidateSession, AuthRequest, requireAuth, setAuthCookie, clearAuthCookie } from '../middleware/auth';
 import { generateCode, sendTwoFactorCode } from '../services/email';
@@ -10,8 +11,6 @@ import { generateCode, sendTwoFactorCode } from '../services/email';
 const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 
 const router = Router();
-
-const sendAuthFailed = (res: Response) => res.status(401).json({ code: 'AUTH_FAILED', message: 'We couldn\'t verify your login details. Please double-check them and try again.' });
 
 // Non-blocking auth event logger
 function logAuthEvent(req: Request, event: string, userId?: string, userType?: string, provider?: string) {

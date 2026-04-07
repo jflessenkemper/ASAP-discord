@@ -1,4 +1,5 @@
 import { Router, Response } from 'express';
+
 import pool from '../db/pool';
 import { AuthRequest, requireAuth } from '../middleware/auth';
 

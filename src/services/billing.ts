@@ -75,7 +75,7 @@ async function queryCostSum(start: Date, end: Date): Promise<{ total: number; cu
     url: `https://monitoring.googleapis.com/v3/projects/${PROJECT_ID}/timeSeries`,
     method: 'GET',
     params: {
-      filter: `metric.type=\"${COST_METRIC_TYPE}\"`,
+      filter: `metric.type="${COST_METRIC_TYPE}"`,
       'interval.startTime': start.toISOString(),
       'interval.endTime': end.toISOString(),
       'aggregation.alignmentPeriod': `${Math.max(60, Math.floor((end.getTime() - start.getTime()) / 1000))}s`,

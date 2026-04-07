@@ -1,12 +1,13 @@
-import puppeteer, { Browser, Page } from 'puppeteer';
 import { AttachmentBuilder, TextChannel } from 'discord.js';
+import puppeteer, { Browser, Page } from 'puppeteer';
+
 import { PUPPETEER_LAUNCH_ARGS, resolvePuppeteerExecutablePath } from './browserRuntime';
 
 const VIEWPORT = { width: 440, height: 956, deviceScaleFactor: 3 };
 const NAV_TIMEOUT = 30_000;
 
 const ALLOWED_URL_PATTERNS = [
-  /^https:\/\/asap-[a-z0-9-]+(?:\.[a-z0-9-]+)*\.run\.app(?:[\/:?#]|$)/i,
+  /^https:\/\/asap-[a-z0-9-]+(?:\.[a-z0-9-]+)*\.run\.app(?:[/:?#]|$)/i,
   /^https?:\/\/localhost(:\d+)?/,
   /^https?:\/\/127\.0\.0\.1(:\d+)?/,
 ];

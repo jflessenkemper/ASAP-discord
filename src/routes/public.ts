@@ -1,8 +1,9 @@
 import { Router, Request, Response } from 'express';
 import rateLimit from 'express-rate-limit';
+
 import { getBestPricesByType } from '../services/fuel';
-import { summarizeFuelPrices, searchBestPrices, categorizeJob } from '../services/gemini';
 import { haversineKm } from '../services/fuel';
+import { summarizeFuelPrices, searchBestPrices, categorizeJob } from '../services/gemini';
 
 const router = Router();
 

@@ -1,5 +1,6 @@
 import { Router, Response } from 'express';
 import jwt from 'jsonwebtoken';
+
 import { AuthRequest, requireAuth } from '../middleware/auth';
 
 const router = Router();

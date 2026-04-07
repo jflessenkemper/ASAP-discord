@@ -1,4 +1,5 @@
 import fs from 'fs';
+
 import puppeteer from 'puppeteer';
 
 export const PUPPETEER_LAUNCH_ARGS = [

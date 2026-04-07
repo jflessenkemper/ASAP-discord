@@ -1,3 +1,5 @@
+import { Readable, Transform } from 'stream';
+
 import {
   joinVoiceChannel,
   VoiceConnection,
@@ -11,11 +13,11 @@ import {
   StreamType,
 } from '@discordjs/voice';
 import { VoiceBasedChannel, GuildMember } from 'discord.js';
-import { Readable, Transform } from 'stream';
 import prism from 'prism-media';
-import { transcribeVoiceDetailed } from './tts';
+
 import { isDeepgramAvailable, startLiveTranscription, DeepgramLiveSession } from './deepgram';
 import { startElevenLabsRealtimeTranscription, ElevenLabsRealtimeSession, isElevenLabsRealtimeAvailable } from './elevenlabsRealtime';
+import { transcribeVoiceDetailed } from './tts';
 
 const DEFAULT_TESTER_BOT_ID = '1487426371209789450';
 
@@ -239,6 +241,7 @@ const MAX_RESUBSCRIBES = 500;
 /** Max audio buffer size (5 MB) — reject oversized buffers */
 const MAX_AUDIO_BUFFER = 5 * 1024 * 1024;
 const VOICE_MIN_AUDIO_BYTES = parseInt(process.env.VOICE_MIN_AUDIO_BYTES || '48000', 10);
+const VOICE_SHORT_BUFFER_COALESCE_WINDOW_MS = Math.max(500, parseInt(process.env.VOICE_SHORT_BUFFER_COALESCE_WINDOW_MS || '2500', 10));
 const MAX_DEEPGRAM_SESSION_RETRIES = parseInt(process.env.MAX_DEEPGRAM_SESSION_RETRIES || '3', 10);
 const VOICE_ENDPOINT_SILENCE_BASE_MS = parseInt(process.env.VOICE_ENDPOINT_SILENCE_BASE_MS || '900', 10);
 const VOICE_ENDPOINT_SILENCE_MIN_MS = parseInt(process.env.VOICE_ENDPOINT_SILENCE_MIN_MS || '650', 10);
@@ -247,6 +250,7 @@ const VOICE_ENDPOINT_STATE_TTL_MS = Math.max(300_000, parseInt(process.env.VOICE
 const VOICE_ENDPOINT_CLEANUP_INTERVAL_MS = Math.max(60_000, parseInt(process.env.VOICE_ENDPOINT_CLEANUP_INTERVAL_MS || '600000', 10));
 
 const voiceEndpointingByUser = new Map<string, { silenceMs: number; lastAudioBytes: number; turns: number; updatedAt: number }>();
+const pendingShortAudioByUser = new Map<string, { audio: Buffer; capturedAt: number }>();
 
 function pruneVoiceEndpointingState(now = Date.now()): void {
   for (const [userId, state] of voiceEndpointingByUser.entries()) {
@@ -361,7 +365,14 @@ export function listenToUser(
       if (destroyed) return;
 
       if (chunks.length > 0 && totalSize <= MAX_AUDIO_BUFFER) {
-        const audioBuffer = Buffer.concat(chunks);
+        const rawAudioBuffer = Buffer.concat(chunks);
+        const pending = pendingShortAudioByUser.get(member.id);
+        const isPendingFresh = Boolean(pending && (Date.now() - pending.capturedAt) <= VOICE_SHORT_BUFFER_COALESCE_WINDOW_MS);
+        const audioBuffer = isPendingFresh && pending
+          ? Buffer.concat([pending.audio, rawAudioBuffer])
+          : rawAudioBuffer;
+        pendingShortAudioByUser.delete(member.id);
+
         if (audioBuffer.length >= VOICE_MIN_AUDIO_BYTES) {
           updateAdaptiveSilenceDuration(member.id, audioBuffer.length);
           try {
@@ -382,10 +393,15 @@ export function listenToUser(
           }
         } else {
           updateAdaptiveSilenceDuration(member.id, audioBuffer.length);
-          console.debug(`Skipped short voice buffer for ${member.displayName}: ${audioBuffer.length} bytes < ${VOICE_MIN_AUDIO_BYTES}`);
+          pendingShortAudioByUser.set(member.id, {
+            audio: audioBuffer,
+            capturedAt: Date.now(),
+          });
+          console.debug(`Coalescing short voice buffer for ${member.displayName}: ${audioBuffer.length} bytes < ${VOICE_MIN_AUDIO_BYTES}`);
         }
       } else if (totalSize > MAX_AUDIO_BUFFER) {
         console.warn(`Audio buffer exceeded ${MAX_AUDIO_BUFFER} bytes for ${member.displayName} — skipped`);
+        pendingShortAudioByUser.delete(member.id);
       }
 
       subscribe();

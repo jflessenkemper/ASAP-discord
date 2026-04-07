@@ -1,7 +1,10 @@
+import { execFileSync } from 'child_process';
 import fs from 'fs';
 import path from 'path';
-import { execFileSync } from 'child_process';
+
 import { Message, TextChannel, GuildMember, EmbedBuilder, ThreadAutoArchiveDuration } from 'discord.js';
+
+import { triggerCloudBuild, listRevisions, getCurrentRevision, rollbackToRevision } from '../../services/cloudrun';
 import {
   getAgents,
   getAgent,
@@ -12,15 +15,20 @@ import {
   resolveAgentId,
   resolveAgentIdByRoleId,
 } from '../agents';
+import { getBotChannels } from '../bot';
 import { agentRespond, clearGeminiQuotaFuse, ConversationMessage, extractAgentResponseEnvelope, getContextRuntimeReport, getGeminiQuotaFuseStatus, setQuotaFuseNotifyCallback, setRateLimitNotifyCallback } from '../claude';
 import { appendToMemory, getMemoryContext, loadMemory, saveMemory, clearMemory, compressMemory } from '../memory';
+import { postAgentErrorLog } from '../services/agentErrors';
+import { formatOpsLine } from '../services/opsFeed';
+import { captureAndPostScreenshots } from '../services/screenshots';
+import { makeOutboundCall, makeAsapTesterCall, startConferenceCall, isTelephonyAvailable } from '../services/telephony';
+import { getWebhook, sendWebhookMessage, WebhookCapableChannel } from '../services/webhooks';
+import { approveAdditionalBudget, getContextEfficiencyReport, getUsageReport, refreshLiveBillingData, refreshUsageDashboard } from '../usage';
+
+import { startCall, endCall, isCallActive, injectVoiceTranscriptForTesting, processTesterVoiceTurnForCall } from './callSession';
 import { documentToChannel } from './documentation';
 import { sendAgentMessage, clearHistory } from './textChannel';
-import { startCall, endCall, isCallActive, injectVoiceTranscriptForTesting, processTesterVoiceTurnForCall } from './callSession';
-import { makeOutboundCall, makeAsapTesterCall, startConferenceCall, isTelephonyAvailable } from '../services/telephony';
-import { getBotChannels } from '../bot';
-import { approveAdditionalBudget, getContextEfficiencyReport, getUsageReport, refreshLiveBillingData, refreshUsageDashboard } from '../usage';
-import { getWebhook, sendWebhookMessage, WebhookCapableChannel } from '../services/webhooks';
+
 
 type ToolNotificationBatch = {
   channel: WebhookCapableChannel;
@@ -91,12 +99,7 @@ async function flushToolNotificationBatch(key: string): Promise<void> {
     }
   }
 }
-import { triggerCloudBuild, listRevisions, getCurrentRevision, rollbackToRevision } from '../../services/cloudrun';
-import { captureAndPostScreenshots } from '../services/screenshots';
-import { postAgentErrorLog } from '../services/agentErrors';
-import { formatOpsLine } from '../services/opsFeed';
-
-let groupHistory: ConversationMessage[] = loadMemory('groupchat');
+const groupHistory: ConversationMessage[] = loadMemory('groupchat');
 
 // Global FIFO for groupchat events. A single stuck request can block all later
 // messages, so processing is always paired with explicit timeout guards.
@@ -128,8 +131,10 @@ const THREAD_CLOSE_REVIEW_INTERVAL_MS = parseInt(process.env.THREAD_CLOSE_REVIEW
 const THREAD_STATUS_POST_INTERVAL_MS = parseInt(process.env.THREAD_STATUS_POST_INTERVAL_MS || '3600000', 10);
 const ACTION_COMMAND_TIMEOUT_MS = parseInt(process.env.ACTION_COMMAND_TIMEOUT_MS || '120000', 10);
 const AUTO_DEPLOY_ON_THREAD_CLOSE = String(process.env.AUTO_DEPLOY_ON_THREAD_CLOSE || 'true').toLowerCase() !== 'false';
+const AUTO_REBUILD_ERROR_COOLDOWN_MS = parseInt(process.env.AUTO_REBUILD_ERROR_COOLDOWN_MS || '900000', 10);
 const URL_ACTION_COOLDOWN_MS = parseInt(process.env.URL_ACTION_COOLDOWN_MS || '1800000', 10);
 const GOAL_THREAD_COUNTER_RE = /\bgoal[-\s]?(\d{4})\b/i;
+const GROUPCHAT_DUPLICATE_WINDOW_MS = parseInt(process.env.GROUPCHAT_DUPLICATE_WINDOW_MS || '10000', 10);
 const APP_SERVER_ROOT = (fs.existsSync(path.join(process.cwd(), 'package.json')) && fs.existsSync(path.join(process.cwd(), 'src')))
   ? process.cwd()
   : path.resolve(__dirname, '../../..');
@@ -162,12 +167,32 @@ function isTesterBotId(userId: string): boolean {
   return allowed.has(userId);
 }
 let lastThreadCloseReviewAt = 0;
-let lastThreadStatusPostAt = 0;
+let lastAutoRebuildErrorAt = 0;
+let lastAutoRebuildErrorKey = '';
 let goalSequenceInitialized = false;
 let goalWatchdog: ReturnType<typeof setInterval> | null = null;
 let threadStatusChannel: TextChannel | null = null;
 let threadStatusSourceChannel: TextChannel | null = null;
 let threadStatusReporter: ReturnType<typeof setInterval> | null = null;
+const recentGroupchatFingerprints = new Map<string, number>();
+
+function isDuplicateGroupchatMessage(message: Message, content: string): boolean {
+  const normalized = String(content || '').replace(/\s+/g, ' ').trim().toLowerCase();
+  if (!normalized) return false;
+  const sender = message.author?.id || 'unknown';
+  const key = `${sender}:${normalized.slice(0, 240)}`;
+  const now = Date.now();
+  const prev = recentGroupchatFingerprints.get(key) || 0;
+  recentGroupchatFingerprints.set(key, now);
+  if (recentGroupchatFingerprints.size > 500) {
+    for (const [k, ts] of recentGroupchatFingerprints) {
+      if (now - ts > GROUPCHAT_DUPLICATE_WINDOW_MS * 3) {
+        recentGroupchatFingerprints.delete(k);
+      }
+    }
+  }
+  return now - prev < GROUPCHAT_DUPLICATE_WINDOW_MS;
+}
 
 function markGoalProgress(status?: string): void {
   lastGoalProgressAt = Date.now();
@@ -486,7 +511,6 @@ export async function postThreadStatusSnapshotNow(reason = 'hourly'): Promise<vo
     await threadStatusChannel.send(content).catch(() => {});
   }
 
-  lastThreadStatusPostAt = Date.now();
 }
 
 export async function getThreadStatusOpsLine(): Promise<string> {
@@ -531,7 +555,6 @@ export function setThreadStatusChannel(channel: TextChannel | null, groupchat?: 
     return;
   }
 
-  lastThreadStatusPostAt = Date.now();
   threadStatusReporter = setInterval(() => {
     postThreadStatusSnapshotNow('hourly').catch((err) => {
       console.error('Thread status reporter error:', err instanceof Error ? err.message : 'Unknown');
@@ -661,7 +684,18 @@ async function closeGoalWorkspace(
       }).catch(() => {});
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Unknown';
-      await groupchat.send(`⚠️ Auto rebuild after thread close failed: ${msg}`).catch(() => {});
+      const normalized = msg.toLowerCase();
+      const isCredentialError = normalized.includes('could not load the default credentials');
+      const userMsg = isCredentialError
+        ? 'Auto rebuild skipped: GCP credentials are not configured for this runtime. Please run manual deploy until credentials are restored.'
+        : `Auto rebuild after thread close failed: ${msg}`;
+      const now = Date.now();
+      const dedupeKey = isCredentialError ? 'cred-missing' : userMsg.slice(0, 180);
+      if (dedupeKey !== lastAutoRebuildErrorKey || now - lastAutoRebuildErrorAt >= AUTO_REBUILD_ERROR_COOLDOWN_MS) {
+        await groupchat.send(`⚠️ ${userMsg}`).catch(() => {});
+        lastAutoRebuildErrorAt = now;
+        lastAutoRebuildErrorKey = dedupeKey;
+      }
       void postAgentErrorLog('riley:auto-deploy', 'Auto rebuild on thread close failed', { detail: msg, level: 'warn' });
     }
   }
@@ -1133,21 +1167,23 @@ async function handleDirectVoiceActionIfRequested(message: Message, content: str
   return true;
 }
 
-function detectDirectOpsAction(text: string): 'status' | 'limits' | 'threads' | null {
+function detectDirectOpsAction(text: string): 'status' | 'limits' | 'threads' | 'help' | null {
   const normalized = stripMentionsForIntent(text).toLowerCase();
   if (!normalized) return null;
 
   const words = normalized.split(/\s+/).filter(Boolean);
-  if (words.length > 18 || normalized.length > 160) return null;
+  if (words.length > 30 || normalized.length > 260) return null;
 
   const lead = String.raw`^(?:hey|hi|yo)?\s*(?:riley|asap)?\s*[,!:;-]?\s*(?:please\s+)?(?:can you\s+|could you\s+|will you\s+)?`;
-  const statusPattern = new RegExp(`${lead}(?:status|what(?:'| i)?s\s+the\s+status|update\s+status|current\s+goal)\??$`, 'i');
-  const limitsPattern = new RegExp(`${lead}(?:limits|usage|budget|spend|costs|token\s+usage|show\s+limits|show\s+usage)\??$`, 'i');
-  const threadsPattern = new RegExp(`${lead}(?:threads|thread\s+status|open\s+threads|workspace\s+threads)\??$`, 'i');
+  const statusPattern = new RegExp(`${lead}(?:status|what(?:'| i)?s\\s+the\\s+status|update\\s+status|current\\s+goal)\\??$`, 'i');
+  const limitsPattern = new RegExp(`${lead}(?:limits|usage|budget|spend|costs|token\\s+usage|show\\s+limits|show\\s+usage)\\??$`, 'i');
+  const threadsPattern = new RegExp(`${lead}(?:threads|thread\\s+status|open\\s+threads|workspace\\s+threads)\\??$`, 'i');
+  const helpPattern = new RegExp(`${lead}(?:help|what\\s+can\\s+you\\s+do|commands?)\\??$`, 'i');
 
   if (statusPattern.test(normalized)) return 'status';
   if (limitsPattern.test(normalized)) return 'limits';
   if (threadsPattern.test(normalized)) return 'threads';
+  if (helpPattern.test(normalized)) return 'help';
   return null;
 }
 
@@ -1163,6 +1199,14 @@ async function sendQuickRileyMessage(groupchat: TextChannel, content: string): P
 async function handleDirectOpsActionIfRequested(content: string, groupchat: TextChannel): Promise<boolean> {
   const action = detectDirectOpsAction(content);
   if (!action) return false;
+
+  if (action === 'help') {
+    await sendQuickRileyMessage(
+      groupchat,
+      '⚡ Quick actions: `status`, `limits`, `threads`, `join voice`, `leave voice`, `cleanup`, `smoke`, `health`.'
+    );
+    return true;
+  }
 
   if (action === 'status') {
     await sendQuickRileyMessage(groupchat, getStatusSummary() || '📋 No active tasks.');
@@ -1258,6 +1302,10 @@ export async function handleGroupchatMessage(
 ): Promise<void> {
   const content = message.content.trim();
   if (!content) return;
+  if (isDuplicateGroupchatMessage(message, content)) {
+    await sendQuickRileyMessage(groupchat, '⏳ I already received that request and I am still processing it.');
+    return;
+  }
 
   // Fast-path direct commands before queue orchestration to avoid abort races
   // between back-to-back control messages (e.g. join then inject test voice).
@@ -2576,7 +2624,7 @@ async function handleSubAgents(
     const directiveExcerpt = directiveContext.replace(/\s+/g, ' ').trim().slice(0, 1400);
 
     const tierResults = await runLimited(
-      tierAgents.map(({ id, agent }) => async () => {
+      tierAgents.map(({ id }) => async () => {
         if (signal?.aborted) return;
         documentToChannel(id, `📥 Received task from groupchat. Working...`).catch(() => {});
         const agentContext = `[Directive from groupchat]: ${directiveExcerpt}${priorContext}\n\nDo only the specialist work relevant to your role. Be concise — max 120 words. Report what you found or changed.`;

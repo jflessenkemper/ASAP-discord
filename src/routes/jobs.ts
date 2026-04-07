@@ -1,10 +1,11 @@
 import { Router, Response } from 'express';
-import multer from 'multer';
 import rateLimit from 'express-rate-limit';
+import multer from 'multer';
+
 import pool from '../db/pool';
 import { AuthRequest, requireAuth, requireClient, requireEmployee } from '../middleware/auth';
-import { assessJobDifficulty, transcribeAudio, categorizeJob } from '../services/gemini';
 import { calculateFuelCost, haversineKm } from '../services/fuel';
+import { assessJobDifficulty, transcribeAudio, categorizeJob } from '../services/gemini';
 import { uploadEvidence } from '../services/storage';
 
 const router = Router();

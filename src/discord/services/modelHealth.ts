@@ -1,8 +1,10 @@
-import { postDiagnostic } from './diagnosticsWebhook';
 import { GoogleAuth } from 'google-auth-library';
-import pool from '../../db/pool';
 import type { PoolClient } from 'pg';
+
+import pool from '../../db/pool';
 import { ensureGoogleCredentials, getAccessTokenViaGcloud } from '../../services/googleCredentials';
+
+import { postDiagnostic } from './diagnosticsWebhook';
 
 interface CheckResult {
   name: string;
@@ -114,6 +116,10 @@ export async function runModelHealthChecks(): Promise<void> {
 }
 
 async function acquireRevisionHealthLock(): Promise<boolean> {
+  if (lockClient) {
+    return true;
+  }
+
   const revision = process.env.K_REVISION || 'local';
   const lockId = hashLockKey(`startup-health:${revision}`);
 

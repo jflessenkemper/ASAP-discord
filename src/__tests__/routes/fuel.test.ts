@@ -1,7 +1,7 @@
-import request from 'supertest';
-import express from 'express';
 import cookieParser from 'cookie-parser';
+import express from 'express';
 import jwt from 'jsonwebtoken';
+import request from 'supertest';
 
 const JWT_SECRET = 'test-jwt-secret-for-testing-only';
 

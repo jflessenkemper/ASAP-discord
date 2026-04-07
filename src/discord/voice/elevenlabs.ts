@@ -1,4 +1,5 @@
 import { ElevenLabsClient } from 'elevenlabs';
+
 import { recordElevenLabsUsage, isElevenLabsOverLimit } from '../usage';
 
 let client: ElevenLabsClient | null = null;
@@ -58,8 +59,8 @@ function getClient(): ElevenLabsClient {
  *  Also supports choosing voices by ElevenLabs name directly.
  *  Full catalog: https://elevenlabs.io/voice-library */
 const VOICE_ID_MAP: Record<string, string> = {
-  Achernar: '1u9fzC9CaZV94lApNwFM',  // Riley → ASAPCommander
-  Aoede: '1u9fzC9CaZV94lApNwFM',       // Ace → ASAPCommander
+  Achernar: 'lsgXALPNLFUcQfT1dmP1',  // Riley
+  Aoede: 'lsgXALPNLFUcQfT1dmP1',     // legacy alias -> Riley voice
 
   sarah: 'EXAVITQu4vr4xnSDxMaL',
   adam: 'pNInz6obpgDQGcFmaJgB',
@@ -97,7 +98,7 @@ const VOICE_ID_MAP: Record<string, string> = {
 };
 
 /** Default voice if agent voice not mapped */
-const DEFAULT_VOICE_ID = '1u9fzC9CaZV94lApNwFM'; // ASAPCommander
+const DEFAULT_VOICE_ID = 'lsgXALPNLFUcQfT1dmP1'; // user-provided default
 
 /**
  * Select the ElevenLabs model based on the target language.

@@ -1,15 +1,17 @@
-import fs from 'fs';
-import path from 'path';
 import { execSync, execFileSync } from 'child_process';
-import https from 'https';
-import http from 'http';
 import { createHash } from 'crypto';
+import fs from 'fs';
+import http from 'http';
+import https from 'https';
+import path from 'path';
+
 import {
   Guild,
   ChannelType,
   TextChannel,
   CategoryChannel,
 } from 'discord.js';
+
 import {
   createBranch,
   createPullRequest,
@@ -18,11 +20,12 @@ import {
   listPullRequests,
   searchGitHub,
 } from '../services/github';
-import { getRequiredReviewers } from './handlers/review';
-import { captureAndPostScreenshots } from './services/screenshots';
-import { mobileHarnessStart, mobileHarnessStep, mobileHarnessSnapshot, mobileHarnessStop } from './services/mobileHarness';
-import { getWebhook } from './services/webhooks';
+
 import { getAgent, AgentId } from './agents';
+import { getRequiredReviewers } from './handlers/review';
+import { mobileHarnessStart, mobileHarnessStep, mobileHarnessSnapshot, mobileHarnessStop } from './services/mobileHarness';
+import { captureAndPostScreenshots } from './services/screenshots';
+import { getWebhook } from './services/webhooks';
 import { setDailyBudgetLimit } from './usage';
 
 
@@ -1854,7 +1857,7 @@ function rebuildHotSearchIndexIfNeeded(): void {
 function searchFilesHotIndexPaths(pattern: string, limit: number): string[] {
   const query = String(pattern || '').trim();
   if (!query) return [];
-  if (/[\[\]{}()*+?|\\]/.test(query)) return [];
+  if (['[', ']', '{', '}', '(', ')', '*', '+', '?', '|', '\\'].some((ch) => query.includes(ch))) return [];
 
   rebuildHotSearchIndexIfNeeded();
   if (hotSearchIndex.length === 0) return [];
@@ -2777,7 +2780,7 @@ async function gcpSetEnv(variables: string): Promise<string> {
   if (!safeVars) return 'Invalid format. Use KEY=VALUE pairs separated by commas.';
 
   try {
-    const result = execFileSync('gcloud', [
+    execFileSync('gcloud', [
       'run', 'services', 'update', GCP_SERVICE,
       `--project=${GCP_PROJECT}`,
       `--region=${GCP_REGION}`,
@@ -2843,7 +2846,6 @@ async function gcpSecretSet(name: string, value: string): Promise<string> {
       exists = true;
     } catch { /* doesn't exist */ }
 
-    const action = exists ? 'versions add' : 'create';
     const args = exists
       ? ['secrets', 'versions', 'add', safeName, `--project=${GCP_PROJECT}`, '--data-file=-']
       : ['secrets', 'create', safeName, `--project=${GCP_PROJECT}`, '--data-file=-'];
@@ -3329,7 +3331,7 @@ async function repoMemoryUpsertPath(relPathRaw: string): Promise<void> {
     await client.query('COMMIT');
   } catch {
     if (client) {
-      try { await client.query('ROLLBACK'); } catch { }
+      try { await client.query('ROLLBACK'); } catch { /* ignore */ }
     }
     repoMemoryDbDisabled = true;
   } finally {
@@ -3704,9 +3706,9 @@ async function repoMemoryIndex(modeRaw?: string, maxFilesRaw?: number): Promise<
     await client.query('COMMIT');
     const elapsed = Date.now() - started;
     return `Repo index updated (${mode}): scanned=${scanned}, changed=${changed}, skipped=${skipped}, removed=${removed}, chunks=${chunksUpserted}, elapsed=${elapsed}ms.`;
-  } catch (err) {
+  } catch {
     if (client) {
-      try { await client.query('ROLLBACK'); } catch { }
+      try { await client.query('ROLLBACK'); } catch { /* ignore */ }
     }
     repoMemoryDbDisabled = true;
     return repoMemoryIndexCache(mode, maxFiles);
@@ -3765,7 +3767,7 @@ async function repoMemorySearch(query: string, limitRaw?: number, sourceRaw?: st
       return `${idx + 1}. [${sourceType}] ${shortKey} (rank=${rank})\n   ${snippet}`;
     });
     return `Repo memory results for "${q}":\n${lines.join('\n')}`.slice(0, 4000);
-  } catch (err) {
+  } catch {
     repoMemoryDbDisabled = true;
     return repoMemorySearchCache(q, safeLimit, sourceFilter);
   }
@@ -3820,9 +3822,9 @@ async function repoMemoryAddOss(title: string, content: string, tagsRaw?: string
 
     await client.query('COMMIT');
     return `Stored OSS knowledge: ${sourcePath} (${chunks.length} chunk(s)).`;
-  } catch (err) {
+  } catch {
     if (client) {
-      try { await client.query('ROLLBACK'); } catch { }
+      try { await client.query('ROLLBACK'); } catch { /* ignore */ }
     }
     repoMemoryDbDisabled = true;
     return repoMemoryAddOssCache(cleanTitle, cleanContent, tagsRaw);

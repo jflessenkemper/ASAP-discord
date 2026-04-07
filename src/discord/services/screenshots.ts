@@ -1,5 +1,6 @@
+import { TextChannel, AttachmentBuilder } from 'discord.js';
 import puppeteer, { Browser, Page } from 'puppeteer';
-import { TextChannel, AttachmentBuilder, Collection, Message } from 'discord.js';
+
 import { postAgentErrorLog } from './agentErrors';
 import { PUPPETEER_LAUNCH_ARGS, resolvePuppeteerExecutablePath } from './browserRuntime';
 
@@ -11,7 +12,7 @@ const CAPTURE_TIMEOUT = 90_000;
 
 /** Allowed URL patterns for screenshot targets */
 const ALLOWED_URL_PATTERNS = [
-  /^https:\/\/asap-[a-z0-9-]+(?:\.[a-z0-9-]+)*\.run\.app(?:[\/:?#]|$)/i,
+  /^https:\/\/asap-[a-z0-9-]+(?:\.[a-z0-9-]+)*\.run\.app(?:[/:?#]|$)/i,
   /^https?:\/\/localhost(:\d+)?/,
   /^https?:\/\/127\.0\.0\.1(:\d+)?/,
 ];
@@ -50,7 +51,7 @@ const SCREENS: Array<{ name: string; action?: (page: Page) => Promise<void>; wai
   },
   {
     name: '04-map-dashboard',
-    action: async (page) => {
+    action: async () => {
       await new Promise((r) => setTimeout(r, 1600));
     },
     waitFor: '.screen2-map, .gm-style, iframe[title="ASAP map fallback"]',

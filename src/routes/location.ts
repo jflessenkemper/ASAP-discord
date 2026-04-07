@@ -1,5 +1,6 @@
 import { Router, Response } from 'express';
 import rateLimit from 'express-rate-limit';
+
 import pool from '../db/pool';
 import { AuthRequest, requireAuth } from '../middleware/auth';
 

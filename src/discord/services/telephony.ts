@@ -7,15 +7,18 @@
  * Outbound: Riley triggers call → Twilio REST API dials user → same pipeline
  */
 
+import { Server as HttpServer } from 'http';
+
+import { TextChannel } from 'discord.js';
 import Twilio from 'twilio';
 import { WebSocket, WebSocketServer } from 'ws';
-import { Server as HttpServer } from 'http';
-import { TextChannel } from 'discord.js';
+
+import pool from '../../db/pool';
+import { getAgent, AgentId } from '../agents';
+import { agentRespond, ConversationMessage, summarizeCall } from '../claude';
+import { getMemoryContext, appendToMemory } from '../memory';
 import { startLiveTranscription, DeepgramLiveSession, isDeepgramAvailable } from '../voice/deepgram';
 import { elevenLabsTTS } from '../voice/elevenlabs';
-import { agentRespond, ConversationMessage, summarizeCall } from '../claude';
-import { getAgent, AgentId } from '../agents';
-import { getMemoryContext, appendToMemory } from '../memory';
 
 const TWILIO_ACCOUNT_SID = process.env.TWILIO_ACCOUNT_SID;
 const TWILIO_AUTH_TOKEN = process.env.TWILIO_AUTH_TOKEN;
@@ -45,7 +48,6 @@ export function isTelephonyAvailable(): boolean {
   return !!(TWILIO_ACCOUNT_SID && TWILIO_AUTH_TOKEN && TWILIO_PHONE_NUMBER);
 }
 
-import pool from '../../db/pool';
 
 const CONTACTS_DB_KEY = 'phone-contacts';
 
@@ -81,7 +83,7 @@ function saveContacts(contacts: Record<string, string>): void {
   });
 }
 
-let knownContacts = loadContacts();
+const knownContacts = loadContacts();
 
 function identifyCaller(number: string): string | null {
   return knownContacts[number] || null;
@@ -491,7 +493,7 @@ export async function makeAsapTesterCall(toNumber: string, greeting?: string): P
   const callSid = await makeOutboundCall(toNumber, greeting || "Hey, this is ASAPTester running a voice check before handing over to Riley.");
   const session = activeSessions.get(callSid);
   if (session) {
-    session.ttsVoiceName = process.env.ASAPTESTER_VOICE_NAME || 'Aoede';
+    session.ttsVoiceName = process.env.ASAPTESTER_VOICE_NAME || 'Achernar';
   }
   return callSid;
 }
@@ -531,7 +533,7 @@ async function endPhoneSession(session: PhoneSession): Promise<void> {
     try {
       const summary = await summarizeCall(session.transcript, ['Caller', 'Riley (Executive Assistant)']);
       await callLogChannel.send(`📝 **Summary**\n${summary}`);
-    } catch {}
+    } catch { /* ignore */ }
   }
 
   if (groupchatChannel) {
@@ -549,7 +551,7 @@ async function endPhoneSession(session: PhoneSession): Promise<void> {
 const MULAW_DECODE_TABLE = new Int16Array(256);
 (function initMulawTable() {
   for (let i = 0; i < 256; i++) {
-    let mulaw = ~i & 0xFF;
+    const mulaw = ~i & 0xFF;
     const sign = mulaw & 0x80;
     const exponent = (mulaw >> 4) & 0x07;
     let mantissa = mulaw & 0x0F;
@@ -638,8 +640,8 @@ async function mp3ToMulaw(mp3: Buffer): Promise<Buffer> {
 
     return mulaw;
   } finally {
-    try { unlinkSync(tmpIn); } catch {}
-    try { unlinkSync(tmpOut); } catch {}
+    try { unlinkSync(tmpIn); } catch { /* ignore */ }
+    try { unlinkSync(tmpOut); } catch { /* ignore */ }
   }
 }
 

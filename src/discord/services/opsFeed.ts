@@ -1,4 +1,5 @@
 import { TextChannel } from 'discord.js';
+
 import { logAgentEvent } from '../activityLog';
 
 export type OpsSeverity = 'info' | 'warn' | 'error';

@@ -1,6 +1,8 @@
 import 'dotenv/config';
 import { execFileSync } from 'node:child_process';
+
 import { Pool } from 'pg';
+
 import pool from './pool';
 
 const DEFAULT_TARGET_TABLES = ['agent_memory', 'discord_message_dedupe', 'agent_activity_log'];

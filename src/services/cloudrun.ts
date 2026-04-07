@@ -1,5 +1,7 @@
 import { GoogleAuth } from 'google-auth-library';
 
+import { getAccessTokenViaGcloud } from './googleCredentials';
+
 const PROJECT_ID = process.env.GCS_PROJECT_ID || 'asap-489910';
 const REGION = process.env.CLOUD_RUN_REGION || 'australia-southeast1';
 const SERVICE_NAME = process.env.CLOUD_RUN_SERVICE || 'asap';
@@ -16,6 +18,40 @@ function getAuth(): GoogleAuth {
   return auth;
 }
 
+type HttpMethod = 'GET' | 'POST' | 'PATCH';
+
+async function requestWithCloudAuth(url: string, method: HttpMethod, body?: unknown): Promise<any> {
+  try {
+    const client = await getAuth().getClient();
+    const res = await client.request({
+      url,
+      method,
+      body: body ? JSON.stringify(body) : undefined,
+      headers: body ? { 'Content-Type': 'application/json' } : undefined,
+    });
+    return res.data;
+  } catch (primaryErr) {
+    const token = getAccessTokenViaGcloud();
+    if (!token) throw primaryErr;
+
+    const res = await fetch(url, {
+      method,
+      headers: {
+        Authorization: `Bearer ${token}`,
+        ...(body ? { 'Content-Type': 'application/json' } : {}),
+      },
+      body: body ? JSON.stringify(body) : undefined,
+    });
+
+    if (!res.ok) {
+      const text = await res.text().catch(() => '');
+      throw new Error(`Cloud API ${method} ${url} failed (${res.status}): ${text.slice(0, 200)}`);
+    }
+    if (res.status === 204) return {};
+    return await res.json().catch(() => ({}));
+  }
+}
+
 interface RevisionInfo {
   name: string;
   uid: string;
@@ -27,13 +63,7 @@ interface RevisionInfo {
  * List recent Cloud Run revisions (newest first).
  */
 export async function listRevisions(limit = 5): Promise<RevisionInfo[]> {
-  const client = await getAuth().getClient();
-  const res = await client.request({
-    url: `${REVISIONS_URL}?pageSize=${limit}`,
-    method: 'GET',
-  });
-
-  const data = res.data as any;
+  const data = await requestWithCloudAuth(`${REVISIONS_URL}?pageSize=${limit}`, 'GET') as any;
   const revisions = (data.revisions || []) as any[];
 
   return revisions.map((r: any) => ({
@@ -48,15 +78,8 @@ export async function listRevisions(limit = 5): Promise<RevisionInfo[]> {
  * Rollback to a specific revision by routing 100% traffic to it.
  */
 export async function rollbackToRevision(revisionName: string): Promise<string> {
-  const client = await getAuth().getClient();
-
   // Get the current service config
-  const serviceRes = await client.request({
-    url: BASE_URL,
-    method: 'GET',
-  });
-
-  const service = serviceRes.data as any;
+  const service = await requestWithCloudAuth(BASE_URL, 'GET') as any;
 
   // Set traffic to target revision only
   service.traffic = [
@@ -67,12 +90,7 @@ export async function rollbackToRevision(revisionName: string): Promise<string> 
     },
   ];
 
-  await client.request({
-    url: BASE_URL,
-    method: 'PATCH',
-    body: JSON.stringify(service),
-    headers: { 'Content-Type': 'application/json' },
-  });
+  await requestWithCloudAuth(BASE_URL, 'PATCH', service);
 
   return `✅ Traffic routed to revision \`${revisionName}\`. Rollback complete.`;
 }
@@ -81,13 +99,7 @@ export async function rollbackToRevision(revisionName: string): Promise<string> 
  * Get the currently active revision name.
  */
 export async function getCurrentRevision(): Promise<string> {
-  const client = await getAuth().getClient();
-  const res = await client.request({
-    url: BASE_URL,
-    method: 'GET',
-  });
-
-  const data = res.data as any;
+  const data = await requestWithCloudAuth(BASE_URL, 'GET') as any;
   const traffic = data.traffic || [];
   const active = traffic.find((t: any) => t.percent === 100);
   return active?.revision || 'unknown';
@@ -98,7 +110,6 @@ export async function getCurrentRevision(): Promise<string> {
  * Uses the Cloud Build API to submit the build with our cloudbuild.yaml config.
  */
 export async function triggerCloudBuild(commitSha: string): Promise<{ buildId: string; logUrl: string }> {
-  const client = await getAuth().getClient();
   const REPO_NAME = process.env.CLOUD_BUILD_REPO || 'asap';
   void commitSha;
 
@@ -112,14 +123,11 @@ export async function triggerCloudBuild(commitSha: string): Promise<{ buildId: s
     },
   };
 
-  const res = await client.request({
-    url: `https://cloudbuild.googleapis.com/v1/projects/${PROJECT_ID}/builds`,
-    method: 'POST',
-    body: JSON.stringify(buildConfig),
-    headers: { 'Content-Type': 'application/json' },
-  });
-
-  const data = res.data as any;
+  const data = await requestWithCloudAuth(
+    `https://cloudbuild.googleapis.com/v1/projects/${PROJECT_ID}/builds`,
+    'POST',
+    buildConfig
+  ) as any;
   const buildId = data.metadata?.build?.id || data.name?.split('/').pop() || 'unknown';
   const logUrl = data.metadata?.build?.logUrl || `https://console.cloud.google.com/cloud-build/builds/${buildId}?project=${PROJECT_ID}`;
 

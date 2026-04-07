@@ -1,7 +1,10 @@
-import { Router, Response } from 'express';
-import bcrypt from 'bcryptjs';
-import rateLimit from 'express-rate-limit';
 import { randomBytes } from 'crypto';
+
+import bcrypt from 'bcryptjs';
+import { Router, Response } from 'express';
+import rateLimit from 'express-rate-limit';
+
+
 import pool from '../db/pool';
 import { AuthRequest, requireAuth, requireBusiness, createSession, setAuthCookie } from '../middleware/auth';
 import { sendBusinessWelcome } from '../services/email';
@@ -116,7 +119,8 @@ router.post('/login', authLimiter, async (req: AuthRequest, res: Response) => {
     const token = await createSession(business.id, 'business');
     setAuthCookie(res, token);
 
-    const { password_hash: _, ...safeBusiness } = business;
+    const safeBusiness = { ...business };
+    delete safeBusiness.password_hash;
     res.json({ token, business: safeBusiness });
   } catch (err) {
     console.error('Business login error:', err instanceof Error ? err.message : 'Unknown');

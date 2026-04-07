@@ -1,4 +1,5 @@
-import { Client, GatewayIntentBits, VoiceBasedChannel } from 'discord.js';
+import { Readable } from 'stream';
+
 import {
   entersState,
   joinVoiceChannel,
@@ -10,7 +11,8 @@ import {
   AudioPlayerStatus,
   StreamType,
 } from '@discordjs/voice';
-import { Readable } from 'stream';
+import { Client, GatewayIntentBits, VoiceBasedChannel } from 'discord.js';
+
 import { textToSpeech } from './tts';
 
 let testerClient: Client | null = null;

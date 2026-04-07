@@ -1,13 +1,17 @@
-import { GoogleGenerativeAI, Content, Part, FunctionDeclaration, Tool } from '@google/generative-ai';
-import { GoogleAuth } from 'google-auth-library';
 import { readFileSync } from 'fs';
 import { extname, join } from 'path';
+
+import { GoogleGenerativeAI, Content, Part, FunctionDeclaration, Tool } from '@google/generative-ai';
+import { GoogleAuth } from 'google-auth-library';
+
+import { ensureGoogleCredentials, getAccessTokenViaGcloud } from '../services/googleCredentials';
+
+import { logAgentEvent } from './activityLog';
 import { AgentConfig } from './agents';
+import { recordAgentResponse, recordRateLimitHit } from './metrics';
 import { REPO_TOOLS, getToolsForAgent, executeTool, getToolAuditCallback } from './tools';
 import { recordClaudeUsage, isClaudeOverLimit, isBudgetExceeded, getRemainingBudget, getClaudeTokenStatus, approveAdditionalBudget, type PromptBreakdown } from './usage';
-import { logAgentEvent } from './activityLog';
-import { recordAgentResponse, recordRateLimitHit } from './metrics';
-import { ensureGoogleCredentials, getAccessTokenViaGcloud } from '../services/googleCredentials';
+
 
 let PROJECT_CONTEXT = '';
 try {
@@ -32,7 +36,6 @@ const VOICE_FAST_MODEL = process.env.VOICE_FAST_MODEL || DEFAULT_FAST_MODEL;
 const VERTEX_OPUS_ONLY_MODE = process.env.VERTEX_OPUS_ONLY_MODE === 'true';
 const FORCE_OPUS_FOR_CODE_WORK = process.env.FORCE_OPUS_FOR_CODE_WORK !== 'false';
 const DEVELOPER_ALWAYS_OPUS = process.env.DEVELOPER_ALWAYS_OPUS !== 'false';
-const ANTHROPIC_AUTO_CACHE = process.env.ANTHROPIC_AUTO_CACHE !== 'false';
 const COMPACT_RUNTIME_TOOL_PROMPTS = process.env.COMPACT_RUNTIME_TOOL_PROMPTS !== 'false';
 const CODE_HEAVY_AGENT_IDS = new Set(['developer', 'devops', 'ios-engineer', 'android-engineer']);
 const CODE_WORK_RE = /\b(?:code|coding|implement|implementation|fix|bug|debug|refactor|build|compile|lint|typecheck|test(?:s|ing)?|deploy|migration|schema|sql|query|api|endpoint|component|screen|tsx|jsx|react|expo|node|frontend|backend|repo|commit|branch|diff|patch|pull request|pr)\b/i;
@@ -1153,7 +1156,6 @@ const QUEUE_RELEASE_DELAY_RATE_LIMIT_MS = parseInt(process.env.QUEUE_RELEASE_DEL
 /** Minimum delay between sends per model to avoid bursty RPM spikes */
 const MODEL_PACE_FLASH_MS = parseInt(process.env.GEMINI_MODEL_PACE_FLASH_MS || '130', 10);
 const MODEL_PACE_PRO_MS = parseInt(process.env.GEMINI_MODEL_PACE_PRO_MS || '700', 10);
-const MODEL_PACE_FLASH_PRIORITY_MS = parseInt(process.env.GEMINI_MODEL_PACE_FLASH_PRIORITY_MS || '0', 10);
 const MODEL_PACE_FLASH_VOICE_MS = parseInt(process.env.GEMINI_MODEL_PACE_FLASH_VOICE_MS || '0', 10);
 const MODEL_PACE_PRO_VOICE_MS = parseInt(process.env.GEMINI_MODEL_PACE_PRO_VOICE_MS || '300', 10);
 
@@ -1759,10 +1761,6 @@ function normalizeModelKey(modelName: string): string {
   return String(modelName || '').trim().toLowerCase();
 }
 
-function isOpusModel(modelName: string): boolean {
-  return /\bopus\b/i.test(String(modelName || ''));
-}
-
 function isPotentiallyMutatingCommand(command: string): boolean {
   const cmd = String(command || '').toLowerCase();
   if (!cmd.trim()) return false;
@@ -1787,11 +1785,6 @@ function getBackgroundModelConcurrencyCap(modelName: string): number {
 function getModelPaceMs(modelName: string): number {
   const key = normalizeModelKey(modelName);
   return key.includes('pro') ? MODEL_PACE_PRO_MS : MODEL_PACE_FLASH_MS;
-}
-
-function getPriorityModelPaceMs(modelName: string): number {
-  const key = normalizeModelKey(modelName);
-  return key.includes('pro') ? MODEL_PACE_PRO_MS : MODEL_PACE_FLASH_PRIORITY_MS;
 }
 
 function getVoiceModelPaceMs(modelName: string): number {
@@ -1831,7 +1824,7 @@ function getVoiceModelQueue(modelKey: string): Array<() => void> {
   return created;
 }
 
-async function waitForModelPace(modelName: string, priority = false, lane: 'text' | 'voice' | 'background' = 'text'): Promise<void> {
+async function waitForModelPace(modelName: string, lane: 'text' | 'voice' | 'background' = 'text'): Promise<void> {
   const modelKey = normalizeModelKey(modelName);
   const now = Date.now();
   const nextAllowed = lane === 'voice'
@@ -1953,7 +1946,7 @@ async function withConcurrencyLimit<T>(
       await waitForRateLimit();
     }
 
-    await waitForModelPace(modelName, true, 'voice');
+    await waitForModelPace(modelName, 'voice');
     activeVoiceClaude++;
     activeVoiceByModel.set(modelKey, (activeVoiceByModel.get(modelKey) || 0) + 1);
 
@@ -1986,7 +1979,7 @@ async function withConcurrencyLimit<T>(
       await waitForRateLimit();
     }
 
-    await waitForModelPace(modelName, false, 'background');
+    await waitForModelPace(modelName, 'background');
     activeBackgroundClaude++;
     activeBackgroundByModel.set(modelKey, (activeBackgroundByModel.get(modelKey) || 0) + 1);
 
@@ -2021,7 +2014,7 @@ async function withConcurrencyLimit<T>(
     await waitForRateLimit();
   }
 
-  await waitForModelPace(modelName, false, 'text');
+  await waitForModelPace(modelName, 'text');
   activeClaude++;
   activeByModel.set(modelKey, (activeByModel.get(modelKey) || 0) + 1);
 
@@ -2625,10 +2618,6 @@ RUNTIME EFFICIENCY:
     'db_query',
     'capture_screenshots',
     'mobile_harness_start', 'mobile_harness_step', 'mobile_harness_snapshot', 'mobile_harness_stop',
-  ]);
-
-  const CODE_WRITE_TOOLS = new Set([
-    'write_file', 'edit_file', 'batch_edit',
   ]);
 
   for (let round = 0; round < maxToolRounds; round++) {

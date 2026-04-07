@@ -34,7 +34,9 @@
 import 'dotenv/config';
 import fs from 'fs';
 import path from 'path';
+
 import { ChannelType, Client, GatewayIntentBits, Message, TextChannel } from 'discord.js';
+
 import { getAgent, getAgentAliases, resolveAgentId } from './agents';
 
 type CheckPattern = RegExp;

@@ -1,7 +1,9 @@
-import { TextChannel } from 'discord.js';
 import crypto from 'crypto';
-import { captureAndPostScreenshots } from '../services/screenshots';
+
+import { TextChannel } from 'discord.js';
+
 import { formatOpsLine } from '../services/opsFeed';
+import { captureAndPostScreenshots } from '../services/screenshots';
 
 let githubChannel: TextChannel | null = null;
 

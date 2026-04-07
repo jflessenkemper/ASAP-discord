@@ -1,4 +1,5 @@
 import pool from '../db/pool';
+
 import { postAgentErrorLog } from './services/agentErrors';
 
 /**

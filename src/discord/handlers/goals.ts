@@ -1,10 +1,12 @@
 import { Message, TextChannel } from 'discord.js';
+
 import { getAgent, AgentId, AgentConfig } from '../agents';
 import { agentRespond, ConversationMessage, extractAgentResponseEnvelope } from '../claude';
 import { appendToMemory, getMemoryContext, loadMemory, saveMemory, compressMemory } from '../memory';
+import { getWebhook } from '../services/webhooks';
+
 import { documentToChannel } from './documentation';
 import { sendAgentMessage } from './textChannel';
-import { getWebhook } from '../services/webhooks';
 
 const goalsHistory: ConversationMessage[] = loadMemory('goals');
 const MAX_HISTORY = 40;
@@ -27,14 +29,13 @@ export function clearDecision(): void {
  */
 export async function handleGoalsMessage(
   message: Message,
-  goalsChannel: TextChannel,
-  groupchat: TextChannel
+  goalsChannel: TextChannel
 ): Promise<void> {
   const content = message.content.trim();
   if (!content) return;
 
   goalsQueue = goalsQueue.then(() =>
-    processGoalsMessage(message, content, goalsChannel, groupchat)
+    processGoalsMessage(message, content, goalsChannel)
   ).catch((err) => {
     console.error('Goals queue error:', err instanceof Error ? err.message : 'Unknown');
   });
@@ -57,8 +58,7 @@ async function sendGoalsToolNotification(channel: TextChannel, agent: AgentConfi
 async function processGoalsMessage(
   message: Message,
   content: string,
-  goalsChannel: TextChannel,
-  groupchat: TextChannel
+  goalsChannel: TextChannel
 ): Promise<void> {
   const senderName = message.member?.displayName || message.author.username;
   const riley = getAgent('executive-assistant' as AgentId);

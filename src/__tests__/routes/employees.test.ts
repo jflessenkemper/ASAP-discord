@@ -1,7 +1,8 @@
-import request from 'supertest';
-import express from 'express';
+import bcrypt from 'bcryptjs';
 import cookieParser from 'cookie-parser';
+import express from 'express';
 import jwt from 'jsonwebtoken';
+import request from 'supertest';
 
 const JWT_SECRET = 'test-jwt-secret-for-testing-only';
 
@@ -21,7 +22,6 @@ jest.mock('../../services/storage', () => ({
 }));
 
 import employeeRoutes from '../../routes/employees';
-import bcrypt from 'bcryptjs';
 
 function makeToken(userId: string, userType: 'client' | 'employee') {
   return jwt.sign({ userId, userType }, JWT_SECRET, { expiresIn: '1h' });

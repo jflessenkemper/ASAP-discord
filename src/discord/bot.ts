@@ -5,28 +5,31 @@ import {
   Partials,
   ChatInputCommandInteraction,
 } from 'discord.js';
-import { setupChannels, BotChannels } from './setup';
+
+import pool from '../db/pool';
+
 import { getAgentByChannelName } from './agents';
 import { getAgent } from './agents';
-import { handleAgentMessage } from './handlers/textChannel';
-import { setCommandAuditCallback, setPRReviewCallback, setDiscordGuild, setToolAuditCallback, setAgentChannelResolver } from './tools';
-import { autoReviewPR } from './handlers/review';
-import { handleGroupchatMessage } from './handlers/groupchat';
-import { setDecisionsChannel, setThreadStatusChannel, handleDecisionReply } from './handlers/groupchat';
-import { endCall, isCallActive, processTesterVoiceTurnForCall } from './handlers/callSession';
-import { setVoiceErrorChannel } from './handlers/callSession';
-import { setBotChannels } from './handlers/documentation';
-import { setAgentErrorChannel, postAgentErrorLog } from './services/agentErrors';
 import { registerCommands } from './commands';
+import { setVoiceErrorChannel } from './handlers/callSession';
+import { endCall, isCallActive, processTesterVoiceTurnForCall } from './handlers/callSession';
+import { setBotChannels } from './handlers/documentation';
 import { setGitHubChannel } from './handlers/github';
-import { setLimitsChannel, setCostChannel, startDashboardUpdates, stopDashboardUpdates, initUsageCounters, flushUsageCounters, getUsageReport, getCostOpsSummaryLine } from './usage';
+import { setDecisionsChannel, setThreadStatusChannel, handleDecisionReply } from './handlers/groupchat';
+import { handleGroupchatMessage } from './handlers/groupchat';
+import { getThreadStatusOpsLine } from './handlers/groupchat';
+import { autoReviewPR } from './handlers/review';
+import { handleAgentMessage } from './handlers/textChannel';
 import { flushPendingWrites, initMemory } from './memory';
-import { setScreenshotsChannel } from './services/screenshots';
-import { setTelephonyChannels, isTelephonyAvailable, initContacts } from './services/telephony';
+import { setAgentErrorChannel, postAgentErrorLog } from './services/agentErrors';
 import { runModelHealthChecks } from './services/modelHealth';
 import { flushAllOpsDigests, postOpsLine } from './services/opsFeed';
-import { getThreadStatusOpsLine } from './handlers/groupchat';
-import pool from '../db/pool';
+import { setScreenshotsChannel } from './services/screenshots';
+import { setTelephonyChannels, isTelephonyAvailable, initContacts } from './services/telephony';
+import { setupChannels, BotChannels } from './setup';
+import { setCommandAuditCallback, setPRReviewCallback, setDiscordGuild, setToolAuditCallback, setAgentChannelResolver } from './tools';
+import { setLimitsChannel, setCostChannel, startDashboardUpdates, stopDashboardUpdates, initUsageCounters, flushUsageCounters, getUsageReport, getCostOpsSummaryLine } from './usage';
+
 
 /**
  * Discord runtime bootstrap.

@@ -1,11 +1,12 @@
 import { Router, Request, Response } from 'express';
 import rateLimit from 'express-rate-limit';
 import multer from 'multer';
-import { intelligentSearch, transcribeAudio, categorizeJob, summarizeFuelPrices, searchBestPrices } from '../services/gemini';
-import { getBestPricesByType, haversineKm } from '../services/fuel';
-import { textToSpeech } from '../services/elevenlabs';
+
 import pool from '../db/pool';
+import { textToSpeech } from '../services/elevenlabs';
 import { sendQuoteNotification, sendOwnerNotification } from '../services/email';
+import { getBestPricesByType, haversineKm } from '../services/fuel';
+import { intelligentSearch, transcribeAudio, summarizeFuelPrices, searchBestPrices } from '../services/gemini';
 
 const router = Router();
 

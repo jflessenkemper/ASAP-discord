@@ -1,6 +1,7 @@
-import { ConversationMessage } from './claude';
-import { logAgentEvent } from './activityLog';
 import pool from '../db/pool';
+
+import { logAgentEvent } from './activityLog';
+import { ConversationMessage } from './claude';
 
 /**
  * Persistent memory system for Discord agents.

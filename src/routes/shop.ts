@@ -1,8 +1,9 @@
 import { Router, Response } from 'express';
 import rateLimit from 'express-rate-limit';
-import { searchBestPrices } from '../services/gemini';
-import { AuthRequest, requireAuth, requireClient } from '../middleware/auth';
+
 import pool from '../db/pool';
+import { AuthRequest, requireAuth, requireClient } from '../middleware/auth';
+import { searchBestPrices } from '../services/gemini';
 
 const router = Router();
 

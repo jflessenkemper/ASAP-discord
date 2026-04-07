@@ -1,8 +1,9 @@
 import { Router, Response } from 'express';
 import multer from 'multer';
-import { AuthRequest, requireAuth, requireEmployee } from '../middleware/auth';
-import { uploadEvidence } from '../services/storage';
+
 import pool from '../db/pool';
+import { AuthRequest, requireAuth } from '../middleware/auth';
+import { uploadEvidence } from '../services/storage';
 
 const router = Router();
 const upload = multer({

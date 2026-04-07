@@ -1,9 +1,10 @@
-import { Message, TextChannel, EmbedBuilder } from 'discord.js';
+import { Message, TextChannel } from 'discord.js';
+
 import { AgentConfig, getAgentMention, resolveAgentId } from '../agents';
 import { agentRespond, ConversationMessage } from '../claude';
 import { appendToMemory, getMemoryContext } from '../memory';
-import { clearWebhookCache, sendWebhookMessage, WebhookCapableChannel } from '../services/webhooks';
 import { mirrorAgentResponse } from '../services/diagnosticsWebhook';
+import { clearWebhookCache, sendWebhookMessage, WebhookCapableChannel } from '../services/webhooks';
 
 const conversationHistories = new Map<string, ConversationMessage[]>();
 const channelQueues = new Map<string, Promise<void>>();
@@ -21,6 +22,47 @@ const STREAM_MAX_PREVIEW_CHARS = parseInt(process.env.STREAM_MAX_PREVIEW_CHARS |
 const STREAM_EDIT_MIN_CHAR_DELTA = parseInt(process.env.STREAM_EDIT_MIN_CHAR_DELTA || '35', 10);
 const AGENT_MAX_VISIBLE_CHARS = parseInt(process.env.AGENT_MAX_VISIBLE_CHARS || '3800', 10);
 const TEXT_AGENT_RESPONSE_TIMEOUT_MS = parseInt(process.env.TEXT_AGENT_RESPONSE_TIMEOUT_MS || '120000', 10);
+const TEXT_PROGRESS_HEARTBEAT_MS = parseInt(process.env.TEXT_PROGRESS_HEARTBEAT_MS || '15000', 10);
+const CAREER_OPS_DUPLICATE_WINDOW_MS = parseInt(process.env.CAREER_OPS_DUPLICATE_WINDOW_MS || '600000', 10);
+const CAREER_OPS_SUPPRESSION_NOTICE_COOLDOWN_MS = parseInt(process.env.CAREER_OPS_SUPPRESSION_NOTICE_COOLDOWN_MS || '120000', 10);
+const careerOpsLastResponseFingerprint = new Map<string, { fingerprint: string; ts: number }>();
+const careerOpsSuppressionNoticeAt = new Map<string, number>();
+const careerOpsIncomingCompletionFingerprint = new Map<string, number>();
+
+function shouldSuppressCareerOpsDuplicate(channel: WebhookCapableChannel, rendered: string): { suppress: boolean; notice?: string } {
+  const channelName = String((channel as any)?.name || '').toLowerCase();
+  if (!channelName.includes('career-ops')) return { suppress: false };
+
+  const normalized = rendered
+    .replace(/<@!?\d+>/g, '@user')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+  const looksLikeCompletionUpdate =
+    normalized.startsWith('completion update:') ||
+    normalized.startsWith('✅ completion update:') ||
+    normalized.includes('partially complete with follow-up required');
+
+  if (!looksLikeCompletionUpdate) return { suppress: false };
+
+  const key = String((channel as any)?.id || channelName);
+  const fingerprint = normalized.slice(0, 260);
+  const prev = careerOpsLastResponseFingerprint.get(key);
+  const now = Date.now();
+  if (prev && prev.fingerprint === fingerprint && now - prev.ts < CAREER_OPS_DUPLICATE_WINDOW_MS) {
+    const noticePrev = careerOpsSuppressionNoticeAt.get(key) || 0;
+    if (now - noticePrev >= CAREER_OPS_SUPPRESSION_NOTICE_COOLDOWN_MS) {
+      careerOpsSuppressionNoticeAt.set(key, now);
+      return {
+        suppress: true,
+        notice: 'ℹ️ I already posted that completion update recently, so I skipped the duplicate.',
+      };
+    }
+    return { suppress: true };
+  }
+  careerOpsLastResponseFingerprint.set(key, { fingerprint, ts: now });
+  return { suppress: false };
+}
 
 function classifyAgentError(err: unknown): string {
   const message = String((err as any)?.message || err || '').toLowerCase();
@@ -40,6 +82,48 @@ function classifyAgentError(err: unknown): string {
     return 'Gemini quota is exhausted right now. Riley needs to restore credits before this can continue.';
   }
   return 'An internal error interrupted the response.';
+}
+
+function detectCareerOpsIncomingDuplicate(message: Message, channel: TextChannel, raw: string): { duplicate: boolean; notice?: string } {
+  const channelName = String(channel.name || '').toLowerCase();
+  if (!channelName.includes('career-ops')) return { duplicate: false };
+
+  const normalized = String(raw || '')
+    .replace(/<@!?\d+>/g, '@user')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+  if (!normalized) return { duplicate: false };
+
+  const looksLikeCompletionUpdate =
+    normalized.startsWith('completion update:') ||
+    normalized.startsWith('✅ completion update:') ||
+    normalized.includes('partially complete with follow-up required');
+  if (!looksLikeCompletionUpdate) return { duplicate: false };
+
+  const authorId = String(message.author?.id || 'unknown');
+  const fingerprint = normalized.slice(0, 260);
+  const key = `${channel.id}:${authorId}:${fingerprint}`;
+  const now = Date.now();
+  const prev = careerOpsIncomingCompletionFingerprint.get(key) || 0;
+  careerOpsIncomingCompletionFingerprint.set(key, now);
+
+  if (now - prev < CAREER_OPS_DUPLICATE_WINDOW_MS) {
+    return {
+      duplicate: true,
+      notice: 'ℹ️ I already received that completion update recently, so I skipped the duplicate submission.',
+    };
+  }
+
+  if (careerOpsIncomingCompletionFingerprint.size > 1000) {
+    for (const [k, ts] of careerOpsIncomingCompletionFingerprint) {
+      if (now - ts > CAREER_OPS_DUPLICATE_WINDOW_MS * 2) {
+        careerOpsIncomingCompletionFingerprint.delete(k);
+      }
+    }
+  }
+
+  return { duplicate: false };
 }
 
 function estimateTextMaxTokens(agent: AgentConfig, userMessage: string): number {
@@ -95,12 +179,22 @@ async function handleAgentMessageInner(
 
   const channel = message.channel as TextChannel;
   const isCareerOpsRiley = agent.id === 'executive-assistant' && /career-ops/i.test(channel.name);
+  const incomingDuplicate = detectCareerOpsIncomingDuplicate(message, channel, userMessage);
+  if (incomingDuplicate.duplicate) {
+    await sendWebhookMessage(channel, {
+      content: incomingDuplicate.notice || 'ℹ️ Duplicate update suppressed.',
+      username: `${agent.emoji} ${agent.name}`,
+      avatarURL: agent.avatarUrl,
+    }).catch(() => {});
+    return;
+  }
   if (isCareerOpsRiley) {
     userMessage = `${userMessage}\n\n[Career Ops channel mode: respond directly for job-search workflow. Do not run deployment, health-check, smoke-test, or infra actions unless the user explicitly asks for them.]`;
   }
   await channel.sendTyping();
 
   let pendingThinking: Message | null = null;
+  let progressHeartbeat: ReturnType<typeof setInterval> | null = null;
   try {
     pendingThinking = await sendWebhookMessage(channel, {
       content: 'Thinking…',
@@ -127,6 +221,21 @@ async function handleAgentMessageInner(
     let streamedPreviewShown = false;
     let lastStreamEditAt = 0;
     let lastRenderedLength = 0;
+    let lastProgressSignalAt = Date.now();
+
+    if (pendingThinking) {
+      progressHeartbeat = setInterval(() => {
+        if (signal?.aborted || !pendingThinking) return;
+        if (streamedPreviewShown) return;
+        if (Date.now() - lastProgressSignalAt < TEXT_PROGRESS_HEARTBEAT_MS) return;
+        lastProgressSignalAt = Date.now();
+        void sendWebhookMessage(channel, {
+          content: `⏳ ${agent.name} is still working on this...`,
+          username: `${agent.emoji} ${agent.name}`,
+          avatarURL: agent.avatarUrl,
+        }).catch(() => {});
+      }, Math.max(5000, TEXT_PROGRESS_HEARTBEAT_MS));
+    }
 
     const updateStreamPreview = async (partialText: string, force = false): Promise<void> => {
       if (signal?.aborted || !pendingThinking) return;
@@ -140,6 +249,7 @@ async function handleAgentMessageInner(
       if (!force && Math.abs(clipped.length - lastRenderedLength) < STREAM_EDIT_MIN_CHAR_DELTA) return;
       lastStreamEditAt = now;
       await pendingThinking.edit(clipped).catch(() => {});
+      lastProgressSignalAt = now;
       streamedPreviewShown = true;
       lastRenderedLength = clipped.length;
     };
@@ -205,14 +315,13 @@ async function handleAgentMessageInner(
     const errMsg = err instanceof Error ? err.message : String(err);
     const userFacing = classifyAgentError(err);
     console.error(`Agent ${agent.name} error:`, errMsg);
-    const short = errMsg.length > 200 ? errMsg.slice(0, 200) + '…' : errMsg;
     try {
       if (pendingThinking) {
         pendingThinking.delete().catch(() => {});
         pendingThinkingMessages.delete(channelId);
       }
       await sendWebhookMessage(channel, {
-        content: `⚠️ ${agent.name}: ${userFacing}\n\`\`\`${short}\`\`\``,
+        content: `⚠️ ${agent.name}: ${userFacing}`,
         username: `${agent.emoji} ${agent.name}`,
         avatarURL: agent.avatarUrl,
       });
@@ -220,6 +329,9 @@ async function handleAgentMessageInner(
       console.warn(`Webhook error notification failed for ${agent.name}:`, webhookErr instanceof Error ? webhookErr.message : 'Unknown');
     }
   } finally {
+    if (progressHeartbeat) {
+      clearInterval(progressHeartbeat);
+    }
     if (signal?.aborted && pendingThinking) {
       pendingThinking.delete().catch(() => {});
       pendingThinkingMessages.delete(channelId);
@@ -260,15 +372,24 @@ export async function sendAgentMessage(
   response: string
 ): Promise<void> {
   const normalized = String(response || '').trim();
-  if (
+  const effectiveResponse = (
     (agent.id === 'developer' || agent.id === 'executive-assistant')
     && /^(?:done|fixed|resolved|completed|all good|finished)\.?$/i.test(normalized)
-  ) {
+  ) ? '✅ Done.' : response;
+
+  const rendered = renderAgentMessage(effectiveResponse);
+  if (!rendered.trim()) {
     return;
   }
-
-  const rendered = renderAgentMessage(response);
-  if (!rendered.trim()) {
+  const duplicateDecision = shouldSuppressCareerOpsDuplicate(channel, rendered);
+  if (duplicateDecision.suppress) {
+    if (duplicateDecision.notice) {
+      await sendWebhookMessage(channel, {
+        content: duplicateDecision.notice,
+        username: `${agent.emoji} ${agent.name}`,
+        avatarURL: agent.avatarUrl,
+      }).catch(() => {});
+    }
     return;
   }
   const chunks = splitMessage(rendered, 1900);
@@ -371,7 +492,7 @@ function renderAgentMessage(raw: string): string {
 
   let normalized = formatted
     .replace(/\bI\s+cannot\s+access\b/gi, 'Blocked: missing access to')
-    .replace(/\bI\s+don\'t\s+have\s+access\s+to\b/gi, 'Blocked: missing access to')
+    .replace(/\bI\s+don't\s+have\s+access\s+to\b/gi, 'Blocked: missing access to')
     .trim();
 
   const hasActionCue = /\b(next step|action|will|now|recommend|should|run|check|verify|post|update|fix|implement|create|change|retry)\b/i.test(normalized);

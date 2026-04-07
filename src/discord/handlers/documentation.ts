@@ -1,6 +1,5 @@
-import { TextChannel } from 'discord.js';
-import { BotChannels } from '../setup';
 import { postOpsLine } from '../services/opsFeed';
+import { BotChannels } from '../setup';
 
 /**
  * Agent self-documentation system.

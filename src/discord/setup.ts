@@ -5,8 +5,8 @@ import {
   VoiceChannel,
   CategoryChannel,
   Role,
-  PermissionFlagsBits,
 } from 'discord.js';
+
 import { getAgents, setAgentRoleId } from './agents';
 import { getWebhook } from './services/webhooks';
 import { REPO_TOOLS } from './tools';
@@ -271,13 +271,6 @@ async function ensureAgentRole(guild: Guild, name: string, color: number): Promi
   }
 
   return role;
-}
-
-/** Find a text channel by name anywhere in the guild (ignores category). */
-function findTextChannel(guild: Guild, name: string): TextChannel | undefined {
-  return guild.channels.cache.find(
-    (c) => c.type === ChannelType.GuildText && c.name === name
-  ) as TextChannel | undefined;
 }
 
 /** Delete duplicate text channels with the same name, keeping the oldest one. */

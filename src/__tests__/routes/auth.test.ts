@@ -1,6 +1,7 @@
-import request from 'supertest';
-import express from 'express';
+import bcrypt from 'bcryptjs';
 import cookieParser from 'cookie-parser';
+import express from 'express';
+import request from 'supertest';
 
 // Bypass rate limiters in tests
 jest.mock('express-rate-limit', () => ({
@@ -54,7 +55,6 @@ jest.mock('bcryptjs', () => ({
 
 import pool from '../../db/pool';
 import authRoutes from '../../routes/auth';
-import bcrypt from 'bcryptjs';
 
 const mockPool = pool as any;
 const mockPoolQuery = mockPool.query as jest.Mock;

@@ -1,9 +1,11 @@
 import { TextChannel } from 'discord.js';
+
+import { addPRComment } from '../../services/github';
 import { getAgent, AgentId } from '../agents';
 import { agentRespond } from '../claude';
 import { getMemoryContext, appendToMemory } from '../memory';
+
 import { documentToChannel } from './documentation';
-import { addPRComment } from '../../services/github';
 
 /**
  * Patterns of files that trigger automatic review by Harper (Lawyer) and/or Kane (Security).
