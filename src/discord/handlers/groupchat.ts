@@ -301,7 +301,7 @@ function inferImplicitActionTags(text: string): string {
   if (/(thread status|open threads|stale threads|ready to close)/i.test(normalized)) {
     tags.add('[ACTION:THREADS]');
   }
-  if (/(health check|release health|prod health|deployment health)/i.test(normalized)) {
+  if (/(?:run|perform|execute)\s+(?:a\s+)?(?:release|prod(?:uction)?|deployment|app)?\s*health\s*check|\/ops\s+health\b/i.test(normalized)) {
     tags.add('[ACTION:HEALTH]');
   }
   if (/(smoke test|sanity check|end to end check|e2e check)/i.test(normalized)) {

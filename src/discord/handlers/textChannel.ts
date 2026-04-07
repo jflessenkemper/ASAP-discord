@@ -19,7 +19,7 @@ const TEXT_MAX_TOKENS_DEVELOPER = parseInt(process.env.TEXT_MAX_TOKENS_DEVELOPER
 const STREAM_EDIT_THROTTLE_MS = parseInt(process.env.STREAM_EDIT_THROTTLE_MS || '80', 10);
 const STREAM_MAX_PREVIEW_CHARS = parseInt(process.env.STREAM_MAX_PREVIEW_CHARS || '1800', 10);
 const STREAM_EDIT_MIN_CHAR_DELTA = parseInt(process.env.STREAM_EDIT_MIN_CHAR_DELTA || '35', 10);
-const AGENT_MAX_VISIBLE_CHARS = parseInt(process.env.AGENT_MAX_VISIBLE_CHARS || '1400', 10);
+const AGENT_MAX_VISIBLE_CHARS = parseInt(process.env.AGENT_MAX_VISIBLE_CHARS || '3800', 10);
 
 function classifyAgentError(err: unknown): string {
   const message = String((err as any)?.message || err || '').toLowerCase();
