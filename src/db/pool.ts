@@ -3,6 +3,25 @@ import fs from 'fs';
 import { Pool } from 'pg';
 
 const IS_PRODUCTION = process.env.NODE_ENV === 'production';
+const IS_CLOUD_RUN = Boolean(process.env.K_SERVICE || process.env.K_REVISION);
+
+function warnIfCloudRunSocketUrlOutsideCloudRun(): void {
+  const rawUrl = String(process.env.DATABASE_URL || '');
+  if (!rawUrl) return;
+  if (IS_CLOUD_RUN) return;
+
+  const looksLikeCloudSqlSocket =
+    rawUrl.includes('host=/cloudsql/')
+    || rawUrl.includes('@/');
+  if (!looksLikeCloudSqlSocket) return;
+
+  console.warn(
+    'DATABASE_URL appears to use a Cloud SQL Unix socket path (/cloudsql/...) outside Cloud Run. '
+    + 'Use TCP host/port DATABASE_URL on VM targets to avoid ENOENT socket failures.'
+  );
+}
+
+warnIfCloudRunSocketUrlOutsideCloudRun();
 
 type SslMode = 'disable' | 'allow' | 'prefer' | 'require' | 'verify-ca' | 'verify-full';
 
