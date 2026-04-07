@@ -29,6 +29,7 @@ const ANTHROPIC_OPUS = process.env.ANTHROPIC_CODING_MODEL || 'claude-opus-4-6';
 const DEFAULT_CODING_MODEL = process.env.CODING_AGENT_MODEL || ANTHROPIC_OPUS;
 const DEFAULT_FAST_MODEL = process.env.FAST_AGENT_MODEL || GEMINI_FLASH;
 const VOICE_FAST_MODEL = process.env.VOICE_FAST_MODEL || DEFAULT_FAST_MODEL;
+const VERTEX_OPUS_ONLY_MODE = process.env.VERTEX_OPUS_ONLY_MODE === 'true';
 const FORCE_OPUS_FOR_CODE_WORK = process.env.FORCE_OPUS_FOR_CODE_WORK !== 'false';
 const DEVELOPER_ALWAYS_OPUS = process.env.DEVELOPER_ALWAYS_OPUS !== 'false';
 const ANTHROPIC_AUTO_CACHE = process.env.ANTHROPIC_AUTO_CACHE !== 'false';
@@ -164,6 +165,9 @@ function resolveToolThreadKey(
  * - Riley still escalates to Pro for non-code high-stakes ops prompts.
  */
 function modelForAgent(agentId: string, userMessage: string): string {
+  if (VERTEX_OPUS_ONLY_MODE) {
+    return DEFAULT_CODING_MODEL;
+  }
   if (agentId === 'developer' && DEVELOPER_ALWAYS_OPUS) {
     return DEFAULT_CODING_MODEL;
   }
@@ -860,6 +864,9 @@ function createModel(modelName: string, options: { systemInstruction?: string; t
 
   if (isAnthropicModel(modelName)) {
     if (!canUseVertexAnthropic) {
+      if (VERTEX_OPUS_ONLY_MODE) {
+        throw new Error('Vertex Anthropic unavailable while VERTEX_OPUS_ONLY_MODE=true');
+      }
       return createModel(nonAnthropicFallbackModel, options);
     }
     return createVertexAnthropicModel(modelName, options);
@@ -2541,6 +2548,10 @@ RUNTIME EFFICIENCY:
       return '';
     }
     if (isAnthropicModel(currentModelName) && isAnthropicAuthError(err)) {
+      if (VERTEX_OPUS_ONLY_MODE) {
+        logAgentEvent(agent.id, 'error', 'Anthropic auth failed in Vertex Opus-only mode');
+        return '⚠️ Vertex Anthropic auth/config failed and fallback is disabled (VERTEX_OPUS_ONLY_MODE=true). Check Vertex IAM/model access and retry.';
+      }
       const fallbackModel = getNonAnthropicFallbackModel(GEMINI_PRO);
       logAgentEvent(agent.id, 'error', `Anthropic auth failed — falling back to ${fallbackModel}`);
       await swapToModel(fallbackModel, history);
@@ -2548,6 +2559,10 @@ RUNTIME EFFICIENCY:
         withRetry(() => sendMessageWithOptionalStream(chat, runtimeUserMessage, options?.signal, options?.onPartialText))
       , lane);
     } else if (isAnthropicModel(currentModelName) && isAnthropicRateLimitError(err)) {
+      if (VERTEX_OPUS_ONLY_MODE) {
+        logAgentEvent(agent.id, 'error', 'Anthropic rate limited in Vertex Opus-only mode');
+        return '⏳ Vertex Anthropic is rate-limited and fallback is disabled (VERTEX_OPUS_ONLY_MODE=true). Retry shortly.';
+      }
       logAgentEvent(agent.id, 'error', 'Anthropic rate limited — falling back to Gemini Flash');
       await swapToModel(DEFAULT_FAST_MODEL, history);
       response = await withConcurrencyLimit(currentModelName, () =>
@@ -2873,6 +2888,10 @@ RUNTIME EFFICIENCY:
         return '';
       }
       if (isAnthropicModel(currentModelName) && isAnthropicAuthError(err)) {
+        if (VERTEX_OPUS_ONLY_MODE) {
+          logAgentEvent(agent.id, 'error', 'Anthropic auth failed mid-loop in Vertex Opus-only mode');
+          return '⚠️ Vertex Anthropic auth/config failed and fallback is disabled (VERTEX_OPUS_ONLY_MODE=true). Check Vertex IAM/model access and retry.';
+        }
         const fallbackModel = getNonAnthropicFallbackModel(GEMINI_PRO);
         logAgentEvent(agent.id, 'error', `Anthropic auth failed mid-loop — falling back to ${fallbackModel}`);
         const accumulatedHistory = await chat.getHistory();
@@ -2883,6 +2902,10 @@ RUNTIME EFFICIENCY:
         continue;
       }
       if (isAnthropicModel(currentModelName) && isAnthropicRateLimitError(err)) {
+        if (VERTEX_OPUS_ONLY_MODE) {
+          logAgentEvent(agent.id, 'error', 'Anthropic rate limited mid-loop in Vertex Opus-only mode');
+          return '⏳ Vertex Anthropic is rate-limited and fallback is disabled (VERTEX_OPUS_ONLY_MODE=true). Retry shortly.';
+        }
         logAgentEvent(agent.id, 'error', 'Anthropic rate limited mid-loop — falling back to Gemini Flash');
         const accumulatedHistory = await chat.getHistory();
         await swapToModel(DEFAULT_FAST_MODEL, accumulatedHistory);
