@@ -7,6 +7,7 @@ import {
 } from 'discord.js';
 import { setupChannels, BotChannels } from './setup';
 import { getAgentByChannelName } from './agents';
+import { getAgent } from './agents';
 import { handleAgentMessage } from './handlers/textChannel';
 import { setCommandAuditCallback, setPRReviewCallback, setDiscordGuild, setToolAuditCallback, setAgentChannelResolver } from './tools';
 import { autoReviewPR } from './handlers/review';
@@ -322,6 +323,14 @@ export async function startBot(): Promise<void> {
         }
 
         await handleGroupchatMessage(message, botChannels.groupchat);
+        return;
+      }
+
+      if (channelId === botChannels.careerOps.id) {
+        const riley = getAgent('executive-assistant');
+        if (riley) {
+          await handleAgentMessage(message, riley);
+        }
         return;
       }
 
