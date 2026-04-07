@@ -85,11 +85,14 @@ async function handleAgentMessageInner(
   signal?: AbortSignal
 ): Promise<void> {
   const channelId = message.channel.id;
-  const userMessage = message.content.trim();
+  let userMessage = message.content.trim();
 
   if (!userMessage) return;
 
   const channel = message.channel as TextChannel;
+  if (agent.id === 'executive-assistant' && /career-ops/i.test(channel.name)) {
+    userMessage = `${userMessage}\n\n[Career Ops channel mode: respond directly for job-search workflow. Do not run deployment, health-check, smoke-test, or infra actions unless the user explicitly asks for them.]`;
+  }
   await channel.sendTyping();
 
   let pendingThinking: Message | null = null;
