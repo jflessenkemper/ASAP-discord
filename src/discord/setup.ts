@@ -558,7 +558,7 @@ export async function setupChannels(guild: Guild): Promise<BotChannels> {
           CreatePublicThreads: false,
           CreatePrivateThreads: false,
           AddReactions: false,
-          ManageWebhooks: true,
+          
           ViewChannel: true,
           ReadMessageHistory: true,
         });
@@ -574,7 +574,6 @@ export async function setupChannels(guild: Guild): Promise<BotChannels> {
           CreatePublicThreads: true,
           CreatePrivateThreads: true,
           AddReactions: true,
-          ManageWebhooks: true,
           ViewChannel: true,
           ReadMessageHistory: true,
         });

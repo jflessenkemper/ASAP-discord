@@ -36,6 +36,10 @@ import twilio from 'twilio';
 import { loadRuntimeSecrets } from './services/runtimeSecrets';
 
 const app = express();
+
+app.get('/health-check', (req, res) => {
+  res.status(200).send('OK');
+});
 const PORT = parseInt(process.env.PORT || '3001', 10);
 const IS_CLOUD_RUN = !!process.env.K_SERVICE || !!process.env.K_REVISION;
 const UNHANDLED_REJECTION_DEDUPE_MS = parseInt(process.env.UNHANDLED_REJECTION_DEDUPE_MS || '60000', 10);

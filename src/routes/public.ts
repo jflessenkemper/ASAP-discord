@@ -169,4 +169,9 @@ router.get('/health', (_req: Request, res: Response) => {
   res.status(200).json({ status: 'OK', message: 'Service is healthy' });
 });
 
+// Health check endpoint as requested.
+router.get('/health-check', (_req: Request, res: Response) => {
+  res.status(200).send('OK');
+});
+
 export default router;
