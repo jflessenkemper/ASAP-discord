@@ -90,7 +90,8 @@ async function handleAgentMessageInner(
   if (!userMessage) return;
 
   const channel = message.channel as TextChannel;
-  if (agent.id === 'executive-assistant' && /career-ops/i.test(channel.name)) {
+  const isCareerOpsRiley = agent.id === 'executive-assistant' && /career-ops/i.test(channel.name);
+  if (isCareerOpsRiley) {
     userMessage = `${userMessage}\n\n[Career Ops channel mode: respond directly for job-search workflow. Do not run deployment, health-check, smoke-test, or infra actions unless the user explicitly asks for them.]`;
   }
   await channel.sendTyping();
@@ -153,6 +154,7 @@ async function handleAgentMessageInner(
       }, {
         signal,
         maxTokens,
+        disableTools: isCareerOpsRiley,
         threadKey: `text:${channelId}`,
         onPartialText: async (partialText) => {
           await updateStreamPreview(partialText);
