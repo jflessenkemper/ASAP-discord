@@ -531,8 +531,16 @@ export async function startBot(): Promise<void> {
       }
     } catch (err) {
       const msg = err instanceof Error ? err.stack || err.message : 'Unknown';
+      const lowered = String(err instanceof Error ? err.message : err || '').toLowerCase();
+      const isAbortLike =
+        (err instanceof Error && err.name === 'AbortError')
+        || lowered.includes('aborterror')
+        || lowered.includes('aborted');
       console.error('Message handler error:', err instanceof Error ? err.message : 'Unknown');
-      void postAgentErrorLog('discord:message-handler', 'Message handler error', { detail: msg });
+      void postAgentErrorLog('discord:message-handler', isAbortLike ? 'Message handler aborted' : 'Message handler error', {
+        detail: msg,
+        level: isAbortLike ? 'info' : 'error',
+      });
     }
   });
 

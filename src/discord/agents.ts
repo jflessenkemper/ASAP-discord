@@ -71,24 +71,23 @@ const COLOR_MAP: Record<string, number> = {
 };
 
 /**
- * Agent avatar URLs — AI-generated profile pictures hosted on Discord CDN.
- * Using placeholder emoji-based avatars via UI Avatars API.
- * Replace with custom images later by uploading to Discord/CDN.
+ * Agent avatar URLs.
+ * Use ui-avatars for high-availability webhook avatar rendering.
  */
 const AVATAR_MAP: Record<string, string> = {
-  qa:                   'https://api.dicebear.com/7.x/adventurer-neutral/png?seed=Max-QA&backgroundColor=ed4245,f97316,1f2937',
-  'ux-reviewer':        'https://api.dicebear.com/7.x/adventurer-neutral/png?seed=Sophie-UX&backgroundColor=eb459e,f59e0b,0f172a',
-  'security-auditor':   'https://api.dicebear.com/7.x/adventurer-neutral/png?seed=Kane-Sec&backgroundColor=fee75c,374151,0f172a',
-  'api-reviewer':       'https://api.dicebear.com/7.x/adventurer-neutral/png?seed=Raj-API&backgroundColor=3498db,0ea5e9,1e293b',
-  dba:                  'https://api.dicebear.com/7.x/adventurer-neutral/png?seed=Elena-DBA&backgroundColor=e67e22,92400e,334155',
-  performance:          'https://api.dicebear.com/7.x/adventurer-neutral/png?seed=Kai-Perf&backgroundColor=1abc9c,0f766e,0b132b',
-  devops:               'https://api.dicebear.com/7.x/adventurer-neutral/png?seed=Jude-DevOps&backgroundColor=9b59b6,6366f1,111827',
-  copywriter:           'https://api.dicebear.com/7.x/adventurer-neutral/png?seed=Liv-Copy&backgroundColor=e91e63,f43f5e,312e81',
-  developer:            'https://api.dicebear.com/7.x/adventurer-neutral/png?seed=Ace-Dev&backgroundColor=57f287,16a34a,0f172a',
-  lawyer:               'https://api.dicebear.com/7.x/adventurer-neutral/png?seed=Harper-Law&backgroundColor=607d8b,334155,111827',
-  'executive-assistant': 'https://api.dicebear.com/7.x/adventurer-neutral/png?seed=Riley-EA&backgroundColor=5865f2,4338ca,0f172a',
-  'ios-engineer':       'https://api.dicebear.com/7.x/adventurer-neutral/png?seed=Mia-iOS&backgroundColor=a3aaae,94a3b8,1f2937',
-  'android-engineer':   'https://api.dicebear.com/7.x/adventurer-neutral/png?seed=Leo-Android&backgroundColor=2ecc71,22c55e,0f172a',
+  qa:                    'https://ui-avatars.com/api/?name=Max+QA&background=ED4245&color=FFFFFF&size=256&bold=true&format=png',
+  'ux-reviewer':         'https://ui-avatars.com/api/?name=Sophie+UX&background=EB459E&color=FFFFFF&size=256&bold=true&format=png',
+  'security-auditor':    'https://ui-avatars.com/api/?name=Kane+Security&background=FEE75C&color=111111&size=256&bold=true&format=png',
+  'api-reviewer':        'https://ui-avatars.com/api/?name=Raj+API&background=3498DB&color=FFFFFF&size=256&bold=true&format=png',
+  dba:                   'https://ui-avatars.com/api/?name=Elena+DBA&background=E67E22&color=FFFFFF&size=256&bold=true&format=png',
+  performance:           'https://ui-avatars.com/api/?name=Kai+Perf&background=1ABC9C&color=FFFFFF&size=256&bold=true&format=png',
+  devops:                'https://ui-avatars.com/api/?name=Jude+DevOps&background=9B59B6&color=FFFFFF&size=256&bold=true&format=png',
+  copywriter:            'https://ui-avatars.com/api/?name=Liv+Copy&background=E91E63&color=FFFFFF&size=256&bold=true&format=png',
+  developer:             'https://ui-avatars.com/api/?name=Ace+Dev&background=57F287&color=0F172A&size=256&bold=true&format=png',
+  lawyer:                'https://ui-avatars.com/api/?name=Harper+Law&background=607D8B&color=FFFFFF&size=256&bold=true&format=png',
+  'executive-assistant': 'https://ui-avatars.com/api/?name=Riley+EA&background=5865F2&color=FFFFFF&size=256&bold=true&format=png',
+  'ios-engineer':        'https://ui-avatars.com/api/?name=Mia+iOS&background=A3AAAE&color=111111&size=256&bold=true&format=png',
+  'android-engineer':    'https://ui-avatars.com/api/?name=Leo+Android&background=2ECC71&color=0F172A&size=256&bold=true&format=png',
 };
 
 const DISPLAY_NAME: Record<string, string> = {

@@ -2826,29 +2826,8 @@ RUNTIME EFFICIENCY:
       toolResultChars: estimateToolResultChars(functionResponses),
     };
 
-    const preToolHistory = await chat.getHistory().catch(() => [] as Content[]);
-    if (preToolHistory.length > 0 && CONTEXT_PRUNING_ENABLED) {
-      const toolLoopPrune = applyContextPruningIfDue({
-        history: preToolHistory,
-        modelName: currentModelName,
-        laneKey: pruneLaneKey,
-      });
-      if (toolLoopPrune.stats.changed) {
-        await swapToModel(currentModelName, toolLoopPrune.history);
-      }
-    }
-
-    const preemptiveBeforeToolSend = await chat.getHistory().catch(() => [] as Content[]);
-    if (preemptiveBeforeToolSend.length > 0) {
-      const guarded = applyPreemptiveContextGuard({
-        history: preemptiveBeforeToolSend,
-        modelName: currentModelName,
-        laneKey: pruneLaneKey,
-      });
-      if (guarded.changed) {
-        await swapToModel(currentModelName, guarded.history);
-      }
-    }
+    // Do not mutate/prune chat history between a model functionCall turn and
+    // sending functionResponses; Gemini requires strict immediate adjacency.
 
     try {
       response = await withConcurrencyLimit(currentModelName, () =>

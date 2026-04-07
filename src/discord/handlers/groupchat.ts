@@ -115,7 +115,11 @@ let claudeNotificationsBoundChannelId: string | null = null;
 const MAX_PARALLEL_SUBAGENTS = parseInt(process.env.MAX_PARALLEL_SUBAGENTS || '1', 10);
 const SUBAGENT_MAX_TOKENS = parseInt(process.env.SUBAGENT_MAX_TOKENS || '900', 10);
 const GROUPCHAT_PROCESS_TIMEOUT_MS = parseInt(process.env.GROUPCHAT_PROCESS_TIMEOUT_MS || '120000', 10);
-const RILEY_NO_RESPONSE_TIMEOUT_MS = parseInt(process.env.RILEY_NO_RESPONSE_TIMEOUT_MS || '45000', 10);
+const RILEY_NO_RESPONSE_TIMEOUT_MS = parseInt(process.env.RILEY_NO_RESPONSE_TIMEOUT_MS || '90000', 10);
+const RILEY_PROGRESS_PING_MS = parseInt(
+  process.env.RILEY_PROGRESS_PING_MS || String(Math.max(20_000, Math.floor(RILEY_NO_RESPONSE_TIMEOUT_MS * 0.6))),
+  10,
+);
 const DIRECT_GROUPCHAT_SHORT_PROMPT_MAX_WORDS = parseInt(process.env.DIRECT_GROUPCHAT_SHORT_PROMPT_MAX_WORDS || '18', 10);
 
 let activeGoal: string | null = null;
@@ -1558,7 +1562,18 @@ async function handleRileyMessage(
   let stopTyping: () => void = () => {};
   let hasVisibleRileyResponse = false;
   let noResponseTimer: NodeJS.Timeout | null = null;
+  let progressTimer: NodeJS.Timeout | null = null;
   try {
+    progressTimer = setTimeout(() => {
+      if (hasVisibleRileyResponse || signal?.aborted) return;
+      const seconds = Math.round(Math.max(0, RILEY_PROGRESS_PING_MS) / 1000);
+      const progressText = `⏳ Riley is still working (${seconds}s elapsed). No action needed yet.`;
+      void sendAgentMessage(workspaceChannel, riley, progressText).catch(() => {});
+      if (workspaceChannel.id !== groupchat.id) {
+        void groupchat.send(progressText).catch(() => {});
+      }
+    }, Math.max(5_000, RILEY_PROGRESS_PING_MS));
+
     noResponseTimer = setTimeout(() => {
       if (hasVisibleRileyResponse || signal?.aborted) return;
       const seconds = Math.round(RILEY_NO_RESPONSE_TIMEOUT_MS / 1000);
@@ -1702,6 +1717,7 @@ async function handleRileyMessage(
       await fallback.send(`⚠️ Riley encountered an error:\n\`\`\`${short}\`\`\``).catch(() => {});
     }
   } finally {
+    if (progressTimer) clearTimeout(progressTimer);
     if (noResponseTimer) clearTimeout(noResponseTimer);
     await clearThinkingMessage().catch(() => {});
     stopTyping();
