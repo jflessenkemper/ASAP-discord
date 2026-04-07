@@ -20,12 +20,16 @@ const STREAM_EDIT_THROTTLE_MS = parseInt(process.env.STREAM_EDIT_THROTTLE_MS || 
 const STREAM_MAX_PREVIEW_CHARS = parseInt(process.env.STREAM_MAX_PREVIEW_CHARS || '1800', 10);
 const STREAM_EDIT_MIN_CHAR_DELTA = parseInt(process.env.STREAM_EDIT_MIN_CHAR_DELTA || '35', 10);
 const AGENT_MAX_VISIBLE_CHARS = parseInt(process.env.AGENT_MAX_VISIBLE_CHARS || '3800', 10);
+const TEXT_AGENT_RESPONSE_TIMEOUT_MS = parseInt(process.env.TEXT_AGENT_RESPONSE_TIMEOUT_MS || '120000', 10);
 
 function classifyAgentError(err: unknown): string {
   const message = String((err as any)?.message || err || '').toLowerCase();
   const status = (err as any)?.status || (err as any)?.statusCode;
   if (status === 429 || message.includes('rate limit')) {
     return 'Gemini API is busy right now. Please retry in a moment.';
+  }
+  if (message.includes('timed out') || message.includes('timeout')) {
+    return 'The model timed out while responding. Please retry with a shorter or more specific request.';
   }
   if (
     message.includes('quota') ||
@@ -140,7 +144,7 @@ async function handleAgentMessageInner(
       lastRenderedLength = clipped.length;
     };
 
-    const response = await agentRespond(agent, history, userMessageWithLang, async (toolName, summary) => {
+    const response = await withTextTimeout(agentRespond(agent, history, userMessageWithLang, async (toolName, summary) => {
       if (signal?.aborted) return;
       try {
         await sendWebhookMessage(channel, {
@@ -159,7 +163,7 @@ async function handleAgentMessageInner(
         onPartialText: async (partialText) => {
           await updateStreamPreview(partialText);
         },
-      });
+      }), TEXT_AGENT_RESPONSE_TIMEOUT_MS);
 
       if (signal?.aborted) return;
 
@@ -220,6 +224,21 @@ async function handleAgentMessageInner(
       pendingThinking.delete().catch(() => {});
       pendingThinkingMessages.delete(channelId);
     }
+  }
+}
+
+async function withTextTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) return promise;
+  let timer: NodeJS.Timeout | null = null;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`Text channel response timed out after ${timeoutMs}ms`)), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
   }
 }
 
