@@ -14,6 +14,7 @@ import shopRoutes from './routes/shop';
 import favoritesRoutes from './routes/favorites';
 import publicRoutes from './routes/public';
 import searchRoutes from './routes/search';
+import userRoutes from './routes/users';
 import pool from './db/pool';
 import {
   startBot,
@@ -82,6 +83,7 @@ if (IS_CLOUD_RUN) {
 }
 // Discord voice requires UDP. Cloud Run is HTTP-only, so force-disable bot there.
 const DISCORD_BOT_ENABLED = !IS_CLOUD_RUN && process.env.DISCORD_BOT_ENABLED !== 'false';
+const DISCORD_BOT_SKIP_LOCK = process.env.DISCORD_BOT_SKIP_LOCK === 'true';
 const DISCORD_BOT_LOCK_KEY = parseInt(process.env.DISCORD_BOT_LOCK_KEY || '842021', 10);
 let botLockClient: { query: (sql: string, params?: unknown[]) => Promise<{ rows: Array<{ locked?: boolean }> }>; release: () => void } | null = null;
 
@@ -162,6 +164,14 @@ app.use(helmet({
     },
   },
 }));
+
+// Defense-in-depth legacy headers for older clients/proxies.
+app.use((_req, res, next) => {
+  res.setHeader('X-XSS-Protection', '1; mode=block');
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  next();
+});
+
 const CORS_ORIGIN: cors.CorsOptions['origin'] = process.env.NODE_ENV === 'production'
   ? process.env.FRONTEND_URL || false
   : /^http:\/\/localhost:(8081|19000|19006|3000|3001)$/;
@@ -398,10 +408,13 @@ const server = app.listen(PORT, () => {
     // Run the Discord bot only on the dedicated voice-capable host.
     if (DISCORD_BOT_ENABLED) {
       try {
-        const lockAcquired = await acquireDiscordBotLock();
+        const lockAcquired = DISCORD_BOT_SKIP_LOCK ? true : await acquireDiscordBotLock();
         if (!lockAcquired) {
           console.log('Discord bot startup skipped: lock held by another instance');
         } else {
+          if (DISCORD_BOT_SKIP_LOCK) {
+            console.log('Discord bot startup lock bypass enabled (DISCORD_BOT_SKIP_LOCK=true)');
+          }
           startBot().catch((err) => {
             console.error('Discord bot startup error:', err instanceof Error ? err.message : 'Unknown');
           });

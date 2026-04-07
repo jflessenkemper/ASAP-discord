@@ -726,7 +726,7 @@ router.get('/:id/timeline', requireAuth, async (req: AuthRequest, res: Response)
     }
 
     const result = await pool.query(
-      'SELECT * FROM job_timeline WHERE job_id = $1 ORDER BY created_at ASC',
+      'SELECT status, created_at AS timestamp, note FROM job_timeline WHERE job_id = $1 ORDER BY created_at ASC',
       [jobId]
     );
     res.json({ timeline: result.rows });

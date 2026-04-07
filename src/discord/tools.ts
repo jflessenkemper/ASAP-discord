@@ -38,7 +38,23 @@ export function setAgentChannelResolver(cb: (agentId: string) => TextChannel | n
 }
 
 /** Channels that must never be deleted by agents (canonical key form). */
-const PROTECTED_CHANNEL_KEYS = ['groupchat', 'voice', 'github', 'upgrades', 'call-log', 'limits', 'screenshots', 'url', 'terminal'];
+const PROTECTED_CHANNEL_KEYS = [
+  'groupchat',
+  'voice',
+  'thread-status',
+  'decisions',
+  'github',
+  'upgrades',
+  'tools',
+  'call-log',
+  'limits',
+  'cost',
+  'screenshots',
+  'url',
+  'terminal',
+  'voice-errors',
+  'agent-errors',
+];
 
 function toChannelProtectionKey(name: string): string {
   return String(name || '').toLowerCase().replace(/^[^a-z0-9]+/, '');
@@ -75,6 +91,19 @@ const MAX_WRITE_SIZE = 2 * 1024 * 1024;
 
 /** Max command execution time (2 min) */
 const CMD_TIMEOUT = 120_000;
+const AUTO_REPO_MEMORY_UPDATE = String(process.env.AUTO_REPO_MEMORY_UPDATE ?? 'true').toLowerCase() !== 'false';
+const TOOL_RESULT_CACHE_TTL_MS = Math.max(1_000, Number(process.env.TOOL_RESULT_CACHE_TTL_MS || '45000'));
+const TOOL_RESULT_CACHE_MAX_ENTRIES = Math.max(200, Number(process.env.TOOL_RESULT_CACHE_MAX_ENTRIES || '2000'));
+const HOT_SEARCH_INDEX_TTL_MS = Math.max(5_000, Number(process.env.HOT_SEARCH_INDEX_TTL_MS || '120000'));
+const HOT_SEARCH_INDEX_MAX_CHUNKS = Math.max(200, Number(process.env.HOT_SEARCH_INDEX_MAX_CHUNKS || '5000'));
+
+type ToolCacheEntry = { result: string; expiresAt: number };
+const toolResultCache = new Map<string, ToolCacheEntry>();
+const toolInFlight = new Map<string, Promise<string>>();
+
+type HotSearchChunk = { path: string; text: string; textLower: string; tokens: Set<string> };
+let hotSearchIndexBuiltAt = 0;
+let hotSearchIndex: HotSearchChunk[] = [];
 
 
 /** Cache validated paths to avoid re-resolving. LRU-like with size cap. */
@@ -203,6 +232,21 @@ export const REPO_TOOLS = [
         path: {
           type: 'string',
           description: 'Relative directory path from repo root (use "." for root)',
+        },
+      },
+      required: ['path'],
+    },
+  },
+  {
+    name: 'check_file_exists',
+    description:
+      'Check whether a file or directory exists without reading full contents. Useful to avoid redundant scans and save tokens.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        path: {
+          type: 'string',
+          description: 'Relative path from repo root',
         },
       },
       required: ['path'],
@@ -410,7 +454,7 @@ export const REPO_TOOLS = [
   {
     name: 'delete_channel',
     description:
-      'Permanently delete a Discord channel by name. Cannot delete protected channels (groupchat, voice, github, upgrades, call-log, limits). NEVER use this for "reset/clear" requests — use clear_channel_messages instead.',
+      'Permanently delete a Discord channel by name. Cannot delete protected core/operations channels (groupchat, voice, thread-status, decisions, github, upgrades, tools, call-log, limits, cost, screenshots, url, terminal, voice-errors, agent-errors). NEVER use this for "reset/clear" requests — use RESET_CHANNELS workflow instead.',
     input_schema: {
       type: 'object' as const,
       properties: {
@@ -1245,10 +1289,11 @@ export const REPO_TOOLS = [
  * GCP inspect tools, screenshots, and mobile harness interactions.
  */
 const REVIEW_TOOL_NAMES = new Set([
-  'read_file', 'search_files', 'list_directory', 'fetch_url',
+  'read_file', 'search_files', 'list_directory', 'check_file_exists', 'fetch_url',
   'db_query_readonly', 'db_schema', 'memory_read', 'memory_list',
   'repo_memory_index', 'repo_memory_search', 'repo_memory_add_oss',
   'run_tests', 'typecheck', 'git_file_history', 'smoke_test_agents', 'list_threads',
+  'send_channel_message',
   'capture_screenshots',
   'mobile_harness_start', 'mobile_harness_step', 'mobile_harness_snapshot', 'mobile_harness_stop',
   'gcp_preflight', 'gcp_get_env', 'gcp_list_revisions', 'gcp_secret_list', 'gcp_build_status',
@@ -1262,7 +1307,7 @@ export const REVIEW_TOOLS = REPO_TOOLS.filter((t) => REVIEW_TOOL_NAMES.has(t.nam
  * are delegated to the specialist agents.
  */
 const RILEY_TOOL_NAMES = new Set([
-  'read_file', 'search_files', 'list_directory', 'fetch_url',
+  'read_file', 'search_files', 'list_directory', 'check_file_exists', 'fetch_url',
   'memory_read', 'memory_write', 'memory_append', 'memory_list',
   'repo_memory_index', 'repo_memory_search', 'repo_memory_add_oss',
   'run_tests', 'typecheck', 'git_file_history', 'smoke_test_agents',
@@ -1311,24 +1356,104 @@ export const PROMPT_REPO_TOOLS: PromptTool[] = REPO_TOOLS.map(compactToolForProm
 export const PROMPT_REVIEW_TOOLS: PromptTool[] = REVIEW_TOOLS.map(compactToolForPrompt);
 export const PROMPT_RILEY_TOOLS: PromptTool[] = RILEY_TOOLS.map(compactToolForPrompt);
 
+const STRICT_AGENT_TOOL_ACCESS = String(process.env.STRICT_AGENT_TOOL_ACCESS ?? 'true').toLowerCase() !== 'false';
+const RILEY_AGENT_ID = 'executive-assistant';
+const FULL_TOOL_ACCESS_AGENT_IDS = new Set(['developer', 'devops', 'ios-engineer', 'android-engineer']);
+const REVIEW_TOOL_ACCESS_AGENT_IDS = new Set([
+  'qa',
+  'ux-reviewer',
+  'security-auditor',
+  'api-reviewer',
+  'dba',
+  'performance',
+  'copywriter',
+  'lawyer',
+]);
+
+function getRawToolsForAgent(agentId: string): readonly (typeof REPO_TOOLS[number])[] {
+  const id = String(agentId || '').trim().toLowerCase();
+  if (!STRICT_AGENT_TOOL_ACCESS) return REPO_TOOLS;
+  if (FULL_TOOL_ACCESS_AGENT_IDS.has(id)) return REPO_TOOLS;
+  if (id === RILEY_AGENT_ID) return RILEY_TOOLS;
+  if (REVIEW_TOOL_ACCESS_AGENT_IDS.has(id)) return REVIEW_TOOLS;
+  // Unknown agents default to review-grade least privilege.
+  return REVIEW_TOOLS;
+}
+
+export function getToolsForAgent(agentId: string, compactPrompt = false): readonly any[] {
+  const rawTools = getRawToolsForAgent(agentId);
+  if (!compactPrompt) return rawTools;
+  const names = new Set<string>(rawTools.map((tool) => String(tool.name)));
+  return PROMPT_REPO_TOOLS.filter((tool) => names.has(tool.name));
+}
+
+export function getAllowedToolNamesForAgent(agentId: string): Set<string> {
+  return new Set(getRawToolsForAgent(agentId).map((tool) => tool.name));
+}
+
+export function agentCanUseTool(agentId: string, toolName: string): boolean {
+  if (!STRICT_AGENT_TOOL_ACCESS) return true;
+  return getAllowedToolNamesForAgent(agentId).has(toolName);
+}
+
 
 export async function executeTool(
   toolName: string,
   input: Record<string, string>,
-  context?: { agentId?: string }
+  context?: { agentId?: string; threadKey?: string }
+): Promise<string> {
+  const scope = context?.threadKey || context?.agentId || 'global';
+  const key = buildToolCacheKey(scope, toolName, input);
+  const cacheable = isCacheableTool(toolName);
+
+  if (context?.agentId && !agentCanUseTool(context.agentId, toolName)) {
+    return `Error: Tool "${toolName}" is not allowed for agent "${context.agentId}".`;
+  }
+
+  if (cacheable) {
+    const cached = getCachedToolResult(key);
+    if (cached !== null) return cached;
+
+    const inFlight = toolInFlight.get(key);
+    if (inFlight) return inFlight;
+  }
+
+  const runPromise = executeToolInternal(toolName, input, context);
+  if (cacheable) toolInFlight.set(key, runPromise);
+
+  try {
+    const result = await runPromise;
+    if (cacheable && !/^Error:/i.test(String(result || '').trim())) {
+      setCachedToolResult(key, result);
+    }
+    return result;
+  } finally {
+    if (cacheable) toolInFlight.delete(key);
+  }
+}
+
+async function executeToolInternal(
+  toolName: string,
+  input: Record<string, string>,
+  context?: { agentId?: string; threadKey?: string }
 ): Promise<string> {
   try {
+    const scope = context?.threadKey || context?.agentId;
     switch (toolName) {
       case 'read_file':
         return readFile(input.path, Number(input.offset), Number(input.max_bytes));
       case 'write_file':
+        clearToolResultCache(scope);
         return writeFile(input.path, input.content);
       case 'edit_file':
+        clearToolResultCache(scope);
         return editFile(input.path, input.old_string, input.new_string);
       case 'search_files':
         return searchFiles(input.pattern, input.include);
       case 'list_directory':
         return listDirectory(input.path);
+      case 'check_file_exists':
+        return checkFileExists(input.path);
       case 'run_command':
         return runCommand(input.command, input.cwd);
       case 'git_create_branch':
@@ -1342,6 +1467,7 @@ export async function executeTool(
       case 'list_pull_requests':
         return await ghListPRs();
       case 'run_tests':
+        clearToolResultCache(scope);
         return runTests(input.test_pattern);
       case 'git_file_history':
         return gitFileHistory(input.path, parseInt(input.limit, 10) || 10, input.line_range);
@@ -1372,8 +1498,10 @@ export async function executeTool(
       case 'github_search':
         return await ghSearch(input.query, (input.type as 'code' | 'issues' | 'commits') || 'code');
       case 'typecheck':
+        clearToolResultCache(scope);
         return runTypecheck((input.target as 'client' | 'server' | 'both') || 'both');
       case 'batch_edit':
+        clearToolResultCache(scope);
         return batchEdit(input.edits as any);
       case 'capture_screenshots': {
         const url = input.url || process.env.FRONTEND_URL || 'https://asap-489910.australia-southeast1.run.app';
@@ -1490,6 +1618,61 @@ export async function executeTool(
   }
 }
 
+function normalizeToolInput(input: Record<string, string>): string {
+  const entries = Object.entries(input || {}).sort(([a], [b]) => a.localeCompare(b));
+  return JSON.stringify(entries);
+}
+
+function buildToolCacheKey(scope: string, toolName: string, input: Record<string, string>): string {
+  const raw = `${scope}::${toolName}::${normalizeToolInput(input)}`;
+  return createHash('sha1').update(raw).digest('hex');
+}
+
+function isCacheableTool(toolName: string): boolean {
+  return new Set([
+    'search_files',
+    'list_directory',
+    'check_file_exists',
+    'list_channels',
+    'list_threads',
+    'github_search',
+    'fetch_url',
+    'memory_read',
+    'memory_list',
+    'repo_memory_search',
+    'db_schema',
+  ]).has(toolName);
+}
+
+function clearToolResultCache(scope?: string): void {
+  if (!scope) {
+    toolResultCache.clear();
+    return;
+  }
+  // Keys are hashed; scope-targeted invalidation is not possible without reverse indexing.
+  // Prefer correctness over stale responses.
+  toolResultCache.clear();
+}
+
+function getCachedToolResult(key: string): string | null {
+  const cached = toolResultCache.get(key);
+  if (!cached) return null;
+  if (cached.expiresAt < Date.now()) {
+    toolResultCache.delete(key);
+    return null;
+  }
+  return cached.result;
+}
+
+function setCachedToolResult(key: string, result: string): void {
+  toolResultCache.set(key, { result, expiresAt: Date.now() + TOOL_RESULT_CACHE_TTL_MS });
+  while (toolResultCache.size > TOOL_RESULT_CACHE_MAX_ENTRIES) {
+    const oldest = toolResultCache.keys().next().value;
+    if (!oldest) break;
+    toolResultCache.delete(oldest);
+  }
+}
+
 function readFile(relativePath: string, offsetRaw?: number, maxBytesRaw?: number): string {
   const abs = safePath(relativePath);
   if (!fs.existsSync(abs)) {
@@ -1527,6 +1710,7 @@ function writeFile(relativePath: string, content: string): string {
   const dir = path.dirname(abs);
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(abs, content, 'utf-8');
+  scheduleRepoMemoryAutoUpsert(relativePath);
   return `Wrote ${content.length} bytes to ${relativePath}`;
 }
 
@@ -1545,6 +1729,7 @@ function editFile(relativePath: string, oldString: string, newString: string): s
   }
   const updated = content.replace(oldString, newString);
   fs.writeFileSync(abs, updated, 'utf-8');
+  scheduleRepoMemoryAutoUpsert(relativePath);
   return `Edited ${relativePath} successfully.`;
 }
 
@@ -1570,16 +1755,20 @@ function batchEdit(edits: Array<{ path: string; old_string: string; new_string: 
 }
 
 function searchFiles(pattern: string, include?: string): string {
-  const includeArgs = include
-    ? ['--include=' + include]
-    : ['--include=*.ts', '--include=*.tsx', '--include=*.js', '--include=*.json', '--include=*.sql', '--include=*.md'];
+  const includeGlobs = include
+    ? [include]
+    : ['*.ts', '*.tsx', '*.js', '*.json', '*.sql', '*.md'];
+  const hotPaths = searchFilesHotIndexPaths(pattern, 25);
 
   try {
-    const result = execFileSync(
-      'grep',
-      ['-rn', '-i', '-E', pattern, ...includeArgs, '--exclude-dir=node_modules', '--exclude-dir=.git', '--exclude-dir=dist', '--max-count=50', '.'],
-      { cwd: REPO_ROOT, timeout: 10_000, maxBuffer: 512 * 1024, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] }
-    );
+    let result = '';
+    if (hotPaths.length > 0) {
+      result = runRgSearch(pattern, includeGlobs, hotPaths);
+    }
+    if (!result.trim()) {
+      result = runRgSearch(pattern, includeGlobs);
+    }
+
     const lines = result.trim();
     if (!lines) return `No matches found for pattern: ${pattern}`;
     const seen = new Set<string>();
@@ -1591,10 +1780,112 @@ function searchFiles(pattern: string, include?: string): string {
     }).slice(0, 50);
     return deduped.join('\n');
   } catch (err: unknown) {
-    const execErr = err as { status?: number; stdout?: string };
+    const execErr = err as { status?: number };
     if (execErr.status === 1) return `No matches found for pattern: ${pattern}`;
     return `Search failed for pattern: ${pattern}`;
   }
+}
+
+function runRgSearch(pattern: string, includeGlobs: string[], targetPaths?: string[]): string {
+  const rgArgs = [
+    '-n',
+    '-i',
+    '-e',
+    pattern,
+    '--max-count',
+    '50',
+    '--glob',
+    '!node_modules/**',
+    '--glob',
+    '!.git/**',
+    '--glob',
+    '!dist/**',
+    ...includeGlobs.flatMap((g) => ['--glob', g]),
+  ];
+
+  if (targetPaths && targetPaths.length > 0) {
+    rgArgs.push(...targetPaths);
+  } else {
+    rgArgs.push('.');
+  }
+
+  return execFileSync(
+    'rg',
+    rgArgs,
+    { cwd: REPO_ROOT, timeout: 10_000, maxBuffer: 512 * 1024, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] }
+  );
+}
+
+function tokenizeHotSearch(text: string): string[] {
+  return String(text || '')
+    .toLowerCase()
+    .split(/[^a-z0-9_]+/)
+    .map((t) => t.trim())
+    .filter((t) => t.length >= 3)
+    .slice(0, 40);
+}
+
+function rebuildHotSearchIndexIfNeeded(): void {
+  const now = Date.now();
+  if (hotSearchIndex.length > 0 && now - hotSearchIndexBuiltAt < HOT_SEARCH_INDEX_TTL_MS) return;
+
+  ensureRepoMemoryCacheLoaded();
+  const next: HotSearchChunk[] = [];
+  for (const [key, content] of repoMemoryChunkCache.entries()) {
+    if (!key.startsWith('repoidx:repo:')) continue;
+    const pathPart = key.replace(/^repoidx:repo:/, '').replace(/:\d+$/, '');
+    const compact = String(content || '').replace(/\s+/g, ' ').trim().slice(0, 900);
+    if (!compact) continue;
+    const tokens = new Set(tokenizeHotSearch(`${pathPart} ${compact}`));
+    if (tokens.size === 0) continue;
+    next.push({
+      path: pathPart,
+      text: compact,
+      textLower: compact.toLowerCase(),
+      tokens,
+    });
+    if (next.length >= HOT_SEARCH_INDEX_MAX_CHUNKS) break;
+  }
+
+  hotSearchIndex = next;
+  hotSearchIndexBuiltAt = now;
+}
+
+function searchFilesHotIndexPaths(pattern: string, limit: number): string[] {
+  const query = String(pattern || '').trim();
+  if (!query) return [];
+  if (/[\[\]{}()*+?|\\]/.test(query)) return [];
+
+  rebuildHotSearchIndexIfNeeded();
+  if (hotSearchIndex.length === 0) return [];
+
+  const qLower = query.toLowerCase();
+  const qTokens = tokenizeHotSearch(query);
+  if (qTokens.length === 0) return [];
+
+  const scored: Array<{ path: string; score: number }> = [];
+  for (const chunk of hotSearchIndex) {
+    let overlap = 0;
+    for (const token of qTokens) {
+      if (chunk.tokens.has(token)) overlap += 1;
+    }
+    if (overlap === 0 && !chunk.textLower.includes(qLower) && !chunk.path.toLowerCase().includes(qLower)) continue;
+    const phraseBoost = chunk.textLower.includes(qLower) ? 3 : 0;
+    const pathBoost = chunk.path.toLowerCase().includes(qLower) ? 2 : 0;
+    scored.push({
+      path: chunk.path,
+      score: overlap + phraseBoost + pathBoost,
+    });
+  }
+
+  scored.sort((a, b) => b.score - a.score || a.path.localeCompare(b.path));
+  const byPath = new Set<string>();
+  for (const row of scored) {
+    byPath.add(row.path);
+    if (byPath.size >= limit) break;
+  }
+
+  return [...byPath.values()].slice(0, limit);
 }
 
 function listDirectory(relativePath: string): string {
@@ -1607,6 +1898,17 @@ function listDirectory(relativePath: string): string {
     .map((e) => (e.isDirectory() ? `${e.name}/` : e.name))
     .sort()
     .join('\n');
+}
+
+function checkFileExists(relativePath: string): string {
+  const target = String(relativePath || '').trim();
+  if (!target) return 'Path is required.';
+  const abs = safePath(target);
+  if (!fs.existsSync(abs)) return `NOT_FOUND ${target}`;
+  const stat = fs.statSync(abs);
+  if (stat.isDirectory()) return `EXISTS dir ${target}`;
+  if (stat.isFile()) return `EXISTS file ${target} (${stat.size} bytes)`;
+  return `EXISTS other ${target}`;
 }
 
 /**
@@ -2164,6 +2466,21 @@ async function discordSendMessage(channelName: string, message: string, agentNam
   const channel = findTextChannelByFlexibleName(guild, channelName);
   if (!channel) return `Channel not found: #${channelName}`;
 
+  const normalizedAgentId = String(agentId || '').trim().toLowerCase();
+  if (
+    normalizedAgentId
+    && STRICT_AGENT_TOOL_ACCESS
+    && REVIEW_TOOL_ACCESS_AGENT_IDS.has(normalizedAgentId)
+  ) {
+    const channelKey = toChannelProtectionKey(channel.name);
+    const ownAgentChannel = agentChannelResolver ? agentChannelResolver(normalizedAgentId) : null;
+    const isOwnChannel = !!ownAgentChannel && ownAgentChannel.id === channel.id;
+    const canPost = channelKey === 'upgrades' || isOwnChannel;
+    if (!canPost) {
+      return `Error: Review agent "${normalizedAgentId}" can only send messages to #upgrades or its own channel.`;
+    }
+  }
+
   const agent = agentId ? getAgent(agentId as AgentId) : null;
   const resolvedUsername = agentName || (agent ? `${agent.emoji} ${agent.name}` : 'ASAP Agent');
   const resolvedAvatarUrl = agent?.avatarUrl;
@@ -2189,6 +2506,10 @@ async function discordSendMessage(channelName: string, message: string, agentNam
 async function discordClearChannelMessages(channelName: string, limit = 500): Promise<string> {
   const guild = requireGuild();
   const maxDelete = Math.min(Math.max(limit, 1), 2000);
+  const key = toChannelProtectionKey(channelName);
+  if (PROTECTED_CHANNEL_KEYS.includes(key)) {
+    return `Cannot clear protected channel: #${channelName}`;
+  }
 
   const channel = findTextChannelByFlexibleName(guild, channelName);
   if (!channel) return `Channel not found: #${channelName}`;
@@ -2898,9 +3219,122 @@ const REPO_MEMORY_SKIP_FILE_RE = /\.(png|jpg|jpeg|gif|webp|ico|bmp|tiff|woff2?|t
 const REPO_MEMORY_INCLUDE_EXT = new Set([
   '.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.json', '.md', '.yml', '.yaml', '.sql', '.sh', '.txt', '.env.example', '.tf', '.toml', '.ini', '.xml', '.html', '.css', '.scss',
 ]);
+const repoMemoryAutoUpdateTimers = new Map<string, NodeJS.Timeout>();
 
 function normalizeRepoPath(absPath: string): string {
   return path.relative(REPO_ROOT, absPath).split(path.sep).join('/');
+}
+
+function repoMemoryRemovePathCaches(relPath: string): void {
+  repoMemoryFileHashCache.delete(relPath);
+  const prefix = `repoidx:repo:${relPath}:`;
+  for (const key of repoMemoryChunkCache.keys()) {
+    if (key.startsWith(prefix)) repoMemoryChunkCache.delete(key);
+  }
+}
+
+function scheduleRepoMemoryAutoUpsert(relativePath: string): void {
+  if (!AUTO_REPO_MEMORY_UPDATE) return;
+  const relPath = String(relativePath || '').trim().replace(/^\.\//, '');
+  if (!relPath) return;
+
+  const existing = repoMemoryAutoUpdateTimers.get(relPath);
+  if (existing) clearTimeout(existing);
+
+  const timer = setTimeout(() => {
+    repoMemoryAutoUpdateTimers.delete(relPath);
+    void repoMemoryUpsertPath(relPath).catch(() => {});
+  }, 300);
+
+  repoMemoryAutoUpdateTimers.set(relPath, timer);
+}
+
+async function repoMemoryUpsertPath(relPathRaw: string): Promise<void> {
+  const relPath = String(relPathRaw || '').trim().replace(/^\.\//, '');
+  if (!relPath) return;
+
+  let absPath: string;
+  try {
+    absPath = safePath(relPath);
+  } catch {
+    return;
+  }
+
+  ensureRepoMemoryCacheLoaded();
+
+  if (!fs.existsSync(absPath)) {
+    repoMemoryRemovePathCaches(relPath);
+    flushRepoMemoryCacheToDisk();
+    return;
+  }
+
+  let stat: fs.Stats;
+  try {
+    stat = fs.statSync(absPath);
+  } catch {
+    return;
+  }
+
+  if (!shouldIndexRepoFile(relPath, stat)) {
+    repoMemoryRemovePathCaches(relPath);
+    flushRepoMemoryCacheToDisk();
+    return;
+  }
+
+  let content = '';
+  try {
+    content = fs.readFileSync(absPath, 'utf-8');
+  } catch {
+    return;
+  }
+
+  const fileHash = hashText(content);
+  const prevHash = repoMemoryFileHashCache.get(relPath);
+  if (prevHash && prevHash === fileHash) return;
+
+  repoMemoryRemovePathCaches(relPath);
+  const chunks = chunkTextBySize(content, REPO_MEMORY_CHUNK_CHARS);
+  for (let i = 0; i < chunks.length; i++) {
+    repoMemoryChunkCache.set(`repoidx:repo:${relPath}:${i}`, chunks[i]);
+  }
+  repoMemoryFileHashCache.set(relPath, fileHash);
+  flushRepoMemoryCacheToDisk();
+
+  if (repoMemoryDbDisabled) return;
+
+  const pool = (await import('../db/pool')).default;
+  const fileKey = `repoidx:file:repo:${relPath}`;
+  const chunkPrefix = `repoidx:repo:${relPath}:`;
+  let client: any | null = null;
+  try {
+    client = await pool.connect();
+    await client.query('BEGIN');
+    await client.query(`DELETE FROM agent_memory WHERE file_name LIKE $1`, [`${chunkPrefix}%`]);
+    for (let i = 0; i < chunks.length; i++) {
+      await client.query(
+        `INSERT INTO agent_memory (file_name, content, updated_at)
+         VALUES ($1, $2, NOW())
+         ON CONFLICT (file_name)
+         DO UPDATE SET content = EXCLUDED.content, updated_at = NOW()`,
+        [`repoidx:repo:${relPath}:${i}`, chunks[i]]
+      );
+    }
+    await client.query(
+      `INSERT INTO agent_memory (file_name, content, updated_at)
+       VALUES ($1, $2, NOW())
+       ON CONFLICT (file_name)
+       DO UPDATE SET content = EXCLUDED.content, updated_at = NOW()`,
+      [fileKey, fileHash]
+    );
+    await client.query('COMMIT');
+  } catch {
+    if (client) {
+      try { await client.query('ROLLBACK'); } catch { }
+    }
+    repoMemoryDbDisabled = true;
+  } finally {
+    if (client) client.release();
+  }
 }
 
 function shouldIndexRepoFile(relPath: string, stat: fs.Stats): boolean {

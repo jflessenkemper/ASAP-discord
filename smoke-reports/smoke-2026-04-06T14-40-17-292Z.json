@@ -1,0 +1,184 @@
+{
+  "startedAt": "2026-04-06T14:30:41.798Z",
+  "endedAt": "2026-04-06T14:40:17.292Z",
+  "summary": {
+    "capabilityPassed": 15,
+    "capabilityFailed": 2,
+    "extraFailed": 0,
+    "score": 70.5,
+    "criticalPassed": false,
+    "detail": "core_fail=1 | orchestration_fail=0 | upgrades_fail=0 | critical_extra_fail=0"
+  },
+  "results": [
+    {
+      "agent": "Riley (Executive Assistant)",
+      "capability": "routing-and-next-step",
+      "category": "core",
+      "passed": true,
+      "elapsed": 6241,
+      "snippet": "My role is to orchestrate the ASAP project, coordinating agents, code, infrastructure, deployments, and operational follow-through on Jordan's behalf. The immediate next step is to…"
+    },
+    {
+      "agent": "Riley (Executive Assistant)",
+      "capability": "repo-memory-tool-awareness",
+      "category": "memory",
+      "passed": true,
+      "elapsed": 3538,
+      "snippet": "To index repository memory, I use `repo_memory_index`, and to search it, I use `repo_memory_search`. SMOKE_EXECUTIV_REPOMEMO_856265"
+    },
+    {
+      "agent": "Ace (Developer)",
+      "capability": "evidence-format-contract",
+      "category": "core",
+      "passed": false,
+      "elapsed": 60139,
+      "snippet": "Timeout while waiting for full capability evidence",
+      "reason": "missing token echo"
+    },
+    {
+      "agent": "Ace (Developer)",
+      "capability": "upgrades-post",
+      "category": "upgrades",
+      "passed": true,
+      "elapsed": 9019,
+      "snippet": "To improve Gemini throughput and save tokens, we should implement more precise `repo_memory_search` queries, limiting broad searches to specific file types or directories when possible. SMOKE_DEVELOPE_UPGRADES_013232"
+    },
+    {
+      "agent": "Max (QA)",
+      "capability": "regression-test-design",
+      "category": "specialist",
+      "passed": true,
+      "elapsed": 6316,
+      "snippet": "Max: A high-risk regression test for job matching is to verify that an employee with specific skills and location preferences is only presented with jobs that precisely match those criteria, and not jobs outside their scope. SMOKE_QA_REGRESSI_054061"
+    },
+    {
+      "agent": "Max (QA)",
+      "capability": "upgrades-post",
+      "category": "upgrades",
+      "passed": true,
+      "elapsed": 8380,
+      "snippet": "I've posted a test-automation enhancement to the #upgrades channel. It suggests implementing automated visual regression testing for the mobile app to catch UI bugs early and ensure consistency. SMOKE_QA_UPGRADES_060627"
+    },
+    {
+      "agent": "Kane (Security Auditor)",
+      "capability": "auth-risk-and-mitigation",
+      "category": "specialist",
+      "passed": true,
+      "elapsed": 7584,
+      "snippet": "One authentication vulnerability is insecure session management, where tokens can be stolen and replayed; a mitigation is to use short-lived, HTTP-only, secure cookies for session tokens and invalidate them on logout. SMOKE_SECURITY_AUTHRISK_135117"
+    },
+    {
+      "agent": "Kane (Security Auditor)",
+      "capability": "upgrades-post",
+      "category": "upgrades",
+      "passed": true,
+      "elapsed": 8109,
+      "snippet": "I've posted a security-hardening upgrade suggestion to the #upgrades channel, recommending the integration of SAST/DAST tools into our CI/CD pipelines to proactively catch vulnerabilities. SMOKE_SECURITY_UPGRADES_142951"
+    },
+    {
+      "agent": "Sophie (UX Reviewer)",
+      "capability": "a11y-priority",
+      "category": "specialist",
+      "passed": true,
+      "elapsed": 4833,
+      "snippet": "Sophie: A crucial accessibility requirement to verify first is that all interactive elements are fully keyboard accessible, adhering to WCAG 2.1.1 Keyboard. SMOKE_UXREVIEW_A11YPRIO_183858"
+    },
+    {
+      "agent": "Raj (API Reviewer)",
+      "capability": "http-semantics",
+      "category": "specialist",
+      "passed": true,
+      "elapsed": 3585,
+      "snippet": "For a missing resource, the API should return a `404 Not Found` status code. SMOKE_APIREVIE_HTTPSEMA_188942"
+    },
+    {
+      "agent": "Elena (DBA)",
+      "capability": "postgres-safety",
+      "category": "specialist",
+      "passed": true,
+      "elapsed": 7509,
+      "snippet": "Elena: Before deploying any PostgreSQL migration to production, ensure you have a robust backup and rollback plan in place to prevent data loss or system downtime. SMOKE_DBA_POSTGRES_225023"
+    },
+    {
+      "agent": "Kai (Performance)",
+      "capability": "measurement",
+      "category": "specialist",
+      "passed": true,
+      "elapsed": 4716,
+      "snippet": "The first metric I would track for app performance is Time to Interactive (TTI), as it directly reflects when users can actually begin interacting with the application. SMOKE_PERFORMA_MEASUREM_232782"
+    },
+    {
+      "agent": "Jude (DevOps)",
+      "capability": "tool-audit-proof",
+      "category": "tool-proof",
+      "passed": true,
+      "elapsed": 6133,
+      "snippet": "TOOL_USED:gcp_run_describe, Status: Ready: True, Revision: asap-00064-gz6 SMOKE_DEVOPS_TOOLAUDI_237748"
+    },
+    {
+      "agent": "Liv (Copywriter)",
+      "capability": "microcopy-tone",
+      "category": "specialist",
+      "passed": true,
+      "elapsed": 6290,
+      "snippet": "We couldn't sign you in. Please check your details and try again. SMOKE_COPYWRIT_MICROCOP_244131"
+    },
+    {
+      "agent": "Harper (Lawyer)",
+      "capability": "au-contractor-distinction",
+      "category": "specialist",
+      "passed": false,
+      "elapsed": 60752,
+      "snippet": "Timeout while waiting for full capability evidence",
+      "reason": "missing token echo"
+    },
+    {
+      "agent": "Mia (iOS Engineer)",
+      "capability": "ios-stack",
+      "category": "specialist",
+      "passed": true,
+      "elapsed": 4756,
+      "snippet": "The primary iOS language and framework we use are Swift and SwiftUI. SMOKE_IOSENGIN_IOSSTACK_404709"
+    },
+    {
+      "agent": "Leo (Android Engineer)",
+      "capability": "android-stack",
+      "category": "specialist",
+      "passed": true,
+      "elapsed": 4742,
+      "snippet": "The primary language for Android development is Kotlin, and Jetpack Compose is the modern declarative UI framework. SMOKE_ANDROIDE_ANDROIDS_409715"
+    }
+  ],
+  "extras": [
+    {
+      "name": "channel_hygiene",
+      "passed": true,
+      "detail": "groupchat:100 | terminal:1 | upgrades:11",
+      "critical": true
+    },
+    {
+      "name": "elevenlabs_api",
+      "passed": true,
+      "detail": "API reachable",
+      "critical": true
+    },
+    {
+      "name": "elevenlabs_tts",
+      "passed": true,
+      "detail": "audio bytes=38078",
+      "critical": false
+    }
+  ],
+  "config": {
+    "timeoutMs": 30000,
+    "profile": "readiness",
+    "preClear": false,
+    "runElevenApi": true,
+    "runElevenTts": true,
+    "runVoiceBridge": false,
+    "runVoiceActive": false,
+    "capabilityAttempts": 3,
+    "runPostSuccessAction": false,
+    "agentFilter": null
+  }
+}

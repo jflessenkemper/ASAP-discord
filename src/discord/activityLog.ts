@@ -22,7 +22,9 @@ export function logAgentEvent(
   detail?: string,
   extra?: { durationMs?: number; tokensIn?: number; tokensOut?: number }
 ): void {
-  if (event === 'error') {
+  const isUserInterrupt = /request interrupted by user/i.test(String(detail || ''));
+
+  if (event === 'error' && !isUserInterrupt) {
     const meta = [
       typeof extra?.durationMs === 'number' ? `durationMs=${extra.durationMs}` : null,
       typeof extra?.tokensIn === 'number' ? `tokensIn=${extra.tokensIn}` : null,

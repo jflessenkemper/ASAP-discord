@@ -44,7 +44,7 @@ router.get('/fuel', publicLimiter, async (req: Request, res: Response) => {
     res.json({ prices, summary });
   } catch (err) {
     console.error('Public fuel error:', err instanceof Error ? err.message : 'Unknown');
-    res.status(500).json({ error: 'Couldn\u2019t load fuel prices. Please try again.' });
+    res.status(500).json({ error: 'Couldn\'t load fuel prices. Please try again.' });
   }
 });
 
@@ -65,7 +65,7 @@ router.post('/shop', publicLimiter, async (req: Request, res: Response) => {
     res.json({ results });
   } catch (err) {
     console.error('Public shop error:', err instanceof Error ? err.message : 'Unknown');
-    res.status(500).json({ error: 'Couldn\u2019t search products. Please try again.' });
+    res.status(500).json({ error: 'Couldn\'t search products. Please try again.' });
   }
 });
 
@@ -123,7 +123,7 @@ router.post('/businesses', publicLimiter, async (req: Request, res: Response) =>
     res.json({ businesses, query: searchQuery });
   } catch (err) {
     console.error('Public businesses error:', err instanceof Error ? err.message : 'Unknown');
-    res.status(500).json({ error: 'Couldn\u2019t find businesses. Please try again.' });
+    res.status(500).json({ error: 'Couldn\'t find businesses. Please try again.' });
   }
 });
 
@@ -162,6 +162,11 @@ router.get('/geocode', publicLimiter, async (req: Request, res: Response) => {
     console.error('Public geocode error:', err instanceof Error ? err.message : 'Unknown');
     res.status(500).json({ error: 'Location search failed. Please try again.' });
   }
+});
+
+// Health ping for uptime probes.
+router.get('/health', (_req: Request, res: Response) => {
+  res.status(200).json({ status: 'OK', message: 'Service is healthy' });
 });
 
 export default router;

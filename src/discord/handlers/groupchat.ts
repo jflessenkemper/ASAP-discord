@@ -22,16 +22,73 @@ import { getBotChannels } from '../bot';
 import { approveAdditionalBudget, getContextEfficiencyReport, getUsageReport, refreshLiveBillingData, refreshUsageDashboard } from '../usage';
 import { getWebhook, sendWebhookMessage, WebhookCapableChannel } from '../services/webhooks';
 
+type ToolNotificationBatch = {
+  channel: WebhookCapableChannel;
+  agent: AgentConfig;
+  items: string[];
+  timer: NodeJS.Timeout | null;
+};
+
+const TOOL_NOTIFICATION_FLUSH_MS = parseInt(process.env.TOOL_NOTIFICATION_FLUSH_MS || '2500', 10);
+const TOOL_NOTIFICATION_MAX_ITEMS = parseInt(process.env.TOOL_NOTIFICATION_MAX_ITEMS || '6', 10);
+const toolNotificationBatches = new Map<string, ToolNotificationBatch>();
+
 /** Send a tool-use notification as the agent (via webhook). */
 async function sendToolNotification(channel: WebhookCapableChannel, agent: AgentConfig, summary: string): Promise<void> {
+  const key = `${channel.id}:${agent.id}`;
+  let batch = toolNotificationBatches.get(key);
+  if (!batch) {
+    batch = { channel, agent, items: [], timer: null };
+    toolNotificationBatches.set(key, batch);
+  }
+
+  batch.items.push(String(summary || '').trim());
+  if (batch.items.length >= TOOL_NOTIFICATION_MAX_ITEMS) {
+    await flushToolNotificationBatch(key);
+    return;
+  }
+
+  if (batch.timer) return;
+  batch.timer = setTimeout(() => {
+    void flushToolNotificationBatch(key);
+  }, Math.max(300, TOOL_NOTIFICATION_FLUSH_MS));
+}
+
+async function flushToolNotificationBatch(key: string): Promise<void> {
+  const batch = toolNotificationBatches.get(key);
+  if (!batch) return;
+  if (batch.timer) {
+    clearTimeout(batch.timer);
+    batch.timer = null;
+  }
+
+  const items = batch.items.splice(0, TOOL_NOTIFICATION_MAX_ITEMS).filter(Boolean);
+  if (items.length === 0) {
+    toolNotificationBatches.delete(key);
+    return;
+  }
+
+  const deduped = [...new Set(items)].slice(0, TOOL_NOTIFICATION_MAX_ITEMS);
+  const content = deduped.length === 1
+    ? `🔧 ${deduped[0]}`
+    : `🔧 ${deduped.length} tool actions:\n- ${deduped.join('\n- ')}`;
+
   try {
-    await sendWebhookMessage(channel, {
-      content: `🔧 ${summary}`,
-      username: `${agent.emoji} ${agent.name}`,
-      avatarURL: agent.avatarUrl,
+    await sendWebhookMessage(batch.channel, {
+      content,
+      username: `${batch.agent.emoji} ${batch.agent.name}`,
+      avatarURL: batch.agent.avatarUrl,
     });
   } catch (err) {
-    console.warn(`Webhook tool notification failed for ${agent.name}:`, err instanceof Error ? err.message : 'Unknown');
+    console.warn(`Webhook tool notification failed for ${batch.agent.name}:`, err instanceof Error ? err.message : 'Unknown');
+  } finally {
+    if (batch.items.length === 0) {
+      toolNotificationBatches.delete(key);
+    } else {
+      batch.timer = setTimeout(() => {
+        void flushToolNotificationBatch(key);
+      }, Math.max(300, TOOL_NOTIFICATION_FLUSH_MS));
+    }
   }
 }
 import { triggerCloudBuild, listRevisions, getCurrentRevision, rollbackToRevision } from '../../services/cloudrun';
@@ -1152,15 +1209,21 @@ async function dispatchToAgent(
     ? getMemoryContext(agentId, options.memoryWindow)
     : getMemoryContext(agentId);
 
-  const response = await agentRespond(
+  const rawResponse = await agentRespond(
     agent,
     [...agentMemory, ...groupHistory],
     contextMessage,
     async (_toolName, summary) => {
       sendToolNotification(outputChannel, agent, summary).catch(() => {});
     },
-    { maxTokens: options.maxTokens, signal: options.signal }
+    {
+      maxTokens: options.maxTokens,
+      signal: options.signal,
+      threadKey: `groupchat:${outputChannel.id}`,
+    }
   );
+
+  const response = String(rawResponse || '').trim();
 
   if (options.signal?.aborted) return '';
 
@@ -1469,7 +1532,12 @@ async function handleRileyMessage(
 
     const response = await agentRespond(riley, [...rileyMemory, ...groupHistory], contextMessageWithLang, async (_toolName, summary) => {
       sendToolNotification(rileyWorkChannel, riley, summary).catch(() => {});
-    }, { signal, outputMode: 'machine_json', machineEnvelopeRaw: true });
+    }, {
+      signal,
+      outputMode: 'machine_json',
+      machineEnvelopeRaw: true,
+      threadKey: `groupchat:${workspaceChannel.id}`,
+    });
 
     const responseEnvelope = extractAgentResponseEnvelope(response);
     const machineDelegateAgents = (responseEnvelope?.machine?.delegateAgents || [])
@@ -1481,13 +1549,14 @@ async function handleRileyMessage(
     const machineRoutingSuffix = machineDelegateAgents.length > 0
       ? `\n\n${machineDelegateAgents.map((id) => getAgentMention(id)).join(' ')} please take the lead on this task and involve other specialists only if needed.`
       : '';
-    const orchestrationResponse = `${responseEnvelope?.human || response}${machineRoutingSuffix}`.trim();
+    const visibleHumanResponse = sanitizeVisibleAgentReply(responseEnvelope?.human || response);
+    const orchestrationResponse = `${visibleHumanResponse}${machineRoutingSuffix}`.trim();
 
     if (signal?.aborted) return;
     await clearThinkingMessage();
 
     let displayResponse = appendDefaultNextSteps(
-      (responseEnvelope?.human || response).replace(/\[\s*action:[^\]]+\]/gi, '').trim()
+      visibleHumanResponse.replace(/\[\s*action:[^\]]+\]/gi, '').trim()
     );
     markGoalProgress('🧭 Riley coordinating...');
 
@@ -1507,7 +1576,6 @@ async function handleRileyMessage(
     const actionPayloadBase = orchestrationResponse;
     const actionPayload = [actionPayloadBase, machineTagsBlock, implicitTags].filter(Boolean).join('\n');
     if (implicitTags) {
-      await sendAgentMessage(rileyWorkChannel, riley, 'Autopilot: executing the requested operational actions now.');
       await sendAutopilotAudit(
         groupchat,
         'implied_actions',
@@ -2063,7 +2131,43 @@ function ensureAceFirstDelegation(rileyResponse: string, userMessage: string): s
 }
 
 function appendDefaultNextSteps(text: string): string {
-  return String(text || '').trim();
+  const normalized = String(text || '').trim();
+  if (!normalized) return normalized;
+  const hasActionCue = /\b(next step|action|will|now|recommend|should|run|check|verify|post|update|fix|implement|create|change|retry|owner)\b/i.test(normalized);
+  if (!hasActionCue) {
+    return `${normalized}\n\nNext step: Riley will post a concrete action with owner and ETA.`;
+  }
+  return normalized;
+}
+
+function sanitizeVisibleAgentReply(text: string): string {
+  let out = String(text || '').trim();
+  if (!out) return out;
+
+  // Remove fenced JSON blobs that sometimes leak from machine_json mode.
+  out = out.replace(/```json[\s\S]*?```/gi, '').trim();
+
+  // If the full payload still looks like an envelope, extract the human field.
+  const envelopeMatch = out.match(/\{[\s\S]*"human"\s*:\s*"([\s\S]*?)"[\s\S]*\}/i);
+  if (envelopeMatch?.[1]) {
+    out = envelopeMatch[1]
+      .replace(/\\n/g, '\n')
+      .replace(/\\t/g, '\t')
+      .replace(/\\"/g, '"')
+      .replace(/\\\\/g, '\\')
+      .trim();
+  }
+
+  // Strip obvious leaked machine fields from plain text output.
+  out = out
+    .replace(/^\s*"?machine"?\s*:\s*\{[\s\S]*$/im, '')
+    .replace(/^\s*"?(delegateAgents|actionTags|notes)"?\s*:\s*.*$/gim, '')
+    .replace(/\bSMOKE_[A-Z0-9_]+\b/g, '[smoke-token]')
+    .replace(/^\s*(?:Riley|Ace|Max|Kane|Sophie|Raj|Elena|Jude|Harper|Kai|Liv|Mia|Leo)\s*:\s*/i, '')
+    .replace(/^\s*[\]}]\s*$/gm, '')
+    .trim();
+
+  return out;
 }
 
 function goalNeedsRuntimeVerification(text: string): boolean {

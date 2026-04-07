@@ -1,0 +1,63 @@
+{
+  "startedAt": "2026-04-06T13:09:43.020Z",
+  "endedAt": "2026-04-06T13:10:20.687Z",
+  "summary": {
+    "capabilityPassed": 1,
+    "capabilityFailed": 1,
+    "extraFailed": 2,
+    "score": 10,
+    "criticalPassed": false,
+    "detail": "core_fail=1 | orchestration_fail=0 | upgrades_fail=0 | critical_extra_fail=1"
+  },
+  "results": [
+    {
+      "agent": "Riley (Executive Assistant)",
+      "capability": "routing-and-next-step",
+      "category": "core",
+      "passed": false,
+      "elapsed": 21688,
+      "snippet": "Timeout while waiting for full capability evidence",
+      "reason": "missing expected pattern /next step|first step|action/i"
+    },
+    {
+      "agent": "Riley (Executive Assistant)",
+      "capability": "repo-memory-tool-awareness",
+      "category": "memory",
+      "passed": true,
+      "elapsed": 7347,
+      "snippet": "The two tools for managing repository knowledge are `repo_memory_index` to build or refresh the search index, and `repo_memory_search` to query it.\n\n<@&1488498029844500572>, please confirm these tools are ready for use.\n\nSMOKE_EXECUTIV_REPOMEMO_013090"
+    }
+  ],
+  "extras": [
+    {
+      "name": "channel_hygiene",
+      "passed": true,
+      "detail": "groupchat:1 | terminal:1 | upgrades:1",
+      "critical": true
+    },
+    {
+      "name": "elevenlabs_api",
+      "passed": false,
+      "detail": "ELEVENLABS_API_KEY missing",
+      "critical": true
+    },
+    {
+      "name": "elevenlabs_tts",
+      "passed": false,
+      "detail": "ELEVENLABS_API_KEY missing",
+      "critical": false
+    }
+  ],
+  "config": {
+    "timeoutMs": 20000,
+    "profile": "readiness",
+    "preClear": false,
+    "runElevenApi": true,
+    "runElevenTts": true,
+    "runVoiceBridge": false,
+    "runVoiceActive": false,
+    "capabilityAttempts": 1,
+    "runPostSuccessAction": false,
+    "agentFilter": "executive-assistant"
+  }
+}

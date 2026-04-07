@@ -1,4 +1,6 @@
 import { GoogleAuth } from 'google-auth-library';
+import { execFileSync } from 'child_process';
+import { ensureGoogleCredentials, getGoogleCredentialBootstrapState } from './googleCredentials';
 
 const PROJECT_ID = process.env.GOOGLE_CLOUD_PROJECT || process.env.GCLOUD_PROJECT || process.env.GCS_PROJECT_ID || '';
 const SECRET_SCOPE = ['https://www.googleapis.com/auth/cloud-platform'];
@@ -31,28 +33,48 @@ async function getAccessToken(): Promise<string> {
 }
 
 async function readSecret(projectId: string, secretName: string): Promise<string> {
-  const token = await getAccessToken();
-  const endpoint = `https://secretmanager.googleapis.com/v1/projects/${encodeURIComponent(projectId)}/secrets/${encodeURIComponent(secretName)}/versions/latest:access`;
-  const res = await fetch(endpoint, {
-    method: 'GET',
-    headers: {
-      Authorization: `Bearer ${token}`,
-      'Content-Type': 'application/json',
-    },
-  });
+  try {
+    const token = await getAccessToken();
+    const endpoint = `https://secretmanager.googleapis.com/v1/projects/${encodeURIComponent(projectId)}/secrets/${encodeURIComponent(secretName)}/versions/latest:access`;
+    const res = await fetch(endpoint, {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+    });
 
-  if (!res.ok) {
-    const body = await res.text().catch(() => '');
-    throw new Error(`Secret Manager HTTP ${res.status} for ${secretName}: ${body.slice(0, 120)}`);
+    if (!res.ok) {
+      const body = await res.text().catch(() => '');
+      throw new Error(`Secret Manager HTTP ${res.status} for ${secretName}: ${body.slice(0, 120)}`);
+    }
+
+    const data = await res.json() as { payload?: { data?: string } };
+    const encoded = data.payload?.data;
+    if (!encoded) throw new Error(`Secret ${secretName} has no payload`);
+    return Buffer.from(encoded, 'base64').toString('utf8').trim();
+  } catch (err) {
+    if (!isMissingAdcError(err)) throw err;
+    try {
+      return execFileSync(
+        'gcloud',
+        ['secrets', 'versions', 'access', 'latest', '--secret', secretName, '--project', projectId, '--quiet'],
+        {
+          encoding: 'utf8',
+          stdio: ['ignore', 'pipe', 'pipe'],
+          env: {
+            ...process.env,
+            CLOUDSDK_CORE_DISABLE_PROMPTS: '1',
+          },
+        }
+      ).trim();
+    } catch {
+      throw err;
+    }
   }
-
-  const data = await res.json() as { payload?: { data?: string } };
-  const encoded = data.payload?.data;
-  if (!encoded) throw new Error(`Secret ${secretName} has no payload`);
-  return Buffer.from(encoded, 'base64').toString('utf8').trim();
 }
 
-async function ensureEnvFromSecret(envVar: 'DEEPGRAM_API_KEY' | 'ELEVENLABS_API_KEY'): Promise<void> {
+async function ensureEnvFromSecret(envVar: 'DEEPGRAM_API_KEY' | 'ELEVENLABS_API_KEY' | 'DISCORD_TEST_BOT_TOKEN' | 'GEMINI_API_KEY' | 'ANTHROPIC_API_KEY'): Promise<void> {
   if (process.env[envVar]) return;
   if (!PROJECT_ID) return;
   if (!isSecretManagerEnabled()) return;
@@ -82,6 +104,14 @@ async function ensureEnvFromSecret(envVar: 'DEEPGRAM_API_KEY' | 'ELEVENLABS_API_
 }
 
 export async function loadRuntimeSecrets(): Promise<void> {
+  await ensureGoogleCredentials(PROJECT_ID).catch(() => {});
+  const state = getGoogleCredentialBootstrapState();
+  if (state.path) {
+    console.log(`Bootstrapped GOOGLE_APPLICATION_CREDENTIALS from runtime secret (${state.path})`);
+  }
+  await ensureEnvFromSecret('GEMINI_API_KEY');
+  await ensureEnvFromSecret('ANTHROPIC_API_KEY');
   await ensureEnvFromSecret('DEEPGRAM_API_KEY');
   await ensureEnvFromSecret('ELEVENLABS_API_KEY');
+  await ensureEnvFromSecret('DISCORD_TEST_BOT_TOKEN');
 }

@@ -7,9 +7,10 @@ import { AnyThreadChannel, ChannelType, Message, TextChannel, Webhook, WebhookMe
  */
 
 const WEBHOOK_NAME = 'ASAP Agent';
+const WEBHOOK_CACHE_TTL_MS = Math.max(60_000, Number(process.env.WEBHOOK_CACHE_TTL_MS || '21600000'));
 
 /** Cache: channelId → Webhook */
-const webhookCache = new Map<string, Webhook>();
+const webhookCache = new Map<string, { webhook: Webhook; cachedAt: number }>();
 
 export type WebhookCapableChannel = TextChannel | AnyThreadChannel;
 
@@ -32,7 +33,10 @@ function resolveWebhookParent(channel: WebhookCapableChannel): { base: TextChann
 export async function getWebhook(channel: WebhookCapableChannel): Promise<Webhook> {
   const { base } = resolveWebhookParent(channel);
   const cached = webhookCache.get(base.id);
-  if (cached) return cached;
+  if (cached && Date.now() - cached.cachedAt <= WEBHOOK_CACHE_TTL_MS) {
+    return cached.webhook;
+  }
+  if (cached) webhookCache.delete(base.id);
 
   const existing = await base.fetchWebhooks();
   let webhook = existing.find((w) => w.name === WEBHOOK_NAME && w.owner?.id === base.client.user?.id);
@@ -41,17 +45,32 @@ export async function getWebhook(channel: WebhookCapableChannel): Promise<Webhoo
     webhook = await base.createWebhook({ name: WEBHOOK_NAME, reason: 'ASAP multi-agent identity' });
   }
 
-  webhookCache.set(base.id, webhook);
+  webhookCache.set(base.id, { webhook, cachedAt: Date.now() });
   return webhook;
+}
+
+function isStaleWebhookError(err: unknown): boolean {
+  const message = String((err as any)?.message || err || '').toLowerCase();
+  const code = Number((err as any)?.code || 0);
+  // Discord Unknown Webhook / Unknown Channel and common 404-like text patterns.
+  return code === 10015 || code === 10003 || message.includes('unknown webhook') || message.includes('unknown channel') || message.includes('404');
 }
 
 export async function sendWebhookMessage(
   channel: WebhookCapableChannel,
   options: WebhookMessageCreateOptions,
 ): Promise<Message<boolean>> {
-  const { threadId } = resolveWebhookParent(channel);
+  const { base, threadId } = resolveWebhookParent(channel);
+  const payload = threadId ? { ...options, threadId } : options;
   const webhook = await getWebhook(channel);
-  return webhook.send(threadId ? { ...options, threadId } : options);
+  try {
+    return await webhook.send(payload);
+  } catch (err) {
+    if (!isStaleWebhookError(err)) throw err;
+    webhookCache.delete(base.id);
+    const refreshed = await getWebhook(channel);
+    return await refreshed.send(payload);
+  }
 }
 
 /** Clear the cache (e.g., on bot restart). */

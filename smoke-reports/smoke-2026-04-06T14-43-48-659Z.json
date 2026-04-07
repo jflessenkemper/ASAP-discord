@@ -1,0 +1,52 @@
+{
+  "startedAt": "2026-04-06T14:41:06.870Z",
+  "endedAt": "2026-04-06T14:43:48.659Z",
+  "summary": {
+    "capabilityPassed": 0,
+    "capabilityFailed": 2,
+    "extraFailed": 0,
+    "score": 0,
+    "criticalPassed": false,
+    "detail": "core_fail=1 | orchestration_fail=0 | upgrades_fail=1 | critical_extra_fail=0"
+  },
+  "results": [
+    {
+      "agent": "Ace (Developer)",
+      "capability": "evidence-format-contract",
+      "category": "core",
+      "passed": false,
+      "elapsed": 50538,
+      "snippet": "Timeout while waiting for full capability evidence",
+      "reason": "missing token echo"
+    },
+    {
+      "agent": "Ace (Developer)",
+      "capability": "upgrades-post",
+      "category": "upgrades",
+      "passed": false,
+      "elapsed": 50715,
+      "snippet": "Timeout while waiting for full capability evidence",
+      "reason": "missing token echo"
+    }
+  ],
+  "extras": [
+    {
+      "name": "channel_hygiene",
+      "passed": true,
+      "detail": "groupchat:100 | terminal:1 | upgrades:14",
+      "critical": true
+    }
+  ],
+  "config": {
+    "timeoutMs": 25000,
+    "profile": "readiness",
+    "preClear": false,
+    "runElevenApi": false,
+    "runElevenTts": false,
+    "runVoiceBridge": false,
+    "runVoiceActive": false,
+    "capabilityAttempts": 2,
+    "runPostSuccessAction": false,
+    "agentFilter": "developer"
+  }
+}

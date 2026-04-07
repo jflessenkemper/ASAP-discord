@@ -1,0 +1,173 @@
+{
+  "startedAt": "2026-04-06T14:23:42.018Z",
+  "endedAt": "2026-04-06T14:28:43.010Z",
+  "summary": {
+    "capabilityPassed": 14,
+    "capabilityFailed": 3,
+    "extraFailed": 0,
+    "score": 68.5,
+    "criticalPassed": false,
+    "detail": "core_fail=1 | orchestration_fail=0 | upgrades_fail=0 | critical_extra_fail=0"
+  },
+  "results": [
+    {
+      "agent": "Riley (Executive Assistant)",
+      "capability": "routing-and-next-step",
+      "category": "core",
+      "passed": true,
+      "elapsed": 4880,
+      "snippet": "My role is to plan, coordinate, implement, and monitor progress for Jordan across the ASAP project.\n\nGiven the current critical blocker, the next step is for Jordan to manually top…"
+    },
+    {
+      "agent": "Riley (Executive Assistant)",
+      "capability": "repo-memory-tool-awareness",
+      "category": "memory",
+      "passed": true,
+      "elapsed": 4076,
+      "snippet": "The two tools I should use to index and search repo memory before broad file scans are `repo_memory_index` and `repo_memory_search`. SMOKE_EXECUTIV_REPOMEMO_435560"
+    },
+    {
+      "agent": "Ace (Developer)",
+      "capability": "evidence-format-contract",
+      "category": "core",
+      "passed": false,
+      "elapsed": 41292,
+      "snippet": "Timeout while waiting for full capability evidence",
+      "reason": "missing token echo"
+    },
+    {
+      "agent": "Ace (Developer)",
+      "capability": "upgrades-post",
+      "category": "upgrades",
+      "passed": true,
+      "elapsed": 13632,
+      "snippet": "To address the Gemini throughput and token limit issues, I've posted an upgrade suggestion to the #upgrades channel: prioritizing `repo_memory_search` for token optimization. SMOKE_DEVELOPE_UPGRADES_502965"
+    },
+    {
+      "agent": "Max (QA)",
+      "capability": "regression-test-design",
+      "category": "specialist",
+      "passed": true,
+      "elapsed": 5138,
+      "snippet": "A high-risk regression test for jobs matching is to verify that a contractor with an exact match of required skills and location preferences is correctly proposed for a job, especially when multiple contractors are available. SMOKE_QA_REGRESSI_539174"
+    },
+    {
+      "agent": "Max (QA)",
+      "capability": "upgrades-post",
+      "category": "upgrades",
+      "passed": true,
+      "elapsed": 6194,
+      "snippet": "I've posted a test-automation enhancement to #🆙-upgrades. Implementing automated visual regression testing will help us catch UI issues faster and reduce manual verification. SMOKE_QA_UPGRADES_544562"
+    },
+    {
+      "agent": "Kane (Security Auditor)",
+      "capability": "auth-risk-and-mitigation",
+      "category": "specialist",
+      "passed": true,
+      "elapsed": 3442,
+      "snippet": "A common auth vulnerability is using weak password hashing, which can be mitigated by employing a strong, adaptive hashing algorithm like bcrypt with a sufficient number of rounds. SMOKE_SECURITY_AUTHRISK_551007"
+    },
+    {
+      "agent": "Kane (Security Auditor)",
+      "capability": "upgrades-post",
+      "category": "upgrades",
+      "passed": true,
+      "elapsed": 7919,
+      "snippet": "Kane: I've posted an upgrade recommendation to #🆙-upgrades regarding integrating DAST/SAST tools into our CI/CD pipeline. This will help us catch security flaws earlier and automate parts of our security testing. SMOKE_SECURITY_UPGRADES_554699"
+    },
+    {
+      "agent": "Sophie (UX Reviewer)",
+      "capability": "a11y-priority",
+      "category": "specialist",
+      "passed": false,
+      "elapsed": 40885,
+      "snippet": "Timeout while waiting for full capability evidence",
+      "reason": "missing token echo"
+    },
+    {
+      "agent": "Raj (API Reviewer)",
+      "capability": "http-semantics",
+      "category": "specialist",
+      "passed": true,
+      "elapsed": 4789,
+      "snippet": "The status code that should be returned for a missing resource is 404 Not Found. SMOKE_APIREVIE_HTTPSEMA_625744"
+    },
+    {
+      "agent": "Elena (DBA)",
+      "capability": "postgres-safety",
+      "category": "specialist",
+      "passed": true,
+      "elapsed": 3426,
+      "snippet": "Elena: A critical PostgreSQL migration safety practice is to always wrap schema changes in a transaction, allowing for easy rollback if an error occurs. SMOKE_DBA_POSTGRES_630784"
+    },
+    {
+      "agent": "Kai (Performance)",
+      "capability": "measurement",
+      "category": "specialist",
+      "passed": true,
+      "elapsed": 6221,
+      "snippet": "The first metric I'd track for app performance is Time to Interactive (TTI). It accurately reflects when users can actually start using the app, which is crucial for perceived performance on our target devices. SMOKE_PERFORMA_MEASUREM_634460"
+    },
+    {
+      "agent": "Jude (DevOps)",
+      "capability": "tool-audit-proof",
+      "category": "tool-proof",
+      "passed": true,
+      "elapsed": 6527,
+      "snippet": "TOOL_USED:gcp_run_describe The service is Ready. SMOKE_DEVOPS_TOOLAUDI_640931"
+    },
+    {
+      "agent": "Liv (Copywriter)",
+      "capability": "microcopy-tone",
+      "category": "specialist",
+      "passed": true,
+      "elapsed": 3518,
+      "snippet": "We couldn't sign you in. Please check your details and try again. SMOKE_COPYWRIT_MICROCOP_647709"
+    },
+    {
+      "agent": "Harper (Lawyer)",
+      "capability": "au-contractor-distinction",
+      "category": "specialist",
+      "passed": false,
+      "elapsed": 40810,
+      "snippet": "Timeout while waiting for full capability evidence",
+      "reason": "missing token echo"
+    },
+    {
+      "agent": "Mia (iOS Engineer)",
+      "capability": "ios-stack",
+      "category": "specialist",
+      "passed": true,
+      "elapsed": 5162,
+      "snippet": "The primary iOS language is Swift, and the main modern framework for building user interfaces is SwiftUI. SMOKE_IOSENGIN_IOSSTACK_714073"
+    },
+    {
+      "agent": "Leo (Android Engineer)",
+      "capability": "android-stack",
+      "category": "specialist",
+      "passed": true,
+      "elapsed": 3275,
+      "snippet": "The primary language for Android development on the ASAP project is Kotlin, and the primary framework is Jetpack Compose. SMOKE_ANDROIDE_ANDROIDS_719485"
+    }
+  ],
+  "extras": [
+    {
+      "name": "channel_hygiene",
+      "passed": true,
+      "detail": "groupchat:76 | terminal:1 | upgrades:8",
+      "critical": true
+    }
+  ],
+  "config": {
+    "timeoutMs": 20000,
+    "profile": "readiness",
+    "preClear": false,
+    "runElevenApi": false,
+    "runElevenTts": false,
+    "runVoiceBridge": false,
+    "runVoiceActive": false,
+    "capabilityAttempts": 2,
+    "runPostSuccessAction": false,
+    "agentFilter": null
+  }
+}

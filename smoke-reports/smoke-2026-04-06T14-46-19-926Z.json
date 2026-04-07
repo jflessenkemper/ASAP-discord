@@ -1,0 +1,50 @@
+{
+  "startedAt": "2026-04-06T14:45:28.515Z",
+  "endedAt": "2026-04-06T14:46:19.926Z",
+  "summary": {
+    "capabilityPassed": 2,
+    "capabilityFailed": 0,
+    "extraFailed": 0,
+    "score": 35,
+    "criticalPassed": true,
+    "detail": "core_fail=0 | orchestration_fail=0 | upgrades_fail=0 | critical_extra_fail=0"
+  },
+  "results": [
+    {
+      "agent": "Ace (Developer)",
+      "capability": "evidence-format-contract",
+      "category": "core",
+      "passed": true,
+      "elapsed": 9003,
+      "snippet": "Result: Task completed successfully. Evidence: Log files show successful execution. Risk/Follow-up: None at this time.\nSMOKE_DEVELOPE_EVIDENCE_735494"
+    },
+    {
+      "agent": "Ace (Developer)",
+      "capability": "upgrades-post",
+      "category": "upgrades",
+      "passed": true,
+      "elapsed": 8196,
+      "snippet": "I've posted a token-saving improvement to #upgrades regarding prioritizing `repo_memory_search` over broad file scans for targeted information retrieval. SMOKE_DEVELOPE_UPGRADES_771479"
+    }
+  ],
+  "extras": [
+    {
+      "name": "channel_hygiene",
+      "passed": true,
+      "detail": "groupchat:100 | terminal:1 | upgrades:16",
+      "critical": true
+    }
+  ],
+  "config": {
+    "timeoutMs": 25000,
+    "profile": "readiness",
+    "preClear": false,
+    "runElevenApi": false,
+    "runElevenTts": false,
+    "runVoiceBridge": false,
+    "runVoiceActive": false,
+    "capabilityAttempts": 2,
+    "runPostSuccessAction": false,
+    "agentFilter": "developer"
+  }
+}

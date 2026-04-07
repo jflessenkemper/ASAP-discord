@@ -11,6 +11,8 @@ const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 
 const router = Router();
 
+const sendAuthFailed = (res: Response) => res.status(401).json({ code: 'AUTH_FAILED', message: 'We couldn\'t verify your login details. Please double-check them and try again.' });
+
 // Non-blocking auth event logger
 function logAuthEvent(req: Request, event: string, userId?: string, userType?: string, provider?: string) {
   const ip = req.ip || req.socket.remoteAddress || null;
@@ -192,10 +194,10 @@ router.post('/social', loginLimiter, async (req: Request, res: Response) => {
     logAuthEvent(req, 'login_failed', undefined, 'client', req.body?.provider);
     console.error('Social auth error:', err instanceof Error ? err.message : 'Unknown error');
     if (err.message?.includes('Token used too late') || err.message?.includes('Invalid')) {
-      res.status(401).json({ error: 'Authentication failed. Please try again.' });
+      res.status(401).json({ error: "We couldn't verify your login details. Please double-check them and try again." });
       return;
     }
-    res.status(500).json({ error: 'Authentication failed. Please try again.' });
+    res.status(500).json({ error: "We couldn't verify your login details. Please double-check them and try again." });
   }
 });
 
@@ -314,7 +316,7 @@ router.post('/employee/login', loginLimiter, async (req: Request, res: Response)
     });
   } catch (err) {
     console.error('Employee login error:', err instanceof Error ? err.message : 'Unknown error');
-    res.status(500).json({ error: 'Login failed. Please try again.' });
+    res.status(500).json({ error: "We couldn't verify your login details. Please double-check them and try again." });
   }
 });
 
@@ -600,4 +602,13 @@ router.delete('/account', requireAuth, profileLimiter, async (req: AuthRequest, 
   }
 });
 
+
+// --- GET /api/auth/status ---
+// A basic endpoint to indicate the authentication service is active.
+// Does not confirm user authentication status without additional middleware.
+router.get('/status', (req: Request, res: Response) => {
+  res.status(200).json({ authenticated: false, message: 'Auth service active' });
+});
+
 export default router;
+

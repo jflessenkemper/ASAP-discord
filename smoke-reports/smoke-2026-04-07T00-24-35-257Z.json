@@ -1,0 +1,50 @@
+{
+  "startedAt": "2026-04-07T00:14:16.667Z",
+  "endedAt": "2026-04-07T00:24:35.256Z",
+  "summary": {
+    "capabilityPassed": 2,
+    "capabilityFailed": 0,
+    "extraFailed": 0,
+    "score": 35,
+    "criticalPassed": true,
+    "detail": "core_fail=0 | orchestration_fail=0 | upgrades_fail=0 | critical_extra_fail=0"
+  },
+  "results": [
+    {
+      "agent": "Riley (Executive Assistant)",
+      "capability": "routing-and-next-step",
+      "category": "core",
+      "passed": true,
+      "elapsed": 4869,
+      "snippet": "I orchestrate the ASAP project, coordinating agents, code, infrastructure, and operations to achieve Jordan's goals efficiently. My immediate next step is to review the current tok…"
+    },
+    {
+      "agent": "Riley (Executive Assistant)",
+      "capability": "repo-memory-tool-awareness",
+      "category": "memory",
+      "passed": true,
+      "elapsed": 4783,
+      "snippet": "The two tools I should use to index and search repo memory are `repo_memory_index` and `repo_memory_search`. [smoke-token]"
+    }
+  ],
+  "extras": [
+    {
+      "name": "channel_hygiene",
+      "passed": true,
+      "detail": "groupchat:100 | terminal:1 | upgrades:31",
+      "critical": true
+    }
+  ],
+  "config": {
+    "timeoutMs": 20000,
+    "profile": "readiness",
+    "preClear": true,
+    "runElevenApi": false,
+    "runElevenTts": false,
+    "runVoiceBridge": false,
+    "runVoiceActive": false,
+    "capabilityAttempts": 1,
+    "runPostSuccessAction": false,
+    "agentFilter": "executive-assistant"
+  }
+}

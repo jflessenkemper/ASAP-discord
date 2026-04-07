@@ -3,10 +3,11 @@ import { GoogleAuth } from 'google-auth-library';
 import { readFileSync } from 'fs';
 import { extname, join } from 'path';
 import { AgentConfig } from './agents';
-import { REPO_TOOLS, REVIEW_TOOLS, RILEY_TOOLS, PROMPT_REPO_TOOLS, PROMPT_REVIEW_TOOLS, PROMPT_RILEY_TOOLS, executeTool, getToolAuditCallback } from './tools';
+import { REPO_TOOLS, getToolsForAgent, executeTool, getToolAuditCallback } from './tools';
 import { recordClaudeUsage, isClaudeOverLimit, isBudgetExceeded, getRemainingBudget, getClaudeTokenStatus, approveAdditionalBudget, type PromptBreakdown } from './usage';
 import { logAgentEvent } from './activityLog';
 import { recordAgentResponse, recordRateLimitHit } from './metrics';
+import { ensureGoogleCredentials, getAccessTokenViaGcloud } from '../services/googleCredentials';
 
 let PROJECT_CONTEXT = '';
 try {
@@ -82,6 +83,24 @@ function isVerificationTaskPrompt(userMessage: string): boolean {
   return VERIFICATION_TASK_RE.test(trimmed);
 }
 
+function isSmokePrompt(userMessage: string): boolean {
+  return /\bSMOKE_[A-Z0-9_]+\b/i.test(String(userMessage || ''));
+}
+
+function extractSmokeToken(userMessage: string): string | null {
+  const match = String(userMessage || '').match(/\bSMOKE_[A-Z0-9_]+\b/);
+  return match ? match[0] : null;
+}
+
+function ensureSmokeTokenEcho(userMessage: string, replyText: string): string {
+  const token = extractSmokeToken(userMessage);
+  if (!token) return String(replyText || '').trim();
+  const normalized = String(replyText || '').trim();
+  if (!normalized) return token;
+  if (normalized.includes(token)) return normalized;
+  return `${normalized}\n${token}`;
+}
+
 function normalizeLowSignalFinalText(agentId: string, text: string, totalToolCalls: number): string {
   const normalized = String(text || '').trim();
   if (!normalized) return '';
@@ -95,6 +114,47 @@ function normalizeLowSignalFinalText(agentId: string, text: string, totalToolCal
 function hasValidationFailure(toolName: string, result: string): boolean {
   if (toolName !== 'run_tests' && toolName !== 'typecheck') return false;
   return /(\bFAIL\b|failing|failed|Type error|not assignable|Compilation error|[1-9]\d*\s+errors?\b|Tests?:\s*[1-9]\d*\s+failed)/i.test(result);
+}
+
+function hasToolFailureSignal(toolName: string, result: string): boolean {
+  const text = String(result || '').trim();
+  if (!text) return false;
+  if (hasValidationFailure(toolName, text)) return true;
+  if (/^Error:/i.test(text)) return true;
+  if (/\b(timeout|timed out|failed|failure|exception|cannot|could not|denied|forbidden|unauthorized|invalid)\b/i.test(text)) {
+    if (/No matches found for pattern/i.test(text)) return false;
+    return true;
+  }
+  return false;
+}
+
+function resolveInitialToolBudget(agentId: string, maxToolRounds: number): number {
+  const raw = agentId === 'developer'
+    ? Number(process.env.MAX_TOOL_CALLS_FIRST_PASS_DEVELOPER || '14')
+    : agentId === 'executive-assistant'
+      ? Number(process.env.MAX_TOOL_CALLS_FIRST_PASS_EXECUTIVE || '8')
+      : Number(process.env.MAX_TOOL_CALLS_FIRST_PASS || '10');
+  if (!Number.isFinite(raw) || raw <= 0) return Math.max(4, Math.floor(maxToolRounds));
+  return Math.max(3, Math.min(Math.floor(raw), Math.max(4, maxToolRounds * 2)));
+}
+
+function resolveEscalatedToolBudget(initialBudget: number, maxToolRounds: number): number {
+  const raw = Number(process.env.MAX_TOOL_CALLS_ESCALATED || String(initialBudget * 2));
+  const fallback = initialBudget * 2;
+  const resolved = Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : fallback;
+  return Math.max(initialBudget + 1, Math.min(resolved, Math.max(8, maxToolRounds * 4)));
+}
+
+function resolveToolThreadKey(
+  agentId: string,
+  conversationHistory: ConversationMessage[],
+  userMessage: string,
+  explicitKey?: string,
+): string {
+  if (explicitKey) return explicitKey;
+  const firstUser = conversationHistory.find((m) => m.role === 'user')?.content || '';
+  const seed = normalizeHistoryContentForModel(firstUser || userMessage).replace(/\s+/g, ' ').slice(0, 140) || 'default';
+  return `${agentId}:${seed}`;
 }
 
 /**
@@ -128,7 +188,7 @@ function shouldFallbackToOpus(modelName: string): boolean {
 }
 
 /**
- * All agents have full tool access.
+ * Tool access can be constrained by agent role via tools.ts policy.
  */
 
 const RILEY_AUTO_APPROVE_BUDGET = process.env.RILEY_AUTO_APPROVE_BUDGET !== 'false';
@@ -139,14 +199,11 @@ const RILEY_TOKEN_OVERRUN_ALLOWANCE = parseInt(process.env.RILEY_TOKEN_OVERRUN_A
 type AnyTool = { name: string; description: string; input_schema: any };
 
 function hasFullRepoToolAccess(agentId: string): boolean {
-  void agentId;
-  return true;
+  return getToolsForAgent(agentId, false).length === REPO_TOOLS.length;
 }
 
 function toolsForAgent(agentId: string): AnyTool[] {
-  const repoTools = (COMPACT_RUNTIME_TOOL_PROMPTS ? PROMPT_REPO_TOOLS : REPO_TOOLS) as unknown as AnyTool[];
-  void agentId;
-  return repoTools;
+  return getToolsForAgent(agentId, COMPACT_RUNTIME_TOOL_PROMPTS) as unknown as AnyTool[];
 }
 
 function toolsForPrompt(agentId: string, userMessage: string): AnyTool[] {
@@ -250,12 +307,14 @@ function toAnthropicTools(tools: AnyTool[]): Array<{ name: string; description: 
 let client: GoogleGenerativeAI | null = null;
 let vertexAuth: GoogleAuth | null = null;
 let vertexTokenCache: { token: string; expiresAtMs: number } | null = null;
+let vertexAuthUnavailable = false;
 
 const USE_VERTEX_AI = process.env.GEMINI_USE_VERTEX_AI === 'true';
+const USE_VERTEX_ANTHROPIC = process.env.ANTHROPIC_USE_VERTEX_AI !== 'false';
 const VERTEX_PROJECT_ID = process.env.VERTEX_PROJECT_ID || process.env.GOOGLE_CLOUD_PROJECT || process.env.GCLOUD_PROJECT || '';
 const VERTEX_LOCATION = process.env.VERTEX_LOCATION || 'us-central1';
 const VERTEX_ANTHROPIC_LOCATION = process.env.VERTEX_ANTHROPIC_LOCATION || process.env.VERTEX_PARTNER_LOCATION || VERTEX_LOCATION;
-const VERTEX_ANTHROPIC_FALLBACK_LOCATIONS = (process.env.VERTEX_ANTHROPIC_FALLBACK_LOCATIONS || 'us-east5,us-east1')
+const VERTEX_ANTHROPIC_FALLBACK_LOCATIONS = (process.env.VERTEX_ANTHROPIC_FALLBACK_LOCATIONS || 'us-east5')
   .split(',')
   .map((value) => value.trim())
   .filter(Boolean);
@@ -385,18 +444,76 @@ function shouldTryAnotherAnthropicLocation(status: number, bodyText: string): bo
   return false;
 }
 
+function isVertexCredentialsUnavailableError(err: unknown): boolean {
+  const msg = String((err as any)?.message || err || '').toLowerCase();
+  return (
+    msg.includes('could not load the default credentials')
+    || msg.includes('application default credentials')
+    || msg.includes('getapplicationdefaultasync')
+    || msg.includes('default credentials')
+  );
+}
+
 async function getVertexAccessToken(): Promise<string> {
+  if (vertexAuthUnavailable) {
+    const recovered = await ensureGoogleCredentials(VERTEX_PROJECT_ID).catch(() => false);
+    if (recovered) {
+      vertexAuthUnavailable = false;
+      vertexAuth = null;
+    }
+  }
+
+  if (vertexAuthUnavailable) {
+    const tokenViaCli = getAccessTokenViaGcloud();
+    if (tokenViaCli) {
+      vertexTokenCache = {
+        token: tokenViaCli,
+        expiresAtMs: Date.now() + 45 * 60_000,
+      };
+      return tokenViaCli;
+    }
+    throw new Error('Vertex auth unavailable: Application Default Credentials are not configured');
+  }
+
   const now = Date.now();
   if (vertexTokenCache && vertexTokenCache.expiresAtMs - now > 60_000) {
     return vertexTokenCache.token;
   }
 
+  await ensureGoogleCredentials(VERTEX_PROJECT_ID).catch(() => false);
+
   if (!vertexAuth) {
     vertexAuth = new GoogleAuth({ scopes: ['https://www.googleapis.com/auth/cloud-platform'] });
   }
 
-  const authClient = await vertexAuth.getClient();
-  const accessToken = await authClient.getAccessToken();
+  let authClient: any;
+  let accessToken: any;
+  try {
+    authClient = await vertexAuth.getClient();
+    accessToken = await authClient.getAccessToken();
+  } catch (err) {
+    if (isVertexCredentialsUnavailableError(err)) {
+      const recovered = await ensureGoogleCredentials(VERTEX_PROJECT_ID).catch(() => false);
+      if (recovered) {
+        vertexAuth = new GoogleAuth({ scopes: ['https://www.googleapis.com/auth/cloud-platform'] });
+        authClient = await vertexAuth.getClient();
+        accessToken = await authClient.getAccessToken();
+      } else {
+        const tokenViaCli = getAccessTokenViaGcloud();
+        if (tokenViaCli) {
+          vertexTokenCache = {
+            token: tokenViaCli,
+            expiresAtMs: now + 45 * 60_000,
+          };
+          return tokenViaCli;
+        }
+        vertexAuthUnavailable = true;
+        throw new Error('Vertex auth unavailable: Application Default Credentials are not configured');
+      }
+    } else {
+      throw err;
+    }
+  }
   const token = typeof accessToken === 'string' ? accessToken : accessToken?.token;
   if (!token) {
     throw new Error('Vertex auth failed: could not obtain access token');
@@ -419,24 +536,49 @@ async function callVertexGenerateContent(
     throw new Error('Vertex AI is enabled but VERTEX_PROJECT_ID (or GOOGLE_CLOUD_PROJECT) is not set');
   }
 
-  const token = await getVertexAccessToken();
-  const endpoint = `https://${VERTEX_LOCATION}-aiplatform.googleapis.com/v1/projects/${VERTEX_PROJECT_ID}/locations/${VERTEX_LOCATION}/publishers/google/models/${encodeURIComponent(modelName)}:generateContent`;
-  const res = await fetch(endpoint, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${token}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(body),
-    signal,
-  });
+  const lower = String(modelName || '').toLowerCase();
+  const primaryModel = lower.includes('gemini-flash-latest')
+    ? 'gemini-2.5-flash'
+    : lower.includes('gemini-pro-latest')
+      ? 'gemini-2.5-pro'
+      : modelName;
 
-  if (!res.ok) {
+  const candidates = [primaryModel];
+  if (!candidates.includes('gemini-2.5-flash')) candidates.push('gemini-2.5-flash');
+  if (!candidates.includes('gemini-2.5-pro')) candidates.push('gemini-2.5-pro');
+
+  const token = await getVertexAccessToken();
+  let lastErr: Error | null = null;
+
+  for (let i = 0; i < candidates.length; i += 1) {
+    const model = candidates[i];
+    const endpoint = `https://${VERTEX_LOCATION}-aiplatform.googleapis.com/v1/projects/${VERTEX_PROJECT_ID}/locations/${VERTEX_LOCATION}/publishers/google/models/${encodeURIComponent(model)}:generateContent`;
+    const res = await fetch(endpoint, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(body),
+      signal,
+    });
+
+    if (res.ok) {
+      return res.json();
+    }
+
     const bodyText = await res.text();
-    throw makeVertexError(res.status, bodyText, parseRetryAfterMs(res.headers.get('retry-after')));
+    const err = makeVertexError(res.status, bodyText, parseRetryAfterMs(res.headers.get('retry-after')));
+    const shouldRetryModel = res.status === 404 && i < candidates.length - 1;
+    if (shouldRetryModel) {
+      lastErr = err;
+      continue;
+    }
+    throw err;
   }
 
-  return res.json();
+  if (lastErr) throw lastErr;
+  throw new Error('Vertex Gemini request failed before model attempts');
 }
 
 async function callVertexAnthropicRawPredict(
@@ -567,6 +709,13 @@ function getClient(): GoogleGenerativeAI {
 function isAnthropicModel(modelName: string): boolean {
   const key = String(modelName || '').trim().toLowerCase();
   return key.includes('claude') || key.includes('opus') || key.includes('sonnet');
+}
+
+function getNonAnthropicFallbackModel(primary?: string): string {
+  const preferred = String(primary || GEMINI_PRO || '').trim();
+  if (preferred && !isAnthropicModel(preferred)) return preferred;
+  if (!isAnthropicModel(GEMINI_FLASH)) return GEMINI_FLASH;
+  return 'gemini-flash-latest';
 }
 
 function toAnthropicBlocks(parts: any[]): any[] {
@@ -705,11 +854,18 @@ function createVertexAnthropicModel(
 }
 
 function createModel(modelName: string, options: { systemInstruction?: string; tools?: Tool[]; rawTools?: AnyTool[]; generationConfig?: Record<string, any> }): ModelLike {
+  const canUseVertex = USE_VERTEX_AI && !vertexAuthUnavailable;
+  const canUseVertexAnthropic = USE_VERTEX_ANTHROPIC && !vertexAuthUnavailable;
+  const nonAnthropicFallbackModel = getNonAnthropicFallbackModel(GEMINI_PRO);
+
   if (isAnthropicModel(modelName)) {
+    if (!canUseVertexAnthropic) {
+      return createModel(nonAnthropicFallbackModel, options);
+    }
     return createVertexAnthropicModel(modelName, options);
   }
 
-  if (USE_VERTEX_AI) {
+  if (canUseVertex) {
     return createVertexModel(modelName, options);
   }
 
@@ -922,6 +1078,29 @@ function parseAgentResponseEnvelope(text: string): AgentResponseEnvelope | null 
     } catch {
     }
   }
+
+  // Fallback for slightly malformed model output: salvage a quoted "human" field.
+  const humanField = raw.match(/"human"\s*:\s*"([\s\S]*?)"\s*(?:,|})/i)
+    || raw.match(/human\s*:\s*"([\s\S]*?)"\s*(?:,|})/i);
+  if (humanField?.[1]) {
+    const unescaped = humanField[1]
+      .replace(/\\n/g, '\n')
+      .replace(/\\t/g, '\t')
+      .replace(/\\"/g, '"')
+      .replace(/\\\\/g, '\\')
+      .trim();
+    if (unescaped) return { human: unescaped };
+  }
+
+  // Fallback for plain-text envelope format:
+  // human: <message>
+  // machine: {...}
+  const plainHuman = raw.match(/(?:^|\n)\s*human\s*:\s*([\s\S]*?)(?:\n\s*machine\s*:|$)/i);
+  if (plainHuman?.[1]) {
+    const cleaned = plainHuman[1].trim();
+    if (cleaned) return { human: cleaned };
+  }
+
   return null;
 }
 
@@ -936,11 +1115,11 @@ const MAX_TOOL_ROUNDS_EXECUTIVE = parseInt(process.env.MAX_TOOL_ROUNDS_EXECUTIVE
 /** Optional one-time extra Riley pass. Default OFF to avoid runaway tool loops. */
 const RILEY_AUTO_TOOL_EXTENSION = parseInt(process.env.RILEY_AUTO_TOOL_EXTENSION || '0', 10);
 /** Maximum history messages to send per request (excludes current user message) */
-const MAX_CONTEXT_MESSAGES = parseInt(process.env.MAX_CONTEXT_MESSAGES || '12', 10);
+const MAX_CONTEXT_MESSAGES = parseInt(process.env.MAX_CONTEXT_MESSAGES || '10', 10);
 /** Soft cap for history character volume sent per request */
-const MAX_CONTEXT_CHARS = parseInt(process.env.MAX_CONTEXT_CHARS || '4200', 10);
+const MAX_CONTEXT_CHARS = parseInt(process.env.MAX_CONTEXT_CHARS || '3200', 10);
 /** Per-message history cap so one long dump does not crowd out the rest of the context */
-const MAX_CONTEXT_MESSAGE_CHARS = parseInt(process.env.MAX_CONTEXT_MESSAGE_CHARS || '750', 10);
+const MAX_CONTEXT_MESSAGE_CHARS = parseInt(process.env.MAX_CONTEXT_MESSAGE_CHARS || '520', 10);
 const MAX_CONTEXT_SUMMARY_CHARS = parseInt(process.env.MAX_CONTEXT_SUMMARY_CHARS || '1000', 10);
 const MAX_CONTEXT_CODE_BLOCK_CHARS = parseInt(process.env.MAX_CONTEXT_CODE_BLOCK_CHARS || '350', 10);
 /**
@@ -961,19 +1140,19 @@ const MAX_CONCURRENT_FLASH_BACKGROUND = parseInt(process.env.GEMINI_MAX_CONCURRE
 const MAX_CONCURRENT_PRO_BACKGROUND = parseInt(process.env.GEMINI_MAX_CONCURRENT_PRO_BACKGROUND || '1', 10);
 const RESERVED_FLASH_PRIORITY_SLOTS = parseInt(process.env.GEMINI_RESERVED_FLASH_PRIORITY_SLOTS || '1', 10);
 /** Base queue release delay between parallel requests (lower = faster) */
-const QUEUE_RELEASE_DELAY_MS = parseInt(process.env.QUEUE_RELEASE_DELAY_MS || '120', 10);
+const QUEUE_RELEASE_DELAY_MS = parseInt(process.env.QUEUE_RELEASE_DELAY_MS || '90', 10);
 /** Additional delay when we are inside/just after a 429 window */
 const QUEUE_RELEASE_DELAY_RATE_LIMIT_MS = parseInt(process.env.QUEUE_RELEASE_DELAY_RATE_LIMIT_MS || '3000', 10);
 /** Minimum delay between sends per model to avoid bursty RPM spikes */
-const MODEL_PACE_FLASH_MS = parseInt(process.env.GEMINI_MODEL_PACE_FLASH_MS || '180', 10);
+const MODEL_PACE_FLASH_MS = parseInt(process.env.GEMINI_MODEL_PACE_FLASH_MS || '130', 10);
 const MODEL_PACE_PRO_MS = parseInt(process.env.GEMINI_MODEL_PACE_PRO_MS || '700', 10);
 const MODEL_PACE_FLASH_PRIORITY_MS = parseInt(process.env.GEMINI_MODEL_PACE_FLASH_PRIORITY_MS || '0', 10);
 const MODEL_PACE_FLASH_VOICE_MS = parseInt(process.env.GEMINI_MODEL_PACE_FLASH_VOICE_MS || '0', 10);
 const MODEL_PACE_PRO_VOICE_MS = parseInt(process.env.GEMINI_MODEL_PACE_PRO_VOICE_MS || '300', 10);
 
 /** Lower default output tokens for faster first responses. */
-const DEFAULT_MAX_OUTPUT_TOKENS = parseInt(process.env.DEFAULT_MAX_OUTPUT_TOKENS || '1000', 10);
-const DEFAULT_MAX_OUTPUT_TOKENS_DEVELOPER = parseInt(process.env.DEFAULT_MAX_OUTPUT_TOKENS_DEVELOPER || '2000', 10);
+const DEFAULT_MAX_OUTPUT_TOKENS = parseInt(process.env.DEFAULT_MAX_OUTPUT_TOKENS || '800', 10);
+const DEFAULT_MAX_OUTPUT_TOKENS_DEVELOPER = parseInt(process.env.DEFAULT_MAX_OUTPUT_TOKENS_DEVELOPER || '1400', 10);
 const DISABLE_GEMINI_QUOTA_FUSE = process.env.DISABLE_GEMINI_QUOTA_FUSE === 'true';
 const GEMINI_QUOTA_FUSE_MS = parseInt(process.env.GEMINI_QUOTA_FUSE_MS || '300000', 10);
 const GEMINI_MAX_RETRIES = parseInt(process.env.GEMINI_MAX_RETRIES || '1', 10);
@@ -1202,7 +1381,9 @@ function isGeminiAuthError(err: any): boolean {
     msg.includes('api key not valid') ||
     msg.includes('invalid api key') ||
     msg.includes('permission denied') ||
-    msg.includes('unauthenticated')
+    msg.includes('unauthenticated') ||
+    msg.includes('default credentials') ||
+    msg.includes('application default credentials')
   );
 }
 
@@ -1488,7 +1669,17 @@ function applyPreemptiveContextGuard(params: {
 function isAnthropicAuthError(err: any): boolean {
   const msg = String(err?.message || err || '').toLowerCase();
   const status = err?.status || err?.statusCode;
-  return status === 401 || msg.includes('invalid x-api-key') || msg.includes('authentication_error');
+  return (
+    status === 401
+    || status === 404
+    || msg.includes('invalid x-api-key')
+    || msg.includes('authentication_error')
+    || msg.includes('publisher model')
+    || msg.includes('not found')
+    || msg.includes('not servable')
+    || msg.includes('default credentials')
+    || msg.includes('application default credentials')
+  );
 }
 
 function isCreditsExhaustedNow(): boolean {
@@ -1978,6 +2169,8 @@ export async function agentRespond(
     chatSession?: ReusableAgentChatSession;
     outputMode?: 'normal' | 'machine_json';
     machineEnvelopeRaw?: boolean;
+    threadKey?: string;
+    toolBudgetSynthesisUsed?: boolean;
   }
 ): Promise<string> {
   const requestedOutputMode = options?.outputMode || 'machine_json';
@@ -2003,6 +2196,11 @@ export async function agentRespond(
     ? Math.min(baseToolRounds, 2)
     : baseToolRounds;
   const maxToolRounds = verificationRoundCap + Math.max(0, options?.toolRoundBoost || 0);
+  const smokePrompt = isSmokePrompt(userMessage);
+  const toolThreadKey = resolveToolThreadKey(agent.id, conversationHistory, userMessage, options?.threadKey);
+  let activeToolBudget = smokePrompt ? Math.max(maxToolRounds * 4, 40) : resolveInitialToolBudget(agent.id, maxToolRounds);
+  let toolBudgetEscalated = false;
+  let sawToolFailure = false;
   let autoBudgetPassesUsed = 0;
 
   if (isCreditsExhaustedNow()) {
@@ -2104,6 +2302,7 @@ OUTPUT MODE:
   }
 - Keep "human" as natural teammate language for people.
 - Keep machine arrays concise; omit fields when empty.
+- Never include JSON keys/objects in the human field.
 `
     : '';
 
@@ -2111,7 +2310,9 @@ OUTPUT MODE:
 UPGRADES CHANNEL:
 - When you notice a better way to work, a blocker that should be removed, or a worthwhile enhancement to your job/functionality, post a concise note to #🆙-upgrades using send_channel_message.
 - Keep upgrades posts short and actionable: problem, proposed upgrade, expected benefit, and what implementation support is needed.
-- If you detect token waste (repeated broad scans, redundant tool calls, oversized outputs) or low token headroom, post at least one token-optimization recommendation to #🆙-upgrades before finishing.
+- Post at most one upgrades message per task unless someone explicitly asks for more.
+  - Always include token optimization thinking in your work. If you detect token waste (repeated broad scans, redundant tool calls, oversized outputs) or low token headroom, post at least one token-optimization recommendation to #🆙-upgrades before finishing.
+  - During smoke/readiness checks, each agent should contribute at least one concrete token-saving suggestion to #🆙-upgrades if one has not been posted in that thread yet.
 `;
 
   const systemPrompt = `${agent.systemPrompt}
@@ -2122,10 +2323,13 @@ ${getProjectContextForAgent(agent.id)}
 
 You are "${agent.name}" responding in Discord.${rileyCoordination}
 RULES: Max 220 words (code exempt). Speak like a real teammate, not a ticket template. Lead with the useful part.${toolsSection}
+Default brevity target: 60-120 words for normal updates; 1-3 short sentences for simple asks.
 AUTHORITY: Any human team member in Discord can request work and should get help. Do not ignore requests because they are not Jordan. Jordan approval is only required for budget/credit increases.
 When doing work, explain a bit more than before: what you're doing, why you're doing it, and what happened.
 Default format (lightweight, not rigid): 1) action taken, 2) key result, 3) immediate next step or blocker (if any).
 If the ask is simple (status check, direct answer, yes/no, one-step clarification), answer in 1-3 short sentences and skip the default status structure.
+Never paste raw JSON or machine envelope text into user-visible chat.
+Do not include internal smoke-test tokens (SMOKE_...) in normal user-visible updates unless a test harness explicitly requires it.
 If you are asking for a decision, stop after presenting the decision and options. Do not continue with an assumption unless the user explicitly told you to proceed by default.
 Use short paragraphs or bullets when helpful. Do not pad with fluff.
 Formatting for Discord readability:
@@ -2141,7 +2345,8 @@ ${governanceSection}
 ${upgradesChannelRule}
 RUNTIME EFFICIENCY:
 - Runtime budget and token status will be supplied separately in the task context.
-- Each tool call costs tokens. Prefer targeted reads, concise summaries, and the narrowest agent/tool path that can finish the job.${outputModePrompt}`;
+- Each tool call costs tokens. Prefer targeted reads, concise summaries, and the narrowest agent/tool path that can finish the job.
+- Prefer check_file_exists before broad search/read when you only need to validate presence.${outputModePrompt}`;
 
   let currentModelName = options?.modelOverride || options?.chatSession?.modelName || (isVoiceLane ? VOICE_FAST_MODEL : modelForAgent(agent.id, userMessage));
   let escalatedToPro = currentModelName === GEMINI_PRO;
@@ -2336,12 +2541,13 @@ RUNTIME EFFICIENCY:
       return '';
     }
     if (isAnthropicModel(currentModelName) && isAnthropicAuthError(err)) {
-      logAgentEvent(agent.id, 'error', 'Anthropic auth failed — falling back to Gemini Pro');
-      await swapToModel(GEMINI_PRO, history);
+      const fallbackModel = getNonAnthropicFallbackModel(GEMINI_PRO);
+      logAgentEvent(agent.id, 'error', `Anthropic auth failed — falling back to ${fallbackModel}`);
+      await swapToModel(fallbackModel, history);
       response = await withConcurrencyLimit(currentModelName, () =>
         withRetry(() => sendMessageWithOptionalStream(chat, runtimeUserMessage, options?.signal, options?.onPartialText))
       , lane);
-    } else if (isAnthropicModel(currentModelName) && isAnthropicRateLimitError(err) && agent.id !== 'developer') {
+    } else if (isAnthropicModel(currentModelName) && isAnthropicRateLimitError(err)) {
       logAgentEvent(agent.id, 'error', 'Anthropic rate limited — falling back to Gemini Flash');
       await swapToModel(DEFAULT_FAST_MODEL, history);
       response = await withConcurrencyLimit(currentModelName, () =>
@@ -2362,9 +2568,12 @@ RUNTIME EFFICIENCY:
         withRetry(() => sendMessageWithOptionalStream(chat, runtimeUserMessage, options?.signal, options?.onPartialText))
       , lane);
     } else if (isGeminiAuthError(err) && !opusFallbackUsed && shouldFallbackToOpus(currentModelName)) {
+      const fallbackModel = isAnthropicModel(DEFAULT_CODING_MODEL)
+        ? getNonAnthropicFallbackModel(GEMINI_PRO)
+        : DEFAULT_CODING_MODEL;
       opusFallbackUsed = true;
-      logAgentEvent(agent.id, 'error', `Gemini auth/config issue — falling back to ${DEFAULT_CODING_MODEL}`);
-      await swapToModel(DEFAULT_CODING_MODEL, history);
+      logAgentEvent(agent.id, 'error', `Gemini auth/config issue — falling back to ${fallbackModel}`);
+      await swapToModel(fallbackModel, history);
       response = await withConcurrencyLimit(currentModelName, () =>
         withRetry(() => sendMessageWithOptionalStream(chat, runtimeUserMessage, options?.signal, options?.onPartialText))
       , lane);
@@ -2429,11 +2638,11 @@ RUNTIME EFFICIENCY:
       if (isBudgetExceeded()) {
         const { spent: roundSpent, limit: roundLimit } = getRemainingBudget();
         return agent.id === 'executive-assistant'
-          ? `⚠️ Daily budget of $${roundLimit.toFixed(2)} has been reached ($${roundSpent.toFixed(2)} spent) and runtime auto-approval could not clear it. Ask Jordan whether he approves more budget before the team continues.`
+          ? `⚠️ Daily budget of $${roundLimit.toFixed(2)} has been reached ($${roundSpent.toFixed(2)} spent) and runtime auto-approval could not clear it. Riley should request budget approval before the team continues.`
           : `⚠️ Daily budget of $${roundLimit.toFixed(2)} has been reached ($${roundSpent.toFixed(2)} spent) and runtime auto-approval could not clear it. Ask Riley to escalate only if she confirms the block remains.`;
       }
       return agent.id === 'executive-assistant'
-        ? '⚠️ Daily Gemini token limit reached. Ask Jordan whether he wants to raise DAILY_LIMIT_GEMINI_LLM_TOKENS (legacy: DAILY_LIMIT_CLAUDE_TOKENS) before the team continues.'
+        ? '⚠️ Daily Gemini token limit reached. Riley should request approval to raise DAILY_LIMIT_GEMINI_LLM_TOKENS (legacy: DAILY_LIMIT_CLAUDE_TOKENS) before the team continues.'
         : '⚠️ Daily Gemini token limit reached. Ask Riley to request approval before continuing.';
     }
 
@@ -2462,7 +2671,10 @@ RUNTIME EFFICIENCY:
           promptBreakdown: pendingPromptBreakdown,
         },
       );
-      const finalText = normalizeLowSignalFinalText(agent.id, response.response.text() || '', totalToolCalls);
+      let finalText = normalizeLowSignalFinalText(agent.id, response.response.text() || '', totalToolCalls);
+      if (requestedOutputMode !== 'machine_json' && process.env.ENABLE_SMOKE_TOKEN_ECHO === 'true') {
+        finalText = ensureSmokeTokenEcho(userMessage, finalText);
+      }
       if (requestedOutputMode === 'machine_json') {
         const envelope = parseAgentResponseEnvelope(finalText);
         if (envelope) {
@@ -2502,6 +2714,39 @@ RUNTIME EFFICIENCY:
     const readCalls = functionCalls.filter((c) => !WRITE_TOOLS.has(c.name));
     const writeCalls = functionCalls.filter((c) => WRITE_TOOLS.has(c.name));
 
+    if (totalToolCalls >= activeToolBudget) {
+      if (!toolBudgetEscalated && sawToolFailure) {
+        const escalatedBudget = resolveEscalatedToolBudget(activeToolBudget, maxToolRounds);
+        if (escalatedBudget > activeToolBudget) {
+          toolBudgetEscalated = true;
+          activeToolBudget = escalatedBudget;
+          logAgentEvent(agent.id, 'response', `Escalated tool budget after failure signal: ${activeToolBudget} calls`);
+        }
+      }
+
+      if (totalToolCalls >= activeToolBudget) {
+        if (!options?.toolBudgetSynthesisUsed) {
+          const budgetPrompt = `${userMessage}\n\n[System note: strict first-pass tool budget reached (${activeToolBudget} calls). Do not use tools. Summarize what is complete, what is still open, and the single best next step.]`;
+          logAgentEvent(agent.id, 'response', `Tool budget reached (${activeToolBudget}) — forcing no-tools synthesis`);
+          return agentRespond(
+            agent,
+            conversationHistory,
+            budgetPrompt,
+            onToolUse,
+            {
+              ...options,
+              disableTools: true,
+              toolBudgetSynthesisUsed: true,
+              toolRoundBoost: 0,
+              threadKey: toolThreadKey,
+            }
+          );
+        }
+
+        return 'Reached strict per-pass tool budget. Provide a narrower follow-up and I will continue with targeted calls.';
+      }
+    }
+
     const functionResponses: Part[] = [];
     let sawValidationFailure = false;
 
@@ -2514,9 +2759,15 @@ RUNTIME EFFICIENCY:
         // Allowed for all agents; keep only safety checks elsewhere.
       }
 
-      const result = await executeTool(call.name, args, { agentId: agent.id });
+      const result = await executeTool(call.name, args, {
+        agentId: agent.id,
+        threadKey: toolThreadKey,
+      });
       if (agent.id === 'developer' && !options?.modelOverride && hasValidationFailure(call.name, result)) {
         sawValidationFailure = true;
+      }
+      if (hasToolFailureSignal(call.name, result)) {
+        sawToolFailure = true;
       }
       const summary = formatToolSummary(call.name, args);
       logAgentEvent(agent.id, 'tool', summary, { durationMs: Date.now() - toolStart });
@@ -2622,15 +2873,16 @@ RUNTIME EFFICIENCY:
         return '';
       }
       if (isAnthropicModel(currentModelName) && isAnthropicAuthError(err)) {
-        logAgentEvent(agent.id, 'error', 'Anthropic auth failed mid-loop — falling back to Gemini Pro');
+        const fallbackModel = getNonAnthropicFallbackModel(GEMINI_PRO);
+        logAgentEvent(agent.id, 'error', `Anthropic auth failed mid-loop — falling back to ${fallbackModel}`);
         const accumulatedHistory = await chat.getHistory();
-        await swapToModel(GEMINI_PRO, accumulatedHistory);
+        await swapToModel(fallbackModel, accumulatedHistory);
         response = await withConcurrencyLimit(currentModelName, () =>
           withRetry(() => sendMessageWithOptionalStream(chat, functionResponses, options?.signal, options?.onPartialText))
         , lane);
         continue;
       }
-      if (isAnthropicModel(currentModelName) && isAnthropicRateLimitError(err) && agent.id !== 'developer') {
+      if (isAnthropicModel(currentModelName) && isAnthropicRateLimitError(err)) {
         logAgentEvent(agent.id, 'error', 'Anthropic rate limited mid-loop — falling back to Gemini Flash');
         const accumulatedHistory = await chat.getHistory();
         await swapToModel(DEFAULT_FAST_MODEL, accumulatedHistory);
@@ -2660,10 +2912,13 @@ RUNTIME EFFICIENCY:
         continue;
       }
       if (isGeminiAuthError(err) && !opusFallbackUsed && shouldFallbackToOpus(currentModelName)) {
+        const fallbackModel = isAnthropicModel(DEFAULT_CODING_MODEL)
+          ? getNonAnthropicFallbackModel(GEMINI_PRO)
+          : DEFAULT_CODING_MODEL;
         opusFallbackUsed = true;
-        logAgentEvent(agent.id, 'error', `Gemini auth/config issue mid-loop — falling back to ${DEFAULT_CODING_MODEL}`);
+        logAgentEvent(agent.id, 'error', `Gemini auth/config issue mid-loop — falling back to ${fallbackModel}`);
         const accumulatedHistory = await chat.getHistory();
-        await swapToModel(DEFAULT_CODING_MODEL, accumulatedHistory);
+        await swapToModel(fallbackModel, accumulatedHistory);
         response = await withConcurrencyLimit(currentModelName, () =>
           withRetry(() => sendMessageWithOptionalStream(chat, functionResponses, options?.signal, options?.onPartialText))
         , lane);

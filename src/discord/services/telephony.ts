@@ -345,7 +345,10 @@ Do NOT use markdown formatting — this is spoken audio.${langHint}`;
       [...rileyMemory, ...session.conversationHistory],
       context,
       undefined,
-      { maxTokens: 1024 }
+      {
+        maxTokens: 1024,
+        threadKey: `phone:${session.callSid || session.callerNumber || 'unknown'}`,
+      }
     );
 
     session.conversationHistory.push(

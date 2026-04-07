@@ -881,6 +881,7 @@ IMPORTANT: End on a complete sentence, never a fragment.${langHint}`;
           disableTools: true,
           priority: 'voice',
           chatSession: session.rileyChatSession,
+          threadKey: `voice:${session.voiceChannel.id}`,
           onPartialText: async (partialText) => {
             if (!firstTokenLogged && partialText.trim()) {
               firstTokenLogged = true;

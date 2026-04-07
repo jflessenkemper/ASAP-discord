@@ -1,0 +1,50 @@
+{
+  "startedAt": "2026-04-06T14:23:12.963Z",
+  "endedAt": "2026-04-06T14:23:31.293Z",
+  "summary": {
+    "capabilityPassed": 2,
+    "capabilityFailed": 0,
+    "extraFailed": 0,
+    "score": 35,
+    "criticalPassed": true,
+    "detail": "core_fail=0 | orchestration_fail=0 | upgrades_fail=0 | critical_extra_fail=0"
+  },
+  "results": [
+    {
+      "agent": "Ace (Developer)",
+      "capability": "evidence-format-contract",
+      "category": "core",
+      "passed": true,
+      "elapsed": 5105,
+      "snippet": "Result: Tooling is operational. Evidence: `read_file` successfully read a sample file. Risk/Follow-up: None at this time, ready for next task. SMOKE_DEVELOPE_EVIDENCE_399747"
+    },
+    {
+      "agent": "Ace (Developer)",
+      "capability": "upgrades-post",
+      "category": "upgrades",
+      "passed": true,
+      "elapsed": 5940,
+      "snippet": "I've posted a token-saving improvement to #🆙-upgrades regarding more precise `repo_memory_search` queries. This should help with token efficiency and reduce rate-limiting issues. SMOKE_DEVELOPE_UPGRADES_405102"
+    }
+  ],
+  "extras": [
+    {
+      "name": "channel_hygiene",
+      "passed": true,
+      "detail": "groupchat:70 | terminal:1 | upgrades:7",
+      "critical": true
+    }
+  ],
+  "config": {
+    "timeoutMs": 25000,
+    "profile": "readiness",
+    "preClear": false,
+    "runElevenApi": false,
+    "runElevenTts": false,
+    "runVoiceBridge": false,
+    "runVoiceActive": false,
+    "capabilityAttempts": 2,
+    "runPostSuccessAction": false,
+    "agentFilter": "developer"
+  }
+}

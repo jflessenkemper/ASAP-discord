@@ -19,6 +19,7 @@ const TEXT_MAX_TOKENS_DEVELOPER = parseInt(process.env.TEXT_MAX_TOKENS_DEVELOPER
 const STREAM_EDIT_THROTTLE_MS = parseInt(process.env.STREAM_EDIT_THROTTLE_MS || '80', 10);
 const STREAM_MAX_PREVIEW_CHARS = parseInt(process.env.STREAM_MAX_PREVIEW_CHARS || '1800', 10);
 const STREAM_EDIT_MIN_CHAR_DELTA = parseInt(process.env.STREAM_EDIT_MIN_CHAR_DELTA || '35', 10);
+const AGENT_MAX_VISIBLE_CHARS = parseInt(process.env.AGENT_MAX_VISIBLE_CHARS || '1400', 10);
 
 function classifyAgentError(err: unknown): string {
   const message = String((err as any)?.message || err || '').toLowerCase();
@@ -149,6 +150,7 @@ async function handleAgentMessageInner(
       }, {
         signal,
         maxTokens,
+        threadKey: `text:${channelId}`,
         onPartialText: async (partialText) => {
           await updateStreamPreview(partialText);
         },
@@ -283,7 +285,7 @@ function shouldProgressivelyReveal(rendered: string): boolean {
   if (!rendered) return false;
   if (rendered.length < 260 || rendered.length > 1800) return false;
   if (rendered.includes('```')) return false;
-    return false;
+  return true;
 }
 
 async function sendProgressiveWebhookMessage(
@@ -319,7 +321,9 @@ function renderAgentMessage(raw: string): string {
   const withoutActionTags = raw.replace(/\[ACTION:[^\]]+\]/g, '').trim();
   if (!withoutActionTags) return '';
 
-  const withoutSpeakerLabel = withoutActionTags.replace(/^\s*\[[^\]\r\n]{1,40}\]:\s*/u, '');
+  const withoutSpeakerLabel = withoutActionTags
+    .replace(/^\s*\[[^\]\r\n]{1,40}\]:\s*/u, '')
+    .replace(/^\s*(?:Riley|Ace|Max|Kane|Sophie|Raj|Elena|Jude|Harper|Kai|Liv|Mia|Leo)\s*:\s*/i, '');
   if (!withoutSpeakerLabel) return '';
 
   const withoutHeadings = withoutSpeakerLabel
@@ -341,7 +345,22 @@ function renderAgentMessage(raw: string): string {
     });
   }).join('');
 
-  return formatted.trim();
+  let normalized = formatted
+    .replace(/\bI\s+cannot\s+access\b/gi, 'Blocked: missing access to')
+    .replace(/\bI\s+don\'t\s+have\s+access\s+to\b/gi, 'Blocked: missing access to')
+    .trim();
+
+  const hasActionCue = /\b(next step|action|will|now|recommend|should|run|check|verify|post|update|fix|implement|create|change|retry)\b/i.test(normalized);
+  if (normalized.length > 220 && !hasActionCue) {
+    normalized = `${normalized}\n\nNext step: I will post a concrete action and owner in my next update.`;
+  }
+
+  if (normalized.length > AGENT_MAX_VISIBLE_CHARS) {
+    const clipped = normalized.slice(0, Math.max(350, AGENT_MAX_VISIBLE_CHARS - 120)).trimEnd();
+    normalized = `${clipped}\n\n[Output trimmed for readability. Ask for a focused drill-down if needed.]`;
+  }
+
+  return normalized;
 }
 
 /**

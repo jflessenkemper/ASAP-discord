@@ -3,6 +3,7 @@ import { GoogleAuth } from 'google-auth-library';
 import { recordGeminiUsage, isGeminiOverLimit } from '../usage';
 import { elevenLabsTTS, isElevenLabsAvailable } from './elevenlabs';
 import { recordTtsError, recordTtsLatency, recordTranscriptionLatency } from '../metrics';
+import { ensureGoogleCredentials, getAccessTokenViaGcloud } from '../../services/googleCredentials';
 
 const USE_VERTEX_AI = process.env.GEMINI_USE_VERTEX_AI === 'true';
 const VERTEX_PROJECT_ID = process.env.VERTEX_PROJECT_ID || process.env.GOOGLE_CLOUD_PROJECT || process.env.GCLOUD_PROJECT || '';
@@ -111,12 +112,37 @@ async function getVertexAccessToken(): Promise<string> {
     return vertexTokenCache.token;
   }
 
+  await ensureGoogleCredentials(VERTEX_PROJECT_ID).catch(() => false);
+
   if (!vertexAuth) {
     vertexAuth = new GoogleAuth({ scopes: ['https://www.googleapis.com/auth/cloud-platform'] });
   }
 
-  const authClient = await vertexAuth.getClient();
-  const accessToken = await authClient.getAccessToken();
+  let authClient: any;
+  let accessToken: any;
+  try {
+    authClient = await vertexAuth.getClient();
+    accessToken = await authClient.getAccessToken();
+  } catch (err) {
+    const msg = String((err as any)?.message || err || '').toLowerCase();
+    if (msg.includes('default credentials') || msg.includes('application default credentials')) {
+      const recovered = await ensureGoogleCredentials(VERTEX_PROJECT_ID).catch(() => false);
+      if (recovered) {
+        vertexAuth = new GoogleAuth({ scopes: ['https://www.googleapis.com/auth/cloud-platform'] });
+        authClient = await vertexAuth.getClient();
+        accessToken = await authClient.getAccessToken();
+      } else {
+        const tokenViaCli = getAccessTokenViaGcloud();
+        if (tokenViaCli) {
+          vertexTokenCache = { token: tokenViaCli, expiresAtMs: now + 45 * 60_000 };
+          return tokenViaCli;
+        }
+        throw new Error('Vertex auth unavailable: Application Default Credentials are not configured');
+      }
+    } else {
+      throw err;
+    }
+  }
   const token = typeof accessToken === 'string' ? accessToken : accessToken?.token;
   if (!token) throw new Error('Vertex auth failed: no access token');
 
@@ -129,7 +155,13 @@ async function callVertexGenerateContent(modelName: string, body: Record<string,
     throw new Error('Vertex AI is enabled but VERTEX_PROJECT_ID (or GOOGLE_CLOUD_PROJECT) is not set');
   }
   const token = await getVertexAccessToken();
-  const endpoint = `https://${VERTEX_LOCATION}-aiplatform.googleapis.com/v1/projects/${VERTEX_PROJECT_ID}/locations/${VERTEX_LOCATION}/publishers/google/models/${encodeURIComponent(modelName)}:generateContent`;
+  const lower = String(modelName || '').toLowerCase();
+  const resolvedModel = lower.includes('gemini-flash-latest')
+    ? 'gemini-2.5-flash'
+    : lower.includes('gemini-pro-latest')
+      ? 'gemini-2.5-pro'
+      : modelName;
+  const endpoint = `https://${VERTEX_LOCATION}-aiplatform.googleapis.com/v1/projects/${VERTEX_PROJECT_ID}/locations/${VERTEX_LOCATION}/publishers/google/models/${encodeURIComponent(resolvedModel)}:generateContent`;
   const response = await fetch(endpoint, {
     method: 'POST',
     headers: {

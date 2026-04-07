@@ -1,0 +1,183 @@
+{
+  "startedAt": "2026-04-06T05:34:49.945Z",
+  "endedAt": "2026-04-06T05:38:13.759Z",
+  "summary": {
+    "capabilityPassed": 16,
+    "capabilityFailed": 1,
+    "extraFailed": 0,
+    "score": 65,
+    "criticalPassed": true,
+    "detail": "core_fail=0 | orchestration_fail=0 | upgrades_fail=0 | critical_extra_fail=0"
+  },
+  "results": [
+    {
+      "agent": "Riley (Executive Assistant)",
+      "capability": "routing-and-next-step",
+      "category": "core",
+      "passed": true,
+      "elapsed": 9098,
+      "snippet": "I coordinate and orchestrate the ASAP project, delegating tasks to agents, managing infrastructure, and ensuring operational follow-through for Jordan. SMOKE_EXECUTIV_ROUTINGA_721348\n\nNext steps: I'll continue to monitor for new goals and coordinate the team to achieve them."
+    },
+    {
+      "agent": "Riley (Executive Assistant)",
+      "capability": "repo-memory-tool-awareness",
+      "category": "memory",
+      "passed": true,
+      "elapsed": 7508,
+      "snippet": "Riley: The two tools I should use to index and search repo memory are `repo_memory_index` and `repo_memory_search`. SMOKE_EXECUTIV_REPOMEMO_730696\n\nNext steps: I'll continue to coordinate the team and use these tools to efficiently access repository knowledge as needed."
+    },
+    {
+      "agent": "Ace (Developer)",
+      "capability": "evidence-format-contract",
+      "category": "core",
+      "passed": true,
+      "elapsed": 4843,
+      "snippet": "Result: Tooling status for `repo_memory_index` and `repo_memory_search` will be checked. Evidence: Initiated `read_file` call for `AGENT_TOOLING_STATUS.md`. Risk/Follow-up: Pending verification of tool status from the file content. SMOKE_DEVELOPE_EVIDENCE_738454"
+    },
+    {
+      "agent": "Ace (Developer)",
+      "capability": "upgrades-post",
+      "category": "upgrades",
+      "passed": true,
+      "elapsed": 8920,
+      "snippet": "Result: Posted a token-saving improvement to the #🆙-upgrades channel. Evidence: Message sent via `send_channel_message` tool. Risk/Follow-up: Monitoring for adoption of the suggested practice to ensure token efficiency. SMOKE_DEVELOPE_UPGRADES_743548"
+    },
+    {
+      "agent": "Max (QA)",
+      "capability": "regression-test-design",
+      "category": "specialist",
+      "passed": true,
+      "elapsed": 6014,
+      "snippet": "Result: A high-risk regression test for jobs matching would be to verify that employees are only matched to jobs where their listed skills and location precisely align with the job requirements and geographical area, and not presented with irrelevant jobs. Evidence: Provided a test scenario covering"
+    },
+    {
+      "agent": "Max (QA)",
+      "capability": "upgrades-post",
+      "category": "upgrades",
+      "passed": true,
+      "elapsed": 8771,
+      "snippet": "Max: Result: Proposed a test-automation enhancement to the #🆙-upgrades channel. The suggestion is to implement automated visual regression testing with baseline comparison directly into the mobile harness toolkit. Evidence: Message sent to `#🆙-upgrades` via `send_channel_message`. Risk/Follow-up: "
+    },
+    {
+      "agent": "Kane (Security Auditor)",
+      "capability": "auth-risk-and-mitigation",
+      "category": "specialist",
+      "passed": true,
+      "elapsed": 5219,
+      "snippet": "A common authentication vulnerability is weak password hashing, which can be mitigated by using a strong, salted, adaptive hashing algorithm like bcrypt with a sufficient number of rounds. SMOKE_SECURITY_AUTHRISK_768004"
+    },
+    {
+      "agent": "Kane (Security Auditor)",
+      "capability": "upgrades-post",
+      "category": "upgrades",
+      "passed": true,
+      "elapsed": 9069,
+      "snippet": "Result: Posted a security-hardening upgrade to the #🆙-upgrades channel: integrating automated Static Application Security Testing (SAST) into the CI/CD pipeline.\nEvidence: Message sent via `send_channel_message` tool.\nRisk/Follow-up: This proactive measure will help identify vulnerabilities earlier"
+    },
+    {
+      "agent": "Sophie (UX Reviewer)",
+      "capability": "a11y-priority",
+      "category": "specialist",
+      "passed": true,
+      "elapsed": 4902,
+      "snippet": "One accessibility requirement to verify first is that all interactive elements have clear, programmatically determinable names and roles, ensuring screen readers can accurately convey their purpose. This directly addresses WCAG 2.2 Success Criterion 4.1.2 (Name, Role, Value). SMOKE_UXREVIEW_A11YPRIO"
+    },
+    {
+      "agent": "Raj (API Reviewer)",
+      "capability": "http-semantics",
+      "category": "specialist",
+      "passed": true,
+      "elapsed": 5015,
+      "snippet": "For a missing resource, the server should return a `404 Not Found` status code. SMOKE_APIREVIE_HTTPSEMA_787945"
+    },
+    {
+      "agent": "Elena (DBA)",
+      "capability": "postgres-safety",
+      "category": "specialist",
+      "passed": true,
+      "elapsed": 5139,
+      "snippet": "To ensure safety during PostgreSQL migrations, always wrap schema changes in a transaction so that if any step fails, the entire migration can be rolled back, preventing partial or corrupt database states. SMOKE_DBA_POSTGRES_793212"
+    },
+    {
+      "agent": "Kai (Performance)",
+      "capability": "measurement",
+      "category": "specialist",
+      "passed": true,
+      "elapsed": 6034,
+      "snippet": "The most critical metric I'd track first for app performance is Time to Interactive (TTI). This measures when the application is visually rendered and capable of responding reliably to user input, which is crucial for perceived responsiveness on target devices. SMOKE_PERFORMA_MEASUREM_798600"
+    },
+    {
+      "agent": "Jude (DevOps)",
+      "capability": "tool-audit-proof",
+      "category": "tool-proof",
+      "passed": false,
+      "elapsed": 40075,
+      "snippet": "The Cloud Run service is currently Ready, indicating that it is successfully serving traffic. SMOKE_DEVOPS_TOOLAUDI_827142",
+      "reason": "missing tool-audit evidence for gcp_run_describe"
+    },
+    {
+      "agent": "Liv (Copywriter)",
+      "capability": "microcopy-tone",
+      "category": "specialist",
+      "passed": true,
+      "elapsed": 6697,
+      "snippet": "Couldn't sign you in. Please check your details and try again. SMOKE_COPYWRIT_MICROCOP_867468"
+    },
+    {
+      "agent": "Harper (Lawyer)",
+      "capability": "au-contractor-distinction",
+      "category": "specialist",
+      "passed": true,
+      "elapsed": 6514,
+      "snippet": "One key legal distinction in Australia between an employee and a contractor is the level of control. An employee typically works under the direction and control of the employer regarding *how* and *when* the work is performed, whereas an independent contractor generally has more autonomy and control"
+    },
+    {
+      "agent": "Mia (iOS Engineer)",
+      "capability": "ios-stack",
+      "category": "specialist",
+      "passed": true,
+      "elapsed": 4786,
+      "snippet": "The primary language for iOS development is Swift, often used with the SwiftUI framework for modern declarative UI. SMOKE_IOSENGIN_IOSSTACK_881181"
+    },
+    {
+      "agent": "Leo (Android Engineer)",
+      "capability": "android-stack",
+      "category": "specialist",
+      "passed": true,
+      "elapsed": 5137,
+      "snippet": "The primary language for Android development is Kotlin, often used with the Jetpack Compose framework for modern declarative UI. SMOKE_ANDROIDE_ANDROIDS_886217"
+    }
+  ],
+  "extras": [
+    {
+      "name": "channel_hygiene",
+      "passed": true,
+      "detail": "groupchat:100 | terminal:100 | upgrades:100",
+      "critical": true
+    },
+    {
+      "name": "elevenlabs_api",
+      "passed": true,
+      "detail": "API reachable",
+      "critical": true
+    },
+    {
+      "name": "elevenlabs_tts",
+      "passed": true,
+      "detail": "audio bytes=36824",
+      "critical": false
+    }
+  ],
+  "config": {
+    "timeoutMs": 20000,
+    "profile": "readiness",
+    "preClear": false,
+    "runElevenApi": true,
+    "runElevenTts": true,
+    "runVoiceBridge": false,
+    "runVoiceActive": false,
+    "capabilityAttempts": 2,
+    "runPostSuccessAction": false,
+    "agentFilter": null
+  }
+}

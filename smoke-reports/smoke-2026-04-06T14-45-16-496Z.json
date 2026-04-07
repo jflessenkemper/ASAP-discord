@@ -1,0 +1,43 @@
+{
+  "startedAt": "2026-04-06T14:43:51.798Z",
+  "endedAt": "2026-04-06T14:45:16.496Z",
+  "summary": {
+    "capabilityPassed": 0,
+    "capabilityFailed": 1,
+    "extraFailed": 0,
+    "score": 0,
+    "criticalPassed": true,
+    "detail": "core_fail=0 | orchestration_fail=0 | upgrades_fail=0 | critical_extra_fail=0"
+  },
+  "results": [
+    {
+      "agent": "Harper (Lawyer)",
+      "capability": "au-contractor-distinction",
+      "category": "specialist",
+      "passed": false,
+      "elapsed": 50781,
+      "snippet": "Timeout while waiting for full capability evidence",
+      "reason": "missing token echo"
+    }
+  ],
+  "extras": [
+    {
+      "name": "channel_hygiene",
+      "passed": true,
+      "detail": "groupchat:100 | terminal:1 | upgrades:16",
+      "critical": true
+    }
+  ],
+  "config": {
+    "timeoutMs": 25000,
+    "profile": "readiness",
+    "preClear": false,
+    "runElevenApi": false,
+    "runElevenTts": false,
+    "runVoiceBridge": false,
+    "runVoiceActive": false,
+    "capabilityAttempts": 2,
+    "runPostSuccessAction": false,
+    "agentFilter": "lawyer"
+  }
+}

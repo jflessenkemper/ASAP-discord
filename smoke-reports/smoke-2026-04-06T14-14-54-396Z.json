@@ -1,0 +1,188 @@
+{
+  "startedAt": "2026-04-06T14:06:41.358Z",
+  "endedAt": "2026-04-06T14:14:54.396Z",
+  "summary": {
+    "capabilityPassed": 11,
+    "capabilityFailed": 6,
+    "extraFailed": 0,
+    "score": 59.8,
+    "criticalPassed": false,
+    "detail": "core_fail=1 | orchestration_fail=0 | upgrades_fail=2 | critical_extra_fail=0"
+  },
+  "results": [
+    {
+      "agent": "Riley (Executive Assistant)",
+      "capability": "routing-and-next-step",
+      "category": "core",
+      "passed": true,
+      "elapsed": 6541,
+      "snippet": "I am Jordan's operational AI teammate, orchestrating project plans, delegating tasks to agents, and ensuring project goals move forward. The most concrete next step is to await Jor…"
+    },
+    {
+      "agent": "Riley (Executive Assistant)",
+      "capability": "repo-memory-tool-awareness",
+      "category": "memory",
+      "passed": true,
+      "elapsed": 6197,
+      "snippet": "The two tools you should use to index and search repo memory before broad file scans are `repo_memory_index` and `repo_memory_search`.\n\nSMOKE_EXECUTIV_REPOMEMO_414949"
+    },
+    {
+      "agent": "Ace (Developer)",
+      "capability": "evidence-format-contract",
+      "category": "core",
+      "passed": false,
+      "elapsed": 40248,
+      "snippet": "Timeout while waiting for full capability evidence",
+      "reason": "missing token echo"
+    },
+    {
+      "agent": "Ace (Developer)",
+      "capability": "upgrades-post",
+      "category": "upgrades",
+      "passed": true,
+      "elapsed": 9517,
+      "snippet": "Posted a token-saving improvement to #upgrades: prioritize `repo_memory_search` to reduce token consumption from broad file scans. SMOKE_DEVELOPE_UPGRADES_505801"
+    },
+    {
+      "agent": "Max (QA)",
+      "capability": "regression-test-design",
+      "category": "specialist",
+      "passed": false,
+      "elapsed": 40066,
+      "snippet": "Timeout while waiting for full capability evidence",
+      "reason": "missing any-of expected patterns"
+    },
+    {
+      "agent": "Max (QA)",
+      "capability": "upgrades-post",
+      "category": "upgrades",
+      "passed": false,
+      "elapsed": 41500,
+      "snippet": "Timeout while waiting for full capability evidence",
+      "reason": "missing token echo"
+    },
+    {
+      "agent": "Kane (Security Auditor)",
+      "capability": "auth-risk-and-mitigation",
+      "category": "specialist",
+      "passed": true,
+      "elapsed": 6180,
+      "snippet": "Storing JWTs in `localStorage` makes them vulnerable to XSS; mitigate this by using `httpOnly` cookies for token storage. SMOKE_SECURITY_AUTHRISK_641669"
+    },
+    {
+      "agent": "Kane (Security Auditor)",
+      "capability": "upgrades-post",
+      "category": "upgrades",
+      "passed": false,
+      "elapsed": 40169,
+      "snippet": "Timeout while waiting for full capability evidence",
+      "reason": "missing upgrades channel post with token"
+    },
+    {
+      "agent": "Sophie (UX Reviewer)",
+      "capability": "a11y-priority",
+      "category": "specialist",
+      "passed": false,
+      "elapsed": 41183,
+      "snippet": "Timeout while waiting for full capability evidence",
+      "reason": "missing token echo"
+    },
+    {
+      "agent": "Raj (API Reviewer)",
+      "capability": "http-semantics",
+      "category": "specialist",
+      "passed": true,
+      "elapsed": 4732,
+      "snippet": "For a missing resource, the server should return a `404 Not Found` status code. SMOKE_APIREVIE_HTTPSEMA_774075"
+    },
+    {
+      "agent": "Elena (DBA)",
+      "capability": "postgres-safety",
+      "category": "specialist",
+      "passed": false,
+      "elapsed": 40268,
+      "snippet": "Timeout while waiting for full capability evidence",
+      "reason": "missing any-of expected patterns"
+    },
+    {
+      "agent": "Kai (Performance)",
+      "capability": "measurement",
+      "category": "specialist",
+      "passed": true,
+      "elapsed": 6057,
+      "snippet": "The first metric I'd track for app performance is Time To Interactive (TTI). It gives a solid indication of when users can actually start using the application, which is key for user perception on React Native Web and Expo apps. SMOKE_PERFORMA_MEASUREM_863239"
+    },
+    {
+      "agent": "Jude (DevOps)",
+      "capability": "tool-audit-proof",
+      "category": "tool-proof",
+      "passed": true,
+      "elapsed": 6193,
+      "snippet": "TOOL_USED:gcp_run_describe Status: Ready: True SMOKE_DEVOPS_TOOLAUDI_869547"
+    },
+    {
+      "agent": "Liv (Copywriter)",
+      "capability": "microcopy-tone",
+      "category": "specialist",
+      "passed": true,
+      "elapsed": 3461,
+      "snippet": "We couldn't sign you in. Please check your details and try again. SMOKE_COPYWRIT_MICROCOP_875990"
+    },
+    {
+      "agent": "Harper (Lawyer)",
+      "capability": "au-contractor-distinction",
+      "category": "specialist",
+      "passed": true,
+      "elapsed": 5790,
+      "snippet": "The key distinction often lies in the level of control: an employee typically has their work directed and controlled by an employer, while a contractor usually has more autonomy over how and when they complete their work. SMOKE_LAWYER_AUCONTRA_879701"
+    },
+    {
+      "agent": "Mia (iOS Engineer)",
+      "capability": "ios-stack",
+      "category": "specialist",
+      "passed": true,
+      "elapsed": 2249,
+      "snippet": "The primary iOS language is Swift, and the main frameworks for building user interfaces are SwiftUI and UIKit. SMOKE_IOSENGIN_IOSSTACK_885741"
+    },
+    {
+      "agent": "Leo (Android Engineer)",
+      "capability": "android-stack",
+      "category": "specialist",
+      "passed": true,
+      "elapsed": 3458,
+      "snippet": "The primary Android language is Kotlin, and the main framework for building user interfaces is Jetpack Compose. SMOKE_ANDROIDE_ANDROIDS_888240"
+    }
+  ],
+  "extras": [
+    {
+      "name": "channel_hygiene",
+      "passed": true,
+      "detail": "groupchat:9 | terminal:1 | upgrades:1",
+      "critical": true
+    },
+    {
+      "name": "elevenlabs_api",
+      "passed": true,
+      "detail": "API reachable",
+      "critical": true
+    },
+    {
+      "name": "elevenlabs_tts",
+      "passed": true,
+      "detail": "audio bytes=34316",
+      "critical": false
+    }
+  ],
+  "config": {
+    "timeoutMs": 20000,
+    "profile": "readiness",
+    "preClear": false,
+    "runElevenApi": true,
+    "runElevenTts": true,
+    "runVoiceBridge": false,
+    "runVoiceActive": false,
+    "capabilityAttempts": 2,
+    "runPostSuccessAction": false,
+    "agentFilter": null
+  }
+}

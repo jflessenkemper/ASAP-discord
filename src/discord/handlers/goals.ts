@@ -78,7 +78,11 @@ The user has made their choice. Acknowledge it briefly, then continue executing 
       const rileyMemory = getMemoryContext('executive-assistant');
       const rileyResponseRaw = await agentRespond(riley, [...rileyMemory, ...goalsHistory], decisionContext, async (_toolName, summary) => {
         sendGoalsToolNotification(goalsChannel, riley, summary).catch(() => {});
-      }, { outputMode: 'machine_json', machineEnvelopeRaw: true });
+      }, {
+        outputMode: 'machine_json',
+        machineEnvelopeRaw: true,
+        threadKey: `goals:${goalsChannel.id}`,
+      });
       const rileyEnvelope = extractAgentResponseEnvelope(rileyResponseRaw);
       const rileyResponse = rileyEnvelope?.human || rileyResponseRaw;
 
@@ -130,7 +134,11 @@ Remember: You plan and coordinate. Start with Ace first for execution. Ace can i
     const rileyMemory = getMemoryContext('executive-assistant');
     const rileyResponseRaw = await agentRespond(riley, [...rileyMemory, ...goalsHistory], goalContext, async (_toolName, summary) => {
       sendGoalsToolNotification(goalsChannel, riley, summary).catch(() => {});
-    }, { outputMode: 'machine_json', machineEnvelopeRaw: true });
+    }, {
+      outputMode: 'machine_json',
+      machineEnvelopeRaw: true,
+      threadKey: `goals:${goalsChannel.id}`,
+    });
     const rileyEnvelope = extractAgentResponseEnvelope(rileyResponseRaw);
     const rileyResponse = rileyEnvelope?.human || rileyResponseRaw;
 
@@ -186,6 +194,8 @@ Riley has created this plan based on a goal from ${senderName}. Implement the st
   const aceMemory = getMemoryContext('developer');
   const aceResponse = await agentRespond(ace, [...aceMemory, ...goalsHistory], aceContext, async (_toolName, summary) => {
     sendGoalsToolNotification(goalsChannel, ace, summary).catch(() => {});
+  }, {
+    threadKey: `goals:${goalsChannel.id}`,
   });
 
   await sendAgentMessage(goalsChannel, ace, aceResponse);

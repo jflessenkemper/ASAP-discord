@@ -9,6 +9,10 @@ import {
 } from 'discord.js';
 import { getAgents, setAgentRoleId } from './agents';
 import { getWebhook } from './services/webhooks';
+import { REPO_TOOLS } from './tools';
+
+const TOOLS_POST_MARKER = '[ASAP_TOOLS_POST_V3]';
+const DEFAULT_PUBLIC_APP_URL = 'https://asap-489910.australia-southeast1.run.app';
 
 const CAT_MAIN = 'ASAP';
 const CAT_AGENTS = 'Agents';
@@ -24,6 +28,7 @@ const MAIN_CHANNELS = {
 const OPS_CHANNELS = {
   github: '📦-github',
   upgrades: '🆙-upgrades',
+  tools: '🧰-tools',
   callLog: '📋-call-log',
   limits: '📊-limits',
   cost: '💸-cost',
@@ -72,6 +77,7 @@ export interface BotChannels {
   decisions: TextChannel;
   github: TextChannel;
   upgrades: TextChannel;
+  tools: TextChannel;
   callLog: TextChannel;
   limits: TextChannel;
   cost: TextChannel;
@@ -81,6 +87,147 @@ export interface BotChannels {
   voiceErrors: TextChannel;
   agentErrors: TextChannel;
   voiceChannel: VoiceChannel;
+}
+
+function buildToolsChannelSummary(): string {
+  const coreRuntimeTools = [
+    'read_file',
+    'search_files',
+    'check_file_exists',
+    'run_command',
+    'send_channel_message',
+    'list_threads',
+    'gcp_run_describe',
+    'repo_memory_index',
+    'repo_memory_search',
+  ].filter((name) => REPO_TOOLS.some((tool) => tool.name === name));
+
+  const lines = [
+    TOOLS_POST_MARKER,
+    '**ASAP Tools and Delegation**',
+    '',
+    '**Delegation Flow**',
+    '- Riley coordinates work and delegates to specialists.',
+    '- Specialists post one concise improvement in #upgrades when they identify a blocker or better workflow.',
+    '- Review agents can send channel messages to #upgrades (or their own channel) only.',
+    '',
+    '**Core Runtime Tools**',
+    coreRuntimeTools.map((name) => `\`${name}\``).join(', ') || '_No tools configured._',
+    '',
+    '**External and Free Tools (Requested)**',
+    '- Installed and usable: Spectral, Prism, Newman, Artillery, MSW, Jest Image Snapshot, pa11y-ci, Lighthouse, axe-core, sqlfluff, schemathesis, checkov.',
+    '- In GCP tooling pipeline: Trivy, OWASP ZAP baseline, k6.',
+    '- External/manual: Snyk and Infracost (require separate auth/integration).',
+    '',
+    '**Readiness Rule**',
+    '- Keep exactly one bot post in this channel; refresh replaces prior bot posts.',
+  ];
+
+  const summary = lines.join('\n');
+  return summary.slice(0, 1900);
+}
+
+function isPublicHttpUrl(value: string): boolean {
+  try {
+    const parsed = new URL(String(value || '').trim());
+    if (!/^https?:$/.test(parsed.protocol)) return false;
+    const host = parsed.hostname.toLowerCase();
+    if (host === 'localhost' || host === '127.0.0.1' || host === '::1' || host === '[::1]') return false;
+    if (host.endsWith('.local')) return false;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function resolvePublicAppUrl(): string {
+  const candidates = [
+    process.env.PUBLIC_APP_URL,
+    process.env.APP_URL,
+    process.env.FRONTEND_URL,
+    process.env.RENDER_EXTERNAL_URL,
+    process.env.CLOUD_RUN_APP_URL,
+  ];
+
+  for (const candidate of candidates) {
+    const url = String(candidate || '').trim();
+    if (isPublicHttpUrl(url)) return url;
+  }
+
+  return DEFAULT_PUBLIC_APP_URL;
+}
+
+function splitDiscordMessage(content: string, maxLen = 1900): string[] {
+  const normalized = String(content || '').trim();
+  if (!normalized) return [];
+  if (normalized.length <= maxLen) return [normalized];
+
+  const lines = normalized.split('\n');
+  const chunks: string[] = [];
+  let current = '';
+
+  for (const line of lines) {
+    const candidate = current ? `${current}\n${line}` : line;
+    if (candidate.length <= maxLen) {
+      current = candidate;
+      continue;
+    }
+    if (current) chunks.push(current);
+    if (line.length <= maxLen) {
+      current = line;
+      continue;
+    }
+    // Fallback for exceptionally long single lines.
+    for (let i = 0; i < line.length; i += maxLen) {
+      chunks.push(line.slice(i, i + maxLen));
+    }
+    current = '';
+  }
+
+  if (current) chunks.push(current);
+  return chunks;
+}
+
+async function refreshToolsChannelPost(channel: TextChannel): Promise<void> {
+  const botId = channel.client.user?.id;
+  if (botId) {
+    let before: string | undefined;
+    for (let page = 0; page < 5; page++) {
+      const batch = await channel.messages.fetch({ limit: 100, ...(before ? { before } : {}) });
+      if (batch.size === 0) break;
+      before = batch.last()?.id;
+
+      const oldPosts = [...batch.values()].filter((msg) => msg.author.id === botId);
+
+      for (const msg of oldPosts) {
+        try { await msg.delete(); } catch { /* ignore cleanup failures */ }
+      }
+    }
+  }
+
+  const summary = buildToolsChannelSummary();
+  await channel.send(summary);
+}
+
+async function refreshUrlChannelPost(channel: TextChannel, appUrl: string): Promise<void> {
+  const botId = channel.client.user?.id;
+  if (botId) {
+    let before: string | undefined;
+    for (let page = 0; page < 5; page++) {
+      const batch = await channel.messages.fetch({ limit: 100, ...(before ? { before } : {}) });
+      if (batch.size === 0) break;
+      before = batch.last()?.id;
+
+      const oldPosts = [...batch.values()].filter((msg) => msg.author.id === botId);
+      for (const msg of oldPosts) {
+        try { await msg.delete(); } catch { /* ignore cleanup failures */ }
+      }
+    }
+  }
+
+  await channel.send(
+    `🔗 App URL: ${appUrl} | Cloud Build: https://console.cloud.google.com/cloud-build/builds?project=asap-489910 | Cloud Run: https://console.cloud.google.com/run/detail/australia-southeast1/asap?project=asap-489910`
+  );
 }
 
 /** Find or create a category by name. */
@@ -204,7 +351,11 @@ export async function setupChannels(guild: Guild): Promise<BotChannels> {
         parent,
         topic,
       });
-      if (welcomeMessage) await channel.send(welcomeMessage);
+      if (welcomeMessage) {
+        for (const chunk of splitDiscordMessage(welcomeMessage)) {
+          await channel.send(chunk);
+        }
+      }
     }
     return channel;
   }
@@ -287,6 +438,14 @@ export async function setupChannels(guild: Guild): Promise<BotChannels> {
     '🆙 Agents can post upgrade ideas, blockers to remove, and automation/tooling enhancements here for Jordan to approve.'
   );
 
+  const tools = await ensureText(
+    OPS_CHANNELS.tools,
+    catOps,
+    '🧰 Agent capabilities and runtime tool access summary',
+    buildToolsChannelSummary()
+  );
+  await refreshToolsChannelPost(tools);
+
   const callLog = await ensureText(
     OPS_CHANNELS.callLog,
     catMain,
@@ -314,13 +473,14 @@ export async function setupChannels(guild: Guild): Promise<BotChannels> {
     '📸 Build screenshot updates post here as one-line entries.'
   );
 
-  const appUrl = process.env.FRONTEND_URL || 'https://asap-489910.australia-southeast1.run.app';
+  const appUrl = resolvePublicAppUrl();
   const url = await ensureText(
     OPS_CHANNELS.url,
     catMain,
     '🔗 Live app URL and build links — updated on every deploy',
     `🔗 App URL: ${appUrl} | Cloud Build: https://console.cloud.google.com/cloud-build/builds?project=asap-489910 | Cloud Run: https://console.cloud.google.com/run/detail/australia-southeast1/asap?project=asap-489910`
   );
+  await refreshUrlChannelPost(url, appUrl);
 
   const terminal = await ensureText(
     OPS_CHANNELS.terminal,
@@ -377,7 +537,7 @@ export async function setupChannels(guild: Guild): Promise<BotChannels> {
     }
   }
 
-  const allTextChannels = [groupchat, threadStatus, decisions, github, upgrades, callLog, limits, cost, screenshots, url, terminal, voiceErrors, agentErrors, ...agentChannels.values()];
+  const allTextChannels = [groupchat, threadStatus, decisions, github, upgrades, tools, callLog, limits, cost, screenshots, url, terminal, voiceErrors, agentErrors, ...agentChannels.values()];
   console.log('🔗 Pre-creating webhooks for all channels...');
   const webhookResults = await Promise.allSettled(
     allTextChannels.map((channel) => getWebhook(channel))
@@ -388,7 +548,7 @@ export async function setupChannels(guild: Guild): Promise<BotChannels> {
 
   const botId = guild.client.user?.id;
   if (botId) {
-    const opsChannels = [decisions, github, upgrades, callLog, limits, cost, screenshots, url, terminal, voiceErrors, agentErrors];
+    const opsChannels = [decisions, github, upgrades, tools, callLog, limits, cost, screenshots, url, terminal, voiceErrors, agentErrors];
     const restricted = allTextChannels.filter((channel) => !opsChannels.some((ops) => ops.id === channel.id));
     for (const ch of restricted) {
       try {
@@ -425,5 +585,5 @@ export async function setupChannels(guild: Guild): Promise<BotChannels> {
     console.log(`🔒 Restricted raw bot posting in ${restricted.length} non-Operations channel(s)`);
   }
 
-  return { agentChannels, groupchat, threadStatus, decisions, github, upgrades, callLog, limits, cost, screenshots, url, terminal, voiceErrors, agentErrors, voiceChannel };
+  return { agentChannels, groupchat, threadStatus, decisions, github, upgrades, tools, callLog, limits, cost, screenshots, url, terminal, voiceErrors, agentErrors, voiceChannel };
 }

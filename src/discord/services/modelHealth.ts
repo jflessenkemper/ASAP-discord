@@ -2,6 +2,7 @@ import { postDiagnostic } from './diagnosticsWebhook';
 import { GoogleAuth } from 'google-auth-library';
 import pool from '../../db/pool';
 import type { PoolClient } from 'pg';
+import { ensureGoogleCredentials, getAccessTokenViaGcloud } from '../../services/googleCredentials';
 
 interface CheckResult {
   name: string;
@@ -10,13 +11,13 @@ interface CheckResult {
 }
 
 const ANTHROPIC_MODELS = ['claude-sonnet-4-6', 'claude-opus-4-6'];
-const GEMINI_TEXT_MODEL = 'gemini-flash-latest';
+const GEMINI_TEXT_MODEL = 'gemini-2.5-flash';
 const GEMINI_TTS_MODEL = 'gemini-2.5-flash-preview-tts';
 const USE_VERTEX_ANTHROPIC = process.env.ANTHROPIC_USE_VERTEX_AI === 'true' || process.env.OPUS_USE_VERTEX_AI === 'true';
 const VERTEX_PROJECT_ID = process.env.VERTEX_PROJECT_ID || process.env.GOOGLE_CLOUD_PROJECT || process.env.GCLOUD_PROJECT || '';
 const VERTEX_LOCATION = process.env.VERTEX_LOCATION || 'us-central1';
 const VERTEX_ANTHROPIC_LOCATION = process.env.VERTEX_ANTHROPIC_LOCATION || process.env.VERTEX_PARTNER_LOCATION || VERTEX_LOCATION;
-const VERTEX_ANTHROPIC_FALLBACK_LOCATIONS = (process.env.VERTEX_ANTHROPIC_FALLBACK_LOCATIONS || 'us-east5,us-east1')
+const VERTEX_ANTHROPIC_FALLBACK_LOCATIONS = (process.env.VERTEX_ANTHROPIC_FALLBACK_LOCATIONS || 'us-east5')
   .split(',')
   .map((value) => value.trim())
   .filter(Boolean);
@@ -53,11 +54,37 @@ function shouldTryAnotherLocation(status: number, bodyText: string): boolean {
 }
 
 async function getVertexAccessToken(): Promise<string> {
+  await ensureGoogleCredentials(VERTEX_PROJECT_ID).catch(() => false);
+
   if (!vertexAuth) {
     vertexAuth = new GoogleAuth({ scopes: ['https://www.googleapis.com/auth/cloud-platform'] });
   }
-  const authClient = await vertexAuth.getClient();
-  const accessToken = await authClient.getAccessToken();
+
+  let authClient: any;
+  let accessToken: any;
+  try {
+    authClient = await vertexAuth.getClient();
+    accessToken = await authClient.getAccessToken();
+  } catch (err) {
+    const msg = String((err as any)?.message || err || '').toLowerCase();
+    if (msg.includes('default credentials') || msg.includes('application default credentials')) {
+      const recovered = await ensureGoogleCredentials(VERTEX_PROJECT_ID).catch(() => false);
+      if (recovered) {
+        vertexAuth = new GoogleAuth({ scopes: ['https://www.googleapis.com/auth/cloud-platform'] });
+        authClient = await vertexAuth.getClient();
+        accessToken = await authClient.getAccessToken();
+      } else {
+        const tokenViaCli = getAccessTokenViaGcloud();
+        if (tokenViaCli) {
+          return tokenViaCli;
+        }
+        throw new Error('Vertex auth unavailable: Application Default Credentials are not configured');
+      }
+    } else {
+      throw err;
+    }
+  }
+
   const token = typeof accessToken === 'string' ? accessToken : accessToken?.token;
   if (!token) throw new Error('Vertex auth failed: could not obtain access token');
   return token;

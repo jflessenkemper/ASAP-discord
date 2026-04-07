@@ -243,8 +243,23 @@ const MAX_DEEPGRAM_SESSION_RETRIES = parseInt(process.env.MAX_DEEPGRAM_SESSION_R
 const VOICE_ENDPOINT_SILENCE_BASE_MS = parseInt(process.env.VOICE_ENDPOINT_SILENCE_BASE_MS || '900', 10);
 const VOICE_ENDPOINT_SILENCE_MIN_MS = parseInt(process.env.VOICE_ENDPOINT_SILENCE_MIN_MS || '650', 10);
 const VOICE_ENDPOINT_SILENCE_MAX_MS = parseInt(process.env.VOICE_ENDPOINT_SILENCE_MAX_MS || '1400', 10);
+const VOICE_ENDPOINT_STATE_TTL_MS = Math.max(300_000, parseInt(process.env.VOICE_ENDPOINT_STATE_TTL_MS || '7200000', 10));
+const VOICE_ENDPOINT_CLEANUP_INTERVAL_MS = Math.max(60_000, parseInt(process.env.VOICE_ENDPOINT_CLEANUP_INTERVAL_MS || '600000', 10));
 
-const voiceEndpointingByUser = new Map<string, { silenceMs: number; lastAudioBytes: number; turns: number }>();
+const voiceEndpointingByUser = new Map<string, { silenceMs: number; lastAudioBytes: number; turns: number; updatedAt: number }>();
+
+function pruneVoiceEndpointingState(now = Date.now()): void {
+  for (const [userId, state] of voiceEndpointingByUser.entries()) {
+    if (now - state.updatedAt > VOICE_ENDPOINT_STATE_TTL_MS) {
+      voiceEndpointingByUser.delete(userId);
+    }
+  }
+}
+
+const voiceEndpointCleanupTimer = setInterval(() => {
+  pruneVoiceEndpointingState();
+}, VOICE_ENDPOINT_CLEANUP_INTERVAL_MS);
+voiceEndpointCleanupTimer.unref();
 
 function getAdaptiveSilenceDuration(userId: string): number {
   const state = voiceEndpointingByUser.get(userId);
@@ -253,10 +268,11 @@ function getAdaptiveSilenceDuration(userId: string): number {
 }
 
 function updateAdaptiveSilenceDuration(userId: string, audioBytes: number): void {
-  const prev = voiceEndpointingByUser.get(userId) || { silenceMs: VOICE_ENDPOINT_SILENCE_BASE_MS, lastAudioBytes: 0, turns: 0 };
+  const prev = voiceEndpointingByUser.get(userId) || { silenceMs: VOICE_ENDPOINT_SILENCE_BASE_MS, lastAudioBytes: 0, turns: 0, updatedAt: Date.now() };
   const next = { ...prev };
   next.lastAudioBytes = audioBytes;
   next.turns += 1;
+  next.updatedAt = Date.now();
 
   if (audioBytes < VOICE_MIN_AUDIO_BYTES * 2) {
     next.silenceMs = Math.max(VOICE_ENDPOINT_SILENCE_MIN_MS, next.silenceMs - 80);
@@ -267,6 +283,9 @@ function updateAdaptiveSilenceDuration(userId: string, audioBytes: number): void
   }
 
   voiceEndpointingByUser.set(userId, next);
+  if (voiceEndpointingByUser.size > 5000) {
+    pruneVoiceEndpointingState();
+  }
 }
 
 /**

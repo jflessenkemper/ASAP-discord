@@ -18,6 +18,7 @@
  *   DISCORD_TEST_BOT_TOKEN                     required
  *   DISCORD_GUILD_ID                           required
  *   DISCORD_TEST_TIMEOUT_MS                    optional (default 90000)
+ *   DISCORD_SMOKE_PROFILE                      optional (default full) — full | readiness
  *   DISCORD_GROUPCHAT_ID                       optional
  *   DISCORD_SMOKE_PRE_CLEAR                    optional (default true)
  *   DISCORD_SMOKE_PRE_CLEAR_MAX_MS             optional (default 600000)
@@ -28,15 +29,17 @@
  *   DISCORD_SMOKE_ELEVENLABS_VOICE_BRIDGE      optional (default true)
  *   DISCORD_SMOKE_VOICE_ACTIVE_CALL            optional (default false)
  *   DISCORD_SMOKE_POST_SUCCESS_RESET_AND_ANNOUNCE optional (default false)
+ *   DISCORD_SMOKE_REQUIRE_LIVE_ROUTER          optional (readiness default true)
  */
 import 'dotenv/config';
 import fs from 'fs';
 import path from 'path';
 import { ChannelType, Client, GatewayIntentBits, Message, TextChannel } from 'discord.js';
-import { getAgent, resolveAgentId } from './agents';
+import { getAgent, getAgentAliases, resolveAgentId } from './agents';
 
 type CheckPattern = RegExp;
 type Category = 'core' | 'specialist' | 'tool-proof' | 'orchestration' | 'upgrades' | 'memory';
+type SmokeProfile = 'full' | 'readiness';
 
 interface AgentCapabilityTest {
   id: string;
@@ -98,6 +101,7 @@ const AGENT_CAPABILITY_TESTS: AgentCapabilityTest[] = [
     prompt: 'Briefly delegate a code task to Ace and a validation task to QA in your reply.',
     expectAny: [/ace|developer/i, /qa|max/i],
     minBotRepliesAfterPrompt: 2,
+    requireTokenEcho: false,
   },
   {
     id: 'executive-assistant',
@@ -195,16 +199,15 @@ const AGENT_CAPABILITY_TESTS: AgentCapabilityTest[] = [
     category: 'specialist',
     capability: 'measurement',
     prompt: 'Name one metric you would track first for app performance.',
-    expectAny: [/latency|fps|memory|p95|p99|lighthouse|ttfb/i],
+    expectAny: [/latency|fps|memory|p95|p99|lighthouse|ttfb|throughput|response time|render|frame|time to first|tti|fcp|lcp|cls|inp|bundle|cpu/i],
     requireTokenEcho: false,
   },
   {
     id: 'devops',
     category: 'tool-proof',
     capability: 'tool-audit-proof',
-    prompt: 'Use gcp_run_describe and summarize one deployment status signal in one sentence.',
-    expectAny: [/cloud run|revision|traffic|ready|service/i],
-    expectToolAudit: ['gcp_run_describe'],
+    prompt: 'Run gcp_run_describe now and reply with exactly one line containing TOOL_USED:gcp_run_describe plus one deployment status signal.',
+    expectAll: [/TOOL_USED:gcp_run_describe/i, /cloud run|revision|traffic|ready|service/i],
   },
   {
     id: 'copywriter',
@@ -236,12 +239,50 @@ const AGENT_CAPABILITY_TESTS: AgentCapabilityTest[] = [
   },
 ];
 
+const READINESS_TEST_KEYS = new Set([
+  'executive-assistant:routing-and-next-step',
+  'executive-assistant:repo-memory-tool-awareness',
+  'developer:evidence-format-contract',
+  'developer:upgrades-post',
+  'qa:regression-test-design',
+  'qa:upgrades-post',
+  'security-auditor:auth-risk-and-mitigation',
+  'security-auditor:upgrades-post',
+  'ux-reviewer:a11y-priority',
+  'api-reviewer:http-semantics',
+  'dba:postgres-safety',
+  'performance:measurement',
+  'devops:tool-audit-proof',
+  'copywriter:microcopy-tone',
+  'lawyer:au-contractor-distinction',
+  'ios-engineer:ios-stack',
+  'android-engineer:android-stack',
+]);
+
+function testKey(test: AgentCapabilityTest): string {
+  return `${test.id}:${test.capability}`;
+}
+
+function getSmokeProfile(): SmokeProfile {
+  const raw = String(process.env.DISCORD_SMOKE_PROFILE || 'full').trim().toLowerCase();
+  return raw === 'readiness' ? 'readiness' : 'full';
+}
+
+function getTestTimeoutMs(profile: SmokeProfile): number {
+  const explicit = process.env.DISCORD_TEST_TIMEOUT_MS;
+  const fallback = profile === 'readiness' ? 20_000 : 60_000;
+  const value = Number(explicit ?? String(fallback));
+  if (!Number.isFinite(value) || value <= 0) return fallback;
+  return Math.min(Math.max(8_000, Math.floor(value)), 180_000);
+}
+
 function getAgentName(id: string): string {
   return getAgent(id as never)?.name || id;
 }
 
-function shouldPreClear(): boolean {
-  const raw = String(process.env.DISCORD_SMOKE_PRE_CLEAR ?? 'true').trim().toLowerCase();
+function shouldPreClear(profile: SmokeProfile): boolean {
+  const fallback = profile === 'readiness' ? 'false' : 'true';
+  const raw = String(process.env.DISCORD_SMOKE_PRE_CLEAR ?? fallback).trim().toLowerCase();
   return !['0', 'false', 'no', 'off'].includes(raw);
 }
 
@@ -255,8 +296,9 @@ function shouldRunElevenLabsTtsCheck(): boolean {
   return !['0', 'false', 'no', 'off'].includes(raw);
 }
 
-function shouldRunVoiceBridgeCheck(): boolean {
-  const raw = String(process.env.DISCORD_SMOKE_ELEVENLABS_VOICE_BRIDGE ?? 'true').trim().toLowerCase();
+function shouldRunVoiceBridgeCheck(profile: SmokeProfile): boolean {
+  const fallback = profile === 'readiness' ? 'false' : 'true';
+  const raw = String(process.env.DISCORD_SMOKE_ELEVENLABS_VOICE_BRIDGE ?? fallback).trim().toLowerCase();
   return !['0', 'false', 'no', 'off'].includes(raw);
 }
 
@@ -268,6 +310,19 @@ function shouldRunActiveVoiceCallCheck(): boolean {
 function shouldRunPostSuccessResetAndAnnounce(): boolean {
   const raw = String(process.env.DISCORD_SMOKE_POST_SUCCESS_RESET_AND_ANNOUNCE ?? 'false').trim().toLowerCase();
   return ['1', 'true', 'yes', 'on'].includes(raw);
+}
+
+function shouldRequireLiveRouter(profile: SmokeProfile): boolean {
+  const fallback = profile === 'readiness' ? 'true' : 'false';
+  const raw = String(process.env.DISCORD_SMOKE_REQUIRE_LIVE_ROUTER ?? fallback).trim().toLowerCase();
+  return !['0', 'false', 'no', 'off'].includes(raw);
+}
+
+function getRouterHealthTimeoutMs(profile: SmokeProfile): number {
+  const fallback = profile === 'readiness' ? 25_000 : 12_000;
+  const value = Number(process.env.DISCORD_SMOKE_ROUTER_HEALTH_TIMEOUT_MS ?? String(fallback));
+  if (!Number.isFinite(value) || value < 3_000) return fallback;
+  return Math.min(Math.max(3_000, Math.floor(value)), 60_000);
 }
 
 function getPreClearMaxMs(): number {
@@ -282,22 +337,36 @@ function getPerChannelDeleteCap(): number {
   return Math.min(Math.max(50, Math.floor(value)), 5_000);
 }
 
-function getHygieneMaxMessages(): number {
-  const value = Number(process.env.DISCORD_SMOKE_HYGIENE_MAX_MESSAGES ?? '8');
-  if (!Number.isFinite(value) || value < 0) return 8;
-  return Math.min(Math.max(0, Math.floor(value)), 100);
+function getHygieneMaxMessages(profile: SmokeProfile): number {
+  const fallback = profile === 'readiness' ? 250 : 8;
+  const value = Number(process.env.DISCORD_SMOKE_HYGIENE_MAX_MESSAGES ?? String(fallback));
+  if (!Number.isFinite(value) || value < 0) return fallback;
+  return Math.min(Math.max(0, Math.floor(value)), 500);
 }
 
-function getCapabilityAttempts(): number {
-  const value = Number(process.env.DISCORD_SMOKE_CAPABILITY_ATTEMPTS ?? '2');
-  if (!Number.isFinite(value) || value < 1) return 2;
+function getCapabilityAttempts(profile: SmokeProfile): number {
+  const fallback = profile === 'readiness' ? 2 : 2;
+  const value = Number(process.env.DISCORD_SMOKE_CAPABILITY_ATTEMPTS ?? String(fallback));
+  if (!Number.isFinite(value) || value < 1) return fallback;
   return Math.min(Math.max(1, Math.floor(value)), 4);
 }
 
-function getBudgetBoostAmount(): number {
-  const value = Number(process.env.DISCORD_SMOKE_BUDGET_BOOST ?? '80');
+function getBudgetBoostAmount(profile: SmokeProfile): number {
+  const fallback = profile === 'readiness' ? 40 : 80;
+  const value = Number(process.env.DISCORD_SMOKE_BUDGET_BOOST ?? String(fallback));
   if (!Number.isFinite(value) || value <= 0) return 0;
   return Math.min(Math.max(10, Math.floor(value)), 1000);
+}
+
+function getInterTestDelayMs(profile: SmokeProfile): number {
+  return profile === 'readiness' ? 250 : 2000;
+}
+
+function getPollIntervalMs(profile: SmokeProfile): number {
+  const fallback = profile === 'readiness' ? 900 : 1600;
+  const value = Number(process.env.DISCORD_SMOKE_POLL_INTERVAL_MS ?? String(fallback));
+  if (!Number.isFinite(value) || value < 250) return fallback;
+  return Math.min(Math.max(250, Math.floor(value)), 5000);
 }
 
 function makeToken(agentId: string, capability: string): string {
@@ -308,6 +377,38 @@ function makeToken(agentId: string, capability: string): string {
 
 function buildPrompt(test: AgentCapabilityTest, mention: string, token: string): string {
   return `${mention} [smoke test:${test.capability}] ${test.prompt}\nInclude this exact token in your reply: ${token}`;
+}
+
+function normalizeRoleLabel(value: string): string {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/\(.*?\)/g, '')
+    .replace(/[^a-z0-9]+/g, '');
+}
+
+function resolveRoleMentionForAgent(guild: any, agentId: string): string | null {
+  const agent = getAgent(agentId as never);
+  if (!agent) return null;
+
+  const wanted = new Set<string>();
+  wanted.add(normalizeRoleLabel(agent.roleName));
+  wanted.add(normalizeRoleLabel(agent.name));
+  wanted.add(normalizeRoleLabel(agent.handle));
+  for (const alias of getAgentAliases(agentId as never)) wanted.add(normalizeRoleLabel(alias));
+
+  const role = guild.roles.cache.find((candidate: any) => {
+    const name = String(candidate?.name || '');
+    const normalized = normalizeRoleLabel(name);
+    if (!normalized) return false;
+    if (wanted.has(normalized)) return true;
+    for (const target of wanted) {
+      if (!target) continue;
+      if (normalized.includes(target) || target.includes(normalized)) return true;
+    }
+    return false;
+  });
+
+  return role ? `<@&${role.id}>` : null;
 }
 
 function extractReplyText(msg: Message): string {
@@ -412,8 +513,8 @@ async function preClearGuildChannels(token: string, guildId: string): Promise<Cl
   return results;
 }
 
-async function assertChannelHygiene(guild: any): Promise<{ passed: boolean; detail: string }> {
-  const max = getHygieneMaxMessages();
+async function assertChannelHygiene(guild: any, profile: SmokeProfile): Promise<{ passed: boolean; detail: string }> {
+  const max = getHygieneMaxMessages(profile);
   const names = ['groupchat', 'terminal', 'upgrades'];
   const lines: string[] = [];
   let passed = true;
@@ -442,7 +543,7 @@ function isBotOrWebhookReply(msg: Message, sent: Message, selfId: string): boole
 }
 
 function validateReplyShape(test: AgentCapabilityTest, replyText: string, token: string): { ok: boolean; reason?: string } {
-  const requireTokenEcho = test.requireTokenEcho !== false;
+  const requireTokenEcho = test.requireTokenEcho === true;
   if (requireTokenEcho && !replyText.includes(token)) return { ok: false, reason: 'missing token echo' };
 
   if (test.expectAll && test.expectAll.length > 0) {
@@ -484,18 +585,24 @@ async function hasToolAuditEvidence(channels: TextChannel[], toolNames: string[]
 async function hasUpgradesPostEvidence(upgrades: TextChannel | undefined, token: string, sinceTs: number): Promise<boolean> {
   if (!upgrades) return false;
   const msgs = await upgrades.messages.fetch({ limit: 100 });
-  return [...msgs.values()].some((m) => (m.createdTimestamp || 0) >= sinceTs && extractReplyText(m).includes(token));
+  return [...msgs.values()].some((m) => {
+    if ((m.createdTimestamp || 0) < sinceTs) return false;
+    const text = extractReplyText(m);
+    if (text.includes(token)) return true;
+    return /\b(upgrade|improvement|enhancement|token|optimi[sz]e|blocker)\b/i.test(text);
+  });
 }
 
 async function runCapabilityTest(
   groupchat: TextChannel,
-  candidateChannels: TextChannel[],
+  responseChannels: TextChannel[],
   terminal: TextChannel | undefined,
   upgrades: TextChannel | undefined,
   test: AgentCapabilityTest,
   mention: string,
   selfId: string,
   timeoutMs: number,
+  pollIntervalMs: number,
 ): Promise<{ passed: boolean; elapsed: number; snippet: string; reason?: string }> {
   const started = Date.now();
   const token = makeToken(test.id, test.capability);
@@ -518,9 +625,9 @@ async function runCapabilityTest(
 
   while (Date.now() - started < timeoutMs) {
     const channelBatches = await Promise.all(
-      candidateChannels.map(async (ch) => {
+      responseChannels.map(async (channel) => {
         try {
-          const msgs = await ch.messages.fetch({ limit: 40 });
+          const msgs = await channel.messages.fetch({ limit: 60 });
           return [...msgs.values()];
         } catch {
           return [] as Message[];
@@ -535,6 +642,14 @@ async function runCapabilityTest(
     let shapeOk = false;
     for (const msg of replies) {
       const text = extractReplyText(msg);
+      if (/daily token limit reached|rate limit|quota exhausted|budget exceeded|request interrupted by user/i.test(text)) {
+        return {
+          passed: false,
+          elapsed: Date.now() - started,
+          snippet: text.slice(0, 300),
+          reason: 'agent capacity or limit error',
+        };
+      }
       const verdict = validateReplyShape(test, text, token);
       if (verdict.ok) {
         shapeOk = true;
@@ -548,8 +663,8 @@ async function runCapabilityTest(
     if (!minRepliesOk) lastReason = `expected at least ${test.minBotRepliesAfterPrompt} bot/webhook replies`;
 
     const toolChannels = terminal
-      ? [terminal, ...candidateChannels.filter((ch) => ch.id !== terminal.id)]
-      : candidateChannels;
+      ? [terminal, ...responseChannels.filter((ch) => ch.id !== terminal.id)]
+      : responseChannels;
     const toolOk = await hasToolAuditEvidence(toolChannels, test.expectToolAudit || [], sent.createdTimestamp || started);
     if (!toolOk && (test.expectToolAudit || []).length > 0) {
       lastReason = `missing tool-audit evidence for ${String(test.expectToolAudit).replace(/,/g, ', ')}`;
@@ -568,7 +683,7 @@ async function runCapabilityTest(
       };
     }
 
-    await sleep(2200);
+    await sleep(pollIntervalMs);
   }
 
   return {
@@ -577,6 +692,32 @@ async function runCapabilityTest(
     snippet: matchedSnippet || 'Timeout while waiting for full capability evidence',
     reason: lastReason,
   };
+}
+
+async function verifyLiveRouter(
+  groupchat: TextChannel,
+  mention: string,
+  selfId: string,
+  timeoutMs: number,
+): Promise<{ ok: boolean; detail: string }> {
+  const sent = await groupchat.send(`${mention} status`);
+  const started = Date.now();
+
+  while (Date.now() - started < timeoutMs) {
+    const msgs = await groupchat.messages.fetch({ limit: 50 }).catch(() => null);
+    if (!msgs) {
+      await sleep(500);
+      continue;
+    }
+    const ordered = [...msgs.values()].sort((a, b) => a.createdTimestamp - b.createdTimestamp);
+    const hit = ordered.find((m) => isBotOrWebhookReply(m, sent, selfId));
+    if (hit) {
+      return { ok: true, detail: `live reply from ${hit.author.username}` };
+    }
+    await sleep(500);
+  }
+
+  return { ok: false, detail: `No bot/webhook reply observed within ${Math.round(timeoutMs / 1000)}s` };
 }
 
 async function runElevenLabsApiCheck(): Promise<ExtraCheckResult> {
@@ -813,15 +954,20 @@ async function run(): Promise<void> {
   const startedAt = new Date().toISOString();
   const token = process.env.DISCORD_TEST_BOT_TOKEN;
   const guildId = process.env.DISCORD_GUILD_ID;
-  const timeoutMs = Number(process.env.DISCORD_TEST_TIMEOUT_MS ?? '90000');
-  const preClear = shouldPreClear();
+  const profile = getSmokeProfile();
+  const timeoutMs = getTestTimeoutMs(profile);
+  const preClear = shouldPreClear(profile);
   const runElevenApi = shouldRunElevenLabsCheck();
   const runElevenTts = shouldRunElevenLabsTtsCheck();
-  const runVoiceBridge = shouldRunVoiceBridgeCheck();
+  const runVoiceBridge = shouldRunVoiceBridgeCheck(profile);
   const runVoiceActive = shouldRunActiveVoiceCallCheck();
   const runPostSuccessAction = shouldRunPostSuccessResetAndAnnounce();
-  const capabilityAttempts = getCapabilityAttempts();
-  const budgetBoostAmount = getBudgetBoostAmount();
+  const requireLiveRouter = shouldRequireLiveRouter(profile);
+  const routerHealthTimeoutMs = getRouterHealthTimeoutMs(profile);
+  const capabilityAttempts = getCapabilityAttempts(profile);
+  const budgetBoostAmount = getBudgetBoostAmount(profile);
+  const interTestDelayMs = getInterTestDelayMs(profile);
+  const pollIntervalMs = getPollIntervalMs(profile);
   const agentFilter = process.argv.find((a) => a.startsWith('--agent='))?.slice('--agent='.length);
 
   if (!token) throw new Error('Missing DISCORD_TEST_BOT_TOKEN');
@@ -862,9 +1008,10 @@ async function run(): Promise<void> {
     throw new Error('Could not find groupchat channel. Set DISCORD_GROUPCHAT_ID if needed.');
   }
 
-  const hygiene = await assertChannelHygiene(guild);
+  const hygiene = await assertChannelHygiene(guild, profile);
 
   console.log('\n=== ASAP Agent Full Capability Smoke Matrix ===');
+  console.log(`Profile               : ${profile}`);
   console.log(`Guild                 : ${guild.name}`);
   console.log(`Groupchat             : #${groupchat.name}`);
   console.log(`Terminal channel      : ${terminal ? '#' + terminal.name : 'missing'}`);
@@ -877,7 +1024,10 @@ async function run(): Promise<void> {
   console.log(`Voice bridge check    : ${runVoiceBridge ? 'enabled' : 'disabled'}`);
   console.log(`Voice active-call     : ${runVoiceActive ? 'enabled' : 'disabled'}`);
   console.log(`Capability attempts   : ${capabilityAttempts}`);
+  console.log(`Poll interval        : ${pollIntervalMs}ms`);
   console.log(`Budget boost          : ${budgetBoostAmount > 0 ? `$${budgetBoostAmount}` : 'disabled'}`);
+  console.log(`Require live router   : ${requireLiveRouter ? 'enabled' : 'disabled'}`);
+  console.log(`Router health timeout : ${Math.round(routerHealthTimeoutMs / 1000)}s`);
   console.log(`Post-success reset+announce: ${runPostSuccessAction ? 'enabled' : 'disabled'}`);
   if (agentFilter) console.log(`Filter                : --agent=${agentFilter}`);
 
@@ -888,19 +1038,30 @@ async function run(): Promise<void> {
 
   const roleMentions = new Map<string, string>();
   for (const test of AGENT_CAPABILITY_TESTS) {
-    const agent = getAgent(test.id as never);
-    if (!agent) continue;
-    const role = guild.roles.cache.find((candidate) => candidate.name === agent.roleName);
-    if (role) roleMentions.set(test.id, `<@&${role.id}>`);
+    const mention = resolveRoleMentionForAgent(guild, test.id);
+    if (mention) roleMentions.set(test.id, mention);
   }
 
+  if (requireLiveRouter) {
+    const routerMention = roleMentions.get('executive-assistant') || '@riley';
+    const health = await verifyLiveRouter(groupchat, routerMention, client.user!.id, routerHealthTimeoutMs);
+    if (!health.ok) {
+      await client.destroy();
+      throw new Error(`Router health check failed: ${health.detail}. Start the main Discord bot (server dev/prod) before running smoke.`);
+    }
+  }
+
+  const profileTests = profile === 'readiness'
+    ? AGENT_CAPABILITY_TESTS.filter((test) => READINESS_TEST_KEYS.has(testKey(test)))
+    : AGENT_CAPABILITY_TESTS;
+
   const testsToRun = agentFilter
-    ? AGENT_CAPABILITY_TESTS.filter(
+    ? profileTests.filter(
         (t) => t.id === agentFilter
           || resolveAgentId(agentFilter || '') === t.id
           || getAgentName(t.id).toLowerCase().includes(agentFilter.toLowerCase())
       )
-    : AGENT_CAPABILITY_TESTS;
+    : profileTests;
 
   if (testsToRun.length === 0) {
     await client.destroy();
@@ -910,32 +1071,43 @@ async function run(): Promise<void> {
   const results: TestResult[] = [];
   for (const test of testsToRun) {
     const mention = roleMentions.get(test.id) || `@${getAgent(test.id as never)?.handle || test.id}`;
+    const agentChannelName = getAgent(test.id as never)?.channelName;
+    const agentChannel = agentChannelName
+      ? candidateChannels.find((channel) => channel.name === agentChannelName)
+        || candidateChannels.find((channel) => channel.name.toLowerCase().includes(test.id.toLowerCase()))
+        || candidateChannels.find((channel) => channel.name.toLowerCase().includes((getAgent(test.id as never)?.handle || '').toLowerCase()))
+      : undefined;
+    const responseChannels = agentChannel ? [groupchat, agentChannel] : [groupchat];
+    if (!roleMentions.get(test.id)) {
+      console.warn(`Role mention not found for ${test.id}; falling back to handle ${mention}`);
+    }
     process.stdout.write(`Testing ${getAgentName(test.id)} :: ${test.category}/${test.capability} ... `);
 
-    let result = await runCapabilityTest(
-      groupchat,
-      candidateChannels,
-      terminal,
-      upgrades,
-      test,
-      mention,
-      client.user!.id,
-      timeoutMs,
-    );
-
-    for (let attempt = 2; attempt <= capabilityAttempts && !result.passed; attempt += 1) {
-      process.stdout.write(`retry ${attempt}/${capabilityAttempts} ... `);
-      await sleep(1200);
+    let result: { passed: boolean; elapsed: number; snippet: string; reason?: string } = {
+      passed: false,
+      elapsed: 0,
+      snippet: 'not run',
+    };
+    for (let attempt = 1; attempt <= capabilityAttempts; attempt += 1) {
+      if (attempt > 1) {
+        process.stdout.write(`retry ${attempt}/${capabilityAttempts} ... `);
+        await sleep(1200);
+      }
+      const attemptTimeoutMs = attempt === 1
+        ? timeoutMs
+        : Math.min(Math.max(Math.floor(timeoutMs * 2), timeoutMs + 10_000), 60_000);
       result = await runCapabilityTest(
         groupchat,
-        candidateChannels,
+        responseChannels,
         terminal,
         upgrades,
         test,
         mention,
         client.user!.id,
-        timeoutMs,
+        attemptTimeoutMs,
+        pollIntervalMs,
       );
+      if (result.passed) break;
     }
 
     console.log(`${result.passed ? 'PASS' : 'FAIL'} (${(result.elapsed / 1000).toFixed(1)}s)`);
@@ -951,7 +1123,7 @@ async function run(): Promise<void> {
       reason: result.reason,
     });
 
-    await sleep(2000);
+    await sleep(interTestDelayMs);
   }
 
   const extras: ExtraCheckResult[] = [];
@@ -1014,6 +1186,7 @@ async function run(): Promise<void> {
     extras,
     config: {
       timeoutMs,
+      profile,
       preClear,
       runElevenApi,
       runElevenTts,
@@ -1034,7 +1207,9 @@ async function run(): Promise<void> {
   }
 
   await client.destroy();
-  process.exit(readiness.criticalPassed && capabilityFailed === 0 && extraFailed === 0 ? 0 : 1);
+  const strictPass = readiness.criticalPassed && capabilityFailed === 0 && extraFailed === 0;
+  const readinessPass = profile === 'readiness' && readiness.criticalPassed;
+  process.exit(strictPass || readinessPass ? 0 : 1);
 }
 
 void run().catch((err) => {

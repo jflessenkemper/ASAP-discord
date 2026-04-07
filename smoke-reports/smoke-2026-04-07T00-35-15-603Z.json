@@ -1,0 +1,224 @@
+{
+  "startedAt": "2026-04-07T00:24:48.641Z",
+  "endedAt": "2026-04-07T00:35:15.603Z",
+  "summary": {
+    "capabilityPassed": 17,
+    "capabilityFailed": 4,
+    "extraFailed": 1,
+    "score": 69.2,
+    "criticalPassed": false,
+    "detail": "core_fail=1 | orchestration_fail=0 | upgrades_fail=0 | critical_extra_fail=1"
+  },
+  "results": [
+    {
+      "agent": "Riley (Executive Assistant)",
+      "capability": "routing-and-next-step",
+      "category": "core",
+      "passed": true,
+      "elapsed": 5735,
+      "snippet": "I'm Riley, the executive assistant and project orchestrator for ASAP, coordinating tasks and agents to drive projects forward. My immediate next step is to check the overall system…"
+    },
+    {
+      "agent": "Riley (Executive Assistant)",
+      "capability": "repo-memory-tool-awareness",
+      "category": "memory",
+      "passed": true,
+      "elapsed": 4210,
+      "snippet": "The two tools I should use to index and search repo memory are `repo_memory_index` and `repo_memory_search`. [smoke-token]"
+    },
+    {
+      "agent": "Riley (Executive Assistant)",
+      "capability": "delegate-ace-qa",
+      "category": "orchestration",
+      "passed": true,
+      "elapsed": 51349,
+      "snippet": "🧪 **Agent Smoke Test** (executive-assistant)\n\nnvm is not compatible with the \"npm_config_prefix\" environment variable: currently set to \"/home/jflessenkemper/.var/app/com.visualstudio.code/data/node_modules\"\nRun `unset npm_config_prefix` to unset it.\n(node:403507) DeprecationWarning: The ready even"
+    },
+    {
+      "agent": "Riley (Executive Assistant)",
+      "capability": "repo-memory-evidence",
+      "category": "memory",
+      "passed": false,
+      "elapsed": 61272,
+      "snippet": "<@&1488498029844500572> Please run `repo_memory_index()` to refresh the repository memory, then execute `repo_memory_search(query=\"setupChannels\", limit=1)` and report one source key. Make sure to include the token `[smoke-token]` in your reply.",
+      "reason": "missing tool-audit evidence for repo_memory_index, repo_memory_search"
+    },
+    {
+      "agent": "Ace (Developer)",
+      "capability": "evidence-format-contract",
+      "category": "core",
+      "passed": false,
+      "elapsed": 60239,
+      "snippet": "Timeout while waiting for full capability evidence",
+      "reason": "missing expected pattern /result:/i"
+    },
+    {
+      "agent": "Ace (Developer)",
+      "capability": "tool-audit-proof",
+      "category": "tool-proof",
+      "passed": false,
+      "elapsed": 61729,
+      "snippet": "🔧 2 tool actions:\n- Reading `server/package.json` to gather implementation context\n- Searching for `quality script` to locate relevant code paths",
+      "reason": "missing tool-audit evidence for read_file, search_files"
+    },
+    {
+      "agent": "Ace (Developer)",
+      "capability": "upgrades-post",
+      "category": "upgrades",
+      "passed": true,
+      "elapsed": 9614,
+      "snippet": "🔧 Sending message to #upgrades"
+    },
+    {
+      "agent": "Max (QA)",
+      "capability": "regression-test-design",
+      "category": "specialist",
+      "passed": true,
+      "elapsed": 4220,
+      "snippet": "I'll create a regression test that verifies the job matching algorithm accurately connects jobs with appropriately skilled, available, and geographically relevant employees, and never presents unqualified or unavailable matches. SMOKE_QA_REGRESSI_892095"
+    },
+    {
+      "agent": "Max (QA)",
+      "capability": "tool-audit-proof",
+      "category": "tool-proof",
+      "passed": false,
+      "elapsed": 62048,
+      "snippet": "The `list_threads` tool is functional and returned a list of active threads, indicating it is ready. SMOKE_QA_TOOLAUDI_931208",
+      "reason": "missing tool-audit evidence for list_threads"
+    },
+    {
+      "agent": "Max (QA)",
+      "capability": "upgrades-post",
+      "category": "upgrades",
+      "passed": true,
+      "elapsed": 7344,
+      "snippet": "I've posted a test-automation enhancement to the #upgrades channel, suggesting we integrate automated accessibility checks directly into the mobile harness. This would speed up fee…"
+    },
+    {
+      "agent": "Kane (Security Auditor)",
+      "capability": "auth-risk-and-mitigation",
+      "category": "specialist",
+      "passed": true,
+      "elapsed": 3974,
+      "snippet": "Weak password hashing is an authentication vulnerability, which can be mitigated by using a strong, modern hashing algorithm like bcrypt with a high number of rounds. SMOKE_SECURITY_AUTHRISK_004602"
+    },
+    {
+      "agent": "Kane (Security Auditor)",
+      "capability": "upgrades-post",
+      "category": "upgrades",
+      "passed": true,
+      "elapsed": 7434,
+      "snippet": "Just posted a security-hardening upgrade to #🆙-upgrades. I recommended implementing a strict Content Security Policy to better protect against XSS and data injection attacks. SMOKE_SECURITY_UPGRADES_042277"
+    },
+    {
+      "agent": "Sophie (UX Reviewer)",
+      "capability": "a11y-priority",
+      "category": "specialist",
+      "passed": true,
+      "elapsed": 4250,
+      "snippet": "I'll start by verifying that all text and non-text contrast ratios meet WCAG 2.2 AA requirements, especially for interactive elements. SMOKE_UXREVIEW_A11YPRIO_051711"
+    },
+    {
+      "agent": "Raj (API Reviewer)",
+      "capability": "http-semantics",
+      "category": "specialist",
+      "passed": true,
+      "elapsed": 4344,
+      "snippet": "The correct HTTP status code for a missing resource is 404 Not Found. SMOKE_APIREVIE_HTTPSEMA_057962"
+    },
+    {
+      "agent": "Elena (DBA)",
+      "capability": "postgres-safety",
+      "category": "specialist",
+      "passed": true,
+      "elapsed": 4052,
+      "snippet": "Always wrap migration scripts in a transaction to ensure atomicity and easy rollback in case of an error. SMOKE_DBA_POSTGRES_064306"
+    },
+    {
+      "agent": "Kai (Performance)",
+      "capability": "measurement",
+      "category": "specialist",
+      "passed": true,
+      "elapsed": 3993,
+      "snippet": "The first metric I'd track for app performance is Bundle Size, as it's a foundational indicator of initial load time and impacts all subsequent performance. SMOKE_PERFORMA_MEASUREM_070359"
+    },
+    {
+      "agent": "Jude (DevOps)",
+      "capability": "tool-audit-proof",
+      "category": "tool-proof",
+      "passed": true,
+      "elapsed": 7338,
+      "snippet": "TOOL_USED:gcp_run_describe status: True type: Ready SMOKE_DEVOPS_TOOLAUDI_076353"
+    },
+    {
+      "agent": "Liv (Copywriter)",
+      "capability": "microcopy-tone",
+      "category": "specialist",
+      "passed": true,
+      "elapsed": 4016,
+      "snippet": "We couldn't sign you in. Please check your details and try again. SMOKE_COPYWRIT_MICROCOP_085692"
+    },
+    {
+      "agent": "Harper (Lawyer)",
+      "capability": "au-contractor-distinction",
+      "category": "specialist",
+      "passed": true,
+      "elapsed": 4017,
+      "snippet": "A key legal distinction in Australia between an employee and a contractor is the degree of control the principal has over how the work is performed, with employers typically having…"
+    },
+    {
+      "agent": "Mia (iOS Engineer)",
+      "capability": "ios-stack",
+      "category": "specialist",
+      "passed": true,
+      "elapsed": 3960,
+      "snippet": "The primary iOS language is Swift, and the main declarative UI framework is SwiftUI. SMOKE_IOSENGIN_IOSSTACK_097728"
+    },
+    {
+      "agent": "Leo (Android Engineer)",
+      "capability": "android-stack",
+      "category": "specialist",
+      "passed": true,
+      "elapsed": 4186,
+      "snippet": "Kotlin and Jetpack Compose are the primary language and framework for modern Android development. SMOKE_ANDROIDE_ANDROIDS_103689"
+    }
+  ],
+  "extras": [
+    {
+      "name": "channel_hygiene",
+      "passed": false,
+      "detail": "groupchat:28 | terminal:1 | upgrades:28",
+      "critical": true
+    },
+    {
+      "name": "elevenlabs_api",
+      "passed": true,
+      "detail": "API reachable",
+      "critical": true
+    },
+    {
+      "name": "elevenlabs_tts",
+      "passed": true,
+      "detail": "audio bytes=35988",
+      "critical": false
+    },
+    {
+      "name": "voice_bridge_no_active_call",
+      "passed": true,
+      "detail": "⚠️ ASAPTester voice turn failed [bazzite]: No active voice call.",
+      "critical": false
+    }
+  ],
+  "config": {
+    "timeoutMs": 30000,
+    "profile": "full",
+    "preClear": false,
+    "runElevenApi": true,
+    "runElevenTts": true,
+    "runVoiceBridge": true,
+    "runVoiceActive": false,
+    "capabilityAttempts": 2,
+    "runPostSuccessAction": false,
+    "agentFilter": null
+  }
+}

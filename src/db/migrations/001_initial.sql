@@ -101,5 +101,12 @@ CREATE INDEX idx_jobs_employee_id ON jobs(employee_id);
 CREATE INDEX idx_jobs_status ON jobs(status);
 CREATE INDEX idx_job_timeline_job_id ON job_timeline(job_id);
 CREATE INDEX idx_two_factor_codes_employee_id ON two_factor_codes(employee_id);
+CREATE TABLE sessions (
+  token TEXT PRIMARY KEY,
+  user_id UUID NOT NULL,
+  user_type user_type NOT NULL,
+  expires_at TIMESTAMP WITH TIME ZONE NOT NULL
+);
+
 CREATE INDEX idx_sessions_token ON sessions(token);
 CREATE INDEX idx_sessions_user ON sessions(user_id, user_type);

@@ -1,0 +1,183 @@
+{
+  "startedAt": "2026-04-06T14:16:34.700Z",
+  "endedAt": "2026-04-06T14:19:39.141Z",
+  "summary": {
+    "capabilityPassed": 16,
+    "capabilityFailed": 1,
+    "extraFailed": 0,
+    "score": 72.5,
+    "criticalPassed": false,
+    "detail": "core_fail=1 | orchestration_fail=0 | upgrades_fail=0 | critical_extra_fail=0"
+  },
+  "results": [
+    {
+      "agent": "Riley (Executive Assistant)",
+      "capability": "routing-and-next-step",
+      "category": "core",
+      "passed": true,
+      "elapsed": 8793,
+      "snippet": "I've successfully updated the daily budget to $300.00 to unblock work.\n\nNext steps: I will now review the previous conversation to identify the last uncompleted task and resume coordination."
+    },
+    {
+      "agent": "Riley (Executive Assistant)",
+      "capability": "repo-memory-tool-awareness",
+      "category": "memory",
+      "passed": true,
+      "elapsed": 9071,
+      "snippet": "The two tools you should use to index and search repo memory are `repo_memory_index` and `repo_memory_search`. SMOKE_EXECUTIV_REPOMEMO_011739"
+    },
+    {
+      "agent": "Ace (Developer)",
+      "capability": "evidence-format-contract",
+      "category": "core",
+      "passed": false,
+      "elapsed": 40361,
+      "snippet": "Timeout while waiting for full capability evidence",
+      "reason": "missing token echo"
+    },
+    {
+      "agent": "Ace (Developer)",
+      "capability": "upgrades-post",
+      "category": "upgrades",
+      "passed": true,
+      "elapsed": 8281,
+      "snippet": "I've posted a token-saving improvement to the #upgrades channel, suggesting we prioritize targeted `read_file` or `repo_memory_search` over broad `search_files` to reduce token consumption and rate-limiting issues. SMOKE_DEVELOPE_UPGRADES_083621"
+    },
+    {
+      "agent": "Max (QA)",
+      "capability": "regression-test-design",
+      "category": "specialist",
+      "passed": true,
+      "elapsed": 4862,
+      "snippet": "For jobs matching, a high-risk regression test would be to verify that employees only see jobs that precisely match their skills and location within a defined service radius, especially after any updates to the matching algorithm. SMOKE_QA_REGRESSI_092152"
+    },
+    {
+      "agent": "Max (QA)",
+      "capability": "upgrades-post",
+      "category": "upgrades",
+      "passed": true,
+      "elapsed": 7972,
+      "snippet": "I've posted a test-automation enhancement to the #🆙-upgrades channel regarding automated visual regression testing. This should help catch UI issues faster and reduce manual QA effort. SMOKE_QA_UPGRADES_097264"
+    },
+    {
+      "agent": "Kane (Security Auditor)",
+      "capability": "auth-risk-and-mitigation",
+      "category": "specialist",
+      "passed": true,
+      "elapsed": 4646,
+      "snippet": "A common auth vulnerability is weak password hashing, which can be mitigated by using a strong, salted, adaptive hashing algorithm like bcrypt with sufficient rounds. SMOKE_SECURITY_AUTHRISK_105486"
+    },
+    {
+      "agent": "Kane (Security Auditor)",
+      "capability": "upgrades-post",
+      "category": "upgrades",
+      "passed": true,
+      "elapsed": 6433,
+      "snippet": "Kane: I've posted a security-hardening upgrade to the #🆙-upgrades channel. It recommends integrating Static Application Security Testing (SAST) into our CI/CD pipeline to catch vulnerabilities earlier in development. SMOKE_SECURITY_UPGRADES_132894"
+    },
+    {
+      "agent": "Sophie (UX Reviewer)",
+      "capability": "a11y-priority",
+      "category": "specialist",
+      "passed": true,
+      "elapsed": 3885,
+      "snippet": "A top accessibility priority to verify first is ensuring all interactive elements have proper labels and roles for screen readers, like buttons and links. This aligns with WCAG 2.2 Success Criterion 4.1.2 (Name, Role, Value). SMOKE_UXREVIEW_A11YPRIO_139576"
+    },
+    {
+      "agent": "Raj (API Reviewer)",
+      "capability": "http-semantics",
+      "category": "specialist",
+      "passed": true,
+      "elapsed": 4003,
+      "snippet": "For a missing resource, the API should return a `404 Not Found` status code. SMOKE_APIREVIE_HTTPSEMA_143710"
+    },
+    {
+      "agent": "Elena (DBA)",
+      "capability": "postgres-safety",
+      "category": "specialist",
+      "passed": true,
+      "elapsed": 3387,
+      "snippet": "Elena: One critical PostgreSQL migration safety practice is to always perform migrations in a transaction, allowing for easy rollback if an error occurs. SMOKE_DBA_POSTGRES_147963"
+    },
+    {
+      "agent": "Kai (Performance)",
+      "capability": "measurement",
+      "category": "specialist",
+      "passed": true,
+      "elapsed": 3376,
+      "snippet": "For app performance, I would track First Contentful Paint (FCP) first, as it measures when the first contentful render happens, giving a crucial indicator of perceived loading speed. SMOKE_PERFORMA_MEASUREM_151601"
+    },
+    {
+      "agent": "Jude (DevOps)",
+      "capability": "tool-audit-proof",
+      "category": "tool-proof",
+      "passed": true,
+      "elapsed": 6309,
+      "snippet": "TOOL_USED:gcp_run_describe The service is Ready: True. SMOKE_DEVOPS_TOOLAUDI_155228"
+    },
+    {
+      "agent": "Liv (Copywriter)",
+      "capability": "microcopy-tone",
+      "category": "specialist",
+      "passed": true,
+      "elapsed": 3496,
+      "snippet": "Hey team, for \"Authentication failed,\" I'd suggest something like: \"We couldn't sign you in. Please check your details and try again.\" It's direct and tells the user what to do next. SMOKE_COPYWRIT_MICROCOP_161787"
+    },
+    {
+      "agent": "Harper (Lawyer)",
+      "capability": "au-contractor-distinction",
+      "category": "specialist",
+      "passed": true,
+      "elapsed": 3414,
+      "snippet": "SMOKE_LAWYER_AUCONTRA_165534 A key legal distinction between an employee and a contractor in Australia is the level of control over how the work is performed. Generally, an employe…"
+    },
+    {
+      "agent": "Mia (iOS Engineer)",
+      "capability": "ios-stack",
+      "category": "specialist",
+      "passed": true,
+      "elapsed": 3671,
+      "snippet": "The primary iOS language and framework I work with are Swift and SwiftUI. SMOKE_IOSENGIN_IOSSTACK_169199"
+    },
+    {
+      "agent": "Leo (Android Engineer)",
+      "capability": "android-stack",
+      "category": "specialist",
+      "passed": true,
+      "elapsed": 3675,
+      "snippet": "The primary Android language I work with is Kotlin, and my primary framework is Jetpack Compose. SMOKE_ANDROIDE_ANDROIDS_173120"
+    }
+  ],
+  "extras": [
+    {
+      "name": "channel_hygiene",
+      "passed": true,
+      "detail": "groupchat:43 | terminal:1 | upgrades:4",
+      "critical": true
+    },
+    {
+      "name": "elevenlabs_api",
+      "passed": true,
+      "detail": "API reachable",
+      "critical": true
+    },
+    {
+      "name": "elevenlabs_tts",
+      "passed": true,
+      "detail": "audio bytes=33898",
+      "critical": false
+    }
+  ],
+  "config": {
+    "timeoutMs": 20000,
+    "profile": "readiness",
+    "preClear": false,
+    "runElevenApi": true,
+    "runElevenTts": true,
+    "runVoiceBridge": false,
+    "runVoiceActive": false,
+    "capabilityAttempts": 2,
+    "runPostSuccessAction": false,
+    "agentFilter": null
+  }
+}

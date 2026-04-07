@@ -120,7 +120,7 @@ router.post('/login', authLimiter, async (req: AuthRequest, res: Response) => {
     res.json({ token, business: safeBusiness });
   } catch (err) {
     console.error('Business login error:', err instanceof Error ? err.message : 'Unknown');
-    res.status(500).json({ error: 'Login failed. Please try again.' });
+    res.status(500).json({ error: "We couldn't verify your login details. Please double-check them and try again." });
   }
 });
 

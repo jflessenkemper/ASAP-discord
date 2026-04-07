@@ -1,0 +1,182 @@
+{
+  "startedAt": "2026-04-07T00:03:42.052Z",
+  "endedAt": "2026-04-07T00:06:49.596Z",
+  "summary": {
+    "capabilityPassed": 17,
+    "capabilityFailed": 0,
+    "extraFailed": 0,
+    "score": 85,
+    "criticalPassed": true,
+    "detail": "core_fail=0 | orchestration_fail=0 | upgrades_fail=0 | critical_extra_fail=0"
+  },
+  "results": [
+    {
+      "agent": "Riley (Executive Assistant)",
+      "capability": "routing-and-next-step",
+      "category": "core",
+      "passed": true,
+      "elapsed": 6486,
+      "snippet": "I'm Riley, Jordan's executive assistant and project orchestrator, ensuring goals move forward through planning, coordination, and execution. My next step will be to review the curr…"
+    },
+    {
+      "agent": "Riley (Executive Assistant)",
+      "capability": "repo-memory-tool-awareness",
+      "category": "memory",
+      "passed": true,
+      "elapsed": 3702,
+      "snippet": "I should use `repo_memory_index` to build or refresh the searchable index of repository files, and `repo_memory_search` to query that index. [smoke-token]"
+    },
+    {
+      "agent": "Ace (Developer)",
+      "capability": "evidence-format-contract",
+      "category": "core",
+      "passed": true,
+      "elapsed": 3770,
+      "snippet": "Confirmed the current structure requirements for evidence formatting.\nEvidence: This message itself demonstrates the requested `Result: ... Evidence: ... Risk/Follow-up: ...` forma…"
+    },
+    {
+      "agent": "Ace (Developer)",
+      "capability": "upgrades-post",
+      "category": "upgrades",
+      "passed": true,
+      "elapsed": 8020,
+      "snippet": "I've posted a token-saving improvement to #🆙-upgrades, as requested, to help us avoid future interruptions due to token limits. It suggests a proactive monitoring system to prevent hitting caps."
+    },
+    {
+      "agent": "Max (QA)",
+      "capability": "regression-test-design",
+      "category": "specialist",
+      "passed": true,
+      "elapsed": 5012,
+      "snippet": "To address the job matching regression risk, I'd propose a test to verify that the system correctly matches jobs to employees based on skills, availability, and location, even with…"
+    },
+    {
+      "agent": "Max (QA)",
+      "capability": "upgrades-post",
+      "category": "upgrades",
+      "passed": true,
+      "elapsed": 8492,
+      "snippet": "I've posted a test automation enhancement to #upgrades. I suggested integrating automated visual regression testing into our CI/CD pipeline to catch UI discrepancies proactively an…"
+    },
+    {
+      "agent": "Kane (Security Auditor)",
+      "capability": "auth-risk-and-mitigation",
+      "category": "specialist",
+      "passed": true,
+      "elapsed": 3495,
+      "snippet": "An auth vulnerability could be weak password hashing, which can be mitigated by using a strong, adaptive hashing algorithm like bcrypt with a sufficient number of rounds. SMOKE_SECURITY_AUTHRISK_346516"
+    },
+    {
+      "agent": "Kane (Security Auditor)",
+      "capability": "upgrades-post",
+      "category": "upgrades",
+      "passed": true,
+      "elapsed": 7959,
+      "snippet": "I've provided the auth vulnerability/mitigation as requested. I've also posted a security-hardening upgrade to #🆙-upgrades regarding automated SAST/DAST integration into the CI/CD pipeline. This should help us catch issues earlier."
+    },
+    {
+      "agent": "Sophie (UX Reviewer)",
+      "capability": "a11y-priority",
+      "category": "specialist",
+      "passed": true,
+      "elapsed": 6645,
+      "snippet": "I'd prioritize verifying that all interactive elements, like buttons and links, are keyboard-operable without any custom keystrokes. This aligns with WCAG 2.2 guideline 2.1.1 Keybo…"
+    },
+    {
+      "agent": "Raj (API Reviewer)",
+      "capability": "http-semantics",
+      "category": "specialist",
+      "passed": true,
+      "elapsed": 3477,
+      "snippet": "For a missing resource, the appropriate HTTP status code to return is `404 Not Found`. SMOKE_APIREVIE_HTTPSEMA_365366"
+    },
+    {
+      "agent": "Elena (DBA)",
+      "capability": "postgres-safety",
+      "category": "specialist",
+      "passed": true,
+      "elapsed": 5036,
+      "snippet": "I've posted a security-hardening upgrade to #🆙-upgrades.\n\nOne PostgreSQL migration safety practice is to always wrap schema changes in a transaction to ensure atomicity. SMOKE_DBA_POSTGRES_369094"
+    },
+    {
+      "agent": "Kai (Performance)",
+      "capability": "measurement",
+      "category": "specialist",
+      "passed": true,
+      "elapsed": 5085,
+      "snippet": "The first metric I'd prioritize tracking for app performance is First Contentful Paint (FCP), as it directly reflects when users start seeing meaningful content, which is critical …"
+    },
+    {
+      "agent": "Jude (DevOps)",
+      "capability": "tool-audit-proof",
+      "category": "tool-proof",
+      "passed": true,
+      "elapsed": 7447,
+      "snippet": "TOOL_USED:gcp_run_describe Ready: True SMOKE_DEVOPS_TOOLAUDI_379715"
+    },
+    {
+      "agent": "Liv (Copywriter)",
+      "capability": "microcopy-tone",
+      "category": "specialist",
+      "passed": true,
+      "elapsed": 4650,
+      "snippet": "We couldn't sign you in. Please check your details and try again. SMOKE_COPYWRIT_MICROCOP_387412"
+    },
+    {
+      "agent": "Harper (Lawyer)",
+      "capability": "au-contractor-distinction",
+      "category": "specialist",
+      "passed": true,
+      "elapsed": 6698,
+      "snippet": "A key legal distinction in Australia between an employee and a contractor lies in the degree of control the principal has over the worker's tasks. An employer dictates *how* and *w…"
+    },
+    {
+      "agent": "Mia (iOS Engineer)",
+      "capability": "ios-stack",
+      "category": "specialist",
+      "passed": true,
+      "elapsed": 4100,
+      "snippet": "The primary language for iOS development is Swift, often used with the SwiftUI framework for building user interfaces. SMOKE_IOSENGIN_IOSSTACK_399259"
+    },
+    {
+      "agent": "Leo (Android Engineer)",
+      "capability": "android-stack",
+      "category": "specialist",
+      "passed": true,
+      "elapsed": 3683,
+      "snippet": "Kotlin and Jetpack Compose are the primary language and framework for Android development. SMOKE_ANDROIDE_ANDROIDS_403610"
+    }
+  ],
+  "extras": [
+    {
+      "name": "channel_hygiene",
+      "passed": true,
+      "detail": "groupchat:100 | terminal:1 | upgrades:27",
+      "critical": true
+    },
+    {
+      "name": "elevenlabs_api",
+      "passed": true,
+      "detail": "API reachable",
+      "critical": true
+    },
+    {
+      "name": "elevenlabs_tts",
+      "passed": true,
+      "detail": "audio bytes=35152",
+      "critical": false
+    }
+  ],
+  "config": {
+    "timeoutMs": 25000,
+    "profile": "readiness",
+    "preClear": false,
+    "runElevenApi": true,
+    "runElevenTts": true,
+    "runVoiceBridge": false,
+    "runVoiceActive": false,
+    "capabilityAttempts": 2,
+    "runPostSuccessAction": false,
+    "agentFilter": null
+  }
+}

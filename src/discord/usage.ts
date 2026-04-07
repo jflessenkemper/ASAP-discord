@@ -5,13 +5,13 @@ import { formatOpsLine, postOpsLine } from './services/opsFeed';
 
 const DAILY_LIMITS = {
   /** Max LLM input+output tokens per day (Gemini) */
-  claudeTokens: parseInt(process.env.DAILY_LIMIT_GEMINI_LLM_TOKENS || process.env.DAILY_LIMIT_CLAUDE_TOKENS || '2000000', 10),
+  claudeTokens: parseInt(process.env.DAILY_LIMIT_GEMINI_LLM_TOKENS || process.env.DAILY_LIMIT_CLAUDE_TOKENS || '8000000', 10),
   /** Max Gemini API calls per day (TTS + transcription) */
-  geminiCalls: parseInt(process.env.DAILY_LIMIT_GEMINI_CALLS || '500', 10),
+  geminiCalls: parseInt(process.env.DAILY_LIMIT_GEMINI_CALLS || '2000', 10),
   /** Max ElevenLabs characters per day */
   elevenLabsChars: parseInt(process.env.DAILY_LIMIT_ELEVENLABS_CHARS || '10000', 10),
   /** Hard dollar budget — ALL agents stop when this is exceeded */
-  budgetUsd: parseFloat(process.env.DAILY_BUDGET_USD || '100.00'),
+  budgetUsd: parseFloat(process.env.DAILY_BUDGET_USD || '250.00'),
 };
 const DEFAULT_BUDGET_APPROVAL_INCREMENT_USD = parseFloat(process.env.BUDGET_APPROVAL_INCREMENT_USD || '5.00');
 const DASHBOARD_UPDATE_INTERVAL_MS = 5 * 60 * 1000;
