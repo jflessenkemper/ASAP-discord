@@ -76,19 +76,19 @@ const COLOR_MAP: Record<string, number> = {
  * Replace with custom images later by uploading to Discord/CDN.
  */
 const AVATAR_MAP: Record<string, string> = {
-  qa:                   'https://ui-avatars.com/api/?name=Max&background=ED4245&color=fff&size=256&bold=true',
-  'ux-reviewer':        'https://ui-avatars.com/api/?name=Sophie&background=EB459E&color=fff&size=256&bold=true',
-  'security-auditor':   'https://ui-avatars.com/api/?name=Kane&background=FEE75C&color=000&size=256&bold=true',
-  'api-reviewer':       'https://ui-avatars.com/api/?name=Raj&background=3498DB&color=fff&size=256&bold=true',
-  dba:                  'https://ui-avatars.com/api/?name=Elena&background=E67E22&color=fff&size=256&bold=true',
-  performance:          'https://ui-avatars.com/api/?name=Kai&background=1ABC9C&color=fff&size=256&bold=true',
-  devops:               'https://ui-avatars.com/api/?name=Jude&background=9B59B6&color=fff&size=256&bold=true',
-  copywriter:           'https://ui-avatars.com/api/?name=Liv&background=E91E63&color=fff&size=256&bold=true',
-  developer:            'https://ui-avatars.com/api/?name=Ace&background=57F287&color=000&size=256&bold=true',
-  lawyer:               'https://ui-avatars.com/api/?name=Harper&background=607D8B&color=fff&size=256&bold=true',
-  'executive-assistant': 'https://ui-avatars.com/api/?name=Riley&background=5865F2&color=fff&size=256&bold=true',
-  'ios-engineer':       'https://ui-avatars.com/api/?name=Mia&background=A3AAAE&color=000&size=256&bold=true',
-  'android-engineer':   'https://ui-avatars.com/api/?name=Leo&background=2ECC71&color=000&size=256&bold=true',
+  qa:                   'https://api.dicebear.com/7.x/adventurer-neutral/png?seed=Max-QA&backgroundColor=ed4245,f97316,1f2937',
+  'ux-reviewer':        'https://api.dicebear.com/7.x/adventurer-neutral/png?seed=Sophie-UX&backgroundColor=eb459e,f59e0b,0f172a',
+  'security-auditor':   'https://api.dicebear.com/7.x/adventurer-neutral/png?seed=Kane-Sec&backgroundColor=fee75c,374151,0f172a',
+  'api-reviewer':       'https://api.dicebear.com/7.x/adventurer-neutral/png?seed=Raj-API&backgroundColor=3498db,0ea5e9,1e293b',
+  dba:                  'https://api.dicebear.com/7.x/adventurer-neutral/png?seed=Elena-DBA&backgroundColor=e67e22,92400e,334155',
+  performance:          'https://api.dicebear.com/7.x/adventurer-neutral/png?seed=Kai-Perf&backgroundColor=1abc9c,0f766e,0b132b',
+  devops:               'https://api.dicebear.com/7.x/adventurer-neutral/png?seed=Jude-DevOps&backgroundColor=9b59b6,6366f1,111827',
+  copywriter:           'https://api.dicebear.com/7.x/adventurer-neutral/png?seed=Liv-Copy&backgroundColor=e91e63,f43f5e,312e81',
+  developer:            'https://api.dicebear.com/7.x/adventurer-neutral/png?seed=Ace-Dev&backgroundColor=57f287,16a34a,0f172a',
+  lawyer:               'https://api.dicebear.com/7.x/adventurer-neutral/png?seed=Harper-Law&backgroundColor=607d8b,334155,111827',
+  'executive-assistant': 'https://api.dicebear.com/7.x/adventurer-neutral/png?seed=Riley-EA&backgroundColor=5865f2,4338ca,0f172a',
+  'ios-engineer':       'https://api.dicebear.com/7.x/adventurer-neutral/png?seed=Mia-iOS&backgroundColor=a3aaae,94a3b8,1f2937',
+  'android-engineer':   'https://api.dicebear.com/7.x/adventurer-neutral/png?seed=Leo-Android&backgroundColor=2ecc71,22c55e,0f172a',
 };
 
 const DISPLAY_NAME: Record<string, string> = {
