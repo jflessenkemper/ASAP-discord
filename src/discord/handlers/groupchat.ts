@@ -1049,14 +1049,17 @@ function detectDirectVoiceAction(text: string): 'join' | 'leave' | null {
   if (!normalized) return null;
 
   const words = normalized.split(/\s+/).filter(Boolean);
-  if (words.length > 20 || normalized.length > 180) return null;
+  if (words.length > 80 || normalized.length > 500) return null;
 
   const joinVerb = /\b(?:join|start|open|connect|enter|hop\s+in(?:to)?|jump\s+in(?:to)?)\b/i.test(normalized);
   const leaveVerb = /\b(?:leave|end|stop|disconnect|hang\s*up|drop)\b/i.test(normalized);
-  const voiceTarget = /\b(?:voice|vc|call|voice\s+chat|voice\s+channel)\b/i.test(normalized);
+  const voiceTarget = /\b(?:voice|vc|call|voice\s+chat|voice\s+channel|the\s+call|in\s+the\s+call)\b/i.test(normalized);
+  const addressesRiley = /\b(?:riley|asap)\b/i.test(normalized);
+  const directJoinCall = addressesRiley && /\bjoin\b/i.test(normalized) && /\bcall\b/i.test(normalized);
+  const directLeaveCall = addressesRiley && /\b(?:leave|end|disconnect|hang\s*up|drop)\b/i.test(normalized) && /\bcall\b/i.test(normalized);
 
-  if (joinVerb && voiceTarget) return 'join';
-  if (leaveVerb && (voiceTarget || /^(?:leave|end call|hang up|disconnect)$/i.test(normalized))) return 'leave';
+  if ((joinVerb && voiceTarget) || directJoinCall) return 'join';
+  if ((leaveVerb && (voiceTarget || /^(?:leave|end call|hang up|disconnect)$/i.test(normalized))) || directLeaveCall) return 'leave';
   return null;
 }
 
