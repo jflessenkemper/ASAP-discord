@@ -115,7 +115,7 @@ async function runChannelHeartbeat(channels: BotChannels): Promise<void> {
     metric: `feeds=${contracts.length}`,
     delta: parts.join(' | '),
     action: 'none',
-    severity: parts.some((p) => p.startsWith('⚠️')) ? 'warn' : 'info',
+    severity: parts.some((p) => p.startsWith('⚠️')) ? 'error' : 'info',
   });
 }
 
