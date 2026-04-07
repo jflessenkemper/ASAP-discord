@@ -55,19 +55,19 @@ const EMOJI_MAP: Record<string, string> = {
 };
 
 const COLOR_MAP: Record<string, number> = {
-  'executive-assistant': 0x5865F2, // Blurple (Riley)
-  developer:            0x57F287, // Green (Ace)
-  qa:                   0xED4245, // Red (Max)
-  'ux-reviewer':        0xEB459E, // Fuchsia (Sophie)
-  'security-auditor':   0xFEE75C, // Yellow (Kane)
-  'api-reviewer':       0x3498DB, // Blue (Raj)
-  dba:                  0xE67E22, // Orange (Elena)
-  performance:          0x1ABC9C, // Teal (Kai)
-  devops:               0x9B59B6, // Purple (Jude)
-  copywriter:           0xE91E63, // Pink (Liv)
-  lawyer:               0x607D8B, // Blue Grey (Harper)
-  'ios-engineer':       0xA3AAAE, // Silver (Mia)
-  'android-engineer':   0x2ECC71, // Emerald (Leo)
+  'executive-assistant': 0x3454D1,
+  developer:            0x16A34A,
+  qa:                   0xC62828,
+  'ux-reviewer':        0x0F766E,
+  'security-auditor':   0x374151,
+  'api-reviewer':       0x1D4ED8,
+  dba:                  0xB45309,
+  performance:          0x0E7490,
+  devops:               0x4338CA,
+  copywriter:           0xBE185D,
+  lawyer:               0x475569,
+  'ios-engineer':       0x64748B,
+  'android-engineer':   0x15803D,
 };
 
 /**
@@ -75,19 +75,19 @@ const COLOR_MAP: Record<string, number> = {
  * Use ui-avatars for high-availability webhook avatar rendering.
  */
 const AVATAR_MAP: Record<string, string> = {
-  qa:                    'https://ui-avatars.com/api/?name=Max+QA&background=ED4245&color=FFFFFF&size=256&bold=true&format=png',
-  'ux-reviewer':         'https://ui-avatars.com/api/?name=Sophie+UX&background=EB459E&color=FFFFFF&size=256&bold=true&format=png',
-  'security-auditor':    'https://ui-avatars.com/api/?name=Kane+Security&background=FEE75C&color=111111&size=256&bold=true&format=png',
-  'api-reviewer':        'https://ui-avatars.com/api/?name=Raj+API&background=3498DB&color=FFFFFF&size=256&bold=true&format=png',
-  dba:                   'https://ui-avatars.com/api/?name=Elena+DBA&background=E67E22&color=FFFFFF&size=256&bold=true&format=png',
-  performance:           'https://ui-avatars.com/api/?name=Kai+Perf&background=1ABC9C&color=FFFFFF&size=256&bold=true&format=png',
-  devops:                'https://ui-avatars.com/api/?name=Jude+DevOps&background=9B59B6&color=FFFFFF&size=256&bold=true&format=png',
-  copywriter:            'https://ui-avatars.com/api/?name=Liv+Copy&background=E91E63&color=FFFFFF&size=256&bold=true&format=png',
-  developer:             'https://ui-avatars.com/api/?name=Ace+Dev&background=57F287&color=0F172A&size=256&bold=true&format=png',
-  lawyer:                'https://ui-avatars.com/api/?name=Harper+Law&background=607D8B&color=FFFFFF&size=256&bold=true&format=png',
-  'executive-assistant': 'https://ui-avatars.com/api/?name=Riley+EA&background=5865F2&color=FFFFFF&size=256&bold=true&format=png',
-  'ios-engineer':        'https://ui-avatars.com/api/?name=Mia+iOS&background=A3AAAE&color=111111&size=256&bold=true&format=png',
-  'android-engineer':    'https://ui-avatars.com/api/?name=Leo+Android&background=2ECC71&color=0F172A&size=256&bold=true&format=png',
+  qa:                    'https://ui-avatars.com/api/?name=Max+QA+Flask&background=C62828&color=FFFFFF&size=256&bold=true&format=png',
+  'ux-reviewer':         'https://ui-avatars.com/api/?name=Sophie+UX+Compass&background=0F766E&color=FFFFFF&size=256&bold=true&format=png',
+  'security-auditor':    'https://ui-avatars.com/api/?name=Kane+Security+Shield&background=374151&color=FDE047&size=256&bold=true&format=png',
+  'api-reviewer':        'https://ui-avatars.com/api/?name=Raj+API+Pulse&background=1D4ED8&color=FFFFFF&size=256&bold=true&format=png',
+  dba:                   'https://ui-avatars.com/api/?name=Elena+DBA+Stack&background=B45309&color=FFFFFF&size=256&bold=true&format=png',
+  performance:           'https://ui-avatars.com/api/?name=Kai+Perf+Bolt&background=0E7490&color=FFFFFF&size=256&bold=true&format=png',
+  devops:                'https://ui-avatars.com/api/?name=Jude+DevOps+Rocket&background=4338CA&color=FFFFFF&size=256&bold=true&format=png',
+  copywriter:            'https://ui-avatars.com/api/?name=Liv+Copy+Quill&background=BE185D&color=FFFFFF&size=256&bold=true&format=png',
+  developer:             'https://ui-avatars.com/api/?name=Ace+Developer+Code&background=16A34A&color=FFFFFF&size=256&bold=true&format=png',
+  lawyer:                'https://ui-avatars.com/api/?name=Harper+Law+Scale&background=475569&color=FFFFFF&size=256&bold=true&format=png',
+  'executive-assistant': 'https://ui-avatars.com/api/?name=Riley+EA+Checklist&background=3454D1&color=FFFFFF&size=256&bold=true&format=png',
+  'ios-engineer':        'https://ui-avatars.com/api/?name=Mia+iOS+Orbit&background=64748B&color=FFFFFF&size=256&bold=true&format=png',
+  'android-engineer':    'https://ui-avatars.com/api/?name=Leo+Android+Bot&background=15803D&color=FFFFFF&size=256&bold=true&format=png',
 };
 
 const DISPLAY_NAME: Record<string, string> = {
