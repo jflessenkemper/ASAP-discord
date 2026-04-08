@@ -4,6 +4,51 @@ import path from 'path';
 
 import pool from './pool';
 
+const TABLE_EXPECTATIONS_BY_MIGRATION: Record<string, string[]> = {
+  '001_initial.sql': ['clients', 'employees', 'jobs', 'sessions'],
+  '003_agent_memory.sql': ['agent_memory'],
+  '015_agent_activity_log.sql': ['agent_activity_log'],
+};
+
+const REQUIRED_RUNTIME_TABLES = ['sessions', 'agent_memory', 'agent_activity_log'];
+
+async function getMissingTables(tables: string[]): Promise<string[]> {
+  const missing: string[] = [];
+  for (const table of tables) {
+    const res = await pool.query(
+      `SELECT to_regclass($1) IS NOT NULL AS exists`,
+      [`public.${table}`]
+    );
+    if (!res.rows?.[0]?.exists) {
+      missing.push(table);
+    }
+  }
+  return missing;
+}
+
+async function assertAppliedMigrationExpectations(applied: Set<string>): Promise<void> {
+  for (const [filename, expectedTables] of Object.entries(TABLE_EXPECTATIONS_BY_MIGRATION)) {
+    if (!applied.has(filename)) continue;
+    const missing = await getMissingTables(expectedTables);
+    if (missing.length > 0) {
+      throw new Error(
+        `Migration drift detected: ${filename} is marked applied but missing table(s): ${missing.join(', ')}.`
+        + ' Restore schema before continuing (run DB repair or manual CREATE TABLE statements), then re-run migrations.'
+      );
+    }
+  }
+}
+
+async function assertRuntimeTablesReady(): Promise<void> {
+  const missing = await getMissingTables(REQUIRED_RUNTIME_TABLES);
+  if (missing.length > 0) {
+    throw new Error(
+      `Runtime schema incomplete after migration. Missing table(s): ${missing.join(', ')}.`
+      + ' Bot runtime may fail until these are created.'
+    );
+  }
+}
+
 async function migrate() {
   // Create tracking table if it doesn't exist (safe for first run)
   await pool.query(`
@@ -19,6 +64,9 @@ async function migrate() {
   // Get already-applied migrations
   const appliedResult = await pool.query('SELECT filename FROM applied_migrations');
   const applied = new Set(appliedResult.rows.map((r: { filename: string }) => r.filename));
+
+  // Detect historical drift before running new migrations.
+  await assertAppliedMigrationExpectations(applied);
 
   let appliedCount = 0;
   for (const file of files) {
@@ -46,6 +94,8 @@ async function migrate() {
       client.release();
     }
   }
+
+  await assertRuntimeTablesReady();
 
   console.log(`Migrations complete. ${appliedCount} new, ${applied.size} previously applied.`);
   await pool.end();

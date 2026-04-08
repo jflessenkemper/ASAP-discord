@@ -207,8 +207,9 @@ async function handleAgentMessageInner(
   const channel = message.channel as TextChannel;
   const isCareerOpsRiley = agent.id === 'executive-assistant' && /career-ops/i.test(channel.name);
   const completionToken = extractCompletionTokenFromPrompt(userMessage);
+  const isCompletionCheckPrompt = !!completionToken && !!message.author?.bot;
 
-  if (completionToken) {
+  if (isCompletionCheckPrompt && completionToken) {
     const completionReply = buildCompletionCheckReply(agent, completionToken);
     await sendWebhookMessage(channel, {
       content: completionReply,
@@ -254,7 +255,7 @@ async function handleAgentMessageInner(
 
   try {
     const maxTokens = estimateTextMaxTokens(agent, userMessage);
-    const disableToolsForPrompt = isCareerOpsRiley || shouldDisableToolsForProfilePrompt(userMessage) || !!completionToken;
+    const disableToolsForPrompt = isCareerOpsRiley || shouldDisableToolsForProfilePrompt(userMessage) || isCompletionCheckPrompt;
     const cjkPattern = /[\u4e00-\u9fff\u3400-\u4dbf]/;
     const textLangHint = cjkPattern.test(userMessage)
       ? '\n\n[Language detected: Mandarin Chinese. Please reply in Mandarin Chinese (简体中文).]'
