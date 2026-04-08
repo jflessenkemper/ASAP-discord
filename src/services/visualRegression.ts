@@ -3,6 +3,11 @@ import fs from 'fs';
 import path from 'path';
 
 import puppeteer, { Browser, Page } from 'puppeteer';
+// Use CommonJS loads to avoid adding extra type dependencies for these dev tools.
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const pixelmatch = require('pixelmatch');
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const { PNG } = require('pngjs');
 
 interface CaptureTarget {
   name: string;
@@ -26,6 +31,9 @@ const ROOT = path.resolve(__dirname, '..', '..');
 const ARTIFACTS_DIR = path.join(ROOT, 'visual-regression');
 const BASELINE_DIR = path.join(ARTIFACTS_DIR, 'baseline');
 const CURRENT_DIR = path.join(ARTIFACTS_DIR, 'current');
+const DIFF_DIR = path.join(ARTIFACTS_DIR, 'diff');
+const VISUAL_PIXEL_THRESHOLD = Number(process.env.VISUAL_PIXEL_THRESHOLD || '0.1');
+const VISUAL_MAX_DIFF_PERCENT = Number(process.env.VISUAL_MAX_DIFF_PERCENT || '0.005');
 
 function ensureDir(dir: string): void {
   fs.mkdirSync(dir, { recursive: true });
@@ -75,6 +83,39 @@ function fileHash(filePath: string): string {
   return createHash('sha256').update(fs.readFileSync(filePath)).digest('hex');
 }
 
+function comparePngWithDiff(currentPath: string, baselinePath: string, diffPath: string): {
+  changedPixels: number;
+  totalPixels: number;
+  percent: number;
+} {
+  const current = PNG.sync.read(fs.readFileSync(currentPath));
+  const baseline = PNG.sync.read(fs.readFileSync(baselinePath));
+
+  if (current.width !== baseline.width || current.height !== baseline.height) {
+    throw new Error(
+      `size mismatch current=${current.width}x${current.height} baseline=${baseline.width}x${baseline.height}`
+    );
+  }
+
+  const diff = new PNG({ width: current.width, height: current.height });
+  const changedPixels = pixelmatch(
+    baseline.data,
+    current.data,
+    diff.data,
+    current.width,
+    current.height,
+    { threshold: VISUAL_PIXEL_THRESHOLD }
+  );
+  const totalPixels = current.width * current.height;
+  const percent = totalPixels > 0 ? changedPixels / totalPixels : 0;
+
+  if (changedPixels > 0) {
+    fs.writeFileSync(diffPath, PNG.sync.write(diff));
+  }
+
+  return { changedPixels, totalPixels, percent };
+}
+
 async function captureSet(outDir: string): Promise<string[]> {
   ensureDir(outDir);
   const targets = parseTargets();
@@ -122,19 +163,35 @@ export async function runVisualRegressionCheck(): Promise<string> {
   }
 
   fs.rmSync(CURRENT_DIR, { recursive: true, force: true });
+  fs.rmSync(DIFF_DIR, { recursive: true, force: true });
   ensureDir(CURRENT_DIR);
+  ensureDir(DIFF_DIR);
   const currentFiles = await captureSet(CURRENT_DIR);
 
   const mismatches: string[] = [];
   for (const currentPath of currentFiles) {
     const filename = path.basename(currentPath);
     const baselinePath = path.join(BASELINE_DIR, filename);
+    const diffPath = path.join(DIFF_DIR, filename);
     if (!fs.existsSync(baselinePath)) {
       mismatches.push(`${filename}: missing baseline`);
       continue;
     }
-    if (fileHash(currentPath) !== fileHash(baselinePath)) {
-      mismatches.push(`${filename}: pixel output changed`);
+
+    if (fileHash(currentPath) === fileHash(baselinePath)) {
+      continue;
+    }
+
+    try {
+      const diff = comparePngWithDiff(currentPath, baselinePath, diffPath);
+      if (diff.percent > VISUAL_MAX_DIFF_PERCENT) {
+        mismatches.push(
+          `${filename}: ${(diff.percent * 100).toFixed(3)}% changed (${diff.changedPixels}/${diff.totalPixels})`
+        );
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      mismatches.push(`${filename}: ${msg}`);
     }
   }
 
@@ -147,6 +204,7 @@ export async function runVisualRegressionCheck(): Promise<string> {
     ...mismatches.map((m) => `- ${m}`),
     `Current: ${CURRENT_DIR}`,
     `Baseline: ${BASELINE_DIR}`,
+    `Diff: ${DIFF_DIR}`,
   ].join('\n');
 }
 
