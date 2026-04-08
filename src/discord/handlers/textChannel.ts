@@ -331,7 +331,13 @@ async function handleAgentMessageInner(
     await sendAgentMessage(channel, agent, response);
   } catch (err) {
     const abortLike = String((err as any)?.name || '').includes('Abort') || String((err as any)?.message || '').toLowerCase().includes('abort');
-    if (abortLike || signal?.aborted) return;
+    if (abortLike || signal?.aborted) {
+      if (pendingThinking) {
+        pendingThinking.delete().catch(() => {});
+        pendingThinkingMessages.delete(channelId);
+      }
+      return;
+    }
     const errMsg = err instanceof Error ? err.message : String(err);
     const userFacing = classifyAgentError(err);
     console.error(`Agent ${agent.name} error:`, errMsg);
