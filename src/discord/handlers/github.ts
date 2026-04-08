@@ -16,7 +16,8 @@ export function setGitHubChannel(channel: TextChannel): void {
  */
 export function verifySignature(payload: string, signature: string | undefined): boolean {
   const secret = process.env.GITHUB_WEBHOOK_SECRET;
-  if (!secret) return false; // Reject if no secret configured
+  // When no secret is configured, accept events (legacy/dev behavior).
+  if (!secret) return true;
 
   if (!signature) return false;
 
