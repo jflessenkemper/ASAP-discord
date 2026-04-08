@@ -20,7 +20,6 @@ const TEXT_MAX_TOKENS_DEVELOPER = parseInt(process.env.TEXT_MAX_TOKENS_DEVELOPER
 const STREAM_EDIT_THROTTLE_MS = parseInt(process.env.STREAM_EDIT_THROTTLE_MS || '80', 10);
 const STREAM_MAX_PREVIEW_CHARS = parseInt(process.env.STREAM_MAX_PREVIEW_CHARS || '1800', 10);
 const STREAM_EDIT_MIN_CHAR_DELTA = parseInt(process.env.STREAM_EDIT_MIN_CHAR_DELTA || '35', 10);
-const AGENT_MAX_VISIBLE_CHARS = parseInt(process.env.AGENT_MAX_VISIBLE_CHARS || '3800', 10);
 const TEXT_AGENT_RESPONSE_TIMEOUT_MS = parseInt(process.env.TEXT_AGENT_RESPONSE_TIMEOUT_MS || '120000', 10);
 const TEXT_PROGRESS_HEARTBEAT_MS = parseInt(process.env.TEXT_PROGRESS_HEARTBEAT_MS || '15000', 10);
 const CAREER_OPS_DUPLICATE_WINDOW_MS = parseInt(process.env.CAREER_OPS_DUPLICATE_WINDOW_MS || '600000', 10);
@@ -498,11 +497,6 @@ function renderAgentMessage(raw: string): string {
   const hasActionCue = /\b(next step|action|will|now|recommend|should|run|check|verify|post|update|fix|implement|create|change|retry)\b/i.test(normalized);
   if (normalized.length > 220 && !hasActionCue) {
     normalized = `${normalized}\n\nNext step: I will post a concrete action and owner in my next update.`;
-  }
-
-  if (normalized.length > AGENT_MAX_VISIBLE_CHARS) {
-    const clipped = normalized.slice(0, Math.max(350, AGENT_MAX_VISIBLE_CHARS - 120)).trimEnd();
-    normalized = `${clipped}\n\n[Output trimmed for readability. Ask for a focused drill-down if needed.]`;
   }
 
   return normalized;

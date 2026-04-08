@@ -10,6 +10,45 @@ import { postAgentErrorLog } from './services/agentErrors';
 
 type EventType = 'invoke' | 'tool' | 'response' | 'error' | 'rate_limit';
 let activityLogDbDisabled = false;
+const AGENT_ERROR_DEDUPE_WINDOW_MS = Math.max(30_000, parseInt(process.env.AGENT_ERROR_DEDUPE_WINDOW_MS || '180000', 10));
+const lastAgentErrorPostedAt = new Map<string, number>();
+
+function classifyAgentErrorLevel(detail?: string): 'info' | 'warn' | 'error' {
+  const normalized = String(detail || '').toLowerCase();
+  if (!normalized) return 'error';
+
+  // Quota/rate/budget conditions are operational limits, not service crashes.
+  if (
+    normalized.includes('daily token limit reached') ||
+    normalized.includes('daily dollar budget exceeded') ||
+    normalized.includes('quota exhausted') ||
+    normalized.includes('rate limit') ||
+    normalized.includes('resource_exhausted')
+  ) {
+    return 'warn';
+  }
+
+  return 'error';
+}
+
+function shouldPostAgentError(agentId: string, detail?: string): boolean {
+  const now = Date.now();
+  const key = `${agentId}:${String(detail || '').toLowerCase().slice(0, 240)}`;
+  const last = lastAgentErrorPostedAt.get(key) || 0;
+  if (now - last < AGENT_ERROR_DEDUPE_WINDOW_MS) {
+    return false;
+  }
+  lastAgentErrorPostedAt.set(key, now);
+
+  if (lastAgentErrorPostedAt.size > 2000) {
+    for (const [k, ts] of lastAgentErrorPostedAt) {
+      if (now - ts > AGENT_ERROR_DEDUPE_WINDOW_MS * 2) {
+        lastAgentErrorPostedAt.delete(k);
+      }
+    }
+  }
+  return true;
+}
 
 function isPermissionDeniedError(err: unknown): boolean {
   const code = String((err as any)?.code || '');
@@ -25,7 +64,7 @@ export function logAgentEvent(
 ): void {
   const isUserInterrupt = /request interrupted by user/i.test(String(detail || ''));
 
-  if (event === 'error' && !isUserInterrupt) {
+  if (event === 'error' && !isUserInterrupt && shouldPostAgentError(agentId, detail)) {
     const meta = [
       typeof extra?.durationMs === 'number' ? `durationMs=${extra.durationMs}` : null,
       typeof extra?.tokensIn === 'number' ? `tokensIn=${extra.tokensIn}` : null,
@@ -33,6 +72,7 @@ export function logAgentEvent(
     ].filter(Boolean).join(' ');
     void postAgentErrorLog(`agent:${agentId}`, detail || 'Agent error', {
       agentId,
+      level: classifyAgentErrorLevel(detail),
       detail: meta || undefined,
     });
   }
