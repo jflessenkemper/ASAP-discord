@@ -394,9 +394,9 @@ export async function setupChannels(guild: Guild): Promise<BotChannels> {
   const threadStatus = await ensureText(
     MAIN_CHANNELS.threadStatus,
     catOps,
-    '🧵 Riley posts a fresh hourly summary of open workspace threads and close-ready items.',
+    '🧵 Automated hourly summary of open workspace threads and close-ready items.',
     '🧵 Thread status snapshots post here.',
-    { owner: 'riley', cadence: 'hourly', staleAlert: '2h' }
+    { owner: 'system', cadence: 'hourly', staleAlert: '2h' }
   );
 
   const decisions = await ensureText(
@@ -449,7 +449,7 @@ export async function setupChannels(guild: Guild): Promise<BotChannels> {
     catOps,
     '📦 Live GitHub activity feed — commits, PRs, issues, releases',
     '📦 GitHub activity feed posts here as one-line updates.',
-    { owner: 'riley', cadence: 'on-event', staleAlert: '24h' }
+    { owner: 'system', cadence: 'on-event', staleAlert: '24h' }
   );
 
   const upgrades = await ensureText(
@@ -457,7 +457,7 @@ export async function setupChannels(guild: Guild): Promise<BotChannels> {
     catOps,
     '🆙 Agent-proposed upgrades: better ways of working, blockers to remove, and worthwhile capability enhancements',
     '🆙 Agents can post upgrade ideas, blockers to remove, and automation/tooling enhancements here for Jordan to approve.',
-    { owner: 'riley', cadence: 'daily-triage', staleAlert: '48h' }
+    { owner: 'system', cadence: 'daily-triage', staleAlert: '48h' }
   );
 
   const tools = await ensureText(
@@ -524,7 +524,7 @@ export async function setupChannels(guild: Guild): Promise<BotChannels> {
     catOps,
     '🧯 Voice runtime errors and per-stage latency logs (ms) for live debugging',
     `🧯 **Voice Runtime Logs**\n\nLive voice pipeline telemetry and failures.\nStages include STT, Riley LLM, TTS/playback, sub-agent fan-out, and total turn latency.`,
-    { owner: 'riley', cadence: 'on-error', staleAlert: '7d' }
+    { owner: 'system', cadence: 'on-error', staleAlert: '7d' }
   );
 
   const agentErrors = await ensureText(
@@ -532,7 +532,7 @@ export async function setupChannels(guild: Guild): Promise<BotChannels> {
     catOps,
     '🚨 Central runtime and agent error feed for postmortems and rapid fixes',
     `🚨 **Agent Runtime Errors**\n\nCentralized Riley, sub-agent, tooling, and automation failures for later diagnosis and cleanup.`,
-    { owner: 'riley', cadence: 'on-error', staleAlert: '7d' }
+    { owner: 'system', cadence: 'on-error', staleAlert: '7d' }
   );
 
   const careerOps = await ensureText(
@@ -627,7 +627,10 @@ export async function setupChannels(guild: Guild): Promise<BotChannels> {
     if (hardenSensitive) {
       const sensitiveChannels = [terminal, voiceErrors, agentErrors, limits, cost, callLog, upgrades, careerOps];
       const everyoneRoleId = guild.roles.everyone.id;
-      const ownerId = guild.ownerId;
+      const ownerMember = await guild.fetchOwner().catch(() => null);
+      if (!ownerMember) {
+        console.warn('Could not resolve guild owner member for sensitive channel ACL hardening');
+      }
 
       for (const channel of sensitiveChannels) {
         try {
@@ -640,14 +643,16 @@ export async function setupChannels(guild: Guild): Promise<BotChannels> {
             SendMessages: true,
             SendMessagesInThreads: true,
           });
-          await channel.permissionOverwrites.edit(ownerId, {
-            ViewChannel: true,
-            ReadMessageHistory: true,
-            SendMessages: true,
-            SendMessagesInThreads: true,
-            ManageMessages: true,
-            ManageThreads: true,
-          });
+          if (ownerMember) {
+            await channel.permissionOverwrites.edit(ownerMember, {
+              ViewChannel: true,
+              ReadMessageHistory: true,
+              SendMessages: true,
+              SendMessagesInThreads: true,
+              ManageMessages: true,
+              ManageThreads: true,
+            });
+          }
         } catch (err) {
           console.warn(`Failed to harden permissions in #${channel.name}:`, err instanceof Error ? err.message : 'Unknown');
         }

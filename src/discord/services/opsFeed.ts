@@ -102,6 +102,7 @@ function newCorrelationId(seed = ''): string {
 
 function sanitizeValue(value: string, maxLen = 200): string {
   return String(value || '')
+    .replace(/\[ACTION:[^\]]+\]/gi, ' ')
     .replace(/@(everyone|here)/gi, 'at-$1')
     .replace(/<@[!&]?\d+>/g, 'mention')
     .replace(/\s+/g, ' ')

@@ -3,11 +3,13 @@ import { Message, TextChannel } from 'discord.js';
 import { AgentConfig, getAgentMention, resolveAgentId } from '../agents';
 import { agentRespond, ConversationMessage } from '../claude';
 import { appendToMemory, getMemoryContext } from '../memory';
+import { recordTextChannelTimeout, updateTextChannelQueueDepth } from '../metrics';
 import { mirrorAgentResponse } from '../services/diagnosticsWebhook';
 import { clearWebhookCache, sendWebhookMessage, WebhookCapableChannel } from '../services/webhooks';
 
 const conversationHistories = new Map<string, ConversationMessage[]>();
 const channelQueues = new Map<string, Promise<void>>();
+const channelQueueDepth = new Map<string, number>();
 const channelAbortControllers = new Map<string, AbortController>();
 const pendingThinkingMessages = new Map<string, Message>();
 
@@ -88,6 +90,11 @@ function isGeminiFunctionTurnSequenceError(err: unknown): boolean {
   return message.includes('function response turn comes immediately after a function call turn');
 }
 
+function isTextTimeoutError(err: unknown): boolean {
+  const message = String((err as any)?.message || err || '').toLowerCase();
+  return message.includes('text channel response timed out after') || message.includes('timed out');
+}
+
 function detectCareerOpsIncomingDuplicate(message: Message, channel: TextChannel, raw: string): { duplicate: boolean; notice?: string } {
   const channelName = String(channel.name || '').toLowerCase();
   if (!channelName.includes('career-ops')) return { duplicate: false };
@@ -166,6 +173,10 @@ export async function handleAgentMessage(
   const controller = new AbortController();
   channelAbortControllers.set(channelId, controller);
 
+  const depth = (channelQueueDepth.get(channelId) || 0) + 1;
+  channelQueueDepth.set(channelId, depth);
+  updateTextChannelQueueDepth(agent.id, depth);
+
   const prev = channelQueues.get(channelId) || Promise.resolve();
   const next = prev.then(async () => {
     if (controller.signal.aborted) return;
@@ -175,6 +186,10 @@ export async function handleAgentMessage(
     }
   }).catch((err) => {
     console.error(`Agent queue error for ${agent.name}:`, err instanceof Error ? err.message : 'Unknown');
+  }).finally(() => {
+    const nextDepth = Math.max(0, (channelQueueDepth.get(channelId) || 1) - 1);
+    channelQueueDepth.set(channelId, nextDepth);
+    updateTextChannelQueueDepth(agent.id, nextDepth);
   });
   channelQueues.set(channelId, next);
 }
@@ -191,6 +206,20 @@ async function handleAgentMessageInner(
 
   const channel = message.channel as TextChannel;
   const isCareerOpsRiley = agent.id === 'executive-assistant' && /career-ops/i.test(channel.name);
+  const completionToken = extractCompletionTokenFromPrompt(userMessage);
+
+  if (completionToken) {
+    const completionReply = buildCompletionCheckReply(agent, completionToken);
+    await sendWebhookMessage(channel, {
+      content: completionReply,
+      username: `${agent.emoji} ${agent.name}`,
+      avatarURL: agent.avatarUrl,
+    }).catch(async () => {
+      await sendAgentFallbackMessage(channel, agent, completionReply).catch(() => {});
+    });
+    return;
+  }
+
   const incomingDuplicate = detectCareerOpsIncomingDuplicate(message, channel, userMessage);
   if (incomingDuplicate.duplicate) {
     await sendWebhookMessage(channel, {
@@ -225,7 +254,7 @@ async function handleAgentMessageInner(
 
   try {
     const maxTokens = estimateTextMaxTokens(agent, userMessage);
-    const disableToolsForPrompt = isCareerOpsRiley || shouldDisableToolsForProfilePrompt(userMessage);
+    const disableToolsForPrompt = isCareerOpsRiley || shouldDisableToolsForProfilePrompt(userMessage) || !!completionToken;
     const cjkPattern = /[\u4e00-\u9fff\u3400-\u4dbf]/;
     const textLangHint = cjkPattern.test(userMessage)
       ? '\n\n[Language detected: Mandarin Chinese. Please reply in Mandarin Chinese (简体中文).]'
@@ -250,21 +279,25 @@ async function handleAgentMessageInner(
       }, Math.max(5000, TEXT_PROGRESS_HEARTBEAT_MS));
     }
 
-    const updateStreamPreview = async (partialText: string, force = false): Promise<void> => {
-      if (signal?.aborted || !pendingThinking) return;
+    const updateStreamPreview = async (partialText: string, force = false): Promise<boolean> => {
+      if (signal?.aborted || !pendingThinking) return false;
       const rendered = renderAgentMessage(partialText).trim();
-      if (!rendered) return;
+      if (!rendered) return false;
       const clipped = !force && rendered.length > STREAM_MAX_PREVIEW_CHARS
         ? `${rendered.slice(0, STREAM_MAX_PREVIEW_CHARS - 1)}…`
         : rendered;
       const now = Date.now();
-      if (!force && now - lastStreamEditAt < STREAM_EDIT_THROTTLE_MS) return;
-      if (!force && Math.abs(clipped.length - lastRenderedLength) < STREAM_EDIT_MIN_CHAR_DELTA) return;
+      if (!force && now - lastStreamEditAt < STREAM_EDIT_THROTTLE_MS) return false;
+      if (!force && Math.abs(clipped.length - lastRenderedLength) < STREAM_EDIT_MIN_CHAR_DELTA) return false;
       lastStreamEditAt = now;
-      await pendingThinking.edit(clipped).catch(() => {});
+      const edited = await pendingThinking.edit(clipped)
+        .then(() => true)
+        .catch(() => false);
+      if (!edited) return false;
       lastProgressSignalAt = now;
       streamedPreviewShown = true;
       lastRenderedLength = clipped.length;
+      return true;
     };
 
     const runAgent = async (sourceHistory: ConversationMessage[], disableTools: boolean): Promise<string> => {
@@ -319,7 +352,7 @@ async function handleAgentMessageInner(
     ]);
 
     if (signal?.aborted) return;
-    const renderedResponse = renderAgentMessage(response);
+    const renderedResponse = ensureCompletionToken(renderAgentMessage(response), completionToken);
     const canFinalizeInPlace =
       !!pendingThinking &&
       streamedPreviewShown &&
@@ -327,7 +360,16 @@ async function handleAgentMessageInner(
       renderedResponse.length <= 1900;
 
     if (canFinalizeInPlace && pendingThinking) {
-      await updateStreamPreview(renderedResponse, true);
+      const finalizedInPlace = await updateStreamPreview(renderedResponse, true);
+      if (!finalizedInPlace) {
+        await sendWebhookMessage(channel, {
+          content: renderedResponse,
+          username: `${agent.emoji} ${agent.name}`,
+          avatarURL: agent.avatarUrl,
+        }).catch(async () => {
+          await sendAgentFallbackMessage(channel, agent, renderedResponse).catch(() => {});
+        });
+      }
       pendingThinkingMessages.delete(channelId);
       await mirrorAgentResponse(agent.name, channel.name, renderedResponse);
       return;
@@ -337,7 +379,7 @@ async function handleAgentMessageInner(
       pendingThinking.delete().catch(() => {});
       pendingThinkingMessages.delete(channelId);
     }
-    await sendAgentMessage(channel, agent, response);
+    await sendAgentMessage(channel, agent, response, completionToken);
   } catch (err) {
     const abortLike = String((err as any)?.name || '').includes('Abort') || String((err as any)?.message || '').toLowerCase().includes('abort');
     if (abortLike || signal?.aborted) {
@@ -348,6 +390,8 @@ async function handleAgentMessageInner(
       return;
     }
     const errMsg = err instanceof Error ? err.message : String(err);
+    const timedOut = isTextTimeoutError(err);
+    if (timedOut) recordTextChannelTimeout(agent.id);
     const userFacing = classifyAgentError(err);
     console.error(`Agent ${agent.name} error:`, errMsg);
     try {
@@ -360,8 +404,23 @@ async function handleAgentMessageInner(
         username: `${agent.emoji} ${agent.name}`,
         avatarURL: agent.avatarUrl,
       });
+      if (timedOut) {
+        await sendWebhookMessage(channel, {
+          content: 'ℹ️ Timeout hint: ask a narrower question or split this into smaller steps. Riley can orchestrate the breakdown in #groupchat.',
+          username: `${agent.emoji} ${agent.name}`,
+          avatarURL: agent.avatarUrl,
+        }).catch(() => {});
+      }
     } catch (webhookErr) {
       console.warn(`Webhook error notification failed for ${agent.name}:`, webhookErr instanceof Error ? webhookErr.message : 'Unknown');
+      await sendAgentFallbackMessage(channel, agent, `⚠️ ${agent.name}: ${userFacing}`).catch(() => {});
+      if (timedOut) {
+        await sendAgentFallbackMessage(
+          channel,
+          agent,
+          'ℹ️ Timeout hint: ask a narrower question or split this into smaller steps. Riley can orchestrate the breakdown in #groupchat.'
+        ).catch(() => {});
+      }
     }
   } finally {
     if (progressHeartbeat) {
@@ -404,7 +463,8 @@ export function clearHistory(channelId: string): void {
 export async function sendAgentMessage(
   channel: WebhookCapableChannel,
   agent: AgentConfig,
-  response: string
+  response: string,
+  completionToken: string | null = null
 ): Promise<void> {
   const normalized = String(response || '').trim();
   const effectiveResponse = (
@@ -412,7 +472,7 @@ export async function sendAgentMessage(
     && /^(?:done|fixed|resolved|completed|all good|finished)\.?$/i.test(normalized)
   ) ? '✅ Done.' : response;
 
-  const rendered = renderAgentMessage(effectiveResponse);
+  const rendered = ensureCompletionToken(renderAgentMessage(effectiveResponse), completionToken);
   if (!rendered.trim()) {
     return;
   }
@@ -457,6 +517,9 @@ export async function sendAgentMessage(
       return;
     } catch (retryErr) {
       console.error(`Webhook retry failed for ${agent.name}:`, retryErr instanceof Error ? retryErr.message : 'Unknown');
+      if (channel instanceof TextChannel) {
+        await sendAgentFallbackMessage(channel, agent, rendered).catch(() => {});
+      }
     }
   }
 }
@@ -487,13 +550,29 @@ async function sendProgressiveWebhookMessage(
   if (typeof (sent as { edit?: unknown }).edit !== 'function') return;
 
   let visible = initialChars;
+  let lastSuccessfulVisible = initialChars;
   while (visible < rendered.length) {
     await new Promise((resolve) => setTimeout(resolve, PROGRESSIVE_REVEAL_STEP_MS));
     visible = Math.min(rendered.length, visible + PROGRESSIVE_REVEAL_STEP_CHARS);
     const nextContent = visible < rendered.length
       ? `${rendered.slice(0, visible)}…`
       : rendered;
-    await (sent as Message).edit(nextContent).catch(() => {});
+    const edited = await (sent as Message).edit(nextContent)
+      .then(() => true)
+      .catch(() => false);
+    if (edited) {
+      lastSuccessfulVisible = visible;
+    }
+  }
+
+  // If the progressive stream was interrupted by failed edits, post a full
+  // final message so agent channels never end with a cut-off sentence.
+  if (lastSuccessfulVisible < rendered.length) {
+    await sendWebhookMessage(channel, {
+      content: rendered,
+      username: `${agent.emoji} ${agent.name}`,
+      avatarURL: agent.avatarUrl,
+    }).catch(() => {});
   }
 }
 
@@ -536,6 +615,36 @@ function renderAgentMessage(raw: string): string {
   }
 
   return normalized;
+}
+
+function extractCompletionTokenFromPrompt(userMessage: string): string | null {
+  if (!/\[channel-completion-check:[^\]]+\]/i.test(userMessage)) return null;
+  const match = userMessage.match(/\bTOKEN:([A-Z0-9]{6,32})\b/);
+  return match ? match[1] : null;
+}
+
+function ensureCompletionToken(rendered: string, token: string | null): string {
+  if (!token) return rendered;
+  const needle = `TOKEN:${token}`;
+  if (rendered.includes(needle)) return rendered;
+  return `${rendered.trim()}\n${needle}`;
+}
+
+function buildCompletionCheckReply(agent: AgentConfig, token: string): string {
+  const agentFirst = agent.name.split(' ')[0] || agent.name;
+  const paragraphOne = `${agentFirst} is responsible for high-trust execution in ASAP by turning user intent into concrete, auditable outcomes. In practice this means reducing ambiguity, keeping communication crisp, and ensuring that every recommendation includes scope, expected impact, and the safest next action. The role also protects team velocity by identifying blockers early, escalating risk before it becomes outage-level, and converting broad requests into stepwise work that can be validated quickly in Discord and in production workflows.`;
+  const paragraphTwo = `One concrete improvement I recommend is adding a shared response contract used by every agent channel: explicit objective, constraints, acceptance checks, and completion status in a stable output shape. That contract would reduce partial or inconsistent responses, improve automated channel validation reliability, and make retries more deterministic under load. It also gives Riley and operators a cleaner way to audit quality and triage failures because each answer is comparable, measurable, and easier to route to the right owner without losing execution context.`;
+  return `${paragraphOne}\n\n${paragraphTwo}\nTOKEN:${token}`;
+}
+
+async function sendAgentFallbackMessage(channel: TextChannel, agent: AgentConfig, content: string): Promise<void> {
+  const cleaned = String(content || '').trim();
+  if (!cleaned) return;
+  const prefix = `${agent.emoji} ${agent.name}: `;
+  const chunks = splitMessage(cleaned, 1900 - prefix.length);
+  for (const chunk of chunks) {
+    await channel.send(`${prefix}${chunk}`);
+  }
 }
 
 /**

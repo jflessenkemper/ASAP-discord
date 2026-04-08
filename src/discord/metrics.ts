@@ -75,11 +75,13 @@ const ttsErrorsTotal  = registerCounter('asap_tts_errors_total',  'Total TTS fai
 const agentInvocations = registerCounter('asap_agent_invocations_total', 'Total agent response invocations by agent id');
 const rateLimitHits   = registerCounter('asap_rate_limit_hits_total', 'Total 429 rate-limit hits from Gemini');
 const thinkingChimesPlayed = registerCounter('asap_thinking_chimes_played_total', 'Total thinking chimes played in voice calls');
+const textChannelTimeouts = registerCounter('asap_text_channel_timeouts_total', 'Total text channel response timeouts by agent id');
 
 const voiceCallsActive = registerGauge('asap_voice_calls_active', 'Number of currently active voice calls');
 const geminiSpentUsd   = registerGauge('asap_gemini_spent_usd',   'USD spent on Gemini API today');
 const memoryUsageMb    = registerGauge('asap_memory_usage_mb',    'Heap memory usage in MB');
 const processUptimeSec = registerGauge('asap_process_uptime_seconds', 'Process uptime in seconds');
+const textChannelQueueDepth = registerGauge('asap_text_channel_queue_depth', 'Current queued text-channel tasks by agent id');
 
 const ttsLatencyMs     = registerHistogram('asap_tts_latency_ms',        'TTS generation latency (ms)',            [50, 100, 200, 500, 1000, 2000, 5000]);
 const transcriptionMs  = registerHistogram('asap_transcription_latency_ms', 'Voice transcription latency (ms)',   [200, 500, 1000, 2000, 3000, 5000, 10000]);
@@ -152,6 +154,16 @@ export function recordAgentResponse(agentId: string, latencyMs: number): void {
 /** Call when a Gemini 429 is received. */
 export function recordRateLimitHit(): void {
   incCounter(rateLimitHits);
+}
+
+/** Call when a text-channel agent response times out. */
+export function recordTextChannelTimeout(agentId: string): void {
+  incCounter(textChannelTimeouts, { agent: agentId });
+}
+
+/** Update queued text-channel work depth for an agent. */
+export function updateTextChannelQueueDepth(agentId: string, depth: number): void {
+  setGauge(textChannelQueueDepth, Math.max(0, depth), { agent: agentId });
 }
 
 /** Call when a thinking chime is played in a voice call. */

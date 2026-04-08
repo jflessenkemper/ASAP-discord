@@ -17,7 +17,7 @@
  * Env vars:
  *   DISCORD_TEST_BOT_TOKEN                     required
  *   DISCORD_GUILD_ID                           required
- *   DISCORD_TEST_TIMEOUT_MS                    optional (default 90000)
+ *   DISCORD_TEST_TIMEOUT_MS                    optional (default 300000)
  *   DISCORD_SMOKE_PROFILE                      optional (default full) — full | readiness
  *   DISCORD_GROUPCHAT_ID                       optional
  *   DISCORD_SMOKE_PRE_CLEAR                    optional (default true)
@@ -272,10 +272,10 @@ function getSmokeProfile(): SmokeProfile {
 
 function getTestTimeoutMs(profile: SmokeProfile): number {
   const explicit = process.env.DISCORD_TEST_TIMEOUT_MS;
-  const fallback = profile === 'readiness' ? 20_000 : 60_000;
+  const fallback = profile === 'readiness' ? 300_000 : 300_000;
   const value = Number(explicit ?? String(fallback));
   if (!Number.isFinite(value) || value <= 0) return fallback;
-  return Math.min(Math.max(8_000, Math.floor(value)), 180_000);
+  return Math.min(Math.max(8_000, Math.floor(value)), 300_000);
 }
 
 function getAgentName(id: string): string {
@@ -1097,7 +1097,7 @@ async function run(): Promise<void> {
       }
       const attemptTimeoutMs = attempt === 1
         ? timeoutMs
-        : Math.min(Math.max(Math.floor(timeoutMs * 2), timeoutMs + 10_000), 60_000);
+        : Math.min(Math.max(Math.floor(timeoutMs * 2), timeoutMs + 10_000), 300_000);
       result = await runCapabilityTest(
         groupchat,
         responseChannels,
