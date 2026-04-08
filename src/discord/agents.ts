@@ -72,38 +72,38 @@ const COLOR_MAP: Record<string, number> = {
 
 /**
  * Agent avatar URLs.
- * Use ui-avatars for high-availability webhook avatar rendering.
+ * Use DiceBear portrait-style PNG avatars for stable webhook identities.
  */
 const AVATAR_MAP: Record<string, string> = {
-  qa:                    'https://ui-avatars.com/api/?name=Max+QA+Check&background=50C878&color=36454F&size=256&bold=true&format=png',
-  'ux-reviewer':         'https://ui-avatars.com/api/?name=Sophie+UX+Lens&background=303F9F&color=FFD600&size=256&bold=true&format=png',
-  'security-auditor':    'https://ui-avatars.com/api/?name=Kane+Security+Lock&background=1F2937&color=FDE047&size=256&bold=true&format=png',
-  'api-reviewer':        'https://ui-avatars.com/api/?name=Raj+API+Schema&background=708090&color=00FFFF&size=256&bold=true&format=png',
-  dba:                   'https://ui-avatars.com/api/?name=Elena+DBA+Query&background=7C3AED&color=FFFFFF&size=256&bold=true&format=png',
-  performance:           'https://ui-avatars.com/api/?name=Kai+Performance+Pulse&background=0EA5E9&color=0F172A&size=256&bold=true&format=png',
-  devops:                'https://ui-avatars.com/api/?name=Jude+DevOps+Pipeline&background=4338CA&color=FFFFFF&size=256&bold=true&format=png',
-  copywriter:            'https://ui-avatars.com/api/?name=Liv+Copywriter+Pen&background=0F766E&color=F8FAFC&size=256&bold=true&format=png',
-  developer:             'https://ui-avatars.com/api/?name=Ace+Developer+Gear&background=4682B4&color=FFD600&size=256&bold=true&format=png',
-  lawyer:                'https://ui-avatars.com/api/?name=Harper+Law+Brief&background=14532D&color=FACC15&size=256&bold=true&format=png',
-  'executive-assistant': 'https://ui-avatars.com/api/?name=Riley+EA+Planner&background=1D4ED8&color=FFFFFF&size=256&bold=true&format=png',
-  'ios-engineer':        'https://ui-avatars.com/api/?name=Mia+iOS+Swift&background=F97316&color=FFFFFF&size=256&bold=true&format=png',
-  'android-engineer':    'https://ui-avatars.com/api/?name=Leo+Android+Studio&background=16A34A&color=ECFCCB&size=256&bold=true&format=png',
+  qa:                    'https://api.dicebear.com/9.x/personas/png?seed=MaxQA&size=256&backgroundColor=50c878',
+  'ux-reviewer':         'https://api.dicebear.com/9.x/personas/png?seed=SophieUX&size=256&backgroundColor=303f9f',
+  'security-auditor':    'https://api.dicebear.com/9.x/personas/png?seed=KaneSecurity&size=256&backgroundColor=1f2937',
+  'api-reviewer':        'https://api.dicebear.com/9.x/personas/png?seed=RajAPI&size=256&backgroundColor=708090',
+  dba:                   'https://api.dicebear.com/9.x/personas/png?seed=ElenaDBA&size=256&backgroundColor=7c3aed',
+  performance:           'https://api.dicebear.com/9.x/personas/png?seed=KaiPerformance&size=256&backgroundColor=0ea5e9',
+  devops:                'https://api.dicebear.com/9.x/personas/png?seed=JudeDevOps&size=256&backgroundColor=4338ca',
+  copywriter:            'https://api.dicebear.com/9.x/personas/png?seed=LivCopywriter&size=256&backgroundColor=0f766e',
+  developer:             'https://api.dicebear.com/9.x/personas/png?seed=AceDeveloper&size=256&backgroundColor=4682b4',
+  lawyer:                'https://api.dicebear.com/9.x/personas/png?seed=HarperLawyer&size=256&backgroundColor=14532d',
+  'executive-assistant': 'https://api.dicebear.com/9.x/personas/png?seed=RileyEA&size=256&backgroundColor=1d4ed8',
+  'ios-engineer':        'https://api.dicebear.com/9.x/personas/png?seed=MiaiOS&size=256&backgroundColor=f97316',
+  'android-engineer':    'https://api.dicebear.com/9.x/personas/png?seed=LeoAndroid&size=256&backgroundColor=16a34a',
 };
 
 const DISPLAY_NAME: Record<string, string> = {
-  qa: 'Max (QA)✓',
-  'ux-reviewer': 'Sophie (UX Reviewer)🔎',
-  'security-auditor': 'Kane (Security Auditor)🛡',
-  'api-reviewer': 'Raj (API Reviewer)}',
-  dba: 'Elena (DBA)◈',
-  performance: 'Kai (Performance)↗',
-  devops: 'Jude (DevOps)⛭',
-  copywriter: 'Liv (Copywriter)✒',
-  developer: 'Ace (Developer)⚙',
-  lawyer: 'Harper (Lawyer)§',
-  'executive-assistant': 'Riley (Executive Assistant)✦',
-  'ios-engineer': 'Mia (iOS Engineer)◉',
-  'android-engineer': 'Leo (Android Engineer)⌁',
+  qa: 'Max (QA)',
+  'ux-reviewer': 'Sophie (UX Reviewer)',
+  'security-auditor': 'Kane (Security Auditor)',
+  'api-reviewer': 'Raj (API Reviewer)',
+  dba: 'Elena (DBA)',
+  performance: 'Kai (Performance)',
+  devops: 'Jude (DevOps)',
+  copywriter: 'Liv (Copywriter)',
+  developer: 'Ace (Developer)',
+  lawyer: 'Harper (Lawyer)',
+  'executive-assistant': 'Riley (Executive Assistant)',
+  'ios-engineer': 'Mia (iOS Engineer)',
+  'android-engineer': 'Leo (Android Engineer)',
 };
 
 const HANDLE_MAP: Record<string, string> = {

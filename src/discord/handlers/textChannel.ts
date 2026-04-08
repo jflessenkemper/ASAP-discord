@@ -138,6 +138,14 @@ function estimateTextMaxTokens(agent: AgentConfig, userMessage: string): number 
   return TEXT_MAX_TOKENS_STANDARD;
 }
 
+function shouldDisableToolsForProfilePrompt(userMessage: string): boolean {
+  const text = String(userMessage || '').toLowerCase();
+  const asksForProfileFields =
+    /(profile|avatar|picture|colors?|colour|symbol|nickname)/.test(text) &&
+    /(reply|format|one line|exact format|only|picture=|colors=|symbol=)/.test(text);
+  return asksForProfileFields;
+}
+
 /**
  * Handle a message in an individual agent channel.
  * Serialized per-channel to prevent race conditions on history.
@@ -217,6 +225,7 @@ async function handleAgentMessageInner(
 
   try {
     const maxTokens = estimateTextMaxTokens(agent, userMessage);
+    const disableToolsForPrompt = isCareerOpsRiley || shouldDisableToolsForProfilePrompt(userMessage);
     const cjkPattern = /[\u4e00-\u9fff\u3400-\u4dbf]/;
     const textLangHint = cjkPattern.test(userMessage)
       ? '\n\n[Language detected: Mandarin Chinese. Please reply in Mandarin Chinese (简体中文).]'
@@ -245,7 +254,7 @@ async function handleAgentMessageInner(
       if (signal?.aborted || !pendingThinking) return;
       const rendered = renderAgentMessage(partialText).trim();
       if (!rendered) return;
-      const clipped = rendered.length > STREAM_MAX_PREVIEW_CHARS
+      const clipped = !force && rendered.length > STREAM_MAX_PREVIEW_CHARS
         ? `${rendered.slice(0, STREAM_MAX_PREVIEW_CHARS - 1)}…`
         : rendered;
       const now = Date.now();
@@ -284,7 +293,7 @@ async function handleAgentMessageInner(
 
     let response: string;
     try {
-      response = await runAgent(history, isCareerOpsRiley);
+      response = await runAgent(history, disableToolsForPrompt);
     } catch (err) {
       if (!isGeminiFunctionTurnSequenceError(err)) {
         throw err;
