@@ -14,7 +14,7 @@ import { getAgentByChannelName } from './agents';
 import { getAgent } from './agents';
 import { registerCommands } from './commands';
 import { setVoiceErrorChannel } from './handlers/callSession';
-import { endCall, isCallActive, processTesterVoiceTurnForCall } from './handlers/callSession';
+import { startCall, endCall, isCallActive, processTesterVoiceTurnForCall } from './handlers/callSession';
 import { setBotChannels } from './handlers/documentation';
 import { setGitHubChannel } from './handlers/github';
 import { setDecisionsChannel, setThreadStatusChannel, handleDecisionReply } from './handlers/groupchat';
@@ -571,6 +571,39 @@ export async function startBot(): Promise<void> {
       } else {
         await interaction.reply({ content: `Ops command failed: ${detail}`, ephemeral: true }).catch(() => {});
       }
+    }
+  });
+
+  client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
+    if (!botChannels) return;
+
+    const targetVoiceId = botChannels.voiceChannel.id;
+    const joinedTarget = oldState.channelId !== targetVoiceId && newState.channelId === targetVoiceId;
+    const leftTarget = oldState.channelId === targetVoiceId && newState.channelId !== targetVoiceId;
+
+    // Ignore voice state updates unrelated to the managed Riley voice channel.
+    if (!joinedTarget && !leftTarget) return;
+
+    const member = newState.member || oldState.member;
+    if (!member || member.user.bot) {
+      return;
+    }
+
+    try {
+      if (joinedTarget && !isCallActive()) {
+        await startCall(botChannels.voiceChannel, botChannels.groupchat, botChannels.callLog, member);
+      }
+
+      if (leftTarget && isCallActive()) {
+        const remainingHumans = botChannels.voiceChannel.members.filter((m) => !m.user.bot).size;
+        if (remainingHumans === 0) {
+          await endCall();
+        }
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.stack || err.message : 'Unknown';
+      console.error('Voice auto join/leave handler error:', err instanceof Error ? err.message : 'Unknown');
+      void postAgentErrorLog('discord:voice-auto', 'Voice auto join/leave error', { detail: msg, level: 'warn' });
     }
   });
 
