@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-SERVER_DIR="$ROOT_DIR/server"
+SERVER_DIR="$ROOT_DIR"
 PROJECT_ID="${GOOGLE_CLOUD_PROJECT:-asap-489910}"
 DEV_LOG="${DEV_LOG:-/tmp/asap-discord-dev.log}"
 PORT="${PORT:-3101}"

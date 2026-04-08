@@ -14,7 +14,6 @@ gcloud compute ssh "$VM_NAME" --zone="$VM_ZONE" --command "
   cd '$REMOTE_ROOT'
   git fetch origin
   git reset --hard '$BRANCH'
-  cd server
   export PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
   export npm_config_playwright_skip_browser_download=true
   npm ci

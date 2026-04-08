@@ -14,7 +14,7 @@
     "discord:test:channels:fast": "tsx src/discord/channelCompletionCheck.ts --batch-size=6 --timeout-ms=60000 --retries=1 --inter-agent-stagger-ms=120 --inter-batch-delay-ms=300",
     "discord:test:dist": "node dist/discord/tester.js",
     "discord:test:fast": "DISCORD_SMOKE_PROFILE=readiness DISCORD_TEST_TIMEOUT_MS=20000 DISCORD_SMOKE_CAPABILITY_ATTEMPTS=2 DISCORD_SMOKE_PRE_CLEAR=false DISCORD_SMOKE_POLL_INTERVAL_MS=900 DISCORD_SMOKE_ELEVENLABS_VOICE_BRIDGE=false DISCORD_SMOKE_VOICE_ACTIVE_CALL=false node dist/discord/tester.js",
-    "discord:test:fast:with-runtime": "bash ../scripts/discord-smoke-fast.sh",
+    "discord:test:fast:with-runtime": "bash ./scripts/discord-smoke-fast.sh",
     "discord:test:full": "DISCORD_SMOKE_PRE_CLEAR=true node dist/discord/tester.js",
     "discord:test:readiness": "DISCORD_SMOKE_PROFILE=readiness DISCORD_TEST_TIMEOUT_MS=30000 DISCORD_SMOKE_CAPABILITY_ATTEMPTS=2 DISCORD_SMOKE_ELEVENLABS_VOICE_BRIDGE=false node dist/discord/tester.js",
     "visual:baseline": "tsx src/services/visualRegression.ts baseline",
