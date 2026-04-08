@@ -48,11 +48,13 @@ let upgradesTriageTimer: ReturnType<typeof setInterval> | null = null;
 const staleAlertDedupe = new Map<string, number>();
 const DEFAULT_TESTER_BOT_ID = '1487426371209789450';
 const RUNTIME_INSTANCE_TAG = (process.env.RUNTIME_INSTANCE_TAG || process.env.HOSTNAME || `pid-${process.pid}`).slice(0, 80);
+const nonTesterTriggerNoticeAt = new Map<string, number>();
 let dedupeTableReady = false;
 let lastDedupePruneAt = 0;
 const CHANNEL_HEARTBEAT_INTERVAL_MS = Math.max(5 * 60 * 1000, parseInt(process.env.CHANNEL_HEARTBEAT_INTERVAL_MS || '1800000', 10));
 const STALE_ALERT_COOLDOWN_MS = Math.max(10 * 60 * 1000, parseInt(process.env.CHANNEL_STALE_ALERT_COOLDOWN_MS || '7200000', 10));
 const UPGRADES_TRIAGE_INTERVAL_MS = Math.max(30 * 60 * 1000, parseInt(process.env.UPGRADES_TRIAGE_INTERVAL_MS || '21600000', 10));
+const NON_TESTER_TRIGGER_NOTICE_COOLDOWN_MS = parseInt(process.env.NON_TESTER_TRIGGER_NOTICE_COOLDOWN_MS || '120000', 10);
 const UPGRADES_TRIAGE_MARKER = '[UPGRADES_TRIAGE_V1]';
 
 type ChannelFeedContract = {
@@ -471,8 +473,20 @@ export async function startBot(): Promise<void> {
     }
 
     // Ignore bot traffic except the dedicated smoke-test bot so e2e tests can
-    // still exercise the same production routing path.
-    if (message.author.bot && !isTesterBotId(message.author.id)) return;
+    // still exercise the same production routing path. In groupchat, emit a
+    // short hint so operators know why a bot-authored trigger was ignored.
+    if (message.author.bot && !isTesterBotId(message.author.id)) {
+      if (botChannels && message.channel.id === botChannels.groupchat.id) {
+        const key = `${message.author.id}:${message.channel.id}`;
+        const now = Date.now();
+        const prev = nonTesterTriggerNoticeAt.get(key) || 0;
+        if (now - prev >= NON_TESTER_TRIGGER_NOTICE_COOLDOWN_MS) {
+          nonTesterTriggerNoticeAt.set(key, now);
+          await botChannels.groupchat.send('ℹ️ Workflow trigger ignored: use ASAPTester for Riley task routing in groupchat.').catch(() => {});
+        }
+      }
+      return;
+    }
     if (!botChannels) return;
 
     const claimed = await claimDiscordMessage(message.id).catch((err) => {

@@ -56,12 +56,30 @@ function isStaleWebhookError(err: unknown): boolean {
   return code === 10015 || code === 10003 || message.includes('unknown webhook') || message.includes('unknown channel') || message.includes('404');
 }
 
+function sanitizeWebhookUsername(name: unknown): string | undefined {
+  const raw = String(name || '').trim();
+  if (!raw) return undefined;
+
+  let normalized = raw;
+  // Remove decorative suffix symbols after a role label, e.g. "Riley (Executive Assistant)✦".
+  normalized = normalized.replace(/(\([^)]*\))\s*[^\p{L}\p{N}\s)]+$/u, '$1');
+  // Fallback trim for any remaining standalone trailing symbol clusters.
+  normalized = normalized.replace(/\s+[^\p{L}\p{N}\s]+$/u, '');
+
+  const clipped = normalized.trim();
+  return clipped ? clipped.slice(0, 80) : undefined;
+}
+
 export async function sendWebhookMessage(
   channel: WebhookCapableChannel,
   options: WebhookMessageCreateOptions,
 ): Promise<Message<boolean>> {
   const { base, threadId } = resolveWebhookParent(channel);
-  const payload = threadId ? { ...options, threadId } : options;
+  const sanitizedUsername = sanitizeWebhookUsername((options as any)?.username);
+  const normalizedOptions = sanitizedUsername
+    ? { ...options, username: sanitizedUsername }
+    : options;
+  const payload = threadId ? { ...normalizedOptions, threadId } : normalizedOptions;
   const webhook = await getWebhook(channel);
   try {
     return await webhook.send(payload);

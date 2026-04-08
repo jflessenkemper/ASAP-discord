@@ -39,7 +39,10 @@ type ToolNotificationBatch = {
 
 const TOOL_NOTIFICATION_FLUSH_MS = parseInt(process.env.TOOL_NOTIFICATION_FLUSH_MS || '2500', 10);
 const TOOL_NOTIFICATION_MAX_ITEMS = parseInt(process.env.TOOL_NOTIFICATION_MAX_ITEMS || '6', 10);
+const TOOL_NOTIFICATIONS_TOOLS_ONLY = String(process.env.TOOL_NOTIFICATIONS_TOOLS_ONLY || 'true').toLowerCase() !== 'false';
 const toolNotificationBatches = new Map<string, ToolNotificationBatch>();
+const rileyStallNoticeAt = new Map<string, number>();
+const RILEY_STALL_NOTICE_COOLDOWN_MS = parseInt(process.env.RILEY_STALL_NOTICE_COOLDOWN_MS || '120000', 10);
 
 /** Send a tool-use notification as the agent (via webhook). */
 async function sendToolNotification(channel: WebhookCapableChannel, agent: AgentConfig, summary: string): Promise<void> {
@@ -77,12 +80,19 @@ async function flushToolNotificationBatch(key: string): Promise<void> {
   }
 
   const deduped = [...new Set(items)].slice(0, TOOL_NOTIFICATION_MAX_ITEMS);
+  const channels = getBotChannels();
+  const targetChannel = (TOOL_NOTIFICATIONS_TOOLS_ONLY && channels?.tools)
+    ? channels.tools
+    : batch.channel;
+  const contextPrefix = targetChannel.id !== batch.channel.id
+    ? `[#${(batch.channel as any)?.name || 'channel'}] `
+    : '';
   const content = deduped.length === 1
-    ? `🔧 ${deduped[0]}`
-    : `🔧 ${deduped.length} tool actions:\n- ${deduped.join('\n- ')}`;
+    ? `🔧 ${contextPrefix}${deduped[0]}`
+    : `🔧 ${contextPrefix}${deduped.length} tool actions:\n- ${deduped.join('\n- ')}`;
 
   try {
-    await sendWebhookMessage(batch.channel, {
+    await sendWebhookMessage(targetChannel, {
       content,
       username: `${batch.agent.emoji} ${batch.agent.name}`,
       avatarURL: batch.agent.avatarUrl,
@@ -202,6 +212,74 @@ function markGoalProgress(status?: string): void {
   lastGoalProgressAt = Date.now();
   goalRecoveryAttempts = 0;
   if (status) goalStatus = status;
+}
+
+function inferRileyStatus(text: string, completionClaimed: boolean, completionVerified: boolean): 'fixed' | 'partially fixed' | 'blocked' {
+  const normalized = String(text || '').toLowerCase();
+  if (/\bblocked\b|\bverification pending\b|\bfailed\b|\berror\b/.test(normalized)) return 'blocked';
+  if (completionClaimed && completionVerified) return 'fixed';
+  if (completionClaimed && !completionVerified) return 'blocked';
+  return 'partially fixed';
+}
+
+function enforceRileyResponseContract(
+  text: string,
+  completionClaimed: boolean,
+  completionVerified: boolean,
+): string {
+  const normalized = String(text || '').trim();
+  if (!normalized) return normalized;
+  const hasContract = /\bstatus\s*:/i.test(normalized)
+    && /\broot cause\s*:/i.test(normalized)
+    && /\bfix location\s*:/i.test(normalized)
+    && /\bverification evidence\s*:/i.test(normalized)
+    && /\bresidual risk\s*:/i.test(normalized);
+  if (hasContract) return normalized;
+
+  const status = inferRileyStatus(normalized, completionClaimed, completionVerified);
+  const rootCause = normalized.split(/(?<=[.!?])\s+/)[0]?.slice(0, 180) || 'Investigation in progress.';
+  const fixLocations = (normalized.match(/(?:[A-Za-z0-9_.-]+\/)+[A-Za-z0-9_.-]+\.[A-Za-z0-9]+/g) || []).slice(0, 3);
+  const verificationEvidence = completionVerified
+    ? 'Runtime evidence present (harness/screenshots/checks observed).'
+    : 'Runtime evidence missing or blocked; completion is not yet verified.';
+  const residualRisk = status === 'fixed'
+    ? 'Monitor regressions in the same user flow after next deploy.'
+    : 'User flow remains at risk until verification passes.';
+
+  return [
+    normalized,
+    '',
+    `Status: ${status}`,
+    `Root cause: ${rootCause}`,
+    `Fix location: ${fixLocations.length > 0 ? fixLocations.join(', ') : 'No concrete file path provided yet.'}`,
+    `Verification evidence: ${verificationEvidence}`,
+    `Residual risk: ${residualRisk}`,
+  ].join('\n');
+}
+
+async function emitRileyStallAlert(
+  workspaceChannel: WebhookCapableChannel,
+  groupchat: TextChannel,
+  goal: string,
+  timeoutMs: number,
+): Promise<boolean> {
+  const key = goal.trim().toLowerCase().slice(0, 240) || 'none';
+  const now = Date.now();
+  const prev = rileyStallNoticeAt.get(key) || 0;
+  if (now - prev < RILEY_STALL_NOTICE_COOLDOWN_MS) {
+    return false;
+  }
+  rileyStallNoticeAt.set(key, now);
+
+  const seconds = Math.round(timeoutMs / 1000);
+  const msg = `⚠️ No Riley response after ${seconds}s for this goal. Investigating stall and retrying safeguards.`;
+  if ('send' in workspaceChannel) {
+    await workspaceChannel.send(msg).catch(() => {});
+  }
+  if (workspaceChannel.id !== groupchat.id) {
+    await groupchat.send(msg).catch(() => {});
+  }
+  return true;
 }
 
 function compactAuditField(value: string | undefined | null, maxLen = 80): string {
@@ -1488,19 +1566,16 @@ async function withRileyResponseWatchdog(
   let fired = false;
   const timer = setTimeout(() => {
     fired = true;
-    const seconds = Math.round(RILEY_NO_RESPONSE_TIMEOUT_MS / 1000);
-    const msg = `⚠️ No Riley response after ${seconds}s for this goal. Investigating stall and retrying safeguards.`;
-    void postAgentErrorLog('riley:watchdog', 'No Riley response observed for goal', {
-      agentId: 'executive-assistant',
-      detail: `goal=${activeGoal || 'none'} timeoutMs=${RILEY_NO_RESPONSE_TIMEOUT_MS}`,
-      level: 'warn',
-    });
-    if ('send' in workspaceChannel) {
-      void workspaceChannel.send(msg).catch(() => {});
-    }
-    if (workspaceChannel.id !== groupchat.id) {
-      void groupchat.send(msg).catch(() => {});
-    }
+    const goal = activeGoal || 'none';
+    void emitRileyStallAlert(workspaceChannel, groupchat, goal, RILEY_NO_RESPONSE_TIMEOUT_MS)
+      .then((posted) => {
+        if (!posted) return;
+        void postAgentErrorLog('riley:watchdog', 'No Riley response observed for goal', {
+          agentId: 'executive-assistant',
+          detail: `goal=${goal} timeoutMs=${RILEY_NO_RESPONSE_TIMEOUT_MS}`,
+          level: 'warn',
+        });
+      });
   }, RILEY_NO_RESPONSE_TIMEOUT_MS);
 
   try {
@@ -1576,17 +1651,16 @@ async function handleRileyMessage(
 
     noResponseTimer = setTimeout(() => {
       if (hasVisibleRileyResponse || signal?.aborted) return;
-      const seconds = Math.round(RILEY_NO_RESPONSE_TIMEOUT_MS / 1000);
-      const timeoutText = `⚠️ Riley has not responded in ${seconds}s for this goal. The run may be stalled; timeout safeguards are active.`;
-      void sendAgentMessage(workspaceChannel, riley, timeoutText).catch(() => {});
-      if (workspaceChannel.id !== groupchat.id) {
-        void groupchat.send(timeoutText).catch(() => {});
-      }
-      void postAgentErrorLog('riley:timeout', 'No Riley response within timeout', {
-        agentId: 'executive-assistant',
-        detail: `goal=${activeGoal || 'none'} timeoutMs=${RILEY_NO_RESPONSE_TIMEOUT_MS}`,
-        level: 'warn',
-      });
+      const goal = activeGoal || 'none';
+      void emitRileyStallAlert(workspaceChannel, groupchat, goal, RILEY_NO_RESPONSE_TIMEOUT_MS)
+        .then((posted) => {
+          if (!posted) return;
+          void postAgentErrorLog('riley:timeout', 'No Riley response within timeout', {
+            agentId: 'executive-assistant',
+            detail: `goal=${goal} timeoutMs=${RILEY_NO_RESPONSE_TIMEOUT_MS}`,
+            level: 'warn',
+          });
+        });
     }, RILEY_NO_RESPONSE_TIMEOUT_MS);
 
     stopTyping = startTypingLoop(rileyWorkChannel);
@@ -1670,6 +1744,13 @@ async function handleRileyMessage(
         displayResponse = '⏳ Verification pending: I cannot mark this as complete yet because there is no checkable runtime evidence in screenshots/harness output. I will keep this open until proof is posted.';
       }
     }
+
+    const statusBlocked = /\bblocked\b|\bverification pending\b/i.test(displayResponse);
+    displayResponse = enforceRileyResponseContract(
+      displayResponse,
+      completionClaimed && !statusBlocked,
+      completionVerified && !statusBlocked,
+    );
 
     if (shouldQueueDecisionReview(displayResponse)) {
       const target = decisionsChannel || groupchat;
@@ -2355,6 +2436,10 @@ function buildChainCompletionWatchdogMessage(findings: string[], errors: string[
   return appendDefaultNextSteps(body);
 }
 
+function hasBlockingVerificationFinding(findings: string[]): boolean {
+  return findings.some((line) => /\bverification\s+is\s+blocked\b|\bblocked\b|\bunable\s+to\s+find\b|\bapp\s+.*not\s+loading\b|\bno\s+elements\b/i.test(String(line || '')));
+}
+
 async function recoverFromAgentErrors(
   rileyResponse: string,
   errorLines: string[],
@@ -2556,6 +2641,10 @@ async function handleAgentChain(
     const direct = await handleSubAgents(otherDirected, rileyResponse, groupchat, workspaceChannel, signal);
     consolidatedFindings.push(...direct.findings);
     consolidatedErrors.push(...direct.errors);
+  }
+
+  if (!signal?.aborted && hasBlockingVerificationFinding(consolidatedFindings)) {
+    consolidatedErrors.push('Verification is blocked based on specialist findings; completion remains blocked until verification passes.');
   }
 
   if (RILEY_ACE_ERROR_RECOVERY && !signal?.aborted && consolidatedErrors.length > 0) {
