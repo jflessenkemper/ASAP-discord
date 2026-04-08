@@ -83,6 +83,11 @@ function classifyAgentError(err: unknown): string {
   return 'An internal error interrupted the response.';
 }
 
+function isGeminiFunctionTurnSequenceError(err: unknown): boolean {
+  const message = String((err as any)?.message || err || '').toLowerCase();
+  return message.includes('function response turn comes immediately after a function call turn');
+}
+
 function detectCareerOpsIncomingDuplicate(message: Message, channel: TextChannel, raw: string): { duplicate: boolean; notice?: string } {
   const channelName = String(channel.name || '').toLowerCase();
   if (!channelName.includes('career-ops')) return { duplicate: false };
@@ -253,26 +258,42 @@ async function handleAgentMessageInner(
       lastRenderedLength = clipped.length;
     };
 
-    const response = await withTextTimeout(agentRespond(agent, history, userMessageWithLang, async (toolName, summary) => {
-      if (signal?.aborted) return;
-      try {
-        await sendWebhookMessage(channel, {
-          content: `🔧 ${summary}`,
-          username: `${agent.emoji} ${agent.name}`,
-          avatarURL: agent.avatarUrl,
-        });
-      } catch (err) {
-        console.warn(`Webhook tool notification failed for ${agent.name}:`, err instanceof Error ? err.message : 'Unknown');
-      }
+    const runAgent = async (sourceHistory: ConversationMessage[], disableTools: boolean): Promise<string> => {
+      return await withTextTimeout(agentRespond(agent, sourceHistory, userMessageWithLang, async (_toolName, summary) => {
+        if (signal?.aborted) return;
+        if (disableTools) return;
+        try {
+          await sendWebhookMessage(channel, {
+            content: `🔧 ${summary}`,
+            username: `${agent.emoji} ${agent.name}`,
+            avatarURL: agent.avatarUrl,
+          });
+        } catch (err) {
+          console.warn(`Webhook tool notification failed for ${agent.name}:`, err instanceof Error ? err.message : 'Unknown');
+        }
       }, {
         signal,
         maxTokens,
-        disableTools: isCareerOpsRiley,
+        disableTools,
         threadKey: `text:${channelId}`,
         onPartialText: async (partialText) => {
           await updateStreamPreview(partialText);
         },
       }), TEXT_AGENT_RESPONSE_TIMEOUT_MS);
+    };
+
+    let response: string;
+    try {
+      response = await runAgent(history, isCareerOpsRiley);
+    } catch (err) {
+      if (!isGeminiFunctionTurnSequenceError(err)) {
+        throw err;
+      }
+      console.warn(`Resetting ${agent.name} text-channel history after function-turn sequencing error`);
+      history = [];
+      conversationHistories.set(channelId, history);
+      response = await runAgent(history, true);
+    }
 
       if (signal?.aborted) return;
 
