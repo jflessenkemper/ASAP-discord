@@ -73,12 +73,16 @@ export function setPRReviewCallback(
 }
 
 /**
- * Safe repository root — resolved at startup.
- * In Docker: /app, in local dev: the repo root.
+ * Safe repository root for agent code tools.
+ * AGENT_REPO_ROOT can point tools at a different checkout (e.g., /opt/asap-app)
+ * while the bot runtime itself lives in ASAP-discord.
  */
-const REPO_ROOT = fs.existsSync('/app/package.json')
+const DEFAULT_REPO_ROOT = fs.existsSync('/app/package.json')
   ? '/app'
   : path.resolve(__dirname, '..', '..', '..');
+const REPO_ROOT = process.env.AGENT_REPO_ROOT
+  ? path.resolve(process.env.AGENT_REPO_ROOT)
+  : DEFAULT_REPO_ROOT;
 const SERVER_ROOT = fs.existsSync(path.join(REPO_ROOT, 'server', 'package.json'))
   ? path.join(REPO_ROOT, 'server')
   : REPO_ROOT;
@@ -149,7 +153,7 @@ export const REPO_TOOLS = [
   {
     name: 'read_file',
     description:
-      'Read the contents of a file in the ASAP-discord repository. Use relative paths from the repo root (e.g. "src/index.ts", "src/discord/tools.ts").',
+      'Read the contents of a file in the target repository. Use relative paths from the repo root.',
     input_schema: {
       type: 'object' as const,
       properties: {
@@ -172,7 +176,7 @@ export const REPO_TOOLS = [
   {
     name: 'write_file',
     description:
-      'Create or overwrite a file in the ASAP-discord repository. Use relative paths. Parent directories are created automatically.',
+      'Create or overwrite a file in the target repository. Use relative paths. Parent directories are created automatically.',
     input_schema: {
       type: 'object' as const,
       properties: {
@@ -366,7 +370,7 @@ export const REPO_TOOLS = [
   {
     name: 'list_pull_requests',
     description:
-      'List open pull requests on the ASAP-discord repository.',
+      'List open pull requests on the target repository.',
     input_schema: {
       type: 'object' as const,
       properties: {},
