@@ -76,9 +76,12 @@ export function setPRReviewCallback(
  * Safe repository root — resolved at startup.
  * In Docker: /app, in local dev: the repo root.
  */
-const REPO_ROOT = fs.existsSync('/app/server')
+const REPO_ROOT = fs.existsSync('/app/package.json')
   ? '/app'
   : path.resolve(__dirname, '..', '..', '..');
+const SERVER_ROOT = fs.existsSync(path.join(REPO_ROOT, 'server', 'package.json'))
+  ? path.join(REPO_ROOT, 'server')
+  : REPO_ROOT;
 
 /** Directories agents are never allowed to touch */
 const BLOCKED_PATHS = [
@@ -146,7 +149,7 @@ export const REPO_TOOLS = [
   {
     name: 'read_file',
     description:
-      'Read the contents of a file in the ASAP repository. Use relative paths from the repo root (e.g. "server/src/index.ts", "components/ClientDashboard.tsx").',
+      'Read the contents of a file in the ASAP-discord repository. Use relative paths from the repo root (e.g. "src/index.ts", "src/discord/tools.ts").',
     input_schema: {
       type: 'object' as const,
       properties: {
@@ -169,7 +172,7 @@ export const REPO_TOOLS = [
   {
     name: 'write_file',
     description:
-      'Create or overwrite a file in the ASAP repository. Use relative paths. Parent directories are created automatically.',
+      'Create or overwrite a file in the ASAP-discord repository. Use relative paths. Parent directories are created automatically.',
     input_schema: {
       type: 'object' as const,
       properties: {
@@ -363,7 +366,7 @@ export const REPO_TOOLS = [
   {
     name: 'list_pull_requests',
     description:
-      'List open pull requests on the ASAP repository.',
+      'List open pull requests on the ASAP-discord repository.',
     input_schema: {
       type: 'object' as const,
       properties: {},
@@ -2176,7 +2179,7 @@ function runTests(pattern?: string): string {
 
   try {
     const result = execSync(testCmd, {
-      cwd: path.join(REPO_ROOT, 'server'),
+      cwd: SERVER_ROOT,
       timeout: 120_000, // 2 minutes for test suite
       maxBuffer: 1024 * 1024,
       encoding: 'utf-8',
@@ -2247,7 +2250,7 @@ function smokeTestAgents(agent?: string, timeoutMs = 90_000): string {
 
   try {
     const output = execSync(cmd, {
-      cwd: path.join(REPO_ROOT, 'server'),
+      cwd: SERVER_ROOT,
       timeout: Math.max(safeTimeout * 2, 120_000),
       maxBuffer: 1024 * 1024,
       encoding: 'utf-8',
@@ -2668,7 +2671,7 @@ function runTypecheck(target: 'client' | 'server' | 'both'): string {
   if (target === 'server' || target === 'both') {
     try {
       execSync('npx tsc --noEmit', {
-        cwd: path.join(REPO_ROOT, 'server'),
+        cwd: SERVER_ROOT,
         timeout: 60_000,
         maxBuffer: 512 * 1024,
         encoding: 'utf-8',
