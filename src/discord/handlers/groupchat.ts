@@ -336,8 +336,7 @@ async function sendAutopilotAudit(
   }
 
   try {
-    const wh = await getWebhook(groupchat);
-    await wh.send({ content: line, username: `${riley.emoji} ${riley.name}`, avatarURL: riley.avatarUrl });
+    await sendWebhookMessage(groupchat, { content: line, username: `${riley.emoji} ${riley.name}`, avatarURL: riley.avatarUrl });
   } catch {
     await groupchat.send(line).catch(() => {});
   }
@@ -353,8 +352,7 @@ function ensureClaudeNotifications(groupchat: TextChannel): void {
       const targetChannel = getAgentWorkChannel('executive-assistant', groupchat);
       if (riley) {
         try {
-          const wh = await getWebhook(targetChannel);
-          await wh.send({
+          await sendWebhookMessage(targetChannel, {
             content,
             username: `${riley.emoji} ${riley.name}`,
             avatarURL: riley.avatarUrl,
@@ -1787,8 +1785,7 @@ async function handleRileyMessage(
     const short = errMsg.length > 200 ? errMsg.slice(0, 200) + '…' : errMsg;
     try {
       hasVisibleRileyResponse = true;
-      const wh = await getWebhook(workspaceChannel);
-      await wh.send({
+      await sendWebhookMessage(workspaceChannel, {
         content: `⚠️ Riley encountered an error:\n\`\`\`${short}\`\`\``,
         username: `${riley.emoji} ${riley.name}`,
         avatarURL: riley.avatarUrl,
@@ -1851,8 +1848,7 @@ async function executeActions(
 
     if (riley) {
       try {
-        const wh = await getWebhook(workspaceChannel);
-        await wh.send({ content: safeMsg, username: `${riley.emoji} ${riley.name}`, avatarURL: riley.avatarUrl });
+        await sendWebhookMessage(workspaceChannel, { content: safeMsg, username: `${riley.emoji} ${riley.name}`, avatarURL: riley.avatarUrl });
         return;
       } catch (err) {
         console.warn('Webhook send failed for Riley action response:', err instanceof Error ? err.message : 'Unknown');
@@ -2962,8 +2958,7 @@ async function postDecisionEmbed(
       const riley = getAgent('executive-assistant' as AgentId);
       if (riley) {
         try {
-          const wh = await getWebhook(targetChannel);
-          await wh.send({ content: `✅ **${userName}** chose: **${choice}**`, username: `${riley.emoji} ${riley.name}`, avatarURL: riley.avatarUrl });
+          await sendWebhookMessage(targetChannel, { content: `✅ **${userName}** chose: **${choice}**`, username: `${riley.emoji} ${riley.name}`, avatarURL: riley.avatarUrl });
         } catch {
           await targetChannel.send(`✅ **${userName}** chose: **${choice}**`);
         }
