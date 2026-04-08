@@ -15,7 +15,19 @@ import { recordClaudeUsage, isClaudeOverLimit, isBudgetExceeded, getRemainingBud
 
 let PROJECT_CONTEXT = '';
 try {
-  PROJECT_CONTEXT = readFileSync(join(__dirname, '../../../.github/PROJECT_CONTEXT.md'), 'utf-8');
+  const candidates = [
+    join(process.cwd(), '.github/PROJECT_CONTEXT.md'),
+    join(__dirname, '../../../.github/PROJECT_CONTEXT.md'),
+    join(__dirname, '../../../../.github/PROJECT_CONTEXT.md'),
+  ];
+  for (const contextPath of candidates) {
+    try {
+      PROJECT_CONTEXT = readFileSync(contextPath, 'utf-8');
+      break;
+    } catch {
+    }
+  }
+  if (!PROJECT_CONTEXT) throw new Error('missing project context');
 } catch {
   console.warn('PROJECT_CONTEXT.md not found — agents will lack project context');
 }

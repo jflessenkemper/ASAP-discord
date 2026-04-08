@@ -402,7 +402,7 @@ app.use((err: Error, _req: express.Request, res: express.Response, next: express
 });
 
 // Serve Expo web build in production
-const clientDir = path.join(__dirname, '..', '..', 'dist');
+const clientDir = path.join(__dirname, '..', 'dist');
 const clientIndexPath = path.join(clientDir, 'index.html');
 if (existsSync(clientIndexPath)) {
   app.use(express.static(clientDir));

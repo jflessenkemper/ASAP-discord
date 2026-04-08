@@ -172,7 +172,9 @@ const CHANNEL_NAME_MAP: Record<string, string> = {
 
 function loadSystemPrompt(agentId: string): string {
   const candidates = [
+    path.join(process.cwd(), '.github', 'agents', `${agentId}.agent.md`),
     path.join(__dirname, '..', '..', '..', '.github', 'agents', `${agentId}.agent.md`),
+    path.join(__dirname, '..', '..', '..', '..', '.github', 'agents', `${agentId}.agent.md`),
     path.join('/app', '.github', 'agents', `${agentId}.agent.md`),
   ];
 
