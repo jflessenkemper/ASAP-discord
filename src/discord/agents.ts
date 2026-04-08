@@ -56,11 +56,11 @@ const EMOJI_MAP: Record<string, string> = {
 
 const COLOR_MAP: Record<string, number> = {
   'executive-assistant': 0x3454D1,
-  developer:            0x16A34A,
-  qa:                   0xC62828,
-  'ux-reviewer':        0x0F766E,
+  developer:            0x4682B4,
+  qa:                   0x50C878,
+  'ux-reviewer':        0x303F9F,
   'security-auditor':   0x374151,
-  'api-reviewer':       0x1D4ED8,
+  'api-reviewer':       0x708090,
   dba:                  0xB45309,
   performance:          0x0E7490,
   devops:               0x4338CA,
@@ -75,15 +75,15 @@ const COLOR_MAP: Record<string, number> = {
  * Use ui-avatars for high-availability webhook avatar rendering.
  */
 const AVATAR_MAP: Record<string, string> = {
-  qa:                    'https://ui-avatars.com/api/?name=Max+QA+Flask&background=C62828&color=FFFFFF&size=256&bold=true&format=png',
-  'ux-reviewer':         'https://ui-avatars.com/api/?name=Sophie+UX+Compass&background=0F766E&color=FFFFFF&size=256&bold=true&format=png',
+  qa:                    'https://ui-avatars.com/api/?name=Max+QA+Check&background=50C878&color=36454F&size=256&bold=true&format=png',
+  'ux-reviewer':         'https://ui-avatars.com/api/?name=Sophie+UX+Lens&background=303F9F&color=FFD600&size=256&bold=true&format=png',
   'security-auditor':    'https://ui-avatars.com/api/?name=Kane+Security+Shield&background=374151&color=FDE047&size=256&bold=true&format=png',
-  'api-reviewer':        'https://ui-avatars.com/api/?name=Raj+API+Pulse&background=1D4ED8&color=FFFFFF&size=256&bold=true&format=png',
+  'api-reviewer':        'https://ui-avatars.com/api/?name=Raj+API+Schema&background=708090&color=00FFFF&size=256&bold=true&format=png',
   dba:                   'https://ui-avatars.com/api/?name=Elena+DBA+Stack&background=B45309&color=FFFFFF&size=256&bold=true&format=png',
   performance:           'https://ui-avatars.com/api/?name=Kai+Perf+Bolt&background=0E7490&color=FFFFFF&size=256&bold=true&format=png',
   devops:                'https://ui-avatars.com/api/?name=Jude+DevOps+Rocket&background=4338CA&color=FFFFFF&size=256&bold=true&format=png',
   copywriter:            'https://ui-avatars.com/api/?name=Liv+Copy+Quill&background=BE185D&color=FFFFFF&size=256&bold=true&format=png',
-  developer:             'https://ui-avatars.com/api/?name=Ace+Developer+Code&background=16A34A&color=FFFFFF&size=256&bold=true&format=png',
+  developer:             'https://ui-avatars.com/api/?name=Ace+Developer+Gear&background=4682B4&color=FFD600&size=256&bold=true&format=png',
   lawyer:                'https://ui-avatars.com/api/?name=Harper+Law+Scale&background=475569&color=FFFFFF&size=256&bold=true&format=png',
   'executive-assistant': 'https://ui-avatars.com/api/?name=Riley+EA+Checklist&background=3454D1&color=FFFFFF&size=256&bold=true&format=png',
   'ios-engineer':        'https://ui-avatars.com/api/?name=Mia+iOS+Orbit&background=64748B&color=FFFFFF&size=256&bold=true&format=png',
@@ -91,15 +91,15 @@ const AVATAR_MAP: Record<string, string> = {
 };
 
 const DISPLAY_NAME: Record<string, string> = {
-  qa: 'Max (QA)',
-  'ux-reviewer': 'Sophie (UX Reviewer)',
+  qa: 'Max (QA)✓',
+  'ux-reviewer': 'Sophie (UX Reviewer)🔎',
   'security-auditor': 'Kane (Security Auditor)',
-  'api-reviewer': 'Raj (API Reviewer)',
+  'api-reviewer': 'Raj (API Reviewer)}',
   dba: 'Elena (DBA)',
   performance: 'Kai (Performance)',
   devops: 'Jude (DevOps)',
   copywriter: 'Liv (Copywriter)',
-  developer: 'Ace (Developer)',
+  developer: 'Ace (Developer)⚙',
   lawyer: 'Harper (Lawyer)',
   'executive-assistant': 'Riley (Executive Assistant)',
   'ios-engineer': 'Mia (iOS Engineer)',
