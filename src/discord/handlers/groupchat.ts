@@ -124,8 +124,8 @@ let activeGoalSequence = 0;
 let claudeNotificationsBoundChannelId: string | null = null;
 const MAX_PARALLEL_SUBAGENTS = parseInt(process.env.MAX_PARALLEL_SUBAGENTS || '1', 10);
 const SUBAGENT_MAX_TOKENS = parseInt(process.env.SUBAGENT_MAX_TOKENS || '900', 10);
-const GROUPCHAT_PROCESS_TIMEOUT_MS = parseInt(process.env.GROUPCHAT_PROCESS_TIMEOUT_MS || '120000', 10);
-const RILEY_NO_RESPONSE_TIMEOUT_MS = parseInt(process.env.RILEY_NO_RESPONSE_TIMEOUT_MS || '90000', 10);
+const GROUPCHAT_PROCESS_TIMEOUT_MS = parseInt(process.env.GROUPCHAT_PROCESS_TIMEOUT_MS || '480000', 10);
+const RILEY_NO_RESPONSE_TIMEOUT_MS = parseInt(process.env.RILEY_NO_RESPONSE_TIMEOUT_MS || '180000', 10);
 const RILEY_PROGRESS_PING_MS = parseInt(
   process.env.RILEY_PROGRESS_PING_MS || String(Math.max(20_000, Math.floor(RILEY_NO_RESPONSE_TIMEOUT_MS * 0.6))),
   10,
@@ -156,6 +156,8 @@ const APP_REPO_ROOT = path.resolve(APP_SERVER_ROOT, '..');
 let lastGoalProgressAt = Date.now();
 let goalRecoveryAttempts = 0;
 let lastUrlsActionAt = 0;
+let lastGroupchatTimeoutNoticeAt = 0;
+const GROUPCHAT_TIMEOUT_NOTICE_COOLDOWN_MS = parseInt(process.env.GROUPCHAT_TIMEOUT_NOTICE_COOLDOWN_MS || '120000', 10);
 const DEFAULT_TESTER_BOT_ID = '1487426371209789450';
 
 function decodeBotIdFromToken(token: string): string | null {
@@ -1432,6 +1434,10 @@ export async function handleGroupchatMessage(
       await withMessageTimeout(
         processGroupchatMessage(message, content, groupchat, controller.signal),
         GROUPCHAT_PROCESS_TIMEOUT_MS,
+        () => {
+          controller.abort();
+          markGoalProgress('⚠️ Groupchat run timed out');
+        },
       );
     } catch (err) {
       const detail = err instanceof Error ? err.stack || err.message : String(err);
@@ -1440,6 +1446,19 @@ export async function handleGroupchatMessage(
         detail,
         level: 'warn',
       });
+      if (String(err instanceof Error ? err.message : err || '').includes('Groupchat message timed out')) {
+        const now = Date.now();
+        if (now - lastGroupchatTimeoutNoticeAt >= GROUPCHAT_TIMEOUT_NOTICE_COOLDOWN_MS) {
+          lastGroupchatTimeoutNoticeAt = now;
+          const riley = getAgent('executive-assistant' as AgentId);
+          const timeoutNotice = '⏳ I hit a runtime timeout while processing that request. I canceled the stalled run to avoid duplicate loops. Please retry with a tighter prompt or request one action at a time.';
+          if (riley) {
+            await sendAgentMessage(groupchat, riley, timeoutNotice).catch(() => {});
+          } else {
+            await groupchat.send(timeoutNotice).catch(() => {});
+          }
+        }
+      }
     } finally {
       if (activeAbortController === controller) activeAbortController = null;
     }
@@ -1448,7 +1467,7 @@ export async function handleGroupchatMessage(
   });
 }
 
-async function withMessageTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
+async function withMessageTimeout<T>(promise: Promise<T>, timeoutMs: number, onTimeout?: () => void): Promise<T> {
   if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) return promise;
 
   let timer: NodeJS.Timeout | null = null;
@@ -1456,7 +1475,10 @@ async function withMessageTimeout<T>(promise: Promise<T>, timeoutMs: number): Pr
     return await Promise.race([
       promise,
       new Promise<T>((_, reject) => {
-        timer = setTimeout(() => reject(new Error(`Groupchat message timed out after ${timeoutMs}ms`)), timeoutMs);
+        timer = setTimeout(() => {
+          onTimeout?.();
+          reject(new Error(`Groupchat message timed out after ${timeoutMs}ms`));
+        }, timeoutMs);
       }),
     ]);
   } finally {
