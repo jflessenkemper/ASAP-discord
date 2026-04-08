@@ -321,14 +321,22 @@ app.post('/api/webhooks/build-complete', express.json({ limit: '10kb' }), (req, 
 
   const appUrl = process.env.FRONTEND_URL || `https://asap-${process.env.GCS_PROJECT_ID || 'asap-489910'}.${process.env.CLOUD_RUN_REGION || 'australia-southeast1'}.run.app`;
   const label = req.body?.commitSha?.slice(0, 7) || 'latest';
+  const channels = getBotChannels();
+  const screenshotTarget = channels?.screenshots;
 
-  captureAndPostScreenshots(appUrl, label).catch((err) => {
+  if (!screenshotTarget) {
+    console.warn('Build-complete webhook received before screenshots channel was ready.');
+  }
+
+  captureAndPostScreenshots(appUrl, label, {
+    targetChannel: screenshotTarget || undefined,
+    clearTargetChannel: true,
+  }).catch((err) => {
     const msg = err instanceof Error ? err.stack || err.message : 'Unknown';
     console.error('Screenshot capture error:', err instanceof Error ? err.message : 'Unknown');
     void postAgentErrorLog('build-complete:webhook', 'Screenshot capture error', { detail: msg });
   });
 
-  const channels = getBotChannels();
   if (channels?.url) {
     channels.url.send(`✅ **Build deployed** — app live at ${appUrl}`).catch(() => {});
   }
