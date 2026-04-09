@@ -35,7 +35,7 @@ import 'dotenv/config';
 import fs from 'fs';
 import path from 'path';
 
-import { ChannelType, Client, GatewayIntentBits, Message, TextChannel } from 'discord.js';
+import { ChannelType, Client, GatewayIntentBits, Message, TextChannel, ThreadChannel } from 'discord.js';
 
 import { getAgent, getAgentAliases, resolveAgentId } from './agents';
 
@@ -959,11 +959,35 @@ async function runFreeformObservation(
   const seenIds = new Set<string>();
   const responses: FreeformResponse[] = [];
   let lastNewResponseAt = Date.now();
-  const silenceThresholdMs = 120_000; // 2 min of silence = likely done
+  const silenceThresholdMs = 300_000; // 5 min of silence = likely done (design tasks need longer)
 
-  console.log('Watching for responses...\n');
+  console.log('Watching for responses (channels + threads)...\n');
+
+  // Track discovered threads so we poll them on subsequent cycles
+  const knownThreadIds = new Set<string>();
 
   while (Date.now() - started < timeoutMs) {
+    // ── Fetch active threads from all channels ──
+    const threadBatches: { msg: Message; channelName: string }[][] = [];
+    try {
+      for (const channel of allChannels) {
+        const activeThreads = await channel.threads.fetchActive().catch(() => null);
+        if (activeThreads) {
+          for (const [threadId, thread] of activeThreads.threads) {
+            if (knownThreadIds.has(threadId)) continue;
+            knownThreadIds.add(threadId);
+            console.log(`  📎 Discovered thread: #${thread.name} (${threadId})`);
+          }
+          for (const thread of activeThreads.threads.values()) {
+            try {
+              const msgs = await thread.messages.fetch({ limit: 30 });
+              threadBatches.push([...msgs.values()].map((m) => ({ msg: m, channelName: `🧵${thread.name}` })));
+            } catch { /* thread may be inaccessible */ }
+          }
+        }
+      }
+    } catch { /* thread enumeration failed */ }
+
     const channelBatches = await Promise.all(
       allChannels.map(async (channel) => {
         try {
@@ -976,7 +1000,7 @@ async function runFreeformObservation(
     );
 
     let foundNew = false;
-    for (const { msg, channelName } of channelBatches.flat()) {
+    for (const { msg, channelName } of [...channelBatches.flat(), ...threadBatches.flat()]) {
       if (seenIds.has(msg.id)) continue;
       if (!isBotOrWebhookReply(msg, sent, selfId)) continue;
 
@@ -1012,7 +1036,7 @@ async function runFreeformObservation(
 
     // If we've had responses and then 2 min silence, consider it done
     if (responses.length > 0 && Date.now() - lastNewResponseAt > silenceThresholdMs) {
-      console.log(`\n2 minutes of silence after ${responses.length} responses — ending observation.`);
+      console.log(`\n5 minutes of silence after ${responses.length} responses — ending observation.`);
       break;
     }
 

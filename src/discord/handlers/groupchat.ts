@@ -2637,9 +2637,11 @@ async function handleAgentChain(
         if (signal?.aborted) return;
         const aceChannel = getAgentWorkChannel('developer', groupchat);
         aceChannel.sendTyping().catch(() => {});
-        const isDesignDeliverable = /\bdesign\b.*\b(?:spec|system|html|css|page|route|mockup|wireframe)\b|\b(?:spec|html|css)\b.*\bdesign\b|\bglassmorphism\b/i.test(rileyResponse);
+        const designDeliverableRe = /\bdesign\b.*\b(?:spec|system|html|css|page|route|mockup|wireframe)\b|\b(?:spec|html|css)\b.*\bdesign\b|\bglassmorphism\b/i;
+        const isDesignDeliverable = designDeliverableRe.test(rileyResponse) || designDeliverableRe.test(activeGoal || '');
+        console.log(`AGENT_CHAIN isDesignDeliverable=${isDesignDeliverable} rileyMatch=${designDeliverableRe.test(rileyResponse)} goalMatch=${designDeliverableRe.test(activeGoal || '')} goal="${(activeGoal || '').slice(0, 80)}" rileySnippet="${rileyResponse.slice(0, 120)}"`);
         const aceContext = isDesignDeliverable
-          ? `[Riley directed you]: ${rileyResponse}\n\nOwn execution yourself first. Only bring in extra specialists if they are truly needed. If you do delegate, use the exact Discord mentions from this guide: ${buildAgentMentionGuide(['security-auditor', 'api-reviewer', 'dba', 'performance', 'devops', 'copywriter', 'lawyer', 'qa', 'ux-reviewer', 'ios-engineer', 'android-engineer'])}.\n\nThis is a design deliverable. Provide the complete artifact (HTML/CSS/code) in a fenced code block. After the code block, add a brief summary of what you built. Do NOT use Result/Evidence/Risk format for design deliverables.`
+          ? `[Riley directed you]: ${rileyResponse}\n\nOwn execution yourself first. Only bring in extra specialists if they are truly needed. If you do delegate, use the exact Discord mentions from this guide: ${buildAgentMentionGuide(['security-auditor', 'api-reviewer', 'dba', 'performance', 'devops', 'copywriter', 'lawyer', 'qa', 'ux-reviewer', 'ios-engineer', 'android-engineer'])}.\n\nThis is a design deliverable task. You MUST create the file(s) using the write_file tool. Do not just explore the project — actually write the code. Steps: 1) Read the existing route/page patterns to match conventions, 2) Use write_file to create the new file(s) with complete HTML/CSS/code, 3) After writing, confirm what you created with a short summary including the file path(s). Do NOT use Result/Evidence/Risk format. Do NOT reply with just "Done".`
           : `[Riley directed you]: ${rileyResponse}\n\nOwn execution yourself first. Only bring in extra specialists if they are truly needed. If you do delegate, use the exact Discord mentions from this guide: ${buildAgentMentionGuide(['security-auditor', 'api-reviewer', 'dba', 'performance', 'devops', 'copywriter', 'lawyer', 'qa', 'ux-reviewer', 'ios-engineer', 'android-engineer'])}.\n\nWhen you finish, do NOT reply with just "Done". Include these exact sections:\n- Result: one sentence outcome.\n- Evidence: files changed, commands/tests run, and key output.\n- Risk/Follow-up: any caveats or next checks.`;
 
         let aceResponse = await dispatchToAgent('developer', aceContext, aceChannel, {
@@ -2695,6 +2697,7 @@ async function handleAgentChain(
         }
 
         const aceQualityFailed = !isDesignDeliverable && !signal?.aborted && needsQualityRetry();
+        console.log(`AGENT_CHAIN aceQualityFailed=${aceQualityFailed} isDesignDeliverable=${isDesignDeliverable} needsRetry=${needsQualityRetry()} aceLen=${aceResponse.trim().length} aceSnippet="${aceResponse.slice(0, 120)}"`);
         if (aceQualityFailed) {
           consolidatedErrors.push('Ace completion quality check failed after retries.');
         }
