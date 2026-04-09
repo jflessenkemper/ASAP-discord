@@ -17,7 +17,9 @@ gcloud compute ssh "$VM_NAME" --zone="$VM_ZONE" --command "
   export PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
   export npm_config_playwright_skip_browser_download=true
   npm ci
-  npm run build
-  pm2 restart asap-bot --update-env
+  node_modules/.bin/tsc --project ./tsconfig.json
+  pm2 stop asap-bot 2>/dev/null || true
+  pm2 delete asap-bot 2>/dev/null || true
+  pm2 start dist/index.js --name asap-bot --cwd '$REMOTE_ROOT' --node-args='-r dotenv/config'
   pm2 status asap-bot | cat
 "
