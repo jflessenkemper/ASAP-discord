@@ -1,4 +1,4 @@
-import { Message, TextChannel } from 'discord.js';
+import { AttachmentBuilder, Message, TextChannel } from 'discord.js';
 
 import { AgentConfig, getAgentMention, resolveAgentId } from '../agents';
 import { agentRespond, ConversationMessage } from '../claude';
@@ -236,7 +236,7 @@ async function handleAgentMessageInner(
   await channel.sendTyping();
 
   let pendingThinking: Message | null = null;
-  let progressHeartbeat: ReturnType<typeof setInterval> | null = null;
+  let progressHeartbeat: ReturnType<typeof setTimeout> | null = null;
   try {
     pendingThinking = await sendWebhookMessage(channel, {
       content: 'Thinking…',
@@ -265,19 +265,37 @@ async function handleAgentMessageInner(
     let lastStreamEditAt = 0;
     let lastRenderedLength = 0;
     let lastProgressSignalAt = Date.now();
+    let heartbeatDelayMs = Math.max(5000, TEXT_PROGRESS_HEARTBEAT_MS);
 
-    if (pendingThinking) {
-      progressHeartbeat = setInterval(() => {
+    const scheduleProgressHeartbeat = (): void => {
+      if (!pendingThinking) return;
+      progressHeartbeat = setTimeout(async () => {
         if (signal?.aborted || !pendingThinking) return;
         if (streamedPreviewShown) return;
-        if (Date.now() - lastProgressSignalAt < TEXT_PROGRESS_HEARTBEAT_MS) return;
+        if (Date.now() - lastProgressSignalAt < heartbeatDelayMs) {
+          scheduleProgressHeartbeat();
+          return;
+        }
+
+        const beat = `⏳ ${agent.name} is still working on this...`;
+        const edited = await pendingThinking.edit(beat)
+          .then(() => true)
+          .catch(() => false);
+        if (!edited) {
+          await sendWebhookMessage(channel, {
+            content: beat,
+            username: `${agent.emoji} ${agent.name}`,
+            avatarURL: agent.avatarUrl,
+          }).catch(() => {});
+        }
         lastProgressSignalAt = Date.now();
-        void sendWebhookMessage(channel, {
-          content: `⏳ ${agent.name} is still working on this...`,
-          username: `${agent.emoji} ${agent.name}`,
-          avatarURL: agent.avatarUrl,
-        }).catch(() => {});
-      }, Math.max(5000, TEXT_PROGRESS_HEARTBEAT_MS));
+        heartbeatDelayMs = Math.min(60_000, Math.floor(heartbeatDelayMs * 1.6));
+        scheduleProgressHeartbeat();
+      }, heartbeatDelayMs);
+    };
+
+    if (pendingThinking) {
+      scheduleProgressHeartbeat();
     }
 
     const updateStreamPreview = async (partialText: string, force = false): Promise<boolean> => {
@@ -354,6 +372,21 @@ async function handleAgentMessageInner(
 
     if (signal?.aborted) return;
     const renderedResponse = ensureCompletionToken(renderAgentMessage(response), completionToken);
+    if (!renderedResponse.trim()) {
+      await sendWebhookMessage(channel, {
+        content: `⚠️ ${agent.name}: I executed the request but did not generate a usable message. Retrying usually fixes this; if it repeats, ask Riley to break the task into smaller steps.`,
+        username: `${agent.emoji} ${agent.name}`,
+        avatarURL: agent.avatarUrl,
+      }).catch(async () => {
+        await sendAgentFallbackMessage(
+          channel,
+          agent,
+          `⚠️ ${agent.name}: I executed the request but did not generate a usable message. Retrying usually fixes this; if it repeats, ask Riley to break the task into smaller steps.`
+        ).catch(() => {});
+      });
+      pendingThinkingMessages.delete(channelId);
+      return;
+    }
     const canFinalizeInPlace =
       !!pendingThinking &&
       streamedPreviewShown &&
@@ -363,6 +396,8 @@ async function handleAgentMessageInner(
     if (canFinalizeInPlace && pendingThinking) {
       const finalizedInPlace = await updateStreamPreview(renderedResponse, true);
       if (!finalizedInPlace) {
+        // Delete the stale preview before posting the full message to avoid duplicates
+        await pendingThinking.delete().catch(() => {});
         await sendWebhookMessage(channel, {
           content: renderedResponse,
           username: `${agent.emoji} ${agent.name}`,
@@ -425,7 +460,7 @@ async function handleAgentMessageInner(
     }
   } finally {
     if (progressHeartbeat) {
-      clearInterval(progressHeartbeat);
+      clearTimeout(progressHeartbeat);
     }
     if (signal?.aborted && pendingThinking) {
       pendingThinking.delete().catch(() => {});
@@ -489,9 +524,18 @@ export async function sendAgentMessage(
     return;
   }
   const chunks = splitMessage(rendered, 1900);
+  const codeAttachment = extractLongCodeAttachment(rendered);
 
   try {
-    if (shouldProgressivelyReveal(rendered)) {
+    if (codeAttachment) {
+      // Long code block → send as file attachment instead of splitting across messages
+      await sendWebhookMessage(channel, {
+        content: codeAttachment.summary,
+        username: `${agent.emoji} ${agent.name}`,
+        avatarURL: agent.avatarUrl,
+        files: [codeAttachment.attachment],
+      });
+    } else if (shouldProgressivelyReveal(rendered)) {
       await sendProgressiveWebhookMessage(channel, agent, rendered);
     } else {
       for (const chunk of chunks) {
@@ -504,23 +548,10 @@ export async function sendAgentMessage(
     }
     await mirrorAgentResponse(agent.name, channel.name, rendered);
   } catch (err) {
-    console.warn(`Webhook send failed for ${agent.name}, retrying with a fresh webhook:`, err instanceof Error ? err.message : 'Unknown');
+    console.warn(`Webhook send failed for ${agent.name}, falling back to a single plain send path:`, err instanceof Error ? err.message : 'Unknown');
     clearWebhookCache();
-    try {
-      for (const chunk of chunks) {
-        await sendWebhookMessage(channel, {
-          content: chunk,
-          username: `${agent.emoji} ${agent.name}`,
-          avatarURL: agent.avatarUrl,
-        });
-      }
-      await mirrorAgentResponse(agent.name, channel.name, rendered);
-      return;
-    } catch (retryErr) {
-      console.error(`Webhook retry failed for ${agent.name}:`, retryErr instanceof Error ? retryErr.message : 'Unknown');
-      if (channel instanceof TextChannel) {
-        await sendAgentFallbackMessage(channel, agent, rendered).catch(() => {});
-      }
+    if (channel instanceof TextChannel) {
+      await sendAgentFallbackMessage(channel, agent, rendered).catch(() => {});
     }
   }
 }
@@ -530,6 +561,42 @@ function shouldProgressivelyReveal(rendered: string): boolean {
   if (rendered.length < 260 || rendered.length > 1800) return false;
   if (rendered.includes('```')) return false;
   return true;
+}
+
+function extractLongCodeAttachment(rendered: string): { summary: string; attachment: AttachmentBuilder } | null {
+  if (rendered.length <= 1900) return null;
+  // Match fenced code blocks: ```lang\n...\n```
+  const codeBlockRe = /```(\w*)\n([\s\S]*?)```/g;
+  const blocks: { lang: string; code: string; start: number; end: number }[] = [];
+  let match: RegExpExecArray | null;
+  while ((match = codeBlockRe.exec(rendered)) !== null) {
+    blocks.push({ lang: match[1] || 'txt', code: match[2], start: match.index, end: match.index + match[0].length });
+  }
+  if (blocks.length === 0) return null;
+
+  // Only trigger if the code blocks are the bulk of the content
+  const totalCodeLen = blocks.reduce((sum, b) => sum + b.code.length, 0);
+  if (totalCodeLen < 800) return null;
+
+  // Use the first block's language for the file extension
+  const lang = blocks[0].lang.toLowerCase();
+  const extMap: Record<string, string> = { html: 'html', css: 'css', ts: 'ts', typescript: 'ts', js: 'js', javascript: 'js', json: 'json', sql: 'sql', tsx: 'tsx' };
+  const ext = extMap[lang] || 'txt';
+
+  // Combine all code blocks into one file
+  const fileContent = blocks.map((b) => b.code).join('\n\n');
+  const attachment = new AttachmentBuilder(Buffer.from(fileContent, 'utf-8'), { name: `deliverable.${ext}` });
+
+  // Build summary: everything outside code blocks, truncated
+  let summary = rendered;
+  for (let i = blocks.length - 1; i >= 0; i--) {
+    summary = summary.slice(0, blocks[i].start) + summary.slice(blocks[i].end);
+  }
+  summary = summary.replace(/\n{3,}/g, '\n\n').trim();
+  if (!summary) summary = `📎 Full ${ext.toUpperCase()} deliverable attached.`;
+  if (summary.length > 1800) summary = summary.slice(0, 1800) + '…';
+
+  return { summary, attachment };
 }
 
 async function sendProgressiveWebhookMessage(
@@ -566,14 +633,10 @@ async function sendProgressiveWebhookMessage(
     }
   }
 
-  // If the progressive stream was interrupted by failed edits, post a full
-  // final message so agent channels never end with a cut-off sentence.
+  // If progressive edits were interrupted, try one final in-place update.
+  // Avoid posting another full message to prevent duplicate spam.
   if (lastSuccessfulVisible < rendered.length) {
-    await sendWebhookMessage(channel, {
-      content: rendered,
-      username: `${agent.emoji} ${agent.name}`,
-      avatarURL: agent.avatarUrl,
-    }).catch(() => {});
+    await (sent as Message).edit(rendered).catch(() => {});
   }
 }
 

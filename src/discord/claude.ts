@@ -1184,6 +1184,8 @@ const GEMINI_QUOTA_FUSE_MS = parseInt(process.env.GEMINI_QUOTA_FUSE_MS || '30000
 const GEMINI_MAX_RETRIES = parseInt(process.env.GEMINI_MAX_RETRIES || '1', 10);
 const GEMINI_RETRY_BASE_DELAY_MS = parseInt(process.env.GEMINI_RETRY_BASE_DELAY_MS || '1500', 10);
 const GEMINI_429_PAUSE_MS = parseInt(process.env.GEMINI_429_PAUSE_MS || '25000', 10);
+const GEMINI_429_BACKOFF_FACTOR = Math.max(1, parseFloat(process.env.GEMINI_429_BACKOFF_FACTOR || '2'));
+const GEMINI_429_MAX_BACKOFF_MS = Math.max(5000, parseInt(process.env.GEMINI_429_MAX_BACKOFF_MS || '60000', 10));
 const GEMINI_429_JITTER_MS = parseInt(process.env.GEMINI_429_JITTER_MS || '5000', 10);
 const RATE_LIMIT_FAST_FAIL_ON_429 = process.env.RATE_LIMIT_FAST_FAIL_ON_429 === 'true';
 const GEMINI_RATE_LIMIT_FUSE_HITS = parseInt(process.env.GEMINI_RATE_LIMIT_FUSE_HITS || '6', 10);
@@ -2106,8 +2108,12 @@ async function withRetry<T>(fn: () => Promise<T>, retries = GEMINI_MAX_RETRIES, 
         const halfJitter = Math.max(0, Math.floor(GEMINI_429_JITTER_MS / 2));
         const jitter = Math.floor(Math.random() * (halfJitter * 2 + 1)) - halfJitter;
         const basePause = retryAfterMs > 0 ? retryAfterMs : GEMINI_429_PAUSE_MS;
-        delay = Math.max(5000, basePause + jitter);
-        rateLimitedUntil = Math.max(rateLimitedUntil, Date.now() + Math.max(5000, basePause + halfJitter));
+        const scaledPause = Math.min(
+          GEMINI_429_MAX_BACKOFF_MS,
+          Math.round(basePause * Math.pow(GEMINI_429_BACKOFF_FACTOR, i))
+        );
+        delay = Math.max(5000, scaledPause + jitter);
+        rateLimitedUntil = Math.max(rateLimitedUntil, Date.now() + Math.max(5000, scaledPause + halfJitter));
         console.warn(`429 rate limited — pausing ${Math.ceil(delay / 1000)}s (±jitter, retry ${i + 1}/${retries})`);
         logAgentEvent('system', 'rate_limit', `429 — pausing ${Math.ceil(delay / 1000)}s`);
         if (RATE_LIMIT_FAST_FAIL_ON_429) throw err;

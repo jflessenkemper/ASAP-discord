@@ -99,6 +99,7 @@ async function getReplyViaSignedUrlSocket(signedUrl: string, userText: string, l
     const ws = new WebSocket(signedUrl);
     let settled = false;
     let timeout: ReturnType<typeof setTimeout> | null = null;
+    let timedOut = false;
 
     const finish = (err?: Error, text?: string) => {
       if (settled) return;
@@ -114,7 +115,10 @@ async function getReplyViaSignedUrlSocket(signedUrl: string, userText: string, l
       else resolve(String(text || ''));
     };
 
-    timeout = setTimeout(() => finish(new Error('ConvAI websocket timed out')), Math.max(3000, ELEVENLABS_CONVAI_WS_TIMEOUT_MS));
+    timeout = setTimeout(() => {
+      timedOut = true;
+      finish(new Error('ConvAI websocket timed out'));
+    }, Math.max(3000, ELEVENLABS_CONVAI_WS_TIMEOUT_MS));
 
     ws.on('open', () => {
       const initPayload = {
@@ -171,7 +175,12 @@ async function getReplyViaSignedUrlSocket(signedUrl: string, userText: string, l
     });
 
     ws.on('close', () => {
-      if (!settled) finish(new Error('ConvAI websocket closed before response'));
+      if (settled) return;
+      if (timedOut) {
+        finish(new Error('ConvAI websocket closed after timeout'));
+        return;
+      }
+      finish(new Error('ConvAI websocket closed before response'));
     });
   });
 }

@@ -39,8 +39,10 @@ type ToolNotificationBatch = {
 
 const TOOL_NOTIFICATION_FLUSH_MS = parseInt(process.env.TOOL_NOTIFICATION_FLUSH_MS || '2500', 10);
 const TOOL_NOTIFICATION_MAX_ITEMS = parseInt(process.env.TOOL_NOTIFICATION_MAX_ITEMS || '6', 10);
+const TOOL_NOTIFICATION_CHANNEL_COOLDOWN_MS = parseInt(process.env.TOOL_NOTIFICATION_CHANNEL_COOLDOWN_MS || '5000', 10);
 const TOOL_NOTIFICATIONS_TOOLS_ONLY = String(process.env.TOOL_NOTIFICATIONS_TOOLS_ONLY || 'true').toLowerCase() !== 'false';
 const toolNotificationBatches = new Map<string, ToolNotificationBatch>();
+const toolNotificationLastPostedAt = new Map<string, number>();
 const rileyStallNoticeAt = new Map<string, number>();
 const RILEY_STALL_NOTICE_COOLDOWN_MS = parseInt(process.env.RILEY_STALL_NOTICE_COOLDOWN_MS || '120000', 10);
 
@@ -87,6 +89,18 @@ async function flushToolNotificationBatch(key: string): Promise<void> {
   const contextPrefix = targetChannel.id !== batch.channel.id
     ? `[#${(batch.channel as any)?.name || 'channel'}] `
     : '';
+
+  const channelCooldown = Math.max(0, TOOL_NOTIFICATION_CHANNEL_COOLDOWN_MS);
+  const lastPostedAt = toolNotificationLastPostedAt.get(targetChannel.id) || 0;
+  const waitMs = channelCooldown - (Date.now() - lastPostedAt);
+  if (waitMs > 0) {
+    batch.items.unshift(...items);
+    batch.timer = setTimeout(() => {
+      void flushToolNotificationBatch(key);
+    }, Math.max(300, waitMs));
+    return;
+  }
+
   const content = deduped.length === 1
     ? `🔧 ${contextPrefix}${deduped[0]}`
     : `🔧 ${contextPrefix}${deduped.length} tool actions:\n- ${deduped.join('\n- ')}`;
@@ -97,6 +111,7 @@ async function flushToolNotificationBatch(key: string): Promise<void> {
       username: `${batch.agent.emoji} ${batch.agent.name}`,
       avatarURL: batch.agent.avatarUrl,
     });
+    toolNotificationLastPostedAt.set(targetChannel.id, Date.now());
   } catch (err) {
     console.warn(`Webhook tool notification failed for ${batch.agent.name}:`, err instanceof Error ? err.message : 'Unknown');
   } finally {
@@ -231,6 +246,9 @@ function enforceRileyResponseContract(
 ): string {
   const normalized = String(text || '').trim();
   if (!normalized) return normalized;
+  // Skip contract enforcement for creative/design deliverables — the Status/Root-cause
+  // appendage makes no sense for design specs, creative briefs, or information responses.
+  if (/\bdesign\s*spec\b|\bglassmorphism\b|\bmockup\b|\bwireframe\b|\bstyle\s*guide\b/i.test(normalized)) return normalized;
   const hasContract = /\bstatus\s*:/i.test(normalized)
     && /\broot cause\s*:/i.test(normalized)
     && /\bfix location\s*:/i.test(normalized)
@@ -1556,8 +1574,20 @@ async function processGroupchatMessage(
         groupchat,
         handleRileyMessage(content, senderName, message.member || undefined, groupchat, signal, workspaceChannel),
       );
-    } else {
+    } else if (uniqueMentions.length === 1 && uniqueMentions[0] === 'developer') {
+      // Explicit direct-to-Ace requests are allowed.
       await handleDirectedMessage(content, senderName, uniqueMentions, groupchat, workspaceChannel, signal);
+    } else {
+      // Hard-route multi/specialist mentions through Riley so she can delegate to Ace first.
+      const normalized = `${content}\n\n[System: route this through @ace first. Do not delegate directly to specialists.]`;
+      activeGoal = normalized;
+      activeGoalStartedAt = Date.now();
+      markGoalProgress('⏳ Riley planning...');
+      await withRileyResponseWatchdog(
+        workspaceChannel,
+        groupchat,
+        handleRileyMessage(normalized, senderName, message.member || undefined, groupchat, signal, workspaceChannel),
+      );
     }
   } else {
     activeGoal = content;
@@ -1693,7 +1723,7 @@ async function handleRileyMessage(
     const textLangHint = cjkPattern.test(userMessage)
       ? '\n\n[Language detected: Mandarin Chinese. Please reply in Mandarin Chinese (简体中文).]'
       : '';
-    const mentionGuide = `\n\n[Delegation default: start with ${aceGuide}. Ace can bring in other specialists only if needed.]`;
+    const mentionGuide = `\n\n[Delegation contract: route execution only via ${aceGuide}. Do not directly delegate to specialists; Ace may involve them if needed.]`;
     const threadCloseGuide = `\n\n[Keep the workspace thread updated briefly. Include [ACTION:CLOSE_THREAD] only when the task is fully complete.]`;
     const decisionGuide = '\n\n[Decision policy: only ask the user for MAJOR decisions (prod risk, security/privacy, rollback/no-rollback, schema/data-loss risk, spend increase, legal/compliance impact). For routine implementation choices, decide and proceed.]';
     const contextMessageWithLang = `${textLangHint ? `${contextMessage}${textLangHint}` : contextMessage}${mentionGuide}${threadCloseGuide}${decisionGuide}`;
@@ -1710,7 +1740,7 @@ async function handleRileyMessage(
     const responseEnvelope = extractAgentResponseEnvelope(response);
     const machineDelegateAgents = (responseEnvelope?.machine?.delegateAgents || [])
       .map((id) => resolveAgentId(id))
-      .filter((id): id is AgentId => Boolean(id));
+      .filter((id): id is AgentId => Boolean(id) && id === 'developer');
     const machineActionTags = (responseEnvelope?.machine?.actionTags || [])
       .map((tag) => String(tag || '').trim())
       .filter((tag) => /^\[ACTION:[^\]]+\]$/i.test(tag));
@@ -1785,9 +1815,14 @@ async function handleRileyMessage(
       if (workspaceChannel.id !== rileyWorkChannel.id) {
         await sendAgentMessage(workspaceChannel, riley, displayResponse);
       }
-      if (completionClaimed && completionVerified && shouldMirrorCompletionToGroupchat(displayResponse, workspaceChannel, groupchat)) {
-        const safeGroupchat = displayResponse.replace(/https?:\/\/\S+/gi, '[see #url]');
-        await sendAgentMessage(groupchat, riley, `✅ Completion update: ${safeGroupchat}`);
+      if (workspaceChannel.id !== groupchat.id && (statusBlocked || (completionClaimed && completionVerified && shouldMirrorCompletionToGroupchat(displayResponse, workspaceChannel, groupchat)))) {
+        const compact = buildCompactGroupchatStatus(displayResponse, {
+          complete: completionClaimed && completionVerified && !statusBlocked,
+          blocked: statusBlocked,
+        });
+        if (compact) {
+          await sendAgentMessage(groupchat, riley, compact);
+        }
       }
     }
 
@@ -2205,7 +2240,7 @@ const DIRECTED_AGENT_IDS = new Set<string>([
 ]);
 
 const RILEY_USE_ALL_AGENTS = process.env.RILEY_USE_ALL_AGENTS === 'true';
-const RILEY_DIRECT_SPECIALISTS = process.env.RILEY_DIRECT_SPECIALISTS === 'true';
+const RILEY_DIRECT_SPECIALISTS = false;
 const RILEY_ACE_ERROR_RECOVERY = process.env.RILEY_ACE_ERROR_RECOVERY === 'true';
 
 function parseDirectives(text: string): string[] {
@@ -2237,12 +2272,22 @@ function isAceSelfDelegationResponse(text: string): boolean {
 function hasAceCompletionContract(text: string): boolean {
   const content = String(text || '');
   if (!content.trim()) return false;
+  // Design/spec deliverables with substantial HTML/CSS content satisfy the contract
+  // without requiring the Result/Evidence/Risk format.
+  if (isSubstantialDesignDeliverable(content)) return true;
   if (!/\bresult\s*:/i.test(content)) return false;
   if (!/\bevidence\s*:/i.test(content)) return false;
   if (!/\brisk\s*\/\s*follow-?up\s*:/i.test(content)) return false;
   if (!FILE_PATH_EVIDENCE_RE.test(content)) return false;
   if (!CHECK_EVIDENCE_RE.test(content)) return false;
   return true;
+}
+
+function isSubstantialDesignDeliverable(text: string): boolean {
+  const content = String(text || '');
+  if (content.length < 500) return false;
+  const htmlIndicators = (content.match(/<(?:html|style|div|section|header|nav|main|footer|button|input|table|form)\b/gi) || []).length;
+  return htmlIndicators >= 3;
 }
 
 function summarizeAceCompletionForRiley(text: string): string {
@@ -2348,6 +2393,7 @@ function goalNeedsRuntimeVerification(text: string): boolean {
   const normalized = String(text || '').toLowerCase();
   if (!normalized.trim()) return false;
   if (/\bstatus\b|\bthreads?\b|\busage\b|\blimits\b|\bhealth\b|\burls?\b|\blink\b/.test(normalized)) return false;
+  if (/\bdesign\s*spec\b|\bstyle\s*guide\b|\bglassmorphism\b|\bdesign\s*system\b|\bmockup\b|\bwireframe\b/.test(normalized)) return false;
   return /\bfix|implement|update|change|refactor|remove|add|build|ship|deploy|feature|bug|ui|screen|flow\b/.test(normalized);
 }
 
@@ -2427,6 +2473,36 @@ function shouldMirrorCompletionToGroupchat(text: string, workspaceChannel: Webho
   if (/decision\s+required|\bblocked\b|waiting\s+for\s+(?:approval|input)|need\s+approval/.test(normalized)) return false;
   if (/\breceived\b|\bstarting\b|\bworking\b|\bplan\b|\bwill\b|\bin progress\b|\bongoing\b/.test(normalized)) return false;
   return isCompletionClaim(normalized);
+}
+
+function firstSentence(text: string, maxLen = 220): string {
+  const normalized = String(text || '').replace(/\s+/g, ' ').trim();
+  if (!normalized) return '';
+  const sentence = normalized.split(/(?<=[.!?])\s+/)[0] || normalized;
+  if (sentence.length <= maxLen) return sentence;
+  return `${sentence.slice(0, Math.max(40, maxLen - 1)).trim()}…`;
+}
+
+function buildCompactGroupchatStatus(text: string, opts: { complete?: boolean; blocked?: boolean } = {}): string {
+  const concise = firstSentence(text, 220);
+  if (!concise) return '';
+  if (opts.blocked) return `🛑 Blocked: ${concise}`;
+  if (opts.complete) return `✅ Completion update: ${concise}`;
+  return `🧭 Riley update: ${concise}`;
+}
+
+function buildCompactChainStatus(findings: string[], errors: string[]): string {
+  const findingCount = findings.length;
+  const errorCount = errors.length;
+  if (errorCount > 0) {
+    const firstError = firstSentence(errors[0] || '', 180);
+    return `⚠️ Riley execution update: ${findingCount} finding(s), ${errorCount} issue(s). ${firstError || 'Follow-up is required in the workspace thread.'}`;
+  }
+  if (findingCount > 0) {
+    const firstFinding = firstSentence(findings[0] || '', 180);
+    return `✅ Riley execution complete: ${findingCount} finding(s). ${firstFinding || 'Details are in the workspace thread.'}`;
+  }
+  return '✅ Riley execution cycle finished. Details are in the workspace thread.';
 }
 
 function buildChainCompletionWatchdogMessage(findings: string[], errors: string[]): string {
@@ -2559,10 +2635,14 @@ async function handleAgentChain(
         if (signal?.aborted) return;
         const aceChannel = getAgentWorkChannel('developer', groupchat);
         aceChannel.sendTyping().catch(() => {});
-        const aceContext = `[Riley directed you]: ${rileyResponse}\n\nOwn execution yourself first. Only bring in extra specialists if they are truly needed. If you do delegate, use the exact Discord mentions from this guide: ${buildAgentMentionGuide(['security-auditor', 'api-reviewer', 'dba', 'performance', 'devops', 'copywriter', 'lawyer', 'qa', 'ux-reviewer', 'ios-engineer', 'android-engineer'])}.\n\nWhen you finish, do NOT reply with just "Done". Include these exact sections:\n- Result: one sentence outcome.\n- Evidence: files changed, commands/tests run, and key output.\n- Risk/Follow-up: any caveats or next checks.`;
+        const isDesignDeliverable = /\bdesign\b.*\b(?:spec|system|html|css|page|route|mockup|wireframe)\b|\b(?:spec|html|css)\b.*\bdesign\b|\bglassmorphism\b/i.test(rileyResponse);
+        const aceContext = isDesignDeliverable
+          ? `[Riley directed you]: ${rileyResponse}\n\nOwn execution yourself first. Only bring in extra specialists if they are truly needed. If you do delegate, use the exact Discord mentions from this guide: ${buildAgentMentionGuide(['security-auditor', 'api-reviewer', 'dba', 'performance', 'devops', 'copywriter', 'lawyer', 'qa', 'ux-reviewer', 'ios-engineer', 'android-engineer'])}.\n\nThis is a design deliverable. Provide the complete artifact (HTML/CSS/code) in a fenced code block. After the code block, add a brief summary of what you built. Do NOT use Result/Evidence/Risk format for design deliverables.`
+          : `[Riley directed you]: ${rileyResponse}\n\nOwn execution yourself first. Only bring in extra specialists if they are truly needed. If you do delegate, use the exact Discord mentions from this guide: ${buildAgentMentionGuide(['security-auditor', 'api-reviewer', 'dba', 'performance', 'devops', 'copywriter', 'lawyer', 'qa', 'ux-reviewer', 'ios-engineer', 'android-engineer'])}.\n\nWhen you finish, do NOT reply with just "Done". Include these exact sections:\n- Result: one sentence outcome.\n- Evidence: files changed, commands/tests run, and key output.\n- Risk/Follow-up: any caveats or next checks.`;
 
         let aceResponse = await dispatchToAgent('developer', aceContext, aceChannel, {
           signal,
+          maxTokens: isDesignDeliverable ? 4000 : undefined,
           persistUserContent: `[Riley directed]: ${rileyResponse.slice(0, 1000)}`,
           documentLine: '✅ {response}',
           workspaceChannel,
@@ -2625,13 +2705,13 @@ async function handleAgentChain(
           const fromAce = await handleSubAgents(aceSubDirectives, aceResponse, groupchat, workspaceChannel, signal);
           consolidatedFindings.push(...fromAce.findings);
           consolidatedErrors.push(...fromAce.errors);
-        } else {
+        } else if (!isDesignDeliverable) {
           const inferredSpecialists = inferSpecialistsForContext(`${rileyResponse}\n${aceResponse}`)
             .filter((id) => id !== 'developer');
           const forcedFallback = aceQualityFailed
-            ? ['qa', 'ux-reviewer', 'api-reviewer']
+            ? ['qa']
             : [];
-          const fallbackAgents = [...new Set([...forcedFallback, ...inferredSpecialists])];
+          const fallbackAgents = [...new Set([...forcedFallback, ...inferredSpecialists])].slice(0, 2);
           if (fallbackAgents.length > 0) {
             if (aceQualityFailed) {
               consolidatedFindings.push('Forced specialist fallback executed due to weak Ace completion output.');
@@ -2686,15 +2766,16 @@ async function handleAgentChain(
   if (GROUPCHAT_SUMMARY_ONLY && !signal?.aborted && (consolidatedFindings.length > 0 || consolidatedErrors.length > 0)) {
     const riley = getAgent('executive-assistant' as AgentId);
     if (riley) {
-      await sendAgentMessage(workspaceChannel, riley, buildConsolidatedAgentUpdate(consolidatedFindings, consolidatedErrors));
+      const consolidatedUpdate = buildConsolidatedAgentUpdate(consolidatedFindings, consolidatedErrors);
+      const watchdogSummary = !rileyAlreadyCompletion
+        ? buildChainCompletionWatchdogMessage(consolidatedFindings, consolidatedErrors)
+        : '';
+      const workspaceSummary = [consolidatedUpdate, watchdogSummary].filter(Boolean).join('\n\n');
+      await sendAgentMessage(workspaceChannel, riley, workspaceSummary);
 
-      if (!rileyAlreadyCompletion) {
-        const watchdogSummary = buildChainCompletionWatchdogMessage(consolidatedFindings, consolidatedErrors);
-        await sendAgentMessage(workspaceChannel, riley, watchdogSummary);
-        if (workspaceChannel.id !== groupchat.id) {
-          const safeWatchdog = watchdogSummary.replace(/https?:\/\/\S+/gi, '[see #url]');
-          await sendAgentMessage(groupchat, riley, `✅ Completion update: ${safeWatchdog}`);
-        }
+      if (workspaceChannel.id !== groupchat.id) {
+        const compact = buildCompactChainStatus(consolidatedFindings, consolidatedErrors);
+        await sendAgentMessage(groupchat, riley, compact);
       }
     }
   }

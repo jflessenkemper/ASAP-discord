@@ -33,6 +33,7 @@ export async function startLiveTranscription(
 ): Promise<DeepgramLiveSession> {
   const client = getClient();
   let closedExplicitly = false;
+  let closing = false;
   let errorReported = false;
 
   const connection: LiveClient = client.listen.live({
@@ -69,12 +70,15 @@ export async function startLiveTranscription(
 
   return {
     send: (audio: Buffer) => {
+      if (closing || closedExplicitly) return;
       if (connection.getReadyState() === 1) { // OPEN
         connection.send(audio.buffer.slice(audio.byteOffset, audio.byteOffset + audio.byteLength) as ArrayBuffer);
       }
     },
     close: () => {
+      if (closing || closedExplicitly) return;
       closedExplicitly = true;
+      closing = true;
       connection.requestClose();
     },
   };

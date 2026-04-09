@@ -70,26 +70,49 @@ export async function startElevenLabsRealtimeTranscription(
   let closedExplicitly = false;
   let errorReported = false;
   const sendQueue: Array<string> = [];
+  const startupRetries = Math.max(1, parseInt(process.env.ELEVENLABS_STT_STARTUP_MAX_RETRIES || '3', 10));
+  const startupTimeoutMs = Math.max(3000, parseInt(process.env.ELEVENLABS_STT_STARTUP_TIMEOUT_MS || '10000', 10));
+  const startupBackoffBaseMs = Math.max(250, parseInt(process.env.ELEVENLABS_STT_STARTUP_BACKOFF_BASE_MS || '500', 10));
 
-  const ws = new WebSocket(wsUrl, {
-    headers: {
-      'xi-api-key': apiKey,
-    },
-  });
-
-  await new Promise<void>((resolve, reject) => {
-    const timeout = setTimeout(() => reject(new Error('ElevenLabs realtime connection timed out')), 10_000);
-
-    ws.once('open', () => {
-      clearTimeout(timeout);
-      resolve();
+  let ws: WebSocket | null = null;
+  let startupAttempt = 0;
+  while (startupAttempt < startupRetries) {
+    startupAttempt += 1;
+    ws = new WebSocket(wsUrl, {
+      headers: {
+        'xi-api-key': apiKey,
+      },
     });
 
-    ws.once('error', (err) => {
-      clearTimeout(timeout);
-      reject(err instanceof Error ? err : new Error(String(err)));
-    });
-  });
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const timeout = setTimeout(() => reject(new Error('ElevenLabs realtime connection timed out')), startupTimeoutMs);
+
+        ws!.once('open', () => {
+          clearTimeout(timeout);
+          resolve();
+        });
+
+        ws!.once('error', (err) => {
+          clearTimeout(timeout);
+          reject(err instanceof Error ? err : new Error(String(err)));
+        });
+      });
+      break;
+    } catch (err) {
+      try { ws.close(); } catch {
+      }
+      if (startupAttempt >= startupRetries) {
+        throw err;
+      }
+      const backoffMs = Math.min(30_000, startupBackoffBaseMs * Math.pow(2, startupAttempt - 1));
+      await new Promise((resolve) => setTimeout(resolve, backoffMs));
+    }
+  }
+
+  if (!ws) {
+    throw new Error('Failed to initialize ElevenLabs realtime websocket');
+  }
 
   ws.on('message', (raw) => {
     try {

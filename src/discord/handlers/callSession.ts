@@ -271,6 +271,7 @@ async function handoffVoiceInstructionToTextRiley(
 ): Promise<boolean> {
   const trimmed = String(instruction || '').trim();
   if (!trimmed) return false;
+  if (!session.active) return false;
 
   try {
     const mod = await import('./groupchat');

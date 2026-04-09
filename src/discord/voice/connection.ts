@@ -140,11 +140,11 @@ export async function speakInVCWithOptions(
       options?.onPlaybackStart?.();
     };
     const onIdle = () => {
-      if (!sawPlaying) return;
       cleanup();
       if (aborted) {
         reject(new Error('Playback aborted'));
       } else {
+        // For very short clips the player may transition to Idle before Playing is observed.
         resolve();
       }
     };
@@ -246,16 +246,22 @@ const MAX_DEEPGRAM_SESSION_RETRIES = parseInt(process.env.MAX_DEEPGRAM_SESSION_R
 const VOICE_ENDPOINT_SILENCE_BASE_MS = parseInt(process.env.VOICE_ENDPOINT_SILENCE_BASE_MS || '900', 10);
 const VOICE_ENDPOINT_SILENCE_MIN_MS = parseInt(process.env.VOICE_ENDPOINT_SILENCE_MIN_MS || '650', 10);
 const VOICE_ENDPOINT_SILENCE_MAX_MS = parseInt(process.env.VOICE_ENDPOINT_SILENCE_MAX_MS || '1400', 10);
-const VOICE_ENDPOINT_STATE_TTL_MS = Math.max(300_000, parseInt(process.env.VOICE_ENDPOINT_STATE_TTL_MS || '7200000', 10));
-const VOICE_ENDPOINT_CLEANUP_INTERVAL_MS = Math.max(60_000, parseInt(process.env.VOICE_ENDPOINT_CLEANUP_INTERVAL_MS || '600000', 10));
+const VOICE_ENDPOINT_STATE_TTL_MS = Math.max(300_000, parseInt(process.env.VOICE_ENDPOINT_STATE_TTL_MS || '1800000', 10));
+const VOICE_ENDPOINT_CLEANUP_INTERVAL_MS = Math.max(60_000, parseInt(process.env.VOICE_ENDPOINT_CLEANUP_INTERVAL_MS || '120000', 10));
 
 const voiceEndpointingByUser = new Map<string, { silenceMs: number; lastAudioBytes: number; turns: number; updatedAt: number }>();
 const pendingShortAudioByUser = new Map<string, { audio: Buffer; capturedAt: number }>();
+const SHORT_AUDIO_STATE_TTL_MS = Math.max(10_000, parseInt(process.env.VOICE_SHORT_AUDIO_STATE_TTL_MS || '120000', 10));
 
 function pruneVoiceEndpointingState(now = Date.now()): void {
   for (const [userId, state] of voiceEndpointingByUser.entries()) {
     if (now - state.updatedAt > VOICE_ENDPOINT_STATE_TTL_MS) {
       voiceEndpointingByUser.delete(userId);
+    }
+  }
+  for (const [userId, state] of pendingShortAudioByUser.entries()) {
+    if (now - state.capturedAt > SHORT_AUDIO_STATE_TTL_MS) {
+      pendingShortAudioByUser.delete(userId);
     }
   }
 }
@@ -320,18 +326,36 @@ export function listenToUser(
   let destroyed = false;
   let resubscribeCount = 0;
   const receiver = connection.receiver;
+  let currentSubscription: Readable | null = null;
+  let currentDecoder: Transform | null = null;
+
+  function cleanupCurrentChain(): void {
+    if (currentSubscription && currentDecoder) {
+      try { currentSubscription.unpipe(currentDecoder); } catch {
+      }
+    }
+    try { currentSubscription?.destroy(); } catch {
+    }
+    try { currentDecoder?.destroy(); } catch {
+    }
+    currentSubscription = null;
+    currentDecoder = null;
+  }
 
   function subscribe() {
     if (destroyed) return;
+    cleanupCurrentChain();
     resubscribeCount++;
     if (resubscribeCount >= MAX_RESUBSCRIBES) {
       console.warn(`Max resubscribes (${MAX_RESUBSCRIBES}) reached for ${member.displayName} — stopping listener`);
+      pendingShortAudioByUser.delete(member.id);
       return; // Stop listening instead of continuing forever
     }
 
     const subscription = receiver.subscribe(member.id, {
       end: { behavior: EndBehaviorType.AfterSilence, duration: getAdaptiveSilenceDuration(member.id) },
     });
+    currentSubscription = subscription;
 
     let decoder: Transform;
     try {
@@ -340,6 +364,7 @@ export function listenToUser(
       console.error(`Opus decoder error for ${member.displayName}:`, err instanceof Error ? err.message : 'Unknown');
       return;
     }
+    currentDecoder = decoder;
     subscription.pipe(decoder);
 
     const chunks: Buffer[] = [];
@@ -347,7 +372,7 @@ export function listenToUser(
     let utteranceStartAt: number | null = null;
     let speechStartNotified = false;
 
-    decoder.on('data', (chunk: Buffer) => {
+    const onDecoderData = (chunk: Buffer) => {
       if (utteranceStartAt === null) {
         utteranceStartAt = Date.now();
       }
@@ -359,9 +384,9 @@ export function listenToUser(
       if (totalSize <= MAX_AUDIO_BUFFER) {
         chunks.push(chunk);
       }
-    });
+    };
 
-    decoder.on('end', async () => {
+    const onDecoderEnd = async () => {
       if (destroyed) return;
 
       if (chunks.length > 0 && totalSize <= MAX_AUDIO_BUFFER) {
@@ -405,24 +430,42 @@ export function listenToUser(
       }
 
       subscribe();
-    });
+    };
 
-    decoder.on('error', (err: Error) => {
+    const onDecoderError = (err: Error) => {
       console.error(`Decoder stream error for ${member.displayName}:`, err.message);
       if (!destroyed) subscribe();
-    });
+    };
 
-    subscription.on('end', () => { decoder.end(); });
-    subscription.on('error', (err: Error) => {
+    const onSubscriptionEnd = () => { decoder.end(); };
+    const onSubscriptionError = (err: Error) => {
       console.error(`Voice subscription error for ${member.displayName}:`, err.message);
       decoder.end();
-    });
+    };
+
+    decoder.on('data', onDecoderData);
+    decoder.on('end', onDecoderEnd);
+    decoder.on('error', onDecoderError);
+    subscription.on('end', onSubscriptionEnd);
+    subscription.on('error', onSubscriptionError);
+
+    const detach = () => {
+      decoder.off('data', onDecoderData);
+      decoder.off('end', onDecoderEnd);
+      decoder.off('error', onDecoderError);
+      subscription.off('end', onSubscriptionEnd);
+      subscription.off('error', onSubscriptionError);
+    };
+    decoder.once('close', detach);
+    subscription.once('close', detach);
   }
 
   subscribe();
 
   return () => {
     destroyed = true;
+    pendingShortAudioByUser.delete(member.id);
+    cleanupCurrentChain();
   };
 }
 

@@ -50,6 +50,7 @@ interface AgentCapabilityTest {
   prompt: string;
   expectAny?: CheckPattern[];
   expectAll?: CheckPattern[];
+  expectNone?: CheckPattern[];
   requireTokenEcho?: boolean;
   expectToolAudit?: string[];
   expectUpgradesPost?: boolean;
@@ -103,6 +104,15 @@ const AGENT_CAPABILITY_TESTS: AgentCapabilityTest[] = [
     prompt: 'Briefly delegate a code task to Ace and a validation task to QA in your reply.',
     expectAny: [/ace|developer/i, /qa|max/i],
     minBotRepliesAfterPrompt: 2,
+    requireTokenEcho: false,
+  },
+  {
+    id: 'executive-assistant',
+    category: 'orchestration',
+    capability: 'ace-only-delegation',
+    prompt: 'You need security and QA help. Delegate correctly under strict policy in one short reply.',
+    expectAll: [/@ace|developer/i],
+    expectNone: [/@kane|@max|@raj|@elena|@kai|@jude|@liv|@harper|@mia|@leo/i],
     requireTokenEcho: false,
   },
   {
@@ -244,6 +254,7 @@ const AGENT_CAPABILITY_TESTS: AgentCapabilityTest[] = [
 const READINESS_TEST_KEYS = new Set([
   'executive-assistant:routing-and-next-step',
   'executive-assistant:repo-memory-tool-awareness',
+  'executive-assistant:ace-only-delegation',
   'developer:evidence-format-contract',
   'developer:upgrades-post',
   'qa:regression-test-design',
@@ -557,6 +568,12 @@ function validateReplyShape(test: AgentCapabilityTest, replyText: string, token:
   if (test.expectAny && test.expectAny.length > 0) {
     if (!test.expectAny.some((pattern) => pattern.test(replyText))) {
       return { ok: false, reason: 'missing any-of expected patterns' };
+    }
+  }
+
+  if (test.expectNone && test.expectNone.length > 0) {
+    for (const pattern of test.expectNone) {
+      if (pattern.test(replyText)) return { ok: false, reason: `matched forbidden pattern ${pattern}` };
     }
   }
 
@@ -896,6 +913,122 @@ function buildReadinessSummary(results: TestResult[], extras: ExtraCheckResult[]
   };
 }
 
+interface FreeformResponse {
+  channel: string;
+  author: string;
+  content: string;
+  timestamp: string;
+}
+
+interface FreeformResult {
+  elapsed: number;
+  responses: FreeformResponse[];
+  observations: string[];
+}
+
+async function runFreeformObservation(
+  groupchat: TextChannel,
+  allChannels: TextChannel[],
+  prompt: string,
+  rileyMention: string,
+  selfId: string,
+  timeoutMs: number,
+  pollIntervalMs: number,
+): Promise<FreeformResult> {
+  const started = Date.now();
+  const observations: string[] = [];
+
+  // Post the freeform prompt
+  const fullPrompt = prompt.includes('@') ? prompt : `${rileyMention} ${prompt}`;
+  console.log('\n=== Freeform Observation Mode ===');
+  console.log(`Prompt: ${fullPrompt}`);
+  console.log(`Timeout: ${timeoutMs / 1000}s`);
+  console.log(`Polling: ${pollIntervalMs}ms\n`);
+
+  let sent: Message;
+  try {
+    sent = await groupchat.send(fullPrompt);
+  } catch (err) {
+    return {
+      elapsed: Date.now() - started,
+      responses: [],
+      observations: [`Failed to send prompt: ${err instanceof Error ? err.message : String(err)}`],
+    };
+  }
+
+  const seenIds = new Set<string>();
+  const responses: FreeformResponse[] = [];
+  let lastNewResponseAt = Date.now();
+  const silenceThresholdMs = 120_000; // 2 min of silence = likely done
+
+  console.log('Watching for responses...\n');
+
+  while (Date.now() - started < timeoutMs) {
+    const channelBatches = await Promise.all(
+      allChannels.map(async (channel) => {
+        try {
+          const msgs = await channel.messages.fetch({ limit: 30 });
+          return [...msgs.values()].map((m) => ({ msg: m, channelName: channel.name }));
+        } catch {
+          return [] as { msg: Message; channelName: string }[];
+        }
+      })
+    );
+
+    let foundNew = false;
+    for (const { msg, channelName } of channelBatches.flat()) {
+      if (seenIds.has(msg.id)) continue;
+      if (!isBotOrWebhookReply(msg, sent, selfId)) continue;
+
+      seenIds.add(msg.id);
+      foundNew = true;
+      lastNewResponseAt = Date.now();
+
+      const content = msg.content || msg.embeds[0]?.description || '';
+      const author = msg.author?.username || 'unknown';
+      const ts = new Date(msg.createdTimestamp).toISOString();
+      const attachments = [...msg.attachments.values()];
+
+      const entry: FreeformResponse = {
+        channel: channelName,
+        author,
+        content: content.slice(0, 4000) + (attachments.length > 0 ? `\n[${attachments.length} attachment(s)]` : ''),
+        timestamp: ts,
+      };
+      responses.push(entry);
+
+      const preview = content.slice(0, 120).replace(/\n/g, ' ');
+      console.log(`  [${channelName}] ${author}: ${preview}${content.length > 120 ? '...' : ''}`);
+
+      // Detect pain points automatically
+      if (content.length >= 1900) observations.push(`Long message (${content.length} chars) in #${channelName} by ${author} — likely split`);
+      if (/quality check|quality retry/i.test(content)) observations.push(`Quality retry triggered in #${channelName}`);
+      if (/timed out|timeout/i.test(content)) observations.push(`Timeout detected in #${channelName}`);
+      if (/did not generate a usable message/i.test(content)) observations.push(`Empty response in #${channelName} by ${author}`);
+      if (/blocked.*screenshot|verification.*evidence|runtime.*evidence/i.test(content)) observations.push(`Verification gate blocking in #${channelName}`);
+      if (/daily.*limit|budget.*exceeded|quota.*exhausted/i.test(content)) observations.push(`Budget/quota issue in #${channelName}`);
+      if (attachments.length > 0) observations.push(`File attachment posted in #${channelName} by ${author}`);
+    }
+
+    // If we've had responses and then 2 min silence, consider it done
+    if (responses.length > 0 && Date.now() - lastNewResponseAt > silenceThresholdMs) {
+      console.log(`\n2 minutes of silence after ${responses.length} responses — ending observation.`);
+      break;
+    }
+
+    await sleep(pollIntervalMs);
+  }
+
+  const elapsed = Date.now() - started;
+  console.log(`\nObservation complete: ${responses.length} responses in ${(elapsed / 1000).toFixed(1)}s`);
+  if (observations.length > 0) {
+    console.log('\nAuto-detected observations:');
+    for (const obs of observations) console.log(`  ⚠ ${obs}`);
+  }
+
+  return { elapsed, responses, observations };
+}
+
 function ensureReportsDir(): string {
   const dir = path.join(process.cwd(), 'smoke-reports');
   fs.mkdirSync(dir, { recursive: true });
@@ -971,6 +1104,7 @@ async function run(): Promise<void> {
   const interTestDelayMs = getInterTestDelayMs(profile);
   const pollIntervalMs = getPollIntervalMs(profile);
   const agentFilter = process.argv.find((a) => a.startsWith('--agent='))?.slice('--agent='.length);
+  const freeformPrompt = process.argv.find((a) => a.startsWith('--prompt='))?.slice('--prompt='.length);
 
   if (!token) throw new Error('Missing DISCORD_TEST_BOT_TOKEN');
   if (!guildId) throw new Error('Missing DISCORD_GUILD_ID');
@@ -1032,6 +1166,7 @@ async function run(): Promise<void> {
   console.log(`Router health timeout : ${Math.round(routerHealthTimeoutMs / 1000)}s`);
   console.log(`Post-success reset+announce: ${runPostSuccessAction ? 'enabled' : 'disabled'}`);
   if (agentFilter) console.log(`Filter                : --agent=${agentFilter}`);
+  if (freeformPrompt) console.log(`Freeform prompt       : ${freeformPrompt.slice(0, 80)}${freeformPrompt.length > 80 ? '...' : ''}`);
 
   if (budgetBoostAmount > 0) {
     await groupchat.send(`approve budget $${budgetBoostAmount} for smoke test run`).catch(() => {});
@@ -1051,6 +1186,56 @@ async function run(): Promise<void> {
       await client.destroy();
       throw new Error(`Router health check failed: ${health.detail}. Start the main Discord bot (server dev/prod) before running smoke.`);
     }
+  }
+
+  // ── Freeform prompt mode: post a custom message, observe all agent responses ──
+  if (freeformPrompt) {
+    const freeformResult = await runFreeformObservation(
+      groupchat,
+      candidateChannels,
+      freeformPrompt,
+      roleMentions.get('executive-assistant') || '@riley',
+      client.user!.id,
+      600_000,
+      pollIntervalMs,
+    );
+
+    const dir = ensureReportsDir();
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const mdPath = path.join(dir, `freeform-${stamp}.md`);
+
+    const mdLines: string[] = [];
+    mdLines.push('# Freeform Observation Report');
+    mdLines.push('');
+    mdLines.push(`Started: ${startedAt}`);
+    mdLines.push(`Ended: ${new Date().toISOString()}`);
+    mdLines.push(`Elapsed: ${((freeformResult.elapsed) / 1000).toFixed(1)}s`);
+    mdLines.push('');
+    mdLines.push('## Prompt');
+    mdLines.push('');
+    mdLines.push(`> ${freeformPrompt}`);
+    mdLines.push('');
+    mdLines.push(`## Responses (${freeformResult.responses.length})`);
+    mdLines.push('');
+    for (const resp of freeformResult.responses) {
+      mdLines.push(`### ${resp.channel} — ${resp.author} (${resp.timestamp})`);
+      mdLines.push('');
+      mdLines.push(resp.content);
+      mdLines.push('');
+    }
+    if (freeformResult.observations.length > 0) {
+      mdLines.push('## Observations');
+      mdLines.push('');
+      for (const obs of freeformResult.observations) {
+        mdLines.push(`- ${obs}`);
+      }
+      mdLines.push('');
+    }
+
+    fs.writeFileSync(mdPath, mdLines.join('\n'), 'utf-8');
+    console.log(`\nFreeform report: ${mdPath}`);
+    await client.destroy();
+    process.exit(0);
   }
 
   const profileTests = profile === 'readiness'
