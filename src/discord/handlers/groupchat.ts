@@ -2472,6 +2472,8 @@ function shouldMirrorCompletionToGroupchat(text: string, workspaceChannel: Webho
   if (!normalized.trim()) return false;
   if (/decision\s+required|\bblocked\b|waiting\s+for\s+(?:approval|input)|need\s+approval/.test(normalized)) return false;
   if (/\breceived\b|\bstarting\b|\bworking\b|\bplan\b|\bwill\b|\bin progress\b|\bongoing\b/.test(normalized)) return false;
+  // Don't mirror delegation-to-Ace as a completion — the chain hasn't run yet.
+  if (/please\s+create|@ace|<@&\d+>.*(?:create|build|implement|take the lead)/.test(normalized)) return false;
   return isCompletionClaim(normalized);
 }
 
@@ -2656,39 +2658,43 @@ async function handleAgentChain(
           || !hasAceCompletionContract(aceResponse)
         );
 
-        if (!signal?.aborted && needsQualityRetry()) {
-          aceResponse = await dispatchToAgent(
-            'developer',
-            '[System quality check] Your last update did not satisfy execution standards. Do not delegate back to Ace, do not ask others to investigate, and do not use placeholders. Execute directly and provide a concrete completion summary with these exact sections: Result, Evidence, Risk/Follow-up. Include at least one real file path and one validation command or check.',
-            aceChannel,
-            {
-              signal,
-              maxTokens: Math.max(SUBAGENT_MAX_TOKENS, 700),
-              persistUserContent: '[System quality check for Ace response detail]',
-              documentLine: '✅ {response}',
-              workspaceChannel,
-              suppressVisibleOutput: shouldSuppressAceVisibleOutput,
-            }
-          );
+        // Design deliverables: Ace's file creation via tools IS the deliverable.
+        // The quality gate (Result/Evidence/Risk) is irrelevant — skip retries.
+        if (!isDesignDeliverable) {
+          if (!signal?.aborted && needsQualityRetry()) {
+            aceResponse = await dispatchToAgent(
+              'developer',
+              '[System quality check] Your last update did not satisfy execution standards. Do not delegate back to Ace, do not ask others to investigate, and do not use placeholders. Execute directly and provide a concrete completion summary with these exact sections: Result, Evidence, Risk/Follow-up. Include at least one real file path and one validation command or check.',
+              aceChannel,
+              {
+                signal,
+                maxTokens: Math.max(SUBAGENT_MAX_TOKENS, 700),
+                persistUserContent: '[System quality check for Ace response detail]',
+                documentLine: '✅ {response}',
+                workspaceChannel,
+                suppressVisibleOutput: shouldSuppressAceVisibleOutput,
+              }
+            );
+          }
+
+          if (!signal?.aborted && needsQualityRetry()) {
+            aceResponse = await dispatchToAgent(
+              'developer',
+              '[System quality check final] Return only this format and fill it concretely:\nResult: <one sentence>\nEvidence: files=<path1,path2>; checks=<command and outcome>\nRisk/Follow-up: <one sentence>.\nNo delegation text. No placeholders.',
+              aceChannel,
+              {
+                signal,
+                maxTokens: Math.max(SUBAGENT_MAX_TOKENS, 500),
+                persistUserContent: '[System final quality check for Ace response detail]',
+                documentLine: '✅ {response}',
+                workspaceChannel,
+                suppressVisibleOutput: shouldSuppressAceVisibleOutput,
+              }
+            );
+          }
         }
 
-        if (!signal?.aborted && needsQualityRetry()) {
-          aceResponse = await dispatchToAgent(
-            'developer',
-            '[System quality check final] Return only this format and fill it concretely:\nResult: <one sentence>\nEvidence: files=<path1,path2>; checks=<command and outcome>\nRisk/Follow-up: <one sentence>.\nNo delegation text. No placeholders.',
-            aceChannel,
-            {
-              signal,
-              maxTokens: Math.max(SUBAGENT_MAX_TOKENS, 500),
-              persistUserContent: '[System final quality check for Ace response detail]',
-              documentLine: '✅ {response}',
-              workspaceChannel,
-              suppressVisibleOutput: shouldSuppressAceVisibleOutput,
-            }
-          );
-        }
-
-        const aceQualityFailed = !signal?.aborted && needsQualityRetry();
+        const aceQualityFailed = !isDesignDeliverable && !signal?.aborted && needsQualityRetry();
         if (aceQualityFailed) {
           consolidatedErrors.push('Ace completion quality check failed after retries.');
         }
