@@ -1,0 +1,197 @@
+================================================================================
+SESSION HANDOFF REPORT — 9 April 2026
+Discord Bot Full Matrix Test Implementation
+================================================================================
+
+## WHAT WAS DONE THIS SESSION
+
+### 1. Matrix Test Profile Implemented (src/discord/tester.ts)
+
+Added a third smoke profile `DISCORD_SMOKE_PROFILE=matrix` alongside existing `full` and `readiness`.
+This extends the test suite from 22 tests to 48 tests covering all 13 agents.
+
+Changes made to src/discord/tester.ts:
+- Added `'matrix'` to `SmokeProfile` type union
+- Imported `Guild` from discord.js and `setupChannels` from `./setup`
+- Added 26 new test definitions to `AGENT_CAPABILITY_TESTS` array
+- Updated all config functions with matrix-specific defaults:
+  - timeout: 180s (vs 300s)
+  - pollInterval: 600ms (vs 1600ms)
+  - interTestDelay: 500ms (vs 2000ms)
+  - budgetBoost: $120 (vs $80)
+  - preClear: true (default)
+  - voiceBridge: disabled for matrix
+  - requireLiveRouter: true
+- Added `executeSingleTest()` helper function to DRY up test execution
+- Added parallel wave execution for matrix profile:
+  - Phase 1: Riley/orchestration tests run SERIAL via groupchat (15 tests)
+  - Phase 2: All specialist/developer tests run PARALLEL via agent channels (33 tests)
+- Updated `buildReadinessSummary()` to accept profile param with matrix-specific weights:
+  - core=0.20, specialist=0.15, tool-proof=0.25, orchestration=0.15, upgrades=0.10, memory=0.15
+- Updated `postSuccessResetAndAnnounce()` to accept optional Guild param, call setupChannels()
+- Matrix profile forces post-success cleanup on full pass (regardless of env var)
+- Replaced old serial for-loop with conditional: matrix uses parallel waves, full/readiness use serial
+
+### 2. Build & Test Verified
+- `npx tsc --noEmit` — 0 type errors
+- `npx jest --runInBand` — 139/139 tests pass
+- `npm run build` — dist built clean
+
+### 3. First Matrix Run Started (still running when session ended)
+Command: DISCORD_SMOKE_PROFILE=matrix DISCORD_SMOKE_REQUIRE_LIVE_ROUTER=true node dist/discord/tester.js
+
+================================================================================
+
+## TEST RUN RESULTS (PARTIAL — test was still running)
+
+### Phase 1: Groupchat Tests (Serial) — 15 tests
+
+| # | Test | Result | Time | Notes |
+|---|------|--------|------|-------|
+| 1 | Riley :: core/routing-and-next-step | PASS | 9.0s | Clean first-attempt pass |
+| 2 | Riley :: memory/repo-memory-tool-awareness | PASS | 9.3s | Clean first-attempt pass |
+| 3 | Riley :: orchestration/delegate-ace-qa | PASS | 50.4s | Needed retry. "Ace had an error" on first attempt |
+| 4 | Riley :: orchestration/ace-only-delegation | FAIL | 300.0s | TIMEOUT on both attempts |
+| 5 | Riley :: memory/repo-memory-evidence | PASS | 16.4s | Needed retry |
+| 6 | Riley :: core/action-status | PASS | 7.6s | Needed retry |
+| 7 | Riley :: core/action-agents | PASS | 7.0s | Clean pass |
+| 8 | Riley :: core/action-health | PASS | 9.0s | Needed retry. Delegated to Ace |
+| 9 | Riley :: core/action-urls | PASS | 8.4s | Needed retry |
+| 10 | Riley :: core/action-limits | PASS | 7.0s | Clean pass |
+| 11 | Riley :: core/context-report | PASS | 16.4s | Clean pass |
+| 12 | Riley :: orchestration/delegate-single-specialist | PASS | 89.4s | Clean pass, took long |
+| 13 | Riley :: orchestration/goal-tracking | FAIL | 300.1s | TIMEOUT on both attempts |
+| 14 | Riley :: memory/memory-write | FAIL | 301.9s | TIMEOUT on both attempts |
+| 15 | Ace :: orchestration/specialist-chain | IN PROGRESS | — | Was on retry 2/2 when last checked |
+
+Phase 1 subtotal: 11 PASS, 3 FAIL (+ 1 in progress)
+
+### Phase 2: Agent Channel Tests (Parallel) — 33 tests
+Had not started yet when session ended. Phase 1 was still running.
+
+================================================================================
+
+## ISSUES FOUND & WHAT NEEDS FIXING
+
+### Issue 1: ace-only-delegation test FAILS (expectNone pattern too strict)
+The test expects Riley NOT to mention any specialist directly:
+  expectNone: [/@kane|@max|@raj|@elena|@kai|@jude|@liv|@harper|@mia|@leo/i]
+But Riley's response likely mentions Ace AND mentions specialists by name (not @mention).
+The expectAll pattern requires [/@ace|developer/i] which may also be too loose.
+FIX NEEDED: This is an existing test (not new), but it times out because the bot's reply
+doesn't match the expected shape. Investigate what Riley actually replied — may need to
+relax the expectNone or make the prompt clearer about not @mentioning specialists.
+
+### Issue 2: goal-tracking test FAILS (timeout)
+Riley doesn't produce output matching: /goal|fuel|status|set|tracking|review/i
+This could be because:
+- Riley's goal-tracking behavior requires actual ACTION tags that aren't echoed in text
+- The bot may be producing responses that get cut off (Discord 2000 char limit)
+- Riley might delegate to Ace instead of answering directly
+FIX NEEDED: Check Discord channel to see what Riley actually replied. May need to broaden
+expectAny patterns or adjust the prompt to be more direct.
+
+### Issue 3: memory-write test FAILS (timeout)
+Prompt: "Write a note to repo memory: 'smoke test validated all agents' using memory_write"
+expectToolAudit: ['memory_write']
+The bot likely doesn't have a tool literally called `memory_write` — the actual tool names
+might be `repo_memory_index`, `repo_memory_search`, or something else.
+FIX NEEDED: Check the actual tool names available. The tool may be called something like
+`write_file` targeting a memory path, or `repo_memory_write`. Verify in the tools.ts file
+and update the test prompt and expectToolAudit accordingly.
+
+### Issue 4: Many tests need retries
+6 out of 14 completed tests needed retries, suggesting:
+- 600ms poll interval might be too aggressive (causing missed responses)
+- 180s timeout is fine for most but tight for orchestration (multi-agent chains)
+- The bot takes 7-16s for simple Riley tasks but 50-90s for orchestration
+CONSIDER: Increasing orchestration timeout to 300s, or adding category-specific timeouts.
+
+### Issue 5: Messages getting cut off (Discord 2000 char limit)
+Several responses end with "…" indicating truncation. The test's extractReplyText()
+already handles this (slices to 2000 chars), but validation patterns may miss content
+that was cut off in the actual Discord message.
+CONSIDER: For long responses, the bot may split across multiple messages. The test
+only checks content of individual messages, not concatenated multi-message responses.
+
+### Issue 6: Phase 2 parallel execution untested
+The parallel agent-channel execution (Phase 2) hadn't started yet. Key concerns:
+- Will all 12 agent channels receive messages simultaneously without rate limiting?
+- Will the independent per-channel queues handle concurrent load?
+- Discord API rate limits may throttle parallel message sending
+WATCH FOR: Rate limit errors (429s) in Phase 2 output.
+
+================================================================================
+
+## FILE CHANGES SUMMARY
+
+Only ONE file was modified: src/discord/tester.ts
+
+Key sections changed (approximate current line numbers):
+- Line 46: SmokeProfile type — added 'matrix'
+- Line 42: Import — added Guild, setupChannels
+- Lines 258-470: New test definitions (26 tests appended to AGENT_CAPABILITY_TESTS)
+- Line 280+: getSmokeProfile() — added matrix case
+- Line 285+: getTestTimeoutMs() — matrix default 180s
+- Line 320+: shouldRunVoiceBridgeCheck() — matrix defaults to false
+- Line 333+: shouldRequireLiveRouter() — matrix defaults to true
+- Line 344+: getBudgetBoostAmount() — matrix default $120
+- Line 348+: getInterTestDelayMs() — matrix 500ms
+- Line 352+: getPollIntervalMs() — matrix 600ms
+- Line 1097+: buildReadinessSummary() — added profile param, matrix weights
+- Line 1345+: postSuccessResetAndAnnounce() — added Guild param, setupChannels call
+- Line 1395+: executeSingleTest() — new helper function (extracted from run loop)
+- Line 1600+: run() — matrix parallel wave execution (Phase 1 serial, Phase 2 parallel)
+- Line 1734+: postSuccessResetAndAnnounce call — passes guild, forced for matrix
+
+================================================================================
+
+## RECOMMENDED NEXT STEPS
+
+1. CHECK THE SMOKE REPORT: When the test finishes, a report will be written to
+   smoke-reports/smoke-2026-04-09T*.md — read it for full results.
+
+2. CHECK DISCORD CHANNELS: Look at what the bot actually replied for the 3 failed tests.
+   The snippets show "Timeout" but the bot may have responded — just not matching patterns.
+
+3. FIX THE 3 FAILING TESTS:
+   a. ace-only-delegation — relax expectNone or clarify prompt
+   b. goal-tracking — check if Riley has goal-tracking capability, adjust patterns
+   c. memory-write — verify actual tool name (not `memory_write`), update test
+
+4. CONSIDER TIMEOUT ADJUSTMENTS:
+   - Orchestration tests with multi-agent chains need more time
+   - Consider per-category timeout overrides
+
+5. RE-RUN after fixes: DISCORD_SMOKE_PROFILE=matrix node dist/discord/tester.js
+
+6. VERIFY PHASE 2 RESULTS: The parallel execution is the novel part — check for
+   rate limiting issues and whether agent-channel routing works correctly.
+
+================================================================================
+
+## HOW TO RUN THE MATRIX TEST
+
+# Build first (if source changed)
+npm run build
+
+# Run the test
+DISCORD_TEST_BOT_TOKEN="$(gcloud secrets versions access latest --secret=DISCORD_TEST_BOT_TOKEN --project=asap-489910)" \
+DISCORD_GUILD_ID="$(gcloud secrets versions access latest --secret=DISCORD_GUILD_ID --project=asap-489910)" \
+DISCORD_SMOKE_PROFILE=matrix \
+DISCORD_SMOKE_REQUIRE_LIVE_ROUTER=true \
+node dist/discord/tester.js
+
+# Optional: skip pre-clear if channels are already clean
+# Add: DISCORD_SMOKE_PRE_CLEAR=false
+
+================================================================================
+
+## CODEBASE STATE
+- TypeScript: 0 errors (npx tsc --noEmit)
+- Jest: 139/139 pass (npx jest --runInBand)
+- dist/: built and up to date with source
+- VM bot: deployed and running (pm2 status: online)
+- Git: changes are local only (not pushed)
+
+================================================================================

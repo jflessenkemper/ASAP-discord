@@ -18,7 +18,7 @@
  *   DISCORD_TEST_BOT_TOKEN                     required
  *   DISCORD_GUILD_ID                           required
  *   DISCORD_TEST_TIMEOUT_MS                    optional (default 300000)
- *   DISCORD_SMOKE_PROFILE                      optional (default full) — full | readiness
+ *   DISCORD_SMOKE_PROFILE                      optional (default full) — full | readiness | matrix
  *   DISCORD_GROUPCHAT_ID                       optional
  *   DISCORD_SMOKE_PRE_CLEAR                    optional (default true)
  *   DISCORD_SMOKE_PRE_CLEAR_MAX_MS             optional (default 600000)
@@ -35,13 +35,14 @@ import 'dotenv/config';
 import fs from 'fs';
 import path from 'path';
 
-import { ChannelType, Client, GatewayIntentBits, Message, TextChannel, ThreadChannel } from 'discord.js';
+import { ChannelType, Client, GatewayIntentBits, Guild, Message, TextChannel, ThreadChannel } from 'discord.js';
 
 import { getAgent, getAgentAliases, resolveAgentId } from './agents';
+import { setupChannels } from './setup';
 
 type CheckPattern = RegExp;
 type Category = 'core' | 'specialist' | 'tool-proof' | 'orchestration' | 'upgrades' | 'memory';
-type SmokeProfile = 'full' | 'readiness';
+type SmokeProfile = 'full' | 'readiness' | 'matrix';
 
 interface AgentCapabilityTest {
   id: string;
@@ -249,6 +250,233 @@ const AGENT_CAPABILITY_TESTS: AgentCapabilityTest[] = [
     prompt: 'Name the primary Android language/framework in one sentence.',
     expectAny: [/kotlin|jetpack|compose|gradle/i],
   },
+
+  // ── Matrix-extended tests (26 additional tests) ──
+
+  // Riley core: ACTION tags
+  {
+    id: 'executive-assistant',
+    category: 'core',
+    capability: 'action-status',
+    prompt: 'Show current goal status and active threads.',
+    expectAny: [/\[ACTION:STATUS\]|\[ACTION:THREADS\]|goal|status|thread|active/i],
+  },
+  {
+    id: 'executive-assistant',
+    category: 'core',
+    capability: 'action-agents',
+    prompt: 'List all available agents on this team.',
+    expectAny: [/\[ACTION:AGENTS\]|ace|riley|kane|max|developer|qa/i],
+  },
+  {
+    id: 'executive-assistant',
+    category: 'core',
+    capability: 'action-health',
+    prompt: 'Check the deployment health of our app.',
+    expectAny: [/\[ACTION:HEALTH\]|health|cloud run|deployment|status|running/i],
+  },
+  {
+    id: 'executive-assistant',
+    category: 'core',
+    capability: 'action-urls',
+    prompt: 'Show me the app URLs and Cloud Build console links.',
+    expectAny: [/\[ACTION:URLS\]|url|console|cloud build|http/i],
+  },
+  {
+    id: 'executive-assistant',
+    category: 'core',
+    capability: 'action-limits',
+    prompt: 'Show the current budget and token usage.',
+    expectAny: [/\[ACTION:LIMITS\]|budget|token|usage|limit/i],
+  },
+  {
+    id: 'executive-assistant',
+    category: 'core',
+    capability: 'context-report',
+    prompt: 'Show the current context efficiency.',
+    expectAny: [/\[ACTION:CONTEXT\]|context|efficiency|token|usage/i],
+  },
+
+  // Ace developer: tool-proof tests
+  {
+    id: 'developer',
+    category: 'tool-proof',
+    capability: 'read-and-summarize',
+    prompt: 'Use read_file to read server/src/routes/health.ts and summarize its exports in one line.',
+    expectAny: [/health|export|route|function|handler/i],
+    expectToolAudit: ['read_file'],
+  },
+  {
+    id: 'developer',
+    category: 'tool-proof',
+    capability: 'search-codebase',
+    prompt: 'Use search_files to find all Express route handlers that use authentication middleware, reply with one file path.',
+    expectAny: [/server\/src\/routes|\.ts|auth|middleware/i],
+    expectToolAudit: ['search_files'],
+  },
+  {
+    id: 'developer',
+    category: 'tool-proof',
+    capability: 'typecheck-execution',
+    prompt: 'Run typecheck on the server and report pass or fail in one line.',
+    expectAny: [/pass|fail|error|success|clean|no issues/i],
+    expectToolAudit: ['run_command'],
+  },
+  {
+    id: 'developer',
+    category: 'tool-proof',
+    capability: 'run-tests-execution',
+    prompt: 'Run the test suite with run_tests and report the total pass count in one line.',
+    expectAny: [/\d+\s*(pass|tests?|suites?)|all.*pass/i],
+    expectToolAudit: ['run_tests'],
+  },
+  {
+    id: 'developer',
+    category: 'specialist',
+    capability: 'design-deliverable',
+    prompt: 'Create a minimal health-check HTML snippet (just a div with id=\'status\' showing \'OK\') and return it. This is a design spec task.',
+    expectAny: [/<div|id=.status.|OK|html/i],
+  },
+  {
+    id: 'developer',
+    category: 'tool-proof',
+    capability: 'db-schema-inspect',
+    prompt: 'Use db_schema to inspect the database and name three tables.',
+    expectAny: [/table|schema|users|jobs|fuel/i],
+    expectToolAudit: ['db_schema'],
+  },
+  {
+    id: 'developer',
+    category: 'tool-proof',
+    capability: 'git-branch-awareness',
+    prompt: "Use run_command to run 'git log --oneline -3' and summarize the last 3 commits.",
+    expectAny: [/commit|merge|feat|fix|chore|refactor/i],
+    expectToolAudit: ['run_command'],
+  },
+
+  // Security auditor: code review
+  {
+    id: 'security-auditor',
+    category: 'tool-proof',
+    capability: 'code-review',
+    prompt: 'Use read_file to read server/src/routes/auth.ts and identify one security concern in one sentence.',
+    expectAny: [/auth|security|vulnerab|inject|token|password|concern/i],
+    expectToolAudit: ['read_file'],
+  },
+
+  // API reviewer: route review
+  {
+    id: 'api-reviewer',
+    category: 'tool-proof',
+    capability: 'route-review',
+    prompt: 'Use search_files to find REST endpoint definitions in server/src/routes/ and name one that could benefit from pagination.',
+    expectAny: [/pagina|limit|offset|cursor|page|endpoint|route/i],
+    expectToolAudit: ['search_files'],
+  },
+
+  // DBA: schema inspect
+  {
+    id: 'dba',
+    category: 'tool-proof',
+    capability: 'schema-inspect',
+    prompt: 'Use db_schema to list the tables in the database and name the one most likely to grow fastest.',
+    expectAny: [/table|schema|grow|jobs|users|logs/i],
+    expectToolAudit: ['db_schema'],
+  },
+
+  // Performance: code analysis
+  {
+    id: 'performance',
+    category: 'tool-proof',
+    capability: 'code-analysis',
+    prompt: 'Use read_file on server/src/services/fuel.ts and identify one potential performance bottleneck in one sentence.',
+    expectAny: [/performance|bottleneck|slow|optimi|cache|query|loop|n\+1/i],
+    expectToolAudit: ['read_file'],
+  },
+
+  // DevOps: deployment inspect + gcp describe
+  {
+    id: 'devops',
+    category: 'tool-proof',
+    capability: 'deployment-inspect',
+    prompt: 'Use gcp_list_revisions and report the latest revision name in one line. Prefix with TOOL_USED:gcp_list_revisions.',
+    expectAll: [/TOOL_USED:gcp_list_revisions/i],
+    expectAny: [/revision|rev-|deploy/i],
+  },
+  {
+    id: 'devops',
+    category: 'tool-proof',
+    capability: 'gcp-describe',
+    prompt: 'Use gcp_run_describe to check the current Cloud Run service and report its status in one line.',
+    expectAny: [/cloud run|revision|ready|active|service|running/i],
+  },
+
+  // iOS: code read
+  {
+    id: 'ios-engineer',
+    category: 'tool-proof',
+    capability: 'code-read',
+    prompt: 'Use search_files to find any Swift or SwiftUI references in the repository and report what you found in one line.',
+    expectAny: [/swift|swiftui|found|no.*references|search|result/i],
+    expectToolAudit: ['search_files'],
+  },
+
+  // Android: code read
+  {
+    id: 'android-engineer',
+    category: 'tool-proof',
+    capability: 'code-read',
+    prompt: 'Use search_files to find any Kotlin or Jetpack Compose references in the repository and report what you found in one line.',
+    expectAny: [/kotlin|compose|found|no.*references|search|result/i],
+    expectToolAudit: ['search_files'],
+  },
+
+  // QA: run tests readonly
+  {
+    id: 'qa',
+    category: 'tool-proof',
+    capability: 'run-tests-readonly',
+    prompt: 'Use run_tests to execute the test suite and report total pass count in one line.',
+    expectAny: [/\d+\s*(pass|tests?|suites?)|all.*pass/i],
+    expectToolAudit: ['run_tests'],
+  },
+
+  // Orchestration: delegate single specialist
+  {
+    id: 'executive-assistant',
+    category: 'orchestration',
+    capability: 'delegate-single-specialist',
+    prompt: 'Ask Ace to review the auth route for security concerns.',
+    expectAny: [/ace|developer|security|auth|review/i],
+    minBotRepliesAfterPrompt: 2,
+    requireTokenEcho: false,
+  },
+  // Orchestration: goal tracking
+  {
+    id: 'executive-assistant',
+    category: 'orchestration',
+    capability: 'goal-tracking',
+    prompt: 'Set a goal to review the fuel service, then report the goal status.',
+    expectAny: [/goal|fuel|status|set|tracking|review/i],
+  },
+  // Memory: memory write
+  {
+    id: 'executive-assistant',
+    category: 'memory',
+    capability: 'memory-write',
+    prompt: "Write a note to repo memory: 'smoke test validated all agents' using memory_write, then confirm.",
+    expectAny: [/memory|written|saved|confirmed|noted|stored/i],
+    expectToolAudit: ['memory_write'],
+  },
+  // Orchestration: specialist chain via Ace
+  {
+    id: 'developer',
+    category: 'orchestration',
+    capability: 'specialist-chain',
+    prompt: 'Review server/src/routes/auth.ts — provide Result/Evidence/Risk then note that QA and security should also review.',
+    expectAll: [/result:/i, /evidence:/i],
+    expectAny: [/qa|security|review/i],
+  },
 ];
 
 const READINESS_TEST_KEYS = new Set([
@@ -278,12 +506,14 @@ function testKey(test: AgentCapabilityTest): string {
 
 function getSmokeProfile(): SmokeProfile {
   const raw = String(process.env.DISCORD_SMOKE_PROFILE || 'full').trim().toLowerCase();
-  return raw === 'readiness' ? 'readiness' : 'full';
+  if (raw === 'readiness') return 'readiness';
+  if (raw === 'matrix') return 'matrix';
+  return 'full';
 }
 
 function getTestTimeoutMs(profile: SmokeProfile): number {
   const explicit = process.env.DISCORD_TEST_TIMEOUT_MS;
-  const fallback = profile === 'readiness' ? 300_000 : 300_000;
+  const fallback = profile === 'matrix' ? 180_000 : 300_000;
   const value = Number(explicit ?? String(fallback));
   if (!Number.isFinite(value) || value <= 0) return fallback;
   return Math.min(Math.max(8_000, Math.floor(value)), 300_000);
@@ -310,7 +540,7 @@ function shouldRunElevenLabsTtsCheck(): boolean {
 }
 
 function shouldRunVoiceBridgeCheck(profile: SmokeProfile): boolean {
-  const fallback = profile === 'readiness' ? 'false' : 'true';
+  const fallback = profile === 'readiness' || profile === 'matrix' ? 'false' : 'true';
   const raw = String(process.env.DISCORD_SMOKE_ELEVENLABS_VOICE_BRIDGE ?? fallback).trim().toLowerCase();
   return !['0', 'false', 'no', 'off'].includes(raw);
 }
@@ -326,7 +556,7 @@ function shouldRunPostSuccessResetAndAnnounce(): boolean {
 }
 
 function shouldRequireLiveRouter(profile: SmokeProfile): boolean {
-  const fallback = profile === 'readiness' ? 'true' : 'false';
+  const fallback = profile === 'readiness' || profile === 'matrix' ? 'true' : 'false';
   const raw = String(process.env.DISCORD_SMOKE_REQUIRE_LIVE_ROUTER ?? fallback).trim().toLowerCase();
   return !['0', 'false', 'no', 'off'].includes(raw);
 }
@@ -365,18 +595,18 @@ function getCapabilityAttempts(profile: SmokeProfile): number {
 }
 
 function getBudgetBoostAmount(profile: SmokeProfile): number {
-  const fallback = profile === 'readiness' ? 40 : 80;
+  const fallback = profile === 'matrix' ? 120 : profile === 'readiness' ? 40 : 80;
   const value = Number(process.env.DISCORD_SMOKE_BUDGET_BOOST ?? String(fallback));
   if (!Number.isFinite(value) || value <= 0) return 0;
   return Math.min(Math.max(10, Math.floor(value)), 1000);
 }
 
 function getInterTestDelayMs(profile: SmokeProfile): number {
-  return profile === 'readiness' ? 250 : 2000;
+  return profile === 'matrix' ? 500 : profile === 'readiness' ? 250 : 2000;
 }
 
 function getPollIntervalMs(profile: SmokeProfile): number {
-  const fallback = profile === 'readiness' ? 900 : 1600;
+  const fallback = profile === 'matrix' ? 600 : profile === 'readiness' ? 900 : 1600;
   const value = Number(process.env.DISCORD_SMOKE_POLL_INTERVAL_MS ?? String(fallback));
   if (!Number.isFinite(value) || value < 250) return fallback;
   return Math.min(Math.max(250, Math.floor(value)), 5000);
@@ -864,7 +1094,7 @@ async function runVoiceBridgeActiveCallCheck(groupchat: TextChannel, rileyMentio
   };
 }
 
-function buildReadinessSummary(results: TestResult[], extras: ExtraCheckResult[]): { score: number; criticalPassed: boolean; detail: string } {
+function buildReadinessSummary(results: TestResult[], extras: ExtraCheckResult[], profile: SmokeProfile = 'full'): { score: number; criticalPassed: boolean; detail: string } {
   const byCategory = new Map<Category, { total: number; passed: number }>();
   for (const r of results) {
     const cur = byCategory.get(r.category) || { total: 0, passed: 0 };
@@ -873,14 +1103,9 @@ function buildReadinessSummary(results: TestResult[], extras: ExtraCheckResult[]
     byCategory.set(r.category, cur);
   }
 
-  const weights: Record<Category, number> = {
-    core: 0.25,
-    specialist: 0.20,
-    'tool-proof': 0.20,
-    orchestration: 0.15,
-    upgrades: 0.10,
-    memory: 0.10,
-  };
+  const weights: Record<Category, number> = profile === 'matrix'
+    ? { core: 0.20, specialist: 0.15, 'tool-proof': 0.25, orchestration: 0.15, upgrades: 0.10, memory: 0.15 }
+    : { core: 0.25, specialist: 0.20, 'tool-proof': 0.20, orchestration: 0.15, upgrades: 0.10, memory: 0.10 };
 
   let score = 0;
   for (const key of Object.keys(weights) as Category[]) {
@@ -965,28 +1190,39 @@ async function runFreeformObservation(
 
   // Track discovered threads so we poll them on subsequent cycles
   const knownThreadIds = new Set<string>();
+  const knownThreads = new Map<string, { thread: any; name: string }>();
+  const THREAD_DISCOVERY_INTERVAL = 5; // Re-discover threads every N poll cycles
+  let pollCycle = 0;
 
   while (Date.now() - started < timeoutMs) {
-    // ── Fetch active threads from all channels ──
+    // ── Discover new threads periodically, always poll known ones ──
     const threadBatches: { msg: Message; channelName: string }[][] = [];
-    try {
-      for (const channel of allChannels) {
-        const activeThreads = await channel.threads.fetchActive().catch(() => null);
-        if (activeThreads) {
-          for (const [threadId, thread] of activeThreads.threads) {
-            if (knownThreadIds.has(threadId)) continue;
-            knownThreadIds.add(threadId);
-            console.log(`  📎 Discovered thread: #${thread.name} (${threadId})`);
-          }
-          for (const thread of activeThreads.threads.values()) {
-            try {
-              const msgs = await thread.messages.fetch({ limit: 30 });
-              threadBatches.push([...msgs.values()].map((m) => ({ msg: m, channelName: `🧵${thread.name}` })));
-            } catch { /* thread may be inaccessible */ }
+    const shouldDiscoverThreads = pollCycle % THREAD_DISCOVERY_INTERVAL === 0;
+    pollCycle++;
+
+    if (shouldDiscoverThreads) {
+      try {
+        for (const channel of allChannels) {
+          const activeThreads = await channel.threads.fetchActive().catch(() => null);
+          if (activeThreads) {
+            for (const [threadId, thread] of activeThreads.threads) {
+              if (knownThreadIds.has(threadId)) continue;
+              knownThreadIds.add(threadId);
+              knownThreads.set(threadId, { thread, name: thread.name });
+              console.log(`  📎 Discovered thread: #${thread.name} (${threadId})`);
+            }
           }
         }
-      }
-    } catch { /* thread enumeration failed */ }
+      } catch { /* thread enumeration failed */ }
+    }
+
+    // Always poll messages from all known threads
+    for (const { thread, name } of knownThreads.values()) {
+      try {
+        const msgs = await thread.messages.fetch({ limit: 30 });
+        threadBatches.push([...msgs.values()].map((m: Message) => ({ msg: m, channelName: `🧵${name}` })));
+      } catch { /* thread may be inaccessible */ }
+    }
 
     const channelBatches = await Promise.all(
       allChannels.map(async (channel) => {
@@ -1102,11 +1338,93 @@ function writeSmokeReports(report: {
   return { jsonPath, mdPath };
 }
 
-async function postSuccessResetAndAnnounce(token: string, guildId: string, groupchat: TextChannel): Promise<string> {
+async function postSuccessResetAndAnnounce(token: string, guildId: string, groupchat: TextChannel, guild?: Guild): Promise<string> {
   const cleanup = await preClearGuildChannels(token, guildId);
   const totalDeleted = cleanup.reduce((sum, row) => sum + row.deleted, 0);
-  await groupchat.send('ASAP bot smoke suite complete. Bot is ready for app development.').catch(() => {});
-  return `channels=${cleanup.length} deleted=${totalDeleted}`;
+  if (guild) {
+    try {
+      await setupChannels(guild);
+    } catch (err) {
+      console.warn(`setupChannels failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+  await groupchat.send('✅ Full smoke suite complete — all tests passed. Channels reset and ready for development.').catch(() => {});
+  return `channels=${cleanup.length} deleted=${totalDeleted}${guild ? ' repopulated=true' : ''}`;
+}
+
+async function executeSingleTest(
+  test: AgentCapabilityTest,
+  groupchat: TextChannel,
+  candidateChannels: TextChannel[],
+  terminal: TextChannel | undefined,
+  upgrades: TextChannel | undefined,
+  roleMentions: Map<string, string>,
+  selfId: string,
+  timeoutMs: number,
+  pollIntervalMs: number,
+  capabilityAttempts: number,
+  interTestDelayMs: number,
+  sendToChannel?: TextChannel,
+): Promise<TestResult> {
+  const mention = roleMentions.get(test.id) || `@${getAgent(test.id as never)?.handle || test.id}`;
+  const agentChannelName = getAgent(test.id as never)?.channelName;
+  const agentChannel = agentChannelName
+    ? candidateChannels.find((channel) => channel.name === agentChannelName)
+      || candidateChannels.find((channel) => channel.name.toLowerCase().includes(test.id.toLowerCase()))
+      || candidateChannels.find((channel) => channel.name.toLowerCase().includes((getAgent(test.id as never)?.handle || '').toLowerCase()))
+    : undefined;
+
+  const effectiveSendChannel = sendToChannel || groupchat;
+  const responseChannels = sendToChannel
+    ? [sendToChannel]
+    : agentChannel ? [groupchat, agentChannel] : [groupchat];
+
+  if (!roleMentions.get(test.id)) {
+    console.warn(`Role mention not found for ${test.id}; falling back to handle ${mention}`);
+  }
+  process.stdout.write(`Testing ${getAgentName(test.id)} :: ${test.category}/${test.capability} ... `);
+
+  let result: { passed: boolean; elapsed: number; snippet: string; reason?: string } = {
+    passed: false,
+    elapsed: 0,
+    snippet: 'not run',
+  };
+  for (let attempt = 1; attempt <= capabilityAttempts; attempt += 1) {
+    if (attempt > 1) {
+      process.stdout.write(`retry ${attempt}/${capabilityAttempts} ... `);
+      await sleep(1200);
+    }
+    const attemptTimeoutMs = attempt === 1
+      ? timeoutMs
+      : Math.min(Math.max(Math.floor(timeoutMs * 2), timeoutMs + 10_000), 300_000);
+    result = await runCapabilityTest(
+      effectiveSendChannel,
+      responseChannels,
+      terminal,
+      upgrades,
+      test,
+      mention,
+      selfId,
+      attemptTimeoutMs,
+      pollIntervalMs,
+    );
+    if (result.passed) break;
+  }
+
+  console.log(`${result.passed ? 'PASS' : 'FAIL'} (${(result.elapsed / 1000).toFixed(1)}s)`);
+  console.log(`  -> ${result.snippet}`);
+
+  await sleep(interTestDelayMs);
+
+  return {
+    agent: getAgentName(test.id),
+    capability: test.capability,
+    category: test.category,
+    passed: result.passed,
+    elapsed: result.elapsed,
+    snippet: result.snippet,
+    reason: result.reason,
+  };
 }
 
 async function run(): Promise<void> {
@@ -1280,61 +1598,69 @@ async function run(): Promise<void> {
   }
 
   const results: TestResult[] = [];
-  for (const test of testsToRun) {
-    const mention = roleMentions.get(test.id) || `@${getAgent(test.id as never)?.handle || test.id}`;
-    const agentChannelName = getAgent(test.id as never)?.channelName;
-    const agentChannel = agentChannelName
-      ? candidateChannels.find((channel) => channel.name === agentChannelName)
-        || candidateChannels.find((channel) => channel.name.toLowerCase().includes(test.id.toLowerCase()))
-        || candidateChannels.find((channel) => channel.name.toLowerCase().includes((getAgent(test.id as never)?.handle || '').toLowerCase()))
-      : undefined;
-    const responseChannels = agentChannel ? [groupchat, agentChannel] : [groupchat];
-    if (!roleMentions.get(test.id)) {
-      console.warn(`Role mention not found for ${test.id}; falling back to handle ${mention}`);
-    }
-    process.stdout.write(`Testing ${getAgentName(test.id)} :: ${test.category}/${test.capability} ... `);
 
-    let result: { passed: boolean; elapsed: number; snippet: string; reason?: string } = {
-      passed: false,
-      elapsed: 0,
-      snippet: 'not run',
-    };
-    for (let attempt = 1; attempt <= capabilityAttempts; attempt += 1) {
-      if (attempt > 1) {
-        process.stdout.write(`retry ${attempt}/${capabilityAttempts} ... `);
-        await sleep(1200);
-      }
-      const attemptTimeoutMs = attempt === 1
-        ? timeoutMs
-        : Math.min(Math.max(Math.floor(timeoutMs * 2), timeoutMs + 10_000), 300_000);
-      result = await runCapabilityTest(
-        groupchat,
-        responseChannels,
-        terminal,
-        upgrades,
-        test,
-        mention,
-        client.user!.id,
-        attemptTimeoutMs,
-        pollIntervalMs,
+  if (profile === 'matrix') {
+    // ── Matrix profile: parallel execution via agent channels ──
+    const groupchatTests = testsToRun.filter(
+      (t) => t.id === 'executive-assistant' || t.category === 'orchestration',
+    );
+    const agentChannelTests = testsToRun.filter(
+      (t) => t.id !== 'executive-assistant' && t.category !== 'orchestration',
+    );
+
+    // Phase 1: Groupchat tests (serial — Riley + orchestration)
+    console.log(`\n--- Matrix Phase 1: ${groupchatTests.length} groupchat tests (serial) ---`);
+    for (const test of groupchatTests) {
+      results.push(
+        await executeSingleTest(
+          test, groupchat, candidateChannels, terminal, upgrades, roleMentions,
+          client.user!.id, timeoutMs, pollIntervalMs, capabilityAttempts, interTestDelayMs,
+        ),
       );
-      if (result.passed) break;
     }
 
-    console.log(`${result.passed ? 'PASS' : 'FAIL'} (${(result.elapsed / 1000).toFixed(1)}s)`);
-    console.log(`  -> ${result.snippet}`);
+    // Phase 2: Agent channel tests (parallel by agent)
+    console.log(`\n--- Matrix Phase 2: ${agentChannelTests.length} agent channel tests (parallel by agent) ---`);
+    const testsByAgent = new Map<string, AgentCapabilityTest[]>();
+    for (const test of agentChannelTests) {
+      if (!testsByAgent.has(test.id)) testsByAgent.set(test.id, []);
+      testsByAgent.get(test.id)!.push(test);
+    }
+    console.log(`  Agents (${testsByAgent.size}): ${[...testsByAgent.keys()].map((id) => `${getAgentName(id)}(${testsByAgent.get(id)!.length})`).join(', ')}`);
 
-    results.push({
-      agent: getAgentName(test.id),
-      capability: test.capability,
-      category: test.category,
-      passed: result.passed,
-      elapsed: result.elapsed,
-      snippet: result.snippet,
-      reason: result.reason,
-    });
+    const parallelResults = await Promise.all(
+      [...testsByAgent.entries()].map(async ([agentId, agentTests]) => {
+        const agentChannelName = getAgent(agentId as never)?.channelName;
+        const sendChannel = agentChannelName
+          ? candidateChannels.find((ch) => ch.name === agentChannelName)
+            || candidateChannels.find((ch) => ch.name.toLowerCase().includes(agentId.toLowerCase()))
+            || candidateChannels.find((ch) => ch.name.toLowerCase().includes((getAgent(agentId as never)?.handle || '').toLowerCase()))
+          : undefined;
 
-    await sleep(interTestDelayMs);
+        const agentResults: TestResult[] = [];
+        for (const test of agentTests) {
+          agentResults.push(
+            await executeSingleTest(
+              test, groupchat, candidateChannels, terminal, upgrades, roleMentions,
+              client.user!.id, timeoutMs, pollIntervalMs, capabilityAttempts, interTestDelayMs,
+              sendChannel || groupchat,
+            ),
+          );
+        }
+        return agentResults;
+      }),
+    );
+    results.push(...parallelResults.flat());
+  } else {
+    // ── Standard serial execution (full / readiness profiles) ──
+    for (const test of testsToRun) {
+      results.push(
+        await executeSingleTest(
+          test, groupchat, candidateChannels, terminal, upgrades, roleMentions,
+          client.user!.id, timeoutMs, pollIntervalMs, capabilityAttempts, interTestDelayMs,
+        ),
+      );
+    }
   }
 
   const extras: ExtraCheckResult[] = [];
@@ -1372,7 +1698,7 @@ async function run(): Promise<void> {
   const capabilityPassed = results.filter((r) => r.passed).length;
   const capabilityFailed = results.length - capabilityPassed;
   const extraFailed = extras.filter((e) => !e.passed).length;
-  const readiness = buildReadinessSummary(results, extras);
+  const readiness = buildReadinessSummary(results, extras, profile);
 
   console.log('\n=== Full Smoke Summary ===');
   console.log(`Capabilities: ${capabilityPassed} passed, ${capabilityFailed} failed`);
@@ -1412,8 +1738,8 @@ async function run(): Promise<void> {
   console.log(`Report JSON: ${reportPaths.jsonPath}`);
   console.log(`Report MD  : ${reportPaths.mdPath}`);
 
-  if (readiness.criticalPassed && capabilityFailed === 0 && extraFailed === 0 && runPostSuccessAction) {
-    const post = await postSuccessResetAndAnnounce(token, guildId, groupchat);
+  if (readiness.criticalPassed && capabilityFailed === 0 && extraFailed === 0 && (runPostSuccessAction || profile === 'matrix')) {
+    const post = await postSuccessResetAndAnnounce(token, guildId, groupchat, guild);
     console.log(`Post-success reset+announce complete: ${post}`);
   }
 

@@ -8,6 +8,7 @@ import { ensureGoogleCredentials, getAccessTokenViaGcloud } from '../services/go
 
 import { logAgentEvent } from './activityLog';
 import { AgentConfig } from './agents';
+import { isLowSignalCompletion } from './handlers/responseNormalization';
 import { recordAgentResponse, recordRateLimitHit } from './metrics';
 import { REPO_TOOLS, getToolsForAgent, executeTool, getToolAuditCallback } from './tools';
 import { recordClaudeUsage, isClaudeOverLimit, isBudgetExceeded, getRemainingBudget, getClaudeTokenStatus, approveAdditionalBudget, type PromptBreakdown } from './usage';
@@ -120,8 +121,8 @@ function ensureSmokeTokenEcho(userMessage: string, replyText: string): string {
 function normalizeLowSignalFinalText(agentId: string, text: string, totalToolCalls: number): string {
   const normalized = String(text || '').trim();
   if (!normalized) return '';
-  if ((agentId === 'developer' || agentId === 'executive-assistant') && totalToolCalls > 0 && /^(?:done|fixed|resolved|completed|all good|finished)\.?$/i.test(normalized)) {
-    return '';
+  if ((agentId === 'developer' || agentId === 'executive-assistant') && totalToolCalls > 0 && isLowSignalCompletion(normalized)) {
+    return '✅ Done.';
   }
   return normalized;
 }

@@ -7,6 +7,8 @@ import { recordTextChannelTimeout, updateTextChannelQueueDepth } from '../metric
 import { mirrorAgentResponse } from '../services/diagnosticsWebhook';
 import { clearWebhookCache, sendWebhookMessage, WebhookCapableChannel } from '../services/webhooks';
 
+import { isLowSignalCompletion } from './responseNormalization';
+
 const conversationHistories = new Map<string, ConversationMessage[]>();
 const channelQueues = new Map<string, Promise<void>>();
 const channelQueueDepth = new Map<string, number>();
@@ -505,7 +507,7 @@ export async function sendAgentMessage(
   const normalized = String(response || '').trim();
   const effectiveResponse = (
     (agent.id === 'developer' || agent.id === 'executive-assistant')
-    && /^(?:done|fixed|resolved|completed|all good|finished)\.?$/i.test(normalized)
+    && isLowSignalCompletion(normalized)
   ) ? '✅ Done.' : response;
 
   const rendered = ensureCompletionToken(renderAgentMessage(effectiveResponse), completionToken);

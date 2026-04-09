@@ -26,7 +26,10 @@ import { getWebhook, sendWebhookMessage, WebhookCapableChannel } from '../servic
 import { approveAdditionalBudget, getContextEfficiencyReport, getUsageReport, refreshLiveBillingData, refreshUsageDashboard } from '../usage';
 
 import { startCall, endCall, isCallActive, injectVoiceTranscriptForTesting, processTesterVoiceTurnForCall } from './callSession';
+import { isDesignDeliverableDetailed, shouldSkipContractEnforcement, buildAceDesignContext, buildAceStandardContext } from './designDeliverable';
 import { documentToChannel } from './documentation';
+import { goalState, GOAL_THREAD_COUNTER_RE } from './goalState';
+import { LOW_SIGNAL_COMPLETION_RE } from './responseNormalization';
 import { sendAgentMessage, clearHistory } from './textChannel';
 
 
@@ -134,8 +137,6 @@ let messageQueue: Promise<void> = Promise.resolve();
 // bot follows the newest user intent instead of finishing stale tasks.
 let activeAbortController: AbortController | null = null;
 let activeThinkingMessage: Message | null = null;
-let activeGoalThreadId: string | null = null;
-let activeGoalSequence = 0;
 let claudeNotificationsBoundChannelId: string | null = null;
 const MAX_PARALLEL_SUBAGENTS = parseInt(process.env.MAX_PARALLEL_SUBAGENTS || '1', 10);
 const SUBAGENT_MAX_TOKENS = parseInt(process.env.SUBAGENT_MAX_TOKENS || '900', 10);
@@ -146,10 +147,6 @@ const RILEY_PROGRESS_PING_MS = parseInt(
   10,
 );
 const DIRECT_GROUPCHAT_SHORT_PROMPT_MAX_WORDS = parseInt(process.env.DIRECT_GROUPCHAT_SHORT_PROMPT_MAX_WORDS || '18', 10);
-
-let activeGoal: string | null = null;
-let goalStatus: string | null = null;
-let activeGoalStartedAt = Date.now();
 
 const GOAL_STALL_TIMEOUT_MS = parseInt(process.env.GOAL_STALL_TIMEOUT_MS || '420000', 10);
 const GOAL_STALL_CHECK_INTERVAL_MS = parseInt(process.env.GOAL_STALL_CHECK_INTERVAL_MS || '60000', 10);
@@ -162,14 +159,11 @@ const ACTION_COMMAND_TIMEOUT_MS = parseInt(process.env.ACTION_COMMAND_TIMEOUT_MS
 const AUTO_DEPLOY_ON_THREAD_CLOSE = String(process.env.AUTO_DEPLOY_ON_THREAD_CLOSE || 'true').toLowerCase() !== 'false';
 const AUTO_REBUILD_ERROR_COOLDOWN_MS = parseInt(process.env.AUTO_REBUILD_ERROR_COOLDOWN_MS || '900000', 10);
 const URL_ACTION_COOLDOWN_MS = parseInt(process.env.URL_ACTION_COOLDOWN_MS || '1800000', 10);
-const GOAL_THREAD_COUNTER_RE = /\bgoal[-\s]?(\d{4})\b/i;
 const GROUPCHAT_DUPLICATE_WINDOW_MS = parseInt(process.env.GROUPCHAT_DUPLICATE_WINDOW_MS || '10000', 10);
 const APP_SERVER_ROOT = (fs.existsSync(path.join(process.cwd(), 'package.json')) && fs.existsSync(path.join(process.cwd(), 'src')))
   ? process.cwd()
   : path.resolve(__dirname, '../../..');
 const APP_REPO_ROOT = path.resolve(APP_SERVER_ROOT, '..');
-let lastGoalProgressAt = Date.now();
-let goalRecoveryAttempts = 0;
 let lastUrlsActionAt = 0;
 let lastGroupchatTimeoutNoticeAt = 0;
 const GROUPCHAT_TIMEOUT_NOTICE_COOLDOWN_MS = parseInt(process.env.GROUPCHAT_TIMEOUT_NOTICE_COOLDOWN_MS || '120000', 10);
@@ -200,7 +194,6 @@ function isTesterBotId(userId: string): boolean {
 let lastThreadCloseReviewAt = 0;
 let lastAutoRebuildErrorAt = 0;
 let lastAutoRebuildErrorKey = '';
-let goalSequenceInitialized = false;
 let goalWatchdog: ReturnType<typeof setInterval> | null = null;
 let threadStatusChannel: TextChannel | null = null;
 let threadStatusSourceChannel: TextChannel | null = null;
@@ -226,9 +219,7 @@ function isDuplicateGroupchatMessage(message: Message, content: string): boolean
 }
 
 function markGoalProgress(status?: string): void {
-  lastGoalProgressAt = Date.now();
-  goalRecoveryAttempts = 0;
-  if (status) goalStatus = status;
+  goalState.markProgress(status);
 }
 
 function inferRileyStatus(text: string, completionClaimed: boolean, completionVerified: boolean): 'fixed' | 'partially fixed' | 'blocked' {
@@ -248,7 +239,7 @@ function enforceRileyResponseContract(
   if (!normalized) return normalized;
   // Skip contract enforcement for creative/design deliverables — the Status/Root-cause
   // appendage makes no sense for design specs, creative briefs, or information responses.
-  if (/\bdesign\s*spec\b|\bglassmorphism\b|\bmockup\b|\bwireframe\b|\bstyle\s*guide\b/i.test(normalized)) return normalized;
+  if (shouldSkipContractEnforcement(normalized)) return normalized;
   const hasContract = /\bstatus\s*:/i.test(normalized)
     && /\broot cause\s*:/i.test(normalized)
     && /\bfix location\s*:/i.test(normalized)
@@ -331,8 +322,8 @@ async function sendAutopilotAudit(
   extra?: { action?: string; buildId?: string; attempt?: number }
 ): Promise<void> {
   const riley = getAgent('executive-assistant' as AgentId);
-  const goal = compactAuditField(activeGoal || 'none', 64);
-  const status = compactAuditField(goalStatus || 'n/a', 48);
+  const goal = compactAuditField(goalState.goal || 'none', 64);
+  const status = compactAuditField(goalState.status || 'n/a', 48);
   const bits = [
     `event=${event}`,
     extra?.action ? `action=${compactAuditField(extra.action, 24)}` : null,
@@ -506,29 +497,26 @@ function ensureGoalWatchdog(groupchat: TextChannel): void {
   if (goalWatchdog) return;
 
   goalWatchdog = setInterval(() => {
-    if (!activeGoal) return;
+    if (!goalState.goal) return;
 
     maybeReviewThreadForClosure(groupchat).catch((err) => {
       console.error('Thread close review error:', err instanceof Error ? err.message : 'Unknown');
     });
 
     if (activeAbortController) return;
-    if (Date.now() - lastGoalProgressAt < GOAL_STALL_TIMEOUT_MS) return;
-    if (goalRecoveryAttempts >= GOAL_STALL_MAX_RECOVERY_ATTEMPTS) return;
+    if (!goalState.isStalled()) return;
 
-    goalRecoveryAttempts += 1;
-    goalStatus = `⚠️ Auto-recovery nudge ${goalRecoveryAttempts}/${GOAL_STALL_MAX_RECOVERY_ATTEMPTS}`;
-    lastGoalProgressAt = Date.now();
+    goalState.recordRecoveryAttempt();
 
     sendAutopilotAudit(
       groupchat,
       'watchdog_recovery',
       'Goal was stalled; sending system nudge to Riley for continuation and pending actions.',
-      { attempt: goalRecoveryAttempts }
+      { attempt: goalState.recoveryAttempts }
     ).catch(() => {});
 
     handleRileyMessage(
-      `[System auto-recovery] This goal appears stalled: "${activeGoal}". Summarize current state in one short paragraph, execute any pending deploy/screenshots/urls actions now using explicit [ACTION:...] tags, and continue without waiting for user follow-up. If the work is actually complete, post a short wrap-up in the workspace thread and include [ACTION:CLOSE_THREAD].`,
+      `[System auto-recovery] This goal appears stalled: "${goalState.goal}". Summarize current state in one short paragraph, execute any pending deploy/screenshots/urls actions now using explicit [ACTION:...] tags, and continue without waiting for user follow-up. If the work is actually complete, post a short wrap-up in the workspace thread and include [ACTION:CLOSE_THREAD].`,
       'System',
       undefined,
       groupchat
@@ -584,8 +572,8 @@ export async function postThreadStatusSnapshotNow(reason = 'hourly'): Promise<vo
   const riley = getAgent('executive-assistant' as AgentId);
   const timestamp = new Date().toLocaleString('en-AU', { timeZone: 'Australia/Sydney' });
   const label = reason === 'hourly' ? 'hourly' : 'manual';
-  const currentGoal = activeGoal
-    ? `goal=${activeGoal.replace(/\s+/g, ' ').slice(0, 72)} status=${(goalStatus || 'in-progress').replace(/\s+/g, ' ').slice(0, 48)}`
+  const currentGoal = goalState.goal
+    ? `goal=${goalState.goal.replace(/\s+/g, ' ').slice(0, 72)} status=${(goalState.status || 'in-progress').replace(/\s+/g, ' ').slice(0, 48)}`
     : 'goal=none status=idle';
   const report = await buildThreadStatusReport(threadStatusSourceChannel);
   const content = formatOpsLine({
@@ -626,8 +614,8 @@ export async function getThreadStatusOpsLine(): Promise<string> {
   }
 
   const report = await buildThreadStatusReport(threadStatusSourceChannel);
-  const currentGoal = activeGoal
-    ? `goal=${activeGoal.replace(/\s+/g, ' ').slice(0, 60)} status=${(goalStatus || 'in-progress').replace(/\s+/g, ' ').slice(0, 40)}`
+  const currentGoal = goalState.goal
+    ? `goal=${goalState.goal.replace(/\s+/g, ' ').slice(0, 60)} status=${(goalState.status || 'in-progress').replace(/\s+/g, ' ').slice(0, 40)}`
     : 'goal=none status=idle';
 
   return formatOpsLine({
@@ -704,43 +692,24 @@ function sanitizeThreadName(input: string): string {
     .slice(0, 72);
 }
 
-function extractGoalSequence(threadName: string): number {
-  const match = String(threadName || '').match(GOAL_THREAD_COUNTER_RE);
-  if (!match) return 0;
-  const parsed = parseInt(match[1], 10);
-  return Number.isFinite(parsed) ? parsed : 0;
-}
-
 async function syncGoalSequence(groupchat: TextChannel): Promise<void> {
-  if (goalSequenceInitialized) return;
-
-  let maxSeen = activeGoalSequence;
-  const ingest = (threads: Iterable<{ name?: string }>) => {
-    for (const thread of threads || []) {
-      const seq = extractGoalSequence(thread?.name || '');
-      if (seq > maxSeen) {
-        maxSeen = seq;
-      }
-    }
-  };
-
+  if (goalState.sequenceInitialized) return;
   try {
-    ingest(groupchat.threads.cache.values());
+    const cached = [...groupchat.threads.cache.values()];
     const active = await groupchat.threads.fetchActive().catch(() => null);
-    if (active) ingest(active.threads.values());
     const archived = await groupchat.threads.fetchArchived({ limit: 100 }).catch(() => null);
-    if (archived) ingest(archived.threads.values());
+    await goalState.syncSequence([
+      cached,
+      active ? [...active.threads.values()] : [],
+      archived ? [...archived.threads.values()] : [],
+    ]);
   } catch (err) {
     console.warn('Could not sync goal thread counter:', err instanceof Error ? err.message : 'Unknown');
   }
-
-  activeGoalSequence = maxSeen;
-  goalSequenceInitialized = true;
 }
 
 function buildGoalThreadName(senderName: string, content: string): string {
-  activeGoalSequence = (activeGoalSequence + 1) % 10000;
-  const goalId = activeGoalSequence.toString().padStart(4, '0');
+  const goalId = goalState.nextThreadSequence().toString().padStart(4, '0');
   const sender = sanitizeThreadName(senderName).replace(/\s+/g, '-').toLowerCase() || 'user';
   const preview = sanitizeThreadName(content).split(' ').slice(0, 8).join(' ');
   return sanitizeThreadName(`Goal-${goalId} ${sender} ${preview}`) || `Goal-${goalId}`;
@@ -754,8 +723,8 @@ async function closeGoalWorkspace(
   let thread: any = null;
   if ('setArchived' in workspaceChannel) {
     thread = workspaceChannel;
-  } else if (activeGoalThreadId) {
-    thread = groupchat.threads.cache.get(activeGoalThreadId) || await groupchat.threads.fetch(activeGoalThreadId).catch(() => null);
+  } else if (goalState.threadId) {
+    thread = groupchat.threads.cache.get(goalState.threadId) || await groupchat.threads.fetch(goalState.threadId).catch(() => null);
   }
 
   if (thread && !thread.archived) {
@@ -772,10 +741,7 @@ async function closeGoalWorkspace(
     }
   }
 
-  activeGoalThreadId = null;
-  activeGoal = null;
-  goalStatus = '✅ Completed';
-  activeGoalStartedAt = Date.now();
+  goalState.clear();
   lastThreadCloseReviewAt = 0;
 
   if (AUTO_DEPLOY_ON_THREAD_CLOSE) {
@@ -809,23 +775,23 @@ async function closeGoalWorkspace(
 
 async function maybeReviewThreadForClosure(groupchat: TextChannel): Promise<void> {
   if (!ENABLE_AUTOMATIC_THREAD_CLOSE_REVIEW) return;
-  if (!activeGoal || !activeGoalThreadId || activeAbortController) return;
+  if (!goalState.goal || !goalState.threadId || activeAbortController) return;
 
   const now = Date.now();
-  if (now - lastGoalProgressAt < THREAD_CLOSE_REVIEW_IDLE_MS) return;
+  if (now - goalState.lastProgressAt < THREAD_CLOSE_REVIEW_IDLE_MS) return;
   if (now - lastThreadCloseReviewAt < THREAD_CLOSE_REVIEW_INTERVAL_MS) return;
 
-  const thread = groupchat.threads.cache.get(activeGoalThreadId)
-    || await groupchat.threads.fetch(activeGoalThreadId).catch(() => null);
+  const thread = groupchat.threads.cache.get(goalState.threadId)
+    || await groupchat.threads.fetch(goalState.threadId).catch(() => null);
 
   if (!thread || thread.archived) {
-    activeGoalThreadId = null;
+    goalState.threadId = null;
     return;
   }
 
   lastThreadCloseReviewAt = now;
-  lastGoalProgressAt = now;
-  goalStatus = '🔎 Riley reviewing whether this thread can close...';
+  goalState.lastProgressAt = now;
+  goalState.status = '🔎 Riley reviewing whether this thread can close...';
 
   await sendAutopilotAudit(
     groupchat,
@@ -835,7 +801,7 @@ async function maybeReviewThreadForClosure(groupchat: TextChannel): Promise<void
   ).catch(() => {});
 
   await handleRileyMessage(
-    `[System thread-close review] Review the current workspace thread for "${activeGoal}". If the work is fully complete and no more follow-up is required, post one concise final update in the workspace thread and include [ACTION:CLOSE_THREAD]. If anything is still pending or blocked, say exactly what remains and keep the thread open.`,
+    `[System thread-close review] Review the current workspace thread for "${goalState.goal}". If the work is fully complete and no more follow-up is required, post one concise final update in the workspace thread and include [ACTION:CLOSE_THREAD]. If anything is still pending or blocked, say exactly what remains and keep the thread open.`,
     'System',
     undefined,
     groupchat,
@@ -995,11 +961,11 @@ ${trimCommandOutput(output, 1800)}`;
 }
 
 async function ensureGoalWorkspace(groupchat: TextChannel, senderName: string, content: string): Promise<WebhookCapableChannel> {
-  if (activeGoalThreadId) {
-    const existing = groupchat.threads.cache.get(activeGoalThreadId)
-      || await groupchat.threads.fetch(activeGoalThreadId).catch(() => null);
+  if (goalState.threadId) {
+    const existing = groupchat.threads.cache.get(goalState.threadId)
+      || await groupchat.threads.fetch(goalState.threadId).catch(() => null);
     if (existing && !existing.archived) return existing;
-    activeGoalThreadId = null;
+    goalState.threadId = null;
   }
 
   await syncGoalSequence(groupchat);
@@ -1010,8 +976,8 @@ async function ensureGoalWorkspace(groupchat: TextChannel, senderName: string, c
     reason: `Goal workspace for ${senderName}`,
   });
 
-  activeGoalThreadId = thread.id;
-  activeGoalStartedAt = Date.now();
+  goalState.threadId = thread.id;
+  goalState.startedAt = Date.now();
   lastThreadCloseReviewAt = 0;
 
   const riley = getAgent('executive-assistant' as AgentId);
@@ -1544,13 +1510,13 @@ async function processGroupchatMessage(
       );
     }
 
-    if (activeGoal) {
+    if (goalState.goal) {
       markGoalProgress('▶️ Resuming after budget approval');
       await withRileyResponseWatchdog(
         workspaceChannel,
         groupchat,
         handleRileyMessage(
-        `Budget approval has been granted by ${senderName}. Resume the paused work on this goal: ${activeGoal}`,
+        `Budget approval has been granted by ${senderName}. Resume the paused work on this goal: ${goalState.goal}`,
         senderName,
         message.member || undefined,
         groupchat,
@@ -1566,9 +1532,7 @@ async function processGroupchatMessage(
 
   if (uniqueMentions.length > 0) {
     if (uniqueMentions.length === 1 && uniqueMentions[0] === 'executive-assistant') {
-      activeGoal = content;
-      activeGoalStartedAt = Date.now();
-      markGoalProgress('⏳ Riley planning...');
+      goalState.setGoal(content);
       await withRileyResponseWatchdog(
         workspaceChannel,
         groupchat,
@@ -1580,9 +1544,7 @@ async function processGroupchatMessage(
     } else {
       // Hard-route multi/specialist mentions through Riley so she can delegate to Ace first.
       const normalized = `${content}\n\n[System: route this through @ace first. Do not delegate directly to specialists.]`;
-      activeGoal = normalized;
-      activeGoalStartedAt = Date.now();
-      markGoalProgress('⏳ Riley planning...');
+      goalState.setGoal(normalized);
       await withRileyResponseWatchdog(
         workspaceChannel,
         groupchat,
@@ -1590,9 +1552,7 @@ async function processGroupchatMessage(
       );
     }
   } else {
-    activeGoal = content;
-    activeGoalStartedAt = Date.now();
-    markGoalProgress('⏳ Riley planning...');
+    goalState.setGoal(content);
     await withRileyResponseWatchdog(
       workspaceChannel,
       groupchat,
@@ -1616,7 +1576,7 @@ async function withRileyResponseWatchdog(
   let fired = false;
   const timer = setTimeout(() => {
     fired = true;
-    const goal = activeGoal || 'none';
+    const goal = goalState.goal || 'none';
     void emitRileyStallAlert(workspaceChannel, groupchat, goal, RILEY_NO_RESPONSE_TIMEOUT_MS)
       .then((posted) => {
         if (!posted) return;
@@ -1648,9 +1608,7 @@ export async function handleGoalCommand(
   groupchat: TextChannel
 ): Promise<void> {
   const senderName = member.displayName || member.user.username;
-  activeGoal = description;
-  activeGoalStartedAt = Date.now();
-  markGoalProgress('⏳ Planning...');
+  goalState.setGoal(description);
 
   const workspaceChannel = await ensureGoalWorkspace(groupchat, senderName, description);
   await handleRileyMessage(description, senderName, member, groupchat, undefined, workspaceChannel);
@@ -1660,8 +1618,7 @@ export async function handleGoalCommand(
  * Get current status summary.
  */
 export function getStatusSummary(): string | null {
-  if (!activeGoal) return null;
-  return `📋 **Current Goal:** ${activeGoal}\n**Status:** ${goalStatus || 'In progress...'}`;
+  return goalState.getSummary();
 }
 
 /**
@@ -1701,7 +1658,7 @@ async function handleRileyMessage(
 
     noResponseTimer = setTimeout(() => {
       if (hasVisibleRileyResponse || signal?.aborted) return;
-      const goal = activeGoal || 'none';
+      const goal = goalState.goal || 'none';
       void emitRileyStallAlert(workspaceChannel, groupchat, goal, RILEY_NO_RESPONSE_TIMEOUT_MS)
         .then((posted) => {
           if (!posted) return;
@@ -1784,11 +1741,11 @@ async function handleRileyMessage(
     await executeActions(actionPayload, member, groupchat, workspaceChannel, userMessage);
     markGoalProgress();
 
-    const verificationRequired = goalNeedsRuntimeVerification(activeGoal || userMessage || response);
+    const verificationRequired = goalNeedsRuntimeVerification(goalState.goal || userMessage || response);
     const completionClaimed = isCompletionClaim(displayResponse);
     let completionVerified = true;
     if (verificationRequired && completionClaimed) {
-      const evidenceSince = Math.max(Date.now() - 2 * 60 * 60 * 1000, activeGoalStartedAt - 60_000);
+      const evidenceSince = Math.max(Date.now() - 2 * 60 * 60 * 1000, goalState.startedAt - 60_000);
       completionVerified = await hasRecentRuntimeVerificationEvidence(groupchat, workspaceChannel, evidenceSince);
       if (!completionVerified) {
         displayResponse = '⏳ Verification pending: I cannot mark this as complete yet because there is no checkable runtime evidence in screenshots/harness output. I will keep this open until proof is posted.';
@@ -1983,7 +1940,7 @@ async function executeActions(
           break;
         }
         case 'URLS': {
-          const linkIntent = /\b(url|urls|link|links|asap links|app url|share url|cloud run|cloud build)\b/i.test(String(userMessage || activeGoal || ''));
+          const linkIntent = /\b(url|urls|link|links|asap links|app url|share url|cloud run|cloud build)\b/i.test(String(userMessage || goalState.goal || ''));
           if (!linkIntent && String(param || '').trim().toLowerCase() !== 'force') {
             await sendAsRiley('🔗 Skipped link posting because no explicit link request was detected.');
             break;
@@ -2125,9 +2082,9 @@ async function executeActions(
           break;
         }
         case 'CLOSE_THREAD': {
-          const goalNeedsEvidence = goalNeedsRuntimeVerification(activeGoal || '');
+          const goalNeedsEvidence = goalNeedsRuntimeVerification(goalState.goal || '');
           if (goalNeedsEvidence) {
-            const evidenceSince = Math.max(Date.now() - 2 * 60 * 60 * 1000, activeGoalStartedAt - 60_000);
+            const evidenceSince = Math.max(Date.now() - 2 * 60 * 60 * 1000, goalState.startedAt - 60_000);
             const hasEvidence = await hasRecentRuntimeVerificationEvidence(groupchat, workspaceChannel, evidenceSince);
             if (!hasEvidence) {
               await sendAsRiley('🛑 Cannot close this thread yet. Runtime verification evidence is missing. Please provide checkable proof via screenshots or mobile harness/puppeteer output before closing.');
@@ -2255,7 +2212,6 @@ function shouldFanOutAllAgents(rileyResponse: string): boolean {
 }
 
 const ACE_FIRST_TASK_RE = /\b(?:fix|inspect|investigate|check|review|test|debug|look at|look into|trace|implement|update|change|patch|deploy|smoke|regression|audit|compare|why)\b/i;
-const LOW_SIGNAL_COMPLETION_RE = /^\s*(?:done|fixed|resolved|completed|all good|finished)\.?\s*$/i;
 const FILE_PATH_EVIDENCE_RE = /\b(?:[a-zA-Z0-9_.-]+\/)+[a-zA-Z0-9_.-]+\.[a-zA-Z0-9]+\b/;
 const CHECK_EVIDENCE_RE = /\b(?:npm\s+run|pnpm\s+|yarn\s+|typecheck|lint|test|build|smoke|harness|playwright|jest|tsc)\b/i;
 
@@ -2393,7 +2349,7 @@ function goalNeedsRuntimeVerification(text: string): boolean {
   const normalized = String(text || '').toLowerCase();
   if (!normalized.trim()) return false;
   if (/\bstatus\b|\bthreads?\b|\busage\b|\blimits\b|\bhealth\b|\burls?\b|\blink\b/.test(normalized)) return false;
-  if (/\bdesign\s*spec\b|\bstyle\s*guide\b|\bglassmorphism\b|\bdesign\s*system\b|\bmockup\b|\bwireframe\b/.test(normalized)) return false;
+  if (shouldSkipContractEnforcement(normalized)) return false;
   return /\bfix|implement|update|change|refactor|remove|add|build|ship|deploy|feature|bug|ui|screen|flow\b/.test(normalized);
 }
 
@@ -2605,6 +2561,108 @@ async function recoverFromAgentErrors(
   }
 }
 
+interface AceDispatchResult {
+  response: string;
+  qualityFailed: boolean;
+  designTask: boolean;
+}
+
+async function dispatchAceWithQualityGate(
+  rileyResponse: string,
+  aceChannel: WebhookCapableChannel,
+  workspaceChannel: WebhookCapableChannel,
+  signal?: AbortSignal,
+): Promise<AceDispatchResult> {
+  const designCheck = isDesignDeliverableDetailed(rileyResponse, goalState.goal);
+  const designTask = designCheck.match;
+  console.log(`AGENT_CHAIN isDesignDeliverable=${designTask} rileyMatch=${designCheck.rileyMatch} goalMatch=${designCheck.goalMatch} goal="${(goalState.goal || '').slice(0, 80)}" rileySnippet="${rileyResponse.slice(0, 120)}"`);
+
+  const aceContext = designTask
+    ? buildAceDesignContext(rileyResponse)
+    : buildAceStandardContext(rileyResponse);
+
+  let aceResponse = await dispatchToAgent('developer', aceContext, aceChannel, {
+    signal,
+    maxTokens: designTask ? 4000 : undefined,
+    persistUserContent: `[Riley directed]: ${rileyResponse.slice(0, 1000)}`,
+    documentLine: '✅ {response}',
+    workspaceChannel,
+    suppressVisibleOutput: shouldSuppressAceVisibleOutput,
+  });
+
+  const needsQualityRetry = () => (
+    aceResponse.trim().length < 90
+    || LOW_SIGNAL_COMPLETION_RE.test(aceResponse)
+    || isAceSelfDelegationResponse(aceResponse)
+    || !hasAceCompletionContract(aceResponse)
+  );
+
+  // Design deliverables: Ace's file creation via tools IS the deliverable.
+  // The quality gate (Result/Evidence/Risk) is irrelevant — skip retries.
+  if (!designTask) {
+    if (!signal?.aborted && needsQualityRetry()) {
+      aceResponse = await dispatchToAgent(
+        'developer',
+        '[System quality check] Your last update did not satisfy execution standards. Do not delegate back to Ace, do not ask others to investigate, and do not use placeholders. Execute directly and provide a concrete completion summary with these exact sections: Result, Evidence, Risk/Follow-up. Include at least one real file path and one validation command or check.',
+        aceChannel,
+        {
+          signal,
+          maxTokens: Math.max(SUBAGENT_MAX_TOKENS, 700),
+          persistUserContent: '[System quality check for Ace response detail]',
+          documentLine: '✅ {response}',
+          workspaceChannel,
+          suppressVisibleOutput: shouldSuppressAceVisibleOutput,
+        }
+      );
+    }
+
+    if (!signal?.aborted && needsQualityRetry()) {
+      aceResponse = await dispatchToAgent(
+        'developer',
+        '[System quality check final] Return only this format and fill it concretely:\nResult: <one sentence>\nEvidence: files=<path1,path2>; checks=<command and outcome>\nRisk/Follow-up: <one sentence>.\nNo delegation text. No placeholders.',
+        aceChannel,
+        {
+          signal,
+          maxTokens: Math.max(SUBAGENT_MAX_TOKENS, 500),
+          persistUserContent: '[System final quality check for Ace response detail]',
+          documentLine: '✅ {response}',
+          workspaceChannel,
+          suppressVisibleOutput: shouldSuppressAceVisibleOutput,
+        }
+      );
+    }
+  }
+
+  const qualityFailed = !designTask && !signal?.aborted && needsQualityRetry();
+  console.log(`AGENT_CHAIN aceQualityFailed=${qualityFailed} designTask=${designTask} needsRetry=${needsQualityRetry()} aceLen=${aceResponse.trim().length} aceSnippet="${aceResponse.slice(0, 120)}"`);
+  return { response: aceResponse, qualityFailed, designTask };
+}
+
+async function runSpecialistFallback(
+  rileyResponse: string,
+  aceResponse: string,
+  aceQualityFailed: boolean,
+  groupchat: TextChannel,
+  workspaceChannel: WebhookCapableChannel,
+  signal?: AbortSignal,
+): Promise<{ findings: string[]; errors: string[] }> {
+  const findings: string[] = [];
+  const errors: string[] = [];
+  const inferredSpecialists = inferSpecialistsForContext(`${rileyResponse}\n${aceResponse}`)
+    .filter((id) => id !== 'developer');
+  const forcedFallback = aceQualityFailed ? ['qa'] : [];
+  const fallbackAgents = [...new Set([...forcedFallback, ...inferredSpecialists])].slice(0, 2);
+  if (fallbackAgents.length > 0) {
+    if (aceQualityFailed) {
+      findings.push('Forced specialist fallback executed due to weak Ace completion output.');
+    }
+    const autoSpecialistRun = await handleSubAgents(fallbackAgents, aceResponse, groupchat, workspaceChannel, signal);
+    findings.push(...autoSpecialistRun.findings);
+    errors.push(...autoSpecialistRun.errors);
+  }
+  return { findings, errors };
+}
+
 /**
  * Handle the chain: Riley → Ace → sub-agents → report back
  */
@@ -2629,7 +2687,7 @@ async function handleAgentChain(
   const consolidatedFindings: string[] = [];
   const consolidatedErrors: string[] = [];
   const rileyAlreadyCompletion = /(done|completed|complete|fixed|resolved|implemented|deployed|shipped|finished|ready)/i.test(rileyResponse);
-  const needsRuntimeEvidence = goalNeedsRuntimeVerification(`${activeGoal || ''}\n${rileyResponse}`);
+  const needsRuntimeEvidence = goalNeedsRuntimeVerification(`${goalState.goal || ''}\n${rileyResponse}`);
   if (aceDirected) {
     const ace = getAgent('developer' as AgentId);
     if (ace) {
@@ -2637,67 +2695,10 @@ async function handleAgentChain(
         if (signal?.aborted) return;
         const aceChannel = getAgentWorkChannel('developer', groupchat);
         aceChannel.sendTyping().catch(() => {});
-        const designDeliverableRe = /\bdesign\b.*\b(?:spec|system|html|css|page|route|mockup|wireframe)\b|\b(?:spec|html|css)\b.*\bdesign\b|\bglassmorphism\b/i;
-        const isDesignDeliverable = designDeliverableRe.test(rileyResponse) || designDeliverableRe.test(activeGoal || '');
-        console.log(`AGENT_CHAIN isDesignDeliverable=${isDesignDeliverable} rileyMatch=${designDeliverableRe.test(rileyResponse)} goalMatch=${designDeliverableRe.test(activeGoal || '')} goal="${(activeGoal || '').slice(0, 80)}" rileySnippet="${rileyResponse.slice(0, 120)}"`);
-        const aceContext = isDesignDeliverable
-          ? `[Riley directed you]: ${rileyResponse}\n\nOwn execution yourself first. Only bring in extra specialists if they are truly needed. If you do delegate, use the exact Discord mentions from this guide: ${buildAgentMentionGuide(['security-auditor', 'api-reviewer', 'dba', 'performance', 'devops', 'copywriter', 'lawyer', 'qa', 'ux-reviewer', 'ios-engineer', 'android-engineer'])}.\n\nThis is a design deliverable task. You MUST create the file(s) using the write_file tool. Do not just explore the project — actually write the code. Steps: 1) Read the existing route/page patterns to match conventions, 2) Use write_file to create the new file(s) with complete HTML/CSS/code, 3) After writing, confirm what you created with a short summary including the file path(s). Do NOT use Result/Evidence/Risk format. Do NOT reply with just "Done".`
-          : `[Riley directed you]: ${rileyResponse}\n\nOwn execution yourself first. Only bring in extra specialists if they are truly needed. If you do delegate, use the exact Discord mentions from this guide: ${buildAgentMentionGuide(['security-auditor', 'api-reviewer', 'dba', 'performance', 'devops', 'copywriter', 'lawyer', 'qa', 'ux-reviewer', 'ios-engineer', 'android-engineer'])}.\n\nWhen you finish, do NOT reply with just "Done". Include these exact sections:\n- Result: one sentence outcome.\n- Evidence: files changed, commands/tests run, and key output.\n- Risk/Follow-up: any caveats or next checks.`;
 
-        let aceResponse = await dispatchToAgent('developer', aceContext, aceChannel, {
-          signal,
-          maxTokens: isDesignDeliverable ? 4000 : undefined,
-          persistUserContent: `[Riley directed]: ${rileyResponse.slice(0, 1000)}`,
-          documentLine: '✅ {response}',
-          workspaceChannel,
-          suppressVisibleOutput: shouldSuppressAceVisibleOutput,
-        });
+        const { response: aceResponse, qualityFailed: aceQualityFailed, designTask } =
+          await dispatchAceWithQualityGate(rileyResponse, aceChannel, workspaceChannel, signal);
 
-        const needsQualityRetry = () => (
-          aceResponse.trim().length < 90
-          || LOW_SIGNAL_COMPLETION_RE.test(aceResponse)
-          || isAceSelfDelegationResponse(aceResponse)
-          || !hasAceCompletionContract(aceResponse)
-        );
-
-        // Design deliverables: Ace's file creation via tools IS the deliverable.
-        // The quality gate (Result/Evidence/Risk) is irrelevant — skip retries.
-        if (!isDesignDeliverable) {
-          if (!signal?.aborted && needsQualityRetry()) {
-            aceResponse = await dispatchToAgent(
-              'developer',
-              '[System quality check] Your last update did not satisfy execution standards. Do not delegate back to Ace, do not ask others to investigate, and do not use placeholders. Execute directly and provide a concrete completion summary with these exact sections: Result, Evidence, Risk/Follow-up. Include at least one real file path and one validation command or check.',
-              aceChannel,
-              {
-                signal,
-                maxTokens: Math.max(SUBAGENT_MAX_TOKENS, 700),
-                persistUserContent: '[System quality check for Ace response detail]',
-                documentLine: '✅ {response}',
-                workspaceChannel,
-                suppressVisibleOutput: shouldSuppressAceVisibleOutput,
-              }
-            );
-          }
-
-          if (!signal?.aborted && needsQualityRetry()) {
-            aceResponse = await dispatchToAgent(
-              'developer',
-              '[System quality check final] Return only this format and fill it concretely:\nResult: <one sentence>\nEvidence: files=<path1,path2>; checks=<command and outcome>\nRisk/Follow-up: <one sentence>.\nNo delegation text. No placeholders.',
-              aceChannel,
-              {
-                signal,
-                maxTokens: Math.max(SUBAGENT_MAX_TOKENS, 500),
-                persistUserContent: '[System final quality check for Ace response detail]',
-                documentLine: '✅ {response}',
-                workspaceChannel,
-                suppressVisibleOutput: shouldSuppressAceVisibleOutput,
-              }
-            );
-          }
-        }
-
-        const aceQualityFailed = !isDesignDeliverable && !signal?.aborted && needsQualityRetry();
-        console.log(`AGENT_CHAIN aceQualityFailed=${aceQualityFailed} isDesignDeliverable=${isDesignDeliverable} needsRetry=${needsQualityRetry()} aceLen=${aceResponse.trim().length} aceSnippet="${aceResponse.slice(0, 120)}"`);
         if (aceQualityFailed) {
           consolidatedErrors.push('Ace completion quality check failed after retries.');
         }
@@ -2714,21 +2715,10 @@ async function handleAgentChain(
           const fromAce = await handleSubAgents(aceSubDirectives, aceResponse, groupchat, workspaceChannel, signal);
           consolidatedFindings.push(...fromAce.findings);
           consolidatedErrors.push(...fromAce.errors);
-        } else if (!isDesignDeliverable) {
-          const inferredSpecialists = inferSpecialistsForContext(`${rileyResponse}\n${aceResponse}`)
-            .filter((id) => id !== 'developer');
-          const forcedFallback = aceQualityFailed
-            ? ['qa']
-            : [];
-          const fallbackAgents = [...new Set([...forcedFallback, ...inferredSpecialists])].slice(0, 2);
-          if (fallbackAgents.length > 0) {
-            if (aceQualityFailed) {
-              consolidatedFindings.push('Forced specialist fallback executed due to weak Ace completion output.');
-            }
-            const autoSpecialistRun = await handleSubAgents(fallbackAgents, aceResponse, groupchat, workspaceChannel, signal);
-            consolidatedFindings.push(...autoSpecialistRun.findings);
-            consolidatedErrors.push(...autoSpecialistRun.errors);
-          }
+        } else if (!designTask) {
+          const fallbackResult = await runSpecialistFallback(rileyResponse, aceResponse, aceQualityFailed, groupchat, workspaceChannel, signal);
+          consolidatedFindings.push(...fallbackResult.findings);
+          consolidatedErrors.push(...fallbackResult.errors);
         }
       } catch (err) {
         const msg = err instanceof Error ? err.stack || err.message : 'Unknown';
@@ -2761,7 +2751,7 @@ async function handleAgentChain(
   }
 
   if (!signal?.aborted && needsRuntimeEvidence) {
-    const evidenceSince = Math.max(Date.now() - 2 * 60 * 60 * 1000, activeGoalStartedAt - 60_000);
+    const evidenceSince = Math.max(Date.now() - 2 * 60 * 60 * 1000, goalState.startedAt - 60_000);
     const hasEvidence = await hasRecentRuntimeVerificationEvidence(groupchat, workspaceChannel, evidenceSince);
     if (!hasEvidence) {
       consolidatedErrors.push('Required runtime verification evidence is missing (screenshots or mobile harness/puppeteer output).');
