@@ -95,9 +95,20 @@ function australianFlagSVG(w = 1024, h = 512): string {
 </svg>`;
 }
 
+// ── Lip variants that look professional (exclude pacifier/dummy-looking ones) ─
+// Excluded: variant10 (O-mouth), variant12 (tongue), variant13 (oval/pacifier),
+//           variant15 (pacifier+ring), variant16 (complex), variant20 (dot),
+//           variant29 (oval)
+const SAFE_LIPS = [
+  'variant01','variant02','variant03','variant04','variant05','variant06',
+  'variant07','variant08','variant09','variant11','variant14','variant17',
+  'variant18','variant19','variant21','variant22','variant23','variant24',
+  'variant25','variant26','variant27','variant28','variant30',
+].join(',');
+
 // ── Fetch DiceBear avatar (notionists-neutral — professional, no dummies) ───
 async function fetchAvatar(seed: string): Promise<Buffer> {
-  const url = `https://api.dicebear.com/9.x/notionists-neutral/png?seed=${encodeURIComponent(seed)}&size=${AVATAR_SIZE}&backgroundColor=transparent`;
+  const url = `https://api.dicebear.com/9.x/notionists-neutral/png?seed=${encodeURIComponent(seed)}&size=${AVATAR_SIZE}&backgroundColor=transparent&lips=${SAFE_LIPS}`;
   const resp = await fetch(url);
   if (!resp.ok) throw new Error(`DiceBear fetch failed for ${seed}: ${resp.status}`);
   return Buffer.from(await resp.arrayBuffer());
