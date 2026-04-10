@@ -72,8 +72,10 @@ function digestIntervalMs(): number {
   return 15 * 60 * 1000;
 }
 
-function shouldDigest(channel: TextChannel, severity: OpsSeverity): boolean {
+function shouldDigest(channel: TextChannel, severity: OpsSeverity, scope?: string): boolean {
   if (severity !== 'info') return false;
+  // Tool-audit entries must post immediately so smoke tests can verify them
+  if (scope?.startsWith('tool-audit')) return false;
   const name = String(channel.name || '').toLowerCase();
   return name.includes('cost') || name.includes('terminal');
 }
@@ -202,7 +204,7 @@ export async function postOpsLine(channel: TextChannel, input: OpsLineInput): Pr
     return;
   }
 
-  if (shouldDigest(channel, severity)) {
+  if (shouldDigest(channel, severity, input.scope)) {
     const state = scheduleDigest(channel);
     state.entries.push({ scope: input.scope, metric: input.metric, severity });
     if (!state.timer) {

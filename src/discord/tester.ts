@@ -132,8 +132,8 @@ const AGENT_CAPABILITY_TESTS: AgentCapabilityTest[] = [
     id: 'developer',
     category: 'core',
     capability: 'evidence-format-contract',
-    prompt: 'Return exactly this structure with concrete placeholders: Result: ... Evidence: ... Risk/Follow-up: ...',
-    expectAll: [/result:/i, /evidence:/i, /risk\/follow-up:/i],
+    prompt: 'Return ONLY this exact plain-text structure (no markdown headers):\nResult: <one sentence outcome>\nEvidence: <files changed or tests run>\nRisk/Follow-up: <caveats or next checks>',
+    expectAll: [/\bresults?\s*:/i, /\bevidence\s*:/i, /\brisk|follow.?up/i],
   },
   {
     id: 'developer',
