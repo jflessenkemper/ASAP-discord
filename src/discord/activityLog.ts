@@ -8,7 +8,7 @@ import { postAgentErrorLog } from './services/agentErrors';
  * All writes are fire-and-forget — logging never blocks agent execution.
  */
 
-type EventType = 'invoke' | 'tool' | 'response' | 'error' | 'rate_limit';
+type EventType = 'invoke' | 'tool' | 'response' | 'error' | 'rate_limit' | 'guardrail' | 'cache' | 'memory';
 let activityLogDbDisabled = false;
 const AGENT_ERROR_DEDUPE_WINDOW_MS = Math.max(30_000, parseInt(process.env.AGENT_ERROR_DEDUPE_WINDOW_MS || '180000', 10));
 const lastAgentErrorPostedAt = new Map<string, number>();

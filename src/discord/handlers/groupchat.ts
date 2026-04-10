@@ -17,7 +17,9 @@ import {
 } from '../agents';
 import { getBotChannels } from '../bot';
 import { agentRespond, clearGeminiQuotaFuse, ConversationMessage, extractAgentResponseEnvelope, getContextRuntimeReport, getGeminiQuotaFuseStatus, setQuotaFuseNotifyCallback, setRateLimitNotifyCallback } from '../claude';
+import { buildHandoffContext, formatHandoffPrompt, formatHandoffResult, buildHandoffResult } from '../handoff';
 import { appendToMemory, getMemoryContext, loadMemory, saveMemory, clearMemory, compressMemory } from '../memory';
+import { getAllModelHealth } from '../modelHealth';
 import { postAgentErrorLog } from '../services/agentErrors';
 import { formatOpsLine } from '../services/opsFeed';
 import { captureAndPostScreenshots } from '../services/screenshots';
@@ -138,7 +140,7 @@ let messageQueue: Promise<void> = Promise.resolve();
 let activeAbortController: AbortController | null = null;
 let activeThinkingMessage: Message | null = null;
 let claudeNotificationsBoundChannelId: string | null = null;
-const MAX_PARALLEL_SUBAGENTS = parseInt(process.env.MAX_PARALLEL_SUBAGENTS || '1', 10);
+const MAX_PARALLEL_SUBAGENTS = parseInt(process.env.MAX_PARALLEL_SUBAGENTS || '3', 10);
 const SUBAGENT_MAX_TOKENS = parseInt(process.env.SUBAGENT_MAX_TOKENS || '900', 10);
 const GROUPCHAT_PROCESS_TIMEOUT_MS = parseInt(process.env.GROUPCHAT_PROCESS_TIMEOUT_MS || '480000', 10);
 const RILEY_NO_RESPONSE_TIMEOUT_MS = parseInt(process.env.RILEY_NO_RESPONSE_TIMEOUT_MS || '180000', 10);
@@ -2825,7 +2827,19 @@ async function handleSubAgents(
       tierAgents.map(({ id }) => async () => {
         if (signal?.aborted) return;
         documentToChannel(id, `📥 Received task from groupchat. Working...`).catch(() => {});
-        const agentContext = `[Directive from groupchat]: ${directiveExcerpt}${priorContext}\n\nDo only the specialist work relevant to your role. Be concise — max 120 words. Report what you found or changed.`;
+
+        const handoffCtx = buildHandoffContext({
+          fromAgent: 'riley',
+          toAgent: id,
+          traceId: `groupchat-${Date.now()}`,
+          task: directiveExcerpt,
+          conversationSummary: priorSummary || undefined,
+          constraints: ['Be concise — max 120 words', 'Do only specialist work relevant to your role', 'Report what you found or changed'],
+          expectedOutput: 'Brief specialist finding or action result',
+          parentGoal: directiveContext.slice(0, 200),
+        });
+        const handoffPrefix = formatHandoffPrompt(handoffCtx);
+        const agentContext = `${handoffPrefix}\n\nDo only the specialist work relevant to your role. Be concise — max 120 words. Report what you found or changed.`;
         const outChannel = getAgentWorkChannel(id, groupchat);
         const agentResponse = await dispatchToAgent(id as AgentId, agentContext, outChannel, {
           maxTokens: SUBAGENT_MAX_TOKENS,

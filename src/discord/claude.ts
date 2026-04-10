@@ -8,10 +8,15 @@ import { ensureGoogleCredentials, getAccessTokenViaGcloud } from '../services/go
 
 import { logAgentEvent } from './activityLog';
 import { AgentConfig } from './agents';
+import { getOrCreateContentCache } from './contextCache';
+import { classifyInput, classifyOutput, sanitizeOutputForSecrets } from './guardrails';
 import { isLowSignalCompletion } from './handlers/responseNormalization';
+import { recordModelSuccess, recordModelFailure, resolveHealthyModel, isModelAvailable } from './modelHealth';
 import { recordAgentResponse, recordRateLimitHit } from './metrics';
 import { REPO_TOOLS, getToolsForAgent, executeTool, getToolAuditCallback } from './tools';
+import { createTraceContext, recordSpan, newSpanId, type TraceContext, type TraceSpan } from './tracing';
 import { recordClaudeUsage, isClaudeOverLimit, isBudgetExceeded, getRemainingBudget, getClaudeTokenStatus, approveAdditionalBudget, type PromptBreakdown } from './usage';
+import { recallRelevantContext, recordAgentDecision } from './vectorMemory';
 
 
 let PROJECT_CONTEXT = '';
@@ -41,6 +46,7 @@ const PROJECT_CONTEXT_LIGHT_MAX_CHARS = parseInt(process.env.PROJECT_CONTEXT_LIG
 const PROJECT_CONTEXT_LIGHT = PROJECT_CONTEXT.slice(0, PROJECT_CONTEXT_LIGHT_MAX_CHARS);
 
 const GEMINI_FLASH = process.env.GEMINI_FLASH_MODEL || 'gemini-flash-latest';
+const GEMINI_FLASH_LITE = process.env.GEMINI_FLASH_LITE_MODEL || 'gemini-2.0-flash-lite';
 const GEMINI_PRO = process.env.GEMINI_PRO_MODEL || 'gemini-2.5-pro';
 const ANTHROPIC_OPUS = process.env.ANTHROPIC_CODING_MODEL || 'claude-opus-4-6';
 const DEFAULT_CODING_MODEL = process.env.CODING_AGENT_MODEL || ANTHROPIC_OPUS;
@@ -188,18 +194,18 @@ function modelForAgent(agentId: string, userMessage: string): string {
     return DEFAULT_CODING_MODEL;
   }
   if (isSimpleFastPathPrompt(userMessage)) {
-    return DEFAULT_FAST_MODEL;
+    return resolveHealthyModel(DEFAULT_FAST_MODEL);
   }
   if (CODE_HEAVY_AGENT_IDS.has(agentId) && isCodeWorkPrompt(userMessage)) {
-    return DEFAULT_CODING_MODEL;
+    return resolveHealthyModel(DEFAULT_CODING_MODEL);
   }
   if (FORCE_OPUS_FOR_CODE_WORK && isCodeWorkPrompt(userMessage)) {
-    return DEFAULT_CODING_MODEL;
+    return resolveHealthyModel(DEFAULT_CODING_MODEL);
   }
   if (agentId === 'executive-assistant' && isHighStakesPrompt(userMessage)) {
-    return GEMINI_PRO;
+    return resolveHealthyModel(GEMINI_PRO);
   }
-  return DEFAULT_FAST_MODEL;
+  return resolveHealthyModel(DEFAULT_FAST_MODEL);
 }
 
 function shouldFallbackToOpus(modelName: string): boolean {
@@ -874,7 +880,7 @@ function createVertexAnthropicModel(
   };
 }
 
-function createModel(modelName: string, options: { systemInstruction?: string; tools?: Tool[]; rawTools?: AnyTool[]; generationConfig?: Record<string, any> }): ModelLike {
+function createModel(modelName: string, options: { systemInstruction?: string; tools?: Tool[]; rawTools?: AnyTool[]; generationConfig?: Record<string, any>; cachedContentId?: string }): ModelLike {
   const canUseVertex = USE_VERTEX_AI && !vertexAuthUnavailable;
   const canUseVertexAnthropic = USE_VERTEX_ANTHROPIC && !vertexAuthUnavailable && !!VERTEX_PROJECT_ID;
   const nonAnthropicFallbackModel = getNonAnthropicFallbackModel(GEMINI_PRO);
@@ -2202,6 +2208,26 @@ export async function agentRespond(
   const lane = options?.priority || 'normal';
   const isVoiceLane = lane === 'voice';
   const pruneLaneKey = `${agent.id}:${lane}`;
+  const traceCtx = createTraceContext();
+  const agentSpanId = traceCtx.spanId;
+  const agentSpanStart = Date.now();
+
+  // ─── Input Guardrail ───
+  const guardrailResult = await classifyInput(userMessage, agent.id);
+  if (guardrailResult.verdict === 'block') {
+    logAgentEvent(agent.id, 'guardrail', `Input blocked: ${guardrailResult.reason}`);
+    void recordSpan({
+      traceId: traceCtx.traceId, spanId: agentSpanId, agentId: agent.id,
+      operation: 'guardrail_input', status: 'error', inputTokens: 0, outputTokens: 0,
+      cacheReadTokens: 0, cacheWriteTokens: 0, durationMs: Date.now() - agentSpanStart,
+      errorMessage: guardrailResult.reason,
+    });
+    return `⚠️ I can't process that request. ${guardrailResult.reason || 'Please rephrase.'}`;
+  }
+
+  // ─── Vector Memory Recall ───
+  const semanticContext = await recallRelevantContext(userMessage, agent.id);
+
   const cacheKey = cacheEligible ? makeResponseCacheKey(agent.id, userMessage, conversationHistory) : null;
   if (cacheKey) {
     const cached = getCachedResponse(cacheKey);
@@ -2401,7 +2427,7 @@ RUNTIME EFFICIENCY:
     }
   }
   const runtimeUserMessage = buildRuntimeStatusMessage(
-    userMessage,
+    semanticContext ? `${userMessage}${semanticContext}` : userMessage,
     { remaining, spent, limit },
     { used: tokenUsed, remaining: tokenRemaining, limit: tokenLimit },
   );
@@ -2437,11 +2463,36 @@ RUNTIME EFFICIENCY:
     Math.floor(DEFAULT_TOOL_RESULT_TRUNCATE_CHARS * Math.max(0.35, 1 - Math.min(CONTEXT_OVERFLOW_MAX_TOOL_RESULT_REDUCTION, initialLanePenalty.toolPenalty))),
   );
 
-  const makeModel = (modelName: string) => createModel(modelName, {
-    systemInstruction: systemPrompt,
-    tools: geminiTools,
-    rawTools: agentTools,
-    generationConfig: {
+  // ─── Structured Output Schema for machine_json mode ───
+  const DELEGATION_SCHEMA = {
+    type: 'OBJECT',
+    properties: {
+      human: { type: 'STRING', description: 'Human-readable reply text' },
+      machine: {
+        type: 'OBJECT',
+        properties: {
+          delegateAgents: { type: 'ARRAY', items: { type: 'STRING' }, description: 'Agent IDs to delegate to' },
+          actionTags: { type: 'ARRAY', items: { type: 'STRING' }, description: 'Action tags like [ACTION:DEPLOY]' },
+          notes: { type: 'STRING', description: 'Optional machine note' },
+        },
+      },
+    },
+    required: ['human'],
+  };
+
+  // ─── Context Caching (create/reuse cached content for system prompt + tools) ───
+  // Attempt to cache for Gemini models (not Anthropic)
+  const contextCacheId = !isAnthropicModel(currentModelName)
+    ? await getOrCreateContentCache(
+        currentModelName,
+        systemPrompt,
+        agentTools.map(t => ({ name: t.name, description: t.description, parameters: t.input_schema })),
+        agent.id,
+      ).catch(() => null)
+    : null;
+
+  const makeModel = (modelName: string) => {
+    const genConfig: Record<string, any> = {
       maxOutputTokens: resolveAdaptiveMaxOutputTokens({
         agentId: agent.id,
         userMessage,
@@ -2455,8 +2506,23 @@ RUNTIME EFFICIENCY:
           (pendingPromptBreakdown.toolResultChars || 0),
         laneKey: pruneLaneKey,
       }),
-    },
-  });
+    };
+
+    // Add structured output schema for Gemini models in machine_json mode
+    // Only when tools are not active (Gemini doesn't support both simultaneously)
+    if (requestedOutputMode === 'machine_json' && !isAnthropicModel(modelName) && agentTools.length === 0) {
+      genConfig.responseMimeType = 'application/json';
+      genConfig.responseSchema = DELEGATION_SCHEMA;
+    }
+
+    return createModel(modelName, {
+      systemInstruction: systemPrompt,
+      tools: geminiTools,
+      rawTools: agentTools,
+      generationConfig: genConfig,
+      cachedContentId: contextCacheId || undefined,
+    });
+  };
 
   let model = options?.chatSession?.chat ? null : makeModel(currentModelName);
   let chat = options?.chatSession?.chat || model!.startChat({ history });
@@ -2543,6 +2609,7 @@ RUNTIME EFFICIENCY:
     response = await withConcurrencyLimit(currentModelName, () =>
       withRetry(() => sendMessageWithOptionalStream(chat, runtimeUserMessage, options?.signal, options?.onPartialText))
     , lane);
+    recordModelSuccess(currentModelName, Date.now() - loopStart);
     markCacheTouched(pruneLaneKey);
     const lanePenalty = laneOverflowPenalty.get(pruneLaneKey);
     if (lanePenalty) {
@@ -2555,6 +2622,13 @@ RUNTIME EFFICIENCY:
       }
     }
   } catch (err: any) {
+    // Record model health failure
+    const errType = isGeminiRateLimitError(err) || isAnthropicRateLimitError(err) ? 'rate_limited'
+      : isGeminiQuotaError(err) ? 'quota_exhausted'
+      : isGeminiAuthError(err) || isAnthropicAuthError(err) ? 'auth_error'
+      : 'error';
+    recordModelFailure(currentModelName, errType, String(err?.message || '').slice(0, 200));
+
     const recovered = await recoverContextOverflowAndRetry(runtimeUserMessage, err);
     if (recovered) {
       response = recovered;
@@ -2713,6 +2787,30 @@ RUNTIME EFFICIENCY:
         setCachedResponse(cacheKey, finalText);
       }
       recordAgentResponse(agent.id, Date.now() - loopStart);
+      recordModelSuccess(currentModelName, Date.now() - loopStart);
+
+      // ─── Output Guardrail ───
+      const outputGuardrail = await classifyOutput(finalText, agent.id);
+      if (outputGuardrail.verdict === 'block') {
+        finalText = sanitizeOutputForSecrets(finalText);
+      }
+
+      // ─── Record trace span ───
+      void recordSpan({
+        traceId: traceCtx.traceId, spanId: agentSpanId, agentId: agent.id,
+        modelName: currentModelName, operation: 'agent_respond', status: 'ok',
+        inputTokens: usageTelemetry.inputTokens, outputTokens: usageTelemetry.outputTokens,
+        cacheReadTokens: usageTelemetry.cacheReadInputTokens,
+        cacheWriteTokens: usageTelemetry.cacheCreationInputTokens,
+        durationMs: Date.now() - agentSpanStart,
+        metadata: { toolCalls: totalToolCalls, contextCached: !!contextCacheId },
+      });
+
+      // ─── Store significant decisions in vector memory ───
+      if (requestedOutputMode === 'machine_json' && finalText.length > 50 && totalToolCalls > 2) {
+        void recordAgentDecision(agent.id, finalText.slice(0, 500), userMessage.slice(0, 200));
+      }
+
       logAgentEvent(
         agent.id,
         'response',
@@ -3284,18 +3382,18 @@ Create a condensed summary. Prioritize:
 
 Keep the summary under 700 words. Use bullet points. Drop small talk and redundant exchanges.`;
 
-  const model = createModel(GEMINI_FLASH, {
+  const model = createModel(GEMINI_FLASH_LITE, {
     systemInstruction: 'You are a conversation compressor. Produce structured, information-dense summaries that preserve all actionable context while discarding noise. Output only the summary — no meta-commentary.',
   });
 
-  const result = await withConcurrencyLimit(GEMINI_FLASH, () =>
+  const result = await withConcurrencyLimit(GEMINI_FLASH_LITE, () =>
     withRetry(() => model.generateContent(prompt))
   , 'background');
 
   recordClaudeUsage(
     result.response.usageMetadata?.promptTokenCount || 0,
     result.response.usageMetadata?.candidatesTokenCount || 0,
-    { modelName: GEMINI_FLASH, agentLabel: `system:memory:${agentId}` },
+    { modelName: GEMINI_FLASH_LITE, agentLabel: `system:memory:${agentId}` },
   );
   return result.response.text() || existingSummary || 'Could not generate summary.';
 }
