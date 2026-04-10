@@ -1,0 +1,339 @@
+{
+  "startedAt": "2026-04-10T11:03:33.401Z",
+  "endedAt": "2026-04-10T22:15:23.192Z",
+  "summary": {
+    "capabilityPassed": 31,
+    "capabilityFailed": 5,
+    "extraFailed": 2,
+    "score": 76.3,
+    "criticalPassed": false,
+    "detail": "core_fail=1 | orchestration_fail=0 | upgrades_fail=0 | critical_extra_fail=1"
+  },
+  "results": [
+    {
+      "agent": "Riley (Executive Assistant)",
+      "capability": "action-health",
+      "category": "core",
+      "passed": true,
+      "elapsed": 38110,
+      "snippet": "The deployment pipeline is currently unhealthy. Multiple recent builds have failed, which means we cannot deploy any new code.\n\nHowever, the currently live service is still running…"
+    },
+    {
+      "agent": "Riley (Executive Assistant)",
+      "capability": "action-urls",
+      "category": "core",
+      "passed": true,
+      "elapsed": 16150,
+      "snippet": "Here are the links to the app and the Cloud Build console so you can see the latest. [smoke-token]\n\nNext step: Riley will post a concrete action with owner and ETA.\n\nStatus: partia…"
+    },
+    {
+      "agent": "Riley (Executive Assistant)",
+      "capability": "action-limits",
+      "category": "core",
+      "passed": true,
+      "elapsed": 9389,
+      "snippet": "Here's the current breakdown of our budget and token usage. [smoke-token]\n\nNext step: Riley will post a concrete action with owner and ETA.\n\nStatus: partially fixed\nRoot cause: Her…"
+    },
+    {
+      "agent": "Riley (Executive Assistant)",
+      "capability": "context-report",
+      "category": "core",
+      "passed": true,
+      "elapsed": 18308,
+      "snippet": "I'm prioritizing context efficiency due to having zero token headroom remaining.\n\nTo manage this, I'm operating in a conservation mode. This involves using the most targeted tools …"
+    },
+    {
+      "agent": "Riley (Executive Assistant)",
+      "capability": "goal-tracking",
+      "category": "orchestration",
+      "passed": true,
+      "elapsed": 13851,
+      "snippet": "I don't have any active goals right now. My main focus is on maintaining system health and responding to requests like this one.\n\nIf you have a new goal, let me know and I'll creat…"
+    },
+    {
+      "agent": "Riley (Executive Assistant)",
+      "capability": "memory-write",
+      "category": "memory",
+      "passed": false,
+      "elapsed": 228954,
+      "snippet": "I've saved the note 'smoke test validated all agents' to memory. [smoke-token]\n\nNext step: Riley will post a concrete action with owner and ETA.\n\nStatus: partially fixed\nRoot cause…",
+      "reason": "missing tool-audit evidence for memory_write"
+    },
+    {
+      "agent": "Ace (Developer)",
+      "capability": "specialist-chain",
+      "category": "orchestration",
+      "passed": true,
+      "elapsed": 10558,
+      "snippet": "Auth route reviews need both QA and security specialists to be effective. QA testers focus on the user-facing experience, verifying that login, password resets, and registration fl…"
+    },
+    {
+      "agent": "Ace (Developer)",
+      "capability": "evidence-format-contract",
+      "category": "core",
+      "passed": false,
+      "elapsed": 272132,
+      "snippet": "Timeout while waiting for full capability evidence",
+      "reason": "missing expected pattern /result:/i"
+    },
+    {
+      "agent": "Ace (Developer)",
+      "capability": "tool-audit-proof",
+      "category": "tool-proof",
+      "passed": true,
+      "elapsed": 54981,
+      "snippet": "🔧 Searching for `quality` to locate relevant code paths"
+    },
+    {
+      "agent": "Ace (Developer)",
+      "capability": "upgrades-post",
+      "category": "upgrades",
+      "passed": true,
+      "elapsed": 32108,
+      "snippet": "Thinking…"
+    },
+    {
+      "agent": "Ace (Developer)",
+      "capability": "read-and-summarize",
+      "category": "tool-proof",
+      "passed": true,
+      "elapsed": 26798,
+      "snippet": "🔧 Reading `server/src/routes/health.ts` to gather implementation context"
+    },
+    {
+      "agent": "Ace (Developer)",
+      "capability": "search-codebase",
+      "category": "tool-proof",
+      "passed": true,
+      "elapsed": 21141,
+      "snippet": "🔧 Searching for `authenticate` to locate relevant code paths"
+    },
+    {
+      "agent": "Ace (Developer)",
+      "capability": "design-deliverable",
+      "category": "specialist",
+      "passed": true,
+      "elapsed": 51314,
+      "snippet": "```html\n<div id='status'>OK</div>\n```\n\nSMOKE_DEVELOPE_DESIGNDE_255305"
+    },
+    {
+      "agent": "Ace (Developer)",
+      "capability": "db-schema-inspect",
+      "category": "tool-proof",
+      "passed": true,
+      "elapsed": 19772,
+      "snippet": "🔧 Inspecting schema"
+    },
+    {
+      "agent": "Ace (Developer)",
+      "capability": "git-branch-awareness",
+      "category": "tool-proof",
+      "passed": true,
+      "elapsed": 14673,
+      "snippet": "The last three commits include a fix to increase smoke test timeouts, a fix to exclude certain lip variants from agent avatars, and a feature commit for tracing, model health, and core agent capabilities.\n\nSMOKE_DEVELOPE_GITBRANC_321245"
+    },
+    {
+      "agent": "Max (QA)",
+      "capability": "tool-audit-proof",
+      "category": "tool-proof",
+      "passed": true,
+      "elapsed": 70602,
+      "snippet": "🔧 Using list_threads"
+    },
+    {
+      "agent": "Max (QA)",
+      "capability": "upgrades-post",
+      "category": "upgrades",
+      "passed": true,
+      "elapsed": 19976,
+      "snippet": "Thinking…"
+    },
+    {
+      "agent": "Kane (Security Auditor)",
+      "capability": "auth-risk-and-mitigation",
+      "category": "specialist",
+      "passed": true,
+      "elapsed": 27527,
+      "snippet": "A key vulnerability is the lack of server-side input validation on authentication routes, which can be mitigated by implementing a library like `express-validator` to sanitize and …"
+    },
+    {
+      "agent": "Kane (Security Auditor)",
+      "capability": "upgrades-post",
+      "category": "upgrades",
+      "passed": true,
+      "elapsed": 46690,
+      "snippet": "Thinking…"
+    },
+    {
+      "agent": "Sophie (UX Reviewer)",
+      "capability": "a11y-priority",
+      "category": "specialist",
+      "passed": true,
+      "elapsed": 71808,
+      "snippet": "My priority is to verify that all interactive elements have a clear, accessible name. This ensures screen reader users can understand and operate every button, link, and input. It's the most basic foundation for a usable app.\n\nSMOKE_UXREVIEW_A11YPRIO_660306"
+    },
+    {
+      "agent": "Raj (API Reviewer)",
+      "capability": "http-semantics",
+      "category": "specialist",
+      "passed": true,
+      "elapsed": 20333,
+      "snippet": "A `404 Not Found` status code should be returned when a client requests a resource that does not exist.\n\nSMOKE_APIREVIE_HTTPSEMA_660306"
+    },
+    {
+      "agent": "Raj (API Reviewer)",
+      "capability": "route-review",
+      "category": "tool-proof",
+      "passed": true,
+      "elapsed": 92267,
+      "snippet": "🔧 Listing `server/src/routes/` to inspect project structure"
+    },
+    {
+      "agent": "Elena (DBA)",
+      "capability": "postgres-safety",
+      "category": "specialist",
+      "passed": true,
+      "elapsed": 47731,
+      "snippet": "A critical PostgreSQL migration safety practice is to wrap each migration in a transaction, ensuring that all changes apply atomically or not at all, which prevents the database fr…"
+    },
+    {
+      "agent": "Elena (DBA)",
+      "capability": "schema-inspect",
+      "category": "tool-proof",
+      "passed": true,
+      "elapsed": 46702,
+      "snippet": "🔧 Inspecting schema"
+    },
+    {
+      "agent": "Kai (Performance)",
+      "capability": "measurement",
+      "category": "specialist",
+      "passed": true,
+      "elapsed": 39054,
+      "snippet": "I would track the initial JavaScript bundle size, because a large bundle directly increases download and parse times, which is a major cause of slow initial page loads, especially …"
+    },
+    {
+      "agent": "Jude (DevOps)",
+      "capability": "tool-audit-proof",
+      "category": "tool-proof",
+      "passed": true,
+      "elapsed": 57423,
+      "snippet": "TOOL_USED:gcp_run_describe: Service is ready at https://asap-ud54h56rna-ts.a.run.app SMOKE_DEVOPS_TOOLAUDI_845613"
+    },
+    {
+      "agent": "Jude (DevOps)",
+      "capability": "deployment-inspect",
+      "category": "tool-proof",
+      "passed": true,
+      "elapsed": 50379,
+      "snippet": "TOOL_USED:gcp_list_revisions: The latest revision is asap-00118-sc4. SMOKE_DEVOPS_DEPLOYME_903286"
+    },
+    {
+      "agent": "Jude (DevOps)",
+      "capability": "gcp-describe",
+      "category": "tool-proof",
+      "passed": true,
+      "elapsed": 8648,
+      "snippet": "🔧 Getting Cloud Run service status and URL"
+    },
+    {
+      "agent": "Harper (Lawyer)",
+      "capability": "au-contractor-distinction",
+      "category": "specialist",
+      "passed": true,
+      "elapsed": 65153,
+      "snippet": "A key distinction is the ability to delegate or subcontract work. An employee is engaged to perform the work personally. In contrast, an independent contractor typically has the ri…"
+    },
+    {
+      "agent": "Mia (iOS Engineer)",
+      "capability": "ios-stack",
+      "category": "specialist",
+      "passed": true,
+      "elapsed": 39982,
+      "snippet": "The primary language for modern iOS development is Swift, used with the SwiftUI framework to build user interfaces. SMOKE_IOSENGIN_IOSSTACK_660306"
+    },
+    {
+      "agent": "Mia (iOS Engineer)",
+      "capability": "code-read",
+      "category": "tool-proof",
+      "passed": true,
+      "elapsed": 59771,
+      "snippet": "🔧 Searching for `Swift|SwiftUI` to locate relevant code paths"
+    },
+    {
+      "agent": "Leo (Android Engineer)",
+      "capability": "android-stack",
+      "category": "specialist",
+      "passed": true,
+      "elapsed": 49507,
+      "snippet": "The primary language for modern Android development is Kotlin, and the recommended UI framework is Jetpack Compose. SMOKE_ANDROIDE_ANDROIDS_660307"
+    },
+    {
+      "agent": "Leo (Android Engineer)",
+      "capability": "code-read",
+      "category": "tool-proof",
+      "passed": true,
+      "elapsed": 86847,
+      "snippet": "🔧 Searching for `(?i)kotlin|jetpack compose` to locate relevant code paths"
+    },
+    {
+      "agent": "Ace (Developer)",
+      "capability": "typecheck-execution",
+      "category": "tool-proof",
+      "passed": false,
+      "elapsed": 14,
+      "snippet": "Send failed: getaddrinfo EAI_AGAIN discord.com",
+      "reason": "send failed"
+    },
+    {
+      "agent": "Ace (Developer)",
+      "capability": "run-tests-execution",
+      "category": "tool-proof",
+      "passed": false,
+      "elapsed": 10,
+      "snippet": "Send failed: getaddrinfo EAI_AGAIN discord.com",
+      "reason": "send failed"
+    },
+    {
+      "agent": "Max (QA)",
+      "capability": "run-tests-readonly",
+      "category": "tool-proof",
+      "passed": false,
+      "elapsed": 35,
+      "snippet": "Send failed: getaddrinfo EAI_AGAIN discord.com",
+      "reason": "send failed"
+    }
+  ],
+  "extras": [
+    {
+      "name": "channel_hygiene",
+      "passed": true,
+      "detail": "groupchat:5 | terminal:0 | upgrades:0",
+      "critical": true
+    },
+    {
+      "name": "elevenlabs_api",
+      "passed": false,
+      "detail": "fetch failed",
+      "critical": true
+    },
+    {
+      "name": "elevenlabs_tts",
+      "passed": false,
+      "detail": "fetch failed",
+      "critical": false
+    }
+  ],
+  "config": {
+    "timeoutMs": 180000,
+    "profile": "matrix",
+    "preClear": true,
+    "runElevenApi": true,
+    "runElevenTts": true,
+    "runVoiceBridge": false,
+    "runVoiceActive": false,
+    "capabilityAttempts": 2,
+    "runPostSuccessAction": false,
+    "agentFilter": null
+  }
+}

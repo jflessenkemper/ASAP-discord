@@ -1336,8 +1336,8 @@ async function dispatchToAgent(
     agent,
     [...agentMemory, ...groupHistory],
     contextMessage,
-    async (_toolName, summary) => {
-      sendToolNotification(outputChannel, agent, summary).catch(() => {});
+    async (toolName, summary) => {
+      sendToolNotification(outputChannel, agent, `[${toolName}] ${summary}`).catch(() => {});
     },
     {
       maxTokens: options.maxTokens,
@@ -1671,8 +1671,8 @@ async function handleRileyMessage(
     const decisionGuide = '\n\n[Decision policy: only ask the user for MAJOR decisions (prod risk, security/privacy, rollback/no-rollback, schema/data-loss risk, spend increase, legal/compliance impact). For routine implementation choices, decide and proceed.]';
     const contextMessageWithLang = `${textLangHint ? `${contextMessage}${textLangHint}` : contextMessage}${mentionGuide}${threadCloseGuide}${decisionGuide}`;
 
-    const response = await agentRespond(riley, [...rileyMemory, ...groupHistory], contextMessageWithLang, async (_toolName, summary) => {
-      sendToolNotification(rileyWorkChannel, riley, summary).catch(() => {});
+    const response = await agentRespond(riley, [...rileyMemory, ...groupHistory], contextMessageWithLang, async (toolName, summary) => {
+      sendToolNotification(rileyWorkChannel, riley, `[${toolName}] ${summary}`).catch(() => {});
     }, {
       signal,
       outputMode: 'machine_json',

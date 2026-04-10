@@ -322,12 +322,12 @@ async function handleAgentMessageInner(
     };
 
     const runAgent = async (sourceHistory: ConversationMessage[], disableTools: boolean): Promise<string> => {
-      return await withTextTimeout(agentRespond(agent, sourceHistory, userMessageWithLang, async (_toolName, summary) => {
+      return await withTextTimeout(agentRespond(agent, sourceHistory, userMessageWithLang, async (toolName, summary) => {
         if (signal?.aborted) return;
         if (disableTools) return;
         try {
           await sendWebhookMessage(channel, {
-            content: `🔧 ${summary}`,
+            content: `🔧 [${toolName}] ${summary}`,
             username: `${agent.emoji} ${agent.name}`,
             avatarURL: agent.avatarUrl,
           });

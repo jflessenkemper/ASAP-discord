@@ -477,7 +477,7 @@ const AGENT_CAPABILITY_TESTS: AgentCapabilityTest[] = [
     id: 'executive-assistant',
     category: 'memory',
     capability: 'memory-write',
-    prompt: "Use the memory_write tool right now to save the note 'smoke test validated all agents'. Confirm when done.",
+    prompt: "Personally execute the memory_write tool right now (do NOT delegate this). Call it with file='smoke-test-note' and content='smoke test validated all agents'. You must actually invoke the function — do not just describe or claim to have done it. Reply 'done' only after seeing the tool result.",
     expectAny: [/memory|written|saved|confirmed|noted|stored|done/i],
     expectToolAudit: ['memory_write'],
     timeoutMs: 150_000,
