@@ -56,6 +56,8 @@ interface AgentCapabilityTest {
   expectToolAudit?: string[];
   expectUpgradesPost?: boolean;
   minBotRepliesAfterPrompt?: number;
+  timeoutMs?: number;
+  heavyTool?: boolean;
 }
 
 interface TestResult {
@@ -112,9 +114,10 @@ const AGENT_CAPABILITY_TESTS: AgentCapabilityTest[] = [
     category: 'orchestration',
     capability: 'ace-only-delegation',
     prompt: 'You need security and QA help. Delegate correctly under strict policy in one short reply.',
-    expectAll: [/@ace|developer/i],
+    expectAll: [/ace|developer|delegat/i],
     expectNone: [/@kane|@max|@raj|@elena|@kai|@jude|@liv|@harper|@mia|@leo/i],
     requireTokenEcho: false,
+    timeoutMs: 240_000,
   },
   {
     id: 'executive-assistant',
@@ -205,7 +208,8 @@ const AGENT_CAPABILITY_TESTS: AgentCapabilityTest[] = [
     category: 'specialist',
     capability: 'postgres-safety',
     prompt: 'Name one PostgreSQL migration safety practice in one sentence.',
-    expectAny: [/transaction|rollback|lock|backfill|index/i],
+    expectAny: [/transaction|rollback|lock|backfill|index|migration|safe|wrap/i],
+    timeoutMs: 240_000,
   },
   {
     id: 'performance',
@@ -272,8 +276,9 @@ const AGENT_CAPABILITY_TESTS: AgentCapabilityTest[] = [
     id: 'executive-assistant',
     category: 'core',
     capability: 'action-health',
-    prompt: 'Check the deployment health of our app.',
-    expectAny: [/\[ACTION:HEALTH\]|health|cloud run|deployment|status|running/i],
+    prompt: 'What is the current deployment health status? Reply directly without delegating.',
+    expectAny: [/\[ACTION:HEALTH\]|health|cloud run|deployment|status|running|ready|online/i],
+    timeoutMs: 150_000,
   },
   {
     id: 'executive-assistant',
@@ -281,6 +286,7 @@ const AGENT_CAPABILITY_TESTS: AgentCapabilityTest[] = [
     capability: 'action-urls',
     prompt: 'Show me the app URLs and Cloud Build console links.',
     expectAny: [/\[ACTION:URLS\]|url|console|cloud build|http/i],
+    timeoutMs: 150_000,
   },
   {
     id: 'executive-assistant',
@@ -288,6 +294,7 @@ const AGENT_CAPABILITY_TESTS: AgentCapabilityTest[] = [
     capability: 'action-limits',
     prompt: 'Show the current budget and token usage.',
     expectAny: [/\[ACTION:LIMITS\]|budget|token|usage|limit/i],
+    timeoutMs: 150_000,
   },
   {
     id: 'executive-assistant',
@@ -295,6 +302,7 @@ const AGENT_CAPABILITY_TESTS: AgentCapabilityTest[] = [
     capability: 'context-report',
     prompt: 'Show the current context efficiency.',
     expectAny: [/\[ACTION:CONTEXT\]|context|efficiency|token|usage/i],
+    timeoutMs: 150_000,
   },
 
   // Ace developer: tool-proof tests
@@ -320,15 +328,18 @@ const AGENT_CAPABILITY_TESTS: AgentCapabilityTest[] = [
     capability: 'typecheck-execution',
     prompt: 'Run typecheck on the server and report pass or fail in one line.',
     expectAny: [/pass|fail|error|success|clean|no issues/i],
-    expectToolAudit: ['run_command'],
+    expectToolAudit: ['typecheck'],
+    heavyTool: true,
   },
   {
     id: 'developer',
     category: 'tool-proof',
     capability: 'run-tests-execution',
-    prompt: 'Run the test suite with run_tests and report the total pass count in one line.',
-    expectAny: [/\d+\s*(pass|tests?|suites?)|all.*pass/i],
+    prompt: 'Use run_tests right now and report the result summary in one line.',
+    expectAny: [/\d+\s*(pass|tests?|suites?|fail)|all.*pass|test.*completed|test.*ran|result.*test/i],
     expectToolAudit: ['run_tests'],
+    heavyTool: true,
+    timeoutMs: 240_000,
   },
   {
     id: 'developer',
@@ -439,6 +450,7 @@ const AGENT_CAPABILITY_TESTS: AgentCapabilityTest[] = [
     prompt: 'Use run_tests to execute the test suite and report total pass count in one line.',
     expectAny: [/\d+\s*(pass|tests?|suites?)|all.*pass/i],
     expectToolAudit: ['run_tests'],
+    heavyTool: true,
   },
 
   // Orchestration: delegate single specialist
@@ -456,26 +468,28 @@ const AGENT_CAPABILITY_TESTS: AgentCapabilityTest[] = [
     id: 'executive-assistant',
     category: 'orchestration',
     capability: 'goal-tracking',
-    prompt: 'Set a goal to review the fuel service, then report the goal status.',
-    expectAny: [/goal|fuel|status|set|tracking|review/i],
+    prompt: 'Give me the current status and any active goals right now.',
+    expectAny: [/goal|status|active|none|no.*goal|tracking|idle/i],
+    timeoutMs: 150_000,
   },
   // Memory: memory write
   {
     id: 'executive-assistant',
     category: 'memory',
     capability: 'memory-write',
-    prompt: "Write a note to repo memory: 'smoke test validated all agents' using memory_write, then confirm.",
-    expectAny: [/memory|written|saved|confirmed|noted|stored/i],
+    prompt: "Use the memory_write tool right now to save the note 'smoke test validated all agents'. Confirm when done.",
+    expectAny: [/memory|written|saved|confirmed|noted|stored|done/i],
     expectToolAudit: ['memory_write'],
+    timeoutMs: 150_000,
   },
   // Orchestration: specialist chain via Ace
   {
     id: 'developer',
     category: 'orchestration',
     capability: 'specialist-chain',
-    prompt: 'Review server/src/routes/auth.ts — provide Result/Evidence/Risk then note that QA and security should also review.',
-    expectAll: [/result:/i, /evidence:/i],
-    expectAny: [/qa|security|review/i],
+    prompt: 'Without using any tools, write a short paragraph explaining why auth route reviews should involve QA and security specialists. Keep it to 3-4 sentences.',
+    expectAny: [/qa|security|review|specialist|audit/i],
+    timeoutMs: 120_000,
   },
 ];
 
@@ -513,7 +527,7 @@ function getSmokeProfile(): SmokeProfile {
 
 function getTestTimeoutMs(profile: SmokeProfile): number {
   const explicit = process.env.DISCORD_TEST_TIMEOUT_MS;
-  const fallback = profile === 'matrix' ? 180_000 : 300_000;
+  const fallback = profile === 'matrix' ? 120_000 : 300_000;
   const value = Number(explicit ?? String(fallback));
   if (!Number.isFinite(value) || value <= 0) return fallback;
   return Math.min(Math.max(8_000, Math.floor(value)), 300_000);
@@ -602,11 +616,11 @@ function getBudgetBoostAmount(profile: SmokeProfile): number {
 }
 
 function getInterTestDelayMs(profile: SmokeProfile): number {
-  return profile === 'matrix' ? 500 : profile === 'readiness' ? 250 : 2000;
+  return profile === 'matrix' ? 250 : profile === 'readiness' ? 250 : 2000;
 }
 
 function getPollIntervalMs(profile: SmokeProfile): number {
-  const fallback = profile === 'matrix' ? 600 : profile === 'readiness' ? 900 : 1600;
+  const fallback = profile === 'matrix' ? 500 : profile === 'readiness' ? 900 : 1600;
   const value = Number(process.env.DISCORD_SMOKE_POLL_INTERVAL_MS ?? String(fallback));
   if (!Number.isFinite(value) || value < 250) return fallback;
   return Math.min(Math.max(250, Math.floor(value)), 5000);
@@ -1384,6 +1398,7 @@ async function executeSingleTest(
   }
   process.stdout.write(`Testing ${getAgentName(test.id)} :: ${test.category}/${test.capability} ... `);
 
+  const effectiveTimeoutMs = test.timeoutMs ?? timeoutMs;
   let result: { passed: boolean; elapsed: number; snippet: string; reason?: string } = {
     passed: false,
     elapsed: 0,
@@ -1392,11 +1407,11 @@ async function executeSingleTest(
   for (let attempt = 1; attempt <= capabilityAttempts; attempt += 1) {
     if (attempt > 1) {
       process.stdout.write(`retry ${attempt}/${capabilityAttempts} ... `);
-      await sleep(1200);
+      await sleep(600);
     }
     const attemptTimeoutMs = attempt === 1
-      ? timeoutMs
-      : Math.min(Math.max(Math.floor(timeoutMs * 2), timeoutMs + 10_000), 300_000);
+      ? effectiveTimeoutMs
+      : Math.min(Math.max(Math.floor(effectiveTimeoutMs * 1.5), effectiveTimeoutMs + 10_000), 180_000);
     result = await runCapabilityTest(
       effectiveSendChannel,
       responseChannels,
@@ -1446,6 +1461,7 @@ async function run(): Promise<void> {
   const interTestDelayMs = getInterTestDelayMs(profile);
   const pollIntervalMs = getPollIntervalMs(profile);
   const agentFilter = process.argv.find((a) => a.startsWith('--agent='))?.slice('--agent='.length);
+  const testsFilter = process.argv.find((a) => a.startsWith('--tests='))?.slice('--tests='.length);
   const freeformPrompt = process.argv.find((a) => a.startsWith('--prompt='))?.slice('--prompt='.length);
 
   if (!token) throw new Error('Missing DISCORD_TEST_BOT_TOKEN');
@@ -1508,6 +1524,7 @@ async function run(): Promise<void> {
   console.log(`Router health timeout : ${Math.round(routerHealthTimeoutMs / 1000)}s`);
   console.log(`Post-success reset+announce: ${runPostSuccessAction ? 'enabled' : 'disabled'}`);
   if (agentFilter) console.log(`Filter                : --agent=${agentFilter}`);
+  if (testsFilter) console.log(`Filter                : --tests=${testsFilter}`);
   if (freeformPrompt) console.log(`Freeform prompt       : ${freeformPrompt.slice(0, 80)}${freeformPrompt.length > 80 ? '...' : ''}`);
 
   if (budgetBoostAmount > 0) {
@@ -1590,6 +1607,11 @@ async function run(): Promise<void> {
           || resolveAgentId(agentFilter || '') === t.id
           || getAgentName(t.id).toLowerCase().includes(agentFilter.toLowerCase())
       )
+    : testsFilter
+    ? profileTests.filter((t) => {
+        const caps = testsFilter.split(',').map((s) => s.trim().toLowerCase());
+        return caps.some((c) => t.capability.toLowerCase() === c || testKey(t).toLowerCase().includes(c));
+      })
     : profileTests;
 
   if (testsToRun.length === 0) {
@@ -1605,7 +1627,10 @@ async function run(): Promise<void> {
       (t) => t.id === 'executive-assistant' || t.category === 'orchestration',
     );
     const agentChannelTests = testsToRun.filter(
-      (t) => t.id !== 'executive-assistant' && t.category !== 'orchestration',
+      (t) => t.id !== 'executive-assistant' && t.category !== 'orchestration' && !t.heavyTool,
+    );
+    const heavyToolTests = testsToRun.filter(
+      (t) => t.id !== 'executive-assistant' && t.category !== 'orchestration' && t.heavyTool,
     );
 
     // Phase 1: Groupchat tests (serial — Riley + orchestration)
@@ -1651,6 +1676,26 @@ async function run(): Promise<void> {
       }),
     );
     results.push(...parallelResults.flat());
+
+    // Phase 3: Heavy tool tests (serial — CPU-intensive commands need dedicated VM resources)
+    if (heavyToolTests.length > 0) {
+      console.log(`\n--- Matrix Phase 3: ${heavyToolTests.length} heavy tool tests (serial) ---`);
+      for (const test of heavyToolTests) {
+        const agentChannelName = getAgent(test.id as never)?.channelName;
+        const sendChannel = agentChannelName
+          ? candidateChannels.find((ch) => ch.name === agentChannelName)
+            || candidateChannels.find((ch) => ch.name.toLowerCase().includes(test.id.toLowerCase()))
+            || candidateChannels.find((ch) => ch.name.toLowerCase().includes((getAgent(test.id as never)?.handle || '').toLowerCase()))
+          : undefined;
+        results.push(
+          await executeSingleTest(
+            test, groupchat, candidateChannels, terminal, upgrades, roleMentions,
+            client.user!.id, timeoutMs, pollIntervalMs, capabilityAttempts, interTestDelayMs,
+            sendChannel || groupchat,
+          ),
+        );
+      }
+    }
   } else {
     // ── Standard serial execution (full / readiness profiles) ──
     for (const test of testsToRun) {

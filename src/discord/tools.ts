@@ -79,7 +79,7 @@ export function setPRReviewCallback(
  */
 const DEFAULT_REPO_ROOT = fs.existsSync('/app/package.json')
   ? '/app'
-  : path.resolve(__dirname, '..', '..', '..');
+  : path.resolve(__dirname, '..', '..');
 const REPO_ROOT = process.env.AGENT_REPO_ROOT
   ? path.resolve(process.env.AGENT_REPO_ROOT)
   : DEFAULT_REPO_ROOT;
