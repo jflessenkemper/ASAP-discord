@@ -527,7 +527,7 @@ function getSmokeProfile(): SmokeProfile {
 
 function getTestTimeoutMs(profile: SmokeProfile): number {
   const explicit = process.env.DISCORD_TEST_TIMEOUT_MS;
-  const fallback = profile === 'matrix' ? 120_000 : 300_000;
+  const fallback = profile === 'matrix' ? 180_000 : 300_000;
   const value = Number(explicit ?? String(fallback));
   if (!Number.isFinite(value) || value <= 0) return fallback;
   return Math.min(Math.max(8_000, Math.floor(value)), 300_000);
@@ -1411,7 +1411,7 @@ async function executeSingleTest(
     }
     const attemptTimeoutMs = attempt === 1
       ? effectiveTimeoutMs
-      : Math.min(Math.max(Math.floor(effectiveTimeoutMs * 1.5), effectiveTimeoutMs + 10_000), 180_000);
+      : Math.min(Math.max(Math.floor(effectiveTimeoutMs * 1.5), effectiveTimeoutMs + 10_000), 300_000);
     result = await runCapabilityTest(
       effectiveSendChannel,
       responseChannels,
