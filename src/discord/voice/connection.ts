@@ -201,15 +201,6 @@ export function getConnection(): VoiceConnection | null {
   return currentConnection;
 }
 
-/** Returns true if a voice connection is active and not currently being torn down. */
-export function isVoiceActive(): boolean {
-  return currentConnection !== null && !isCleaningUp;
-}
-
-export function getPlayer(): AudioPlayer | null {
-  return audioPlayer;
-}
-
 export interface VoiceTranscription {
   userId: string;
   username: string;

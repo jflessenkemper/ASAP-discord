@@ -182,52 +182,8 @@ export async function primeElevenLabsVoiceCache(
 }
 
 /**
- * Stream TTS audio in chunks — yields buffers as they arrive.
- * Each chunk is playable on its own (PCM 24kHz 16-bit mono).
- * This enables "start speaking while still generating" for ultra-low latency.
- */
-export async function* elevenLabsTTSStream(
-  text: string,
-  voiceName: string = 'Achernar',
-  language?: string
-): AsyncGenerator<Buffer> {
-  if (!text || text.trim().length < 2) return;
-  if (isElevenLabsOverLimit()) {
-    throw new Error('Daily ElevenLabs character limit reached');
-  }
-
-  const el = getClient();
-  const voiceId = resolveVoiceId(voiceName);
-
-  const audio = await el.textToSpeech.convert(voiceId, {
-    text,
-    model_id: resolveElevenLabsModel(language),
-    output_format: 'mp3_44100_128',
-    voice_settings: {
-      stability: 0.5,
-      similarity_boost: 0.75,
-      style: 0.0,
-      use_speaker_boost: true,
-    },
-  });
-
-  for await (const chunk of audio) {
-    yield Buffer.from(chunk);
-  }
-
-  recordElevenLabsUsage(text.length);
-}
-
-/**
  * Check if ElevenLabs is configured and available.
  */
 export function isElevenLabsAvailable(): boolean {
   return !!process.env.ELEVENLABS_API_KEY;
-}
-
-/**
- * Get list of available ElevenLabs voice names.
- */
-export function getAvailableVoices(): string[] {
-  return Object.keys(VOICE_ID_MAP).filter((k) => k === k.toLowerCase());
 }

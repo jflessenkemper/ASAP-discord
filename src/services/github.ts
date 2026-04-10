@@ -115,19 +115,6 @@ export async function listPullRequests(): Promise<Array<{ number: number; title:
 }
 
 /**
- * Delete a branch (cleanup after merge).
- */
-export async function deleteBranch(branchName: string): Promise<void> {
-  const ok = getOctokit();
-
-  await ok.git.deleteRef({
-    owner: OWNER,
-    repo: REPO,
-    ref: `heads/${branchName}`,
-  });
-}
-
-/**
  * Search the GitHub repository for code, issues, or commits.
  */
 export async function searchGitHub(

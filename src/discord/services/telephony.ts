@@ -101,13 +101,6 @@ export function learnContact(number: string, name: string): void {
   logToDiscord(`📇 **Learned contact**: ${name} → ${normalized}`);
 }
 
-/**
- * Get all known contacts for display.
- */
-export function getKnownContacts(): Record<string, string> {
-  return { ...knownContacts };
-}
-
 interface PhoneSession {
   callSid: string;
   streamSid: string | null;
@@ -722,29 +715,6 @@ export async function startConferenceCall(
   session.transcript.push(`[${new Date().toLocaleTimeString()}] Conference started: ${nameList} + Riley`);
 
   return confName;
-}
-
-/**
- * Add a participant to an existing conference.
- */
-export async function addToConference(conferenceName: string, phoneNumber: string): Promise<void> {
-  const client = getTwilioClient();
-  if (!TWILIO_PHONE_NUMBER) throw new Error('TWILIO_PHONE_NUMBER not configured');
-
-  let normalized = phoneNumber.replace(/\s+/g, '');
-  if (normalized.startsWith('0')) normalized = '+61' + normalized.slice(1);
-  else if (!normalized.startsWith('+')) normalized = '+61' + normalized;
-
-  const twiml = getConferenceTwiML(conferenceName);
-
-  await client.calls.create({
-    to: normalized,
-    from: TWILIO_PHONE_NUMBER,
-    twiml,
-  });
-
-  const name = identifyCaller(normalized) || normalized;
-  logToDiscord(`📞 **Added ${name}** to conference ${conferenceName}`);
 }
 
 

@@ -70,11 +70,9 @@ function labelKey(labels: Record<string, string>): string {
 /* ─────────────────────────── instruments ─────────────────────────── */
 
 const voiceCallsTotal = registerCounter('asap_voice_calls_total', 'Total voice calls initiated');
-const apiCallsTotal   = registerCounter('asap_api_calls_total',   'Total outbound API calls by service and status');
 const ttsErrorsTotal  = registerCounter('asap_tts_errors_total',  'Total TTS failures by service');
 const agentInvocations = registerCounter('asap_agent_invocations_total', 'Total agent response invocations by agent id');
 const rateLimitHits   = registerCounter('asap_rate_limit_hits_total', 'Total 429 rate-limit hits from Gemini');
-const thinkingChimesPlayed = registerCounter('asap_thinking_chimes_played_total', 'Total thinking chimes played in voice calls');
 const textChannelTimeouts = registerCounter('asap_text_channel_timeouts_total', 'Total text channel response timeouts by agent id');
 
 const voiceCallsActive = registerGauge('asap_voice_calls_active', 'Number of currently active voice calls');
@@ -126,11 +124,6 @@ export function recordVoiceCallEnd(): void {
   setGauge(voiceCallsActive, Math.max(0, current - 1));
 }
 
-/** Call when an outbound API request completes. */
-export function recordApiCall(service: string, statusCode: number): void {
-  incCounter(apiCallsTotal, { service, status: String(statusCode) });
-}
-
 /** Call when TTS generation fails (e.g. ElevenLabs/Gemini error). */
 export function recordTtsError(service: 'elevenlabs' | 'gemini', errorType: string): void {
   incCounter(ttsErrorsTotal, { service, error_type: errorType });
@@ -164,11 +157,6 @@ export function recordTextChannelTimeout(agentId: string): void {
 /** Update queued text-channel work depth for an agent. */
 export function updateTextChannelQueueDepth(agentId: string, depth: number): void {
   setGauge(textChannelQueueDepth, Math.max(0, depth), { agent: agentId });
-}
-
-/** Call when a thinking chime is played in a voice call. */
-export function recordThinkingChimePlayed(): void {
-  incCounter(thinkingChimesPlayed);
 }
 
 /** Update Gemini USD spent gauge (called from usage.ts or similar). */

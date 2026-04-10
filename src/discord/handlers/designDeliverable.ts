@@ -9,10 +9,6 @@ const SPECIALIST_IDS = [
   'copywriter', 'lawyer', 'qa', 'ux-reviewer', 'ios-engineer', 'android-engineer',
 ] as const;
 
-export function isDesignDeliverable(rileyResponse: string, activeGoal: string | null): boolean {
-  return DESIGN_DELIVERABLE_RE.test(rileyResponse) || DESIGN_DELIVERABLE_RE.test(activeGoal || '');
-}
-
 export function isDesignDeliverableDetailed(rileyResponse: string, activeGoal: string | null): {
   match: boolean;
   rileyMatch: boolean;

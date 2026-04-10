@@ -40,30 +40,3 @@ export async function documentToChannel(agentId: string, summary: string): Promi
     console.error(`Documentation error for ${agentId}:`, err instanceof Error ? err.message : 'Unknown');
   }
 }
-
-/**
- * Post a longer documentation entry with a title.
- */
-export async function documentActionToChannel(
-  agentId: string,
-  title: string,
-  details: string
-): Promise<void> {
-  if (!channels) return;
-
-  const channel = channels.terminal;
-  if (!channel) return;
-
-  try {
-    await postOpsLine(channel, {
-      actor: agentId,
-      scope: 'agent-doc',
-      metric: String(title || 'action').slice(0, 80),
-      delta: String(details || '').slice(0, 600),
-      action: 'none',
-      severity: 'info',
-    });
-  } catch (err) {
-    console.error(`Documentation error for ${agentId}:`, err instanceof Error ? err.message : 'Unknown');
-  }
-}

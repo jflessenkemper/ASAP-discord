@@ -176,7 +176,3 @@ export function leaveTesterVoiceChannel(): void {
     testerVoiceConnection = null;
   }
 }
-
-export function isTesterVoiceConnected(): boolean {
-  return testerVoiceConnection !== null;
-}

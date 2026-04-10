@@ -1,0 +1,63 @@
+{
+  "startedAt": "2026-04-10T04:40:06.101Z",
+  "endedAt": "2026-04-10T04:49:29.060Z",
+  "summary": {
+    "capabilityPassed": 1,
+    "capabilityFailed": 1,
+    "extraFailed": 0,
+    "score": 12.5,
+    "criticalPassed": true,
+    "detail": "core_fail=0 | orchestration_fail=0 | upgrades_fail=0 | critical_extra_fail=0"
+  },
+  "results": [
+    {
+      "agent": "Ace (Developer)",
+      "capability": "typecheck-execution",
+      "category": "tool-proof",
+      "passed": true,
+      "elapsed": 22025,
+      "snippet": "Result: Server typecheck failed.\nSMOKE_DEVELOPE_TYPECHEC_059185"
+    },
+    {
+      "agent": "Ace (Developer)",
+      "capability": "run-tests-execution",
+      "category": "tool-proof",
+      "passed": false,
+      "elapsed": 302843,
+      "snippet": "Timeout while waiting for full capability evidence",
+      "reason": "missing any-of expected patterns"
+    }
+  ],
+  "extras": [
+    {
+      "name": "channel_hygiene",
+      "passed": true,
+      "detail": "groupchat:0 | terminal:0 | upgrades:0",
+      "critical": true
+    },
+    {
+      "name": "elevenlabs_api",
+      "passed": true,
+      "detail": "API reachable",
+      "critical": true
+    },
+    {
+      "name": "elevenlabs_tts",
+      "passed": true,
+      "detail": "audio bytes=33898",
+      "critical": false
+    }
+  ],
+  "config": {
+    "timeoutMs": 180000,
+    "profile": "matrix",
+    "preClear": true,
+    "runElevenApi": true,
+    "runElevenTts": true,
+    "runVoiceBridge": false,
+    "runVoiceActive": false,
+    "capabilityAttempts": 2,
+    "runPostSuccessAction": false,
+    "agentFilter": null
+  }
+}

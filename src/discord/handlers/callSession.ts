@@ -1097,10 +1097,6 @@ export function isCallActive(): boolean {
   return activeSession?.active ?? false;
 }
 
-export function getActiveSession(): CallSession | null {
-  return activeSession;
-}
-
 interface VoiceTestInjection {
   userId: string;
   username: string;

@@ -713,35 +713,6 @@ async function sendAgentFallbackMessage(channel: TextChannel, agent: AgentConfig
   }
 }
 
-/**
- * Send a plain message, splitting if over 2000 characters.
- */
-export async function sendLongMessage(channel: TextChannel, content: string): Promise<void> {
-  if (content.length <= 2000) {
-    await channel.send(content);
-    return;
-  }
-
-  const lines = content.split('\n');
-  let chunk = '';
-
-  for (const line of lines) {
-    if (line.length > 1990) {
-      if (chunk) { await channel.send(chunk); chunk = ''; }
-      for (let i = 0; i < line.length; i += 1990) {
-        await channel.send(line.slice(i, i + 1990));
-      }
-    } else if (chunk.length + line.length + 1 > 1990) {
-      if (chunk) await channel.send(chunk);
-      chunk = line;
-    } else {
-      chunk += (chunk ? '\n' : '') + line;
-    }
-  }
-
-  if (chunk) await channel.send(chunk);
-}
-
 function splitMessage(text: string, maxLen: number): string[] {
   if (text.length <= maxLen) return [text];
 

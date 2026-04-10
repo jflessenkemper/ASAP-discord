@@ -1599,22 +1599,6 @@ async function withRileyResponseWatchdog(
 }
 
 /**
- * Handle a goal or request — Riley receives it and orchestrates.
- * Also used internally when feeding decisions back.
- */
-export async function handleGoalCommand(
-  description: string,
-  member: GuildMember,
-  groupchat: TextChannel
-): Promise<void> {
-  const senderName = member.displayName || member.user.username;
-  goalState.setGoal(description);
-
-  const workspaceChannel = await ensureGoalWorkspace(groupchat, senderName, description);
-  await handleRileyMessage(description, senderName, member, groupchat, undefined, workspaceChannel);
-}
-
-/**
  * Get current status summary.
  */
 export function getStatusSummary(): string | null {
