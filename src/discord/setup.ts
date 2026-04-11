@@ -548,8 +548,8 @@ export async function setupChannels(guild: Guild): Promise<BotChannels> {
   const jobApplications = await ensureText(
     PERSONAL_CHANNELS.jobApplications,
     catPersonal,
-    '📋 Job application approval queue — react ✅ to approve or ❌ to reject',
-    `📋 **Job Applications**\n\nRiley posts job matches here as numbered cards. React ✅ to approve or ❌ to reject.`,
+    '📋 Job approval queue — ✅ approve (auto-drafts application) · ❌ reject · cards vanish after you react',
+    `📋 **Job Applications**\n\n**How it works:**\n1. Ask Riley to scan & evaluate jobs in #💼-career-ops\n2. Riley posts the best matches here as cards\n3. React ✅ to approve — Riley auto-drafts a tailored cover letter & resume highlights, then posts them in #💼-career-ops\n4. React ❌ to reject\n5. Cards disappear after you react so only pending approvals are shown`,
     { owner: 'jflessenkemper', cadence: 'on-demand', staleAlert: '14d' }
   );
 

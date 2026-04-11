@@ -23,6 +23,8 @@ export interface JobListing {
   status?: string;
   discord_msg_id?: string;
   scanned_at?: string;
+  cover_letter?: string;
+  resume_text?: string;
 }
 
 interface AdzunaJob {
@@ -403,4 +405,162 @@ export async function seedDefaultPortals(): Promise<number> {
     if (res.rowCount && res.rowCount > 0) seeded++;
   }
   return seeded;
+}
+
+// ── Application Drafting & Submission ──────────────────────────────
+
+export async function getListingById(id: number): Promise<JobListing | null> {
+  const res = await pool.query('SELECT * FROM job_listings WHERE id = $1', [id]);
+  return res.rows[0] || null;
+}
+
+export async function saveDraft(listingId: number, coverLetter: string, resumeText: string): Promise<void> {
+  await pool.query(
+    `UPDATE job_listings SET cover_letter = $1, resume_text = $2, status = 'drafted', updated_at = NOW() WHERE id = $3`,
+    [coverLetter, resumeText, listingId]
+  );
+}
+
+export async function getPortalByCompany(company: string): Promise<{ company_name: string; api_type: string; api_url: string; board_api_key?: string } | null> {
+  const res = await pool.query(
+    'SELECT company_name, api_type, api_url, board_api_key FROM job_portals WHERE company_name ILIKE $1 AND enabled = TRUE',
+    [company]
+  );
+  return res.rows[0] || null;
+}
+
+/**
+ * Draft a tailored cover letter and resume highlights for a listing using Gemini Flash.
+ * Returns the drafted text and saves it to the DB.
+ */
+export async function draftApplication(listingId: number): Promise<{ coverLetter: string; resumeHighlights: string } | null> {
+  const listing = await getListingById(listingId);
+  if (!listing) return null;
+
+  const profile = await getProfile();
+  if (!profile) return null;
+
+  const prompt = `You are an expert career coach drafting a job application for an Australian professional.
+
+**Applicant Profile:**
+- Name: ${profile.first_name || 'Jordan'} ${profile.last_name || 'Flessenkemper'}
+- Target roles: ${(profile.target_roles || []).join(', ')}
+- Location: ${profile.location || 'New South Wales'}
+- Current/Recent: ${profile.cv_text ? profile.cv_text.slice(0, 2000) : 'DBA with 6+ years experience'}
+- Deal-breakers: ${profile.deal_breakers || 'None specified'}
+
+**Job Listing:**
+- Title: ${listing.title}
+- Company: ${listing.company}
+- Location: ${listing.location || 'Not specified'}
+- Salary: ${listing.salary_min ? `$${Math.round(listing.salary_min / 1000)}k–$${Math.round((listing.salary_max || listing.salary_min) / 1000)}k` : 'Not specified'}
+- Description: ${(listing.description || 'No description available').slice(0, 3000)}
+
+**Instructions:**
+Write TWO sections separated by "---RESUME---":
+
+1. **COVER LETTER** — A concise, professional cover letter (200-350 words). Highlight relevant experience from the profile that matches the job requirements. Be specific about skills and achievements. Australian tone — professional but not overly formal. Do NOT fabricate experience or qualifications.
+
+2. **RESUME HIGHLIGHTS** — After the "---RESUME---" separator, write 5-8 bullet points highlighting the most relevant skills, experience, and qualifications from the applicant's profile that match this specific role. Each bullet should be a concrete, specific achievement or skill.
+
+Output the cover letter text first, then "---RESUME---", then the resume highlights. No other formatting or headers.`;
+
+  // Use Gemini Flash via the same pattern as other services
+  const { GoogleGenerativeAI } = await import('@google/generative-ai');
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) {
+    console.error('draftApplication: GEMINI_API_KEY not set');
+    return null;
+  }
+
+  const genAI = new GoogleGenerativeAI(apiKey);
+  const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' });
+
+  const result = await model.generateContent(prompt);
+  const text = result.response.text().trim();
+
+  const separatorIdx = text.indexOf('---RESUME---');
+  let coverLetter: string;
+  let resumeHighlights: string;
+
+  if (separatorIdx !== -1) {
+    coverLetter = text.slice(0, separatorIdx).trim();
+    resumeHighlights = text.slice(separatorIdx + '---RESUME---'.length).trim();
+  } else {
+    // Fallback: treat entire response as cover letter
+    coverLetter = text;
+    resumeHighlights = '';
+  }
+
+  await saveDraft(listingId, coverLetter, resumeHighlights);
+  return { coverLetter, resumeHighlights };
+}
+
+/**
+ * Submit an application to a Greenhouse job board via their public API.
+ * Requires a board_api_key configured on the portal.
+ */
+export async function submitToGreenhouse(
+  listing: JobListing,
+  profile: any,
+  coverLetter: string,
+  resumeText: string
+): Promise<{ success: boolean; error?: string }> {
+  const portal = await getPortalByCompany(listing.company);
+  if (!portal || portal.api_type !== 'greenhouse' || !portal.board_api_key) {
+    return { success: false, error: 'No Greenhouse API key configured for this company' };
+  }
+
+  // Extract board token from api_url: https://boards-api.greenhouse.io/v1/boards/{token}/jobs
+  const boardMatch = portal.api_url.match(/\/boards\/([^/]+)\//);
+  if (!boardMatch) return { success: false, error: 'Cannot extract board token from portal URL' };
+  const boardToken = boardMatch[1];
+
+  const firstName = profile.first_name || 'Jordan';
+  const lastName = profile.last_name || 'Flessenkemper';
+  const email = profile.email;
+  if (!email) return { success: false, error: 'Email not set in profile — update profile with email before submitting' };
+
+  const externalId = listing.external_id;
+  if (!externalId) return { success: false, error: 'Listing has no external_id — cannot target Greenhouse job post' };
+
+  const body = JSON.stringify({
+    first_name: firstName,
+    last_name: lastName,
+    email,
+    phone: profile.phone || undefined,
+    resume_text: resumeText || undefined,
+    cover_letter_text: coverLetter,
+  });
+
+  const authHeader = 'Basic ' + Buffer.from(portal.board_api_key + ':').toString('base64');
+
+  return new Promise((resolve) => {
+    const req = https.request(
+      {
+        hostname: 'boards-api.greenhouse.io',
+        path: `/v1/boards/${encodeURIComponent(boardToken)}/jobs/${encodeURIComponent(externalId)}`,
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': authHeader,
+          'Content-Length': Buffer.byteLength(body),
+        },
+      },
+      (res) => {
+        let data = '';
+        res.on('data', (chunk) => (data += chunk));
+        res.on('end', () => {
+          if (res.statusCode && res.statusCode >= 200 && res.statusCode < 300) {
+            resolve({ success: true });
+          } else {
+            resolve({ success: false, error: `Greenhouse returned ${res.statusCode}: ${data.slice(0, 300)}` });
+          }
+        });
+      }
+    );
+    req.on('error', (err) => resolve({ success: false, error: err.message }));
+    req.write(body);
+    req.end();
+  });
 }

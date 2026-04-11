@@ -38,6 +38,10 @@ import {
   seedDefaultPortals,
   updateListingScore,
   setListingDiscordMsg,
+  getListingById,
+  draftApplication,
+  submitToGreenhouse,
+  getPortalByCompany,
 } from '../services/jobSearch';
 
 
@@ -1365,7 +1369,7 @@ export const REPO_TOOLS = [
   {
     name: 'job_profile_update',
     description:
-      'Create or update the job search profile. Store CV text, target roles, keyword filters, salary range, location, deal-breakers. Also seeds default AU company portals on first use.',
+      'Create or update the job search profile. Store CV text, target roles, keyword filters, salary range, location, contact details, deal-breakers. Also seeds default AU company portals on first use.',
     input_schema: {
       type: 'object' as const,
       properties: {
@@ -1379,6 +1383,10 @@ export const REPO_TOOLS = [
         remote_ok: { type: 'string', description: '"true" or "false" — whether remote Australian jobs are acceptable' },
         deal_breakers: { type: 'string', description: 'Freeform deal-breaker notes' },
         preferences: { type: 'string', description: 'Freeform preference notes' },
+        first_name: { type: 'string', description: 'First name for job applications' },
+        last_name: { type: 'string', description: 'Last name for job applications' },
+        email: { type: 'string', description: 'Email for job applications' },
+        phone: { type: 'string', description: 'Phone number for job applications' },
       },
       required: [],
     },
@@ -1400,6 +1408,36 @@ export const REPO_TOOLS = [
         },
       },
       required: [],
+    },
+  },
+  {
+    name: 'job_draft_application',
+    description:
+      'Draft a tailored cover letter and resume highlights for a specific job listing using the user profile. Posts the draft in #career-ops. Use this to manually trigger or re-draft an application.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        listing_id: {
+          type: 'string',
+          description: 'The job_listings.id to draft an application for',
+        },
+      },
+      required: ['listing_id'],
+    },
+  },
+  {
+    name: 'job_submit_application',
+    description:
+      'Submit a drafted application to a Greenhouse job board. Requires listing to have a draft (cover letter + resume) and the portal to have a board_api_key configured. Only works for Greenhouse-sourced listings.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        listing_id: {
+          type: 'string',
+          description: 'The job_listings.id to submit',
+        },
+      },
+      required: ['listing_id'],
     },
   },
 ] as const;
@@ -1742,6 +1780,10 @@ async function executeToolInternal(
         return await toolJobProfileUpdate(input);
       case 'job_post_approvals':
         return await toolJobPostApprovals(parseFloat(input.min_score) || 3.0, parseInt(input.limit, 10) || 10);
+      case 'job_draft_application':
+        return await toolJobDraftApplication(parseInt(input.listing_id, 10));
+      case 'job_submit_application':
+        return await toolJobSubmitApplication(parseInt(input.listing_id, 10));
       default:
         return `Unknown tool: ${toolName}`;
     }
@@ -4200,12 +4242,19 @@ async function toolJobProfileUpdate(input: Record<string, string>): Promise<stri
   if (input.remote_ok) fields.remote_ok = input.remote_ok === 'true';
   if (input.deal_breakers) fields.deal_breakers = input.deal_breakers;
   if (input.preferences) fields.preferences = input.preferences;
+  if (input.first_name) fields.first_name = input.first_name;
+  if (input.last_name) fields.last_name = input.last_name;
+  if (input.email) fields.email = input.email;
+  if (input.phone) fields.phone = input.phone;
 
   if (Object.keys(fields).length === 0) {
     const profile = await getProfile();
     if (!profile) return 'No profile exists yet. Provide at least target_roles to create one.';
     return [
       '**Current Profile**',
+      `Name: ${profile.first_name || '?'} ${profile.last_name || '?'}`,
+      `Email: ${profile.email || 'Not set'}`,
+      `Phone: ${profile.phone || 'Not set'}`,
       `Target roles: ${(profile.target_roles || []).join(', ')}`,
       `Location: ${profile.location || 'Not set'}`,
       `Salary: $${profile.salary_min || '?'}–$${profile.salary_max || '?'}`,
@@ -4275,4 +4324,94 @@ async function toolJobPostApprovals(minScore: number, limit: number): Promise<st
   }
 
   return `Posted ${posted} job approval cards to #📋-job-applications. React ✅ to approve or ❌ to reject each one.`;
+}
+
+async function toolJobDraftApplication(listingId: number): Promise<string> {
+  const listing = await getListingById(listingId);
+  if (!listing) return `Listing #${listingId} not found.`;
+
+  if (listing.cover_letter) {
+    return [
+      `Listing #${listingId} already has a draft:`,
+      '',
+      '**Cover Letter:**',
+      listing.cover_letter.slice(0, 1500),
+      listing.resume_text ? `\n**Resume Highlights:**\n${listing.resume_text.slice(0, 1000)}` : '',
+      '',
+      `Status: ${listing.status} | To re-draft, update the listing status back to "approved" and call again.`,
+    ].filter(Boolean).join('\n');
+  }
+
+  const draft = await draftApplication(listingId);
+  if (!draft) return `Failed to draft application — check that a profile exists and GEMINI_API_KEY is set.`;
+
+  // Post to #💼-career-ops
+  const guild = requireGuild();
+  await guild.channels.fetch();
+  const channel = guild.channels.cache.find(
+    (c) => c.type === ChannelType.GuildText && c.name === '💼-career-ops'
+  ) as TextChannel | undefined;
+
+  if (channel) {
+    const salary = listing.salary_min
+      ? `💰 $${Math.round(listing.salary_min / 1000)}k–$${Math.round((listing.salary_max || listing.salary_min) / 1000)}k`
+      : '💰 Not specified';
+
+    await channel.send({ embeds: [{
+      title: `📝 Application Draft: ${listing.title}`,
+      description: [
+        `**Company:** ${listing.company}`,
+        `**Location:** ${listing.location || 'Unknown'}`,
+        salary,
+        `[View listing](${listing.url})`,
+        '',
+        '**Cover Letter:**',
+        draft.coverLetter.slice(0, 3800),
+      ].join('\n'),
+      color: 0x3498db,
+      footer: { text: `Listing #${listing.id}` },
+    }]});
+
+    if (draft.resumeHighlights) {
+      await channel.send({ embeds: [{
+        title: `📋 Resume Highlights: ${listing.title}`,
+        description: draft.resumeHighlights.slice(0, 3800),
+        color: 0x2ecc71,
+        footer: { text: `Listing #${listing.id} | Tailored for ${listing.company}` },
+      }]});
+    }
+  }
+
+  return [
+    `✅ Drafted application for **${listing.title}** @ ${listing.company}`,
+    '',
+    '**Cover Letter:**',
+    draft.coverLetter.slice(0, 1500),
+    draft.resumeHighlights ? `\n**Resume Highlights:**\n${draft.resumeHighlights.slice(0, 1000)}` : '',
+    '',
+    `Status updated to "drafted". Apply here: ${listing.url}`,
+  ].filter(Boolean).join('\n');
+}
+
+async function toolJobSubmitApplication(listingId: number): Promise<string> {
+  const listing = await getListingById(listingId);
+  if (!listing) return `Listing #${listingId} not found.`;
+
+  if (!listing.cover_letter) return `Listing #${listingId} has no draft. Run job_draft_application first.`;
+
+  if (listing.source !== 'greenhouse') {
+    return `Listing #${listingId} is from ${listing.source} — auto-submit is only supported for Greenhouse listings. Apply manually: ${listing.url}`;
+  }
+
+  const profile = await getProfile();
+  if (!profile) return 'No profile found. Set one up with job_profile_update first.';
+  if (!profile.email) return 'Profile has no email. Update profile with email before submitting.';
+
+  const result = await submitToGreenhouse(listing, profile, listing.cover_letter, listing.resume_text || '');
+  if (result.success) {
+    await updateListingStatus(listingId, 'applied');
+    return `🚀 Successfully submitted application to **${listing.company}** for **${listing.title}** via Greenhouse!`;
+  }
+
+  return `❌ Greenhouse submission failed: ${result.error}\nApply manually: ${listing.url}`;
 }

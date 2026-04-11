@@ -3,6 +3,7 @@ import {
   GatewayIntentBits,
   Events,
   Partials,
+  ChannelType,
   ChatInputCommandInteraction,
   Message,
   TextChannel,
@@ -31,7 +32,7 @@ import { setTelephonyChannels, isTelephonyAvailable, initContacts } from './serv
 import { setupChannels, BotChannels } from './setup';
 import { setCommandAuditCallback, setPRReviewCallback, setDiscordGuild, setToolAuditCallback, setAgentChannelResolver } from './tools';
 import { setLimitsChannel, setCostChannel, startDashboardUpdates, stopDashboardUpdates, initUsageCounters, flushUsageCounters, getUsageReport, getCostOpsSummaryLine } from './usage';
-import { updateListingByMsgId } from '../services/jobSearch';
+import { updateListingByMsgId, draftApplication, getProfile, getPortalByCompany, submitToGreenhouse, getListingById, updateListingStatus, type JobListing } from '../services/jobSearch';
 
 
 /**
@@ -629,12 +630,93 @@ export async function startBot(): Promise<void> {
       const listing = await updateListingByMsgId(msgId, newStatus);
 
       if (listing) {
-        await reaction.message.reply(`${emoji === '✅' ? '✅ Approved' : '❌ Rejected'}: **${listing.title}** @ ${listing.company}`);
+        // Post confirmation then delete the card so only pending approvals remain
+        const confirmChannel = reaction.message.channel as TextChannel;
+        await confirmChannel.send(`${emoji === '✅' ? '✅ Approved' : '❌ Rejected'}: **${listing.title}** @ ${listing.company}`);
+        await reaction.message.delete().catch(() => {});
+
+        // Auto-draft application on approval
+        if (newStatus === 'approved') {
+          handleApprovalDraft(listing, confirmChannel).catch((err) =>
+            console.error('Auto-draft error:', err instanceof Error ? err.message : 'Unknown')
+          );
+        }
       }
     } catch (err) {
       console.error('Job approval reaction error:', err instanceof Error ? err.message : 'Unknown');
     }
   });
+
+  /** Auto-draft a cover letter + resume highlights after ✅ approval, post to #💼-career-ops. */
+  async function handleApprovalDraft(listing: JobListing, notifyChannel: TextChannel): Promise<void> {
+    if (!client) return;
+    const guild = client.guilds.cache.first();
+    if (!guild) return;
+
+    const careerOps = guild.channels.cache.find(
+      (c) => c.type === ChannelType.GuildText && c.name === '💼-career-ops'
+    ) as TextChannel | undefined;
+    const targetChannel = careerOps || notifyChannel;
+
+    await targetChannel.send(`✍️ Drafting application for **${listing.title}** @ ${listing.company}...`);
+
+    const draft = await draftApplication(listing.id!);
+    if (!draft) {
+      await targetChannel.send(`⚠️ Could not draft application for **${listing.title}** — check profile and GEMINI_API_KEY.`);
+      return;
+    }
+
+    const salary = listing.salary_min
+      ? `💰 $${Math.round(listing.salary_min / 1000)}k–$${Math.round((listing.salary_max || listing.salary_min) / 1000)}k`
+      : '💰 Not specified';
+
+    // Post cover letter
+    const clEmbed = {
+      title: `📝 Application Draft: ${listing.title}`,
+      description: [
+        `**Company:** ${listing.company}`,
+        `**Location:** ${listing.location || 'Unknown'}`,
+        salary,
+        `[View listing](${listing.url})`,
+        '',
+        '**Cover Letter:**',
+        draft.coverLetter.slice(0, 3800),
+      ].join('\n'),
+      color: 0x3498db,
+      footer: { text: `Listing #${listing.id} | Status: drafted` },
+    };
+    await targetChannel.send({ embeds: [clEmbed] });
+
+    // Post resume highlights if present
+    if (draft.resumeHighlights) {
+      const rhEmbed = {
+        title: `📋 Resume Highlights: ${listing.title}`,
+        description: draft.resumeHighlights.slice(0, 3800),
+        color: 0x2ecc71,
+        footer: { text: `Listing #${listing.id} | Tailored for ${listing.company}` },
+      };
+      await targetChannel.send({ embeds: [rhEmbed] });
+    }
+
+    // Attempt Greenhouse auto-submit if portal has API key
+    const profile = await getProfile();
+    if (listing.source === 'greenhouse' && profile) {
+      const portal = await getPortalByCompany(listing.company);
+      if (portal?.board_api_key) {
+        const result = await submitToGreenhouse(listing, profile, draft.coverLetter, draft.resumeHighlights);
+        if (result.success) {
+          await updateListingStatus(listing.id!, 'applied');
+          await targetChannel.send(`🚀 **Auto-submitted** to ${listing.company} via Greenhouse!`);
+        } else {
+          await targetChannel.send(`⚠️ Greenhouse submit failed: ${result.error}\nApply manually: ${listing.url}`);
+        }
+        return;
+      }
+    }
+
+    // Manual apply
+    await targetChannel.send(`👉 **Apply here:** ${listing.url}\nCopy the cover letter above and submit manually.`);
+  }
 
   try {
     await client.login(token);
