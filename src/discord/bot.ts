@@ -32,7 +32,7 @@ import { setTelephonyChannels, isTelephonyAvailable, initContacts } from './serv
 import { setupChannels, BotChannels } from './setup';
 import { setCommandAuditCallback, setPRReviewCallback, setDiscordGuild, setToolAuditCallback, setAgentChannelResolver } from './tools';
 import { setLimitsChannel, setCostChannel, startDashboardUpdates, stopDashboardUpdates, initUsageCounters, flushUsageCounters, getUsageReport, getCostOpsSummaryLine } from './usage';
-import { updateListingByMsgId, draftApplication, getProfile, getPortalByCompany, submitToGreenhouse, getListingById, updateListingStatus, type JobListing } from '../services/jobSearch';
+import { updateListingByMsgId, draftApplication, getProfile, getPortalByCompany, submitToGreenhouse, getListingById, updateListingStatus, setListingDiscordMsg, type JobListing } from '../services/jobSearch';
 
 
 /**
@@ -647,6 +647,53 @@ export async function startBot(): Promise<void> {
     }
   });
 
+  // ── Draft approval reactions in #💼-career-ops ────────────────────
+  client.on(Events.MessageReactionAdd, async (reaction, user) => {
+    try {
+      if (user.bot) return;
+      if (reaction.partial) await reaction.fetch();
+      if (reaction.message.partial) await reaction.message.fetch();
+
+      const channel = reaction.message.channel;
+      if (!('name' in channel) || channel.name !== '💼-career-ops') return;
+
+      const emoji = reaction.emoji.name;
+      if (emoji !== '✅' && emoji !== '❌') return;
+
+      const msgId = reaction.message.id;
+      const listing = await updateListingByMsgId(msgId, emoji === '✅' ? 'applied' : 'discarded');
+      if (!listing) return;
+
+      const ch = reaction.message.channel as TextChannel;
+
+      if (emoji === '✅') {
+        // Attempt Greenhouse auto-submit
+        const profile = await getProfile();
+        if (listing.source === 'greenhouse' && profile) {
+          const portal = await getPortalByCompany(listing.company);
+          if (portal?.board_api_key) {
+            const result = await submitToGreenhouse(listing, profile, listing.cover_letter || '', listing.resume_text || '');
+            if (result.success) {
+              await ch.send(`🚀 **Submitted** to ${listing.company} via Greenhouse!`);
+            } else {
+              await ch.send(`⚠️ Greenhouse submit failed: ${result.error}\n👉 Apply manually: ${listing.url}`);
+            }
+          } else {
+            await ch.send(`✅ **Approved** — apply manually: ${listing.url}`);
+          }
+        } else {
+          await ch.send(`✅ **Approved** — apply manually: ${listing.url}`);
+        }
+      } else {
+        await ch.send(`❌ Draft discarded for **${listing.title}** @ ${listing.company}`);
+      }
+
+      await reaction.message.delete().catch(() => {});
+    } catch (err) {
+      console.error('Draft approval reaction error:', err instanceof Error ? err.message : 'Unknown');
+    }
+  });
+
   /** Auto-draft a cover letter + resume highlights after ✅ approval, post to #💼-career-ops. */
   async function handleApprovalDraft(listing: JobListing, notifyChannel: TextChannel): Promise<void> {
     if (!client) return;
@@ -670,52 +717,32 @@ export async function startBot(): Promise<void> {
       ? `💰 $${Math.round(listing.salary_min / 1000)}k–$${Math.round((listing.salary_max || listing.salary_min) / 1000)}k`
       : '💰 Not specified';
 
-    // Post cover letter
-    const clEmbed = {
-      title: `📝 Application Draft: ${listing.title}`,
-      description: [
-        `**Company:** ${listing.company}`,
-        `**Location:** ${listing.location || 'Unknown'}`,
-        salary,
-        `[View listing](${listing.url})`,
-        '',
-        '**Cover Letter:**',
-        draft.coverLetter.slice(0, 3800),
-      ].join('\n'),
-      color: 0x3498db,
-      footer: { text: `Listing #${listing.id} | Status: drafted` },
-    };
-    await targetChannel.send({ embeds: [clEmbed] });
-
-    // Post resume highlights if present
+    // Combine cover letter + resume highlights into a single embed for reaction-based approval
+    const descParts = [
+      `**Company:** ${listing.company}`,
+      `**Location:** ${listing.location || 'Unknown'}`,
+      salary,
+      `[View listing](${listing.url})`,
+      '',
+      '**Cover Letter:**',
+      draft.coverLetter.slice(0, 2500),
+    ];
     if (draft.resumeHighlights) {
-      const rhEmbed = {
-        title: `📋 Resume Highlights: ${listing.title}`,
-        description: draft.resumeHighlights.slice(0, 3800),
-        color: 0x2ecc71,
-        footer: { text: `Listing #${listing.id} | Tailored for ${listing.company}` },
-      };
-      await targetChannel.send({ embeds: [rhEmbed] });
+      descParts.push('', '**Resume Highlights:**', draft.resumeHighlights.slice(0, 1200));
     }
 
-    // Attempt Greenhouse auto-submit if portal has API key
-    const profile = await getProfile();
-    if (listing.source === 'greenhouse' && profile) {
-      const portal = await getPortalByCompany(listing.company);
-      if (portal?.board_api_key) {
-        const result = await submitToGreenhouse(listing, profile, draft.coverLetter, draft.resumeHighlights);
-        if (result.success) {
-          await updateListingStatus(listing.id!, 'applied');
-          await targetChannel.send(`🚀 **Auto-submitted** to ${listing.company} via Greenhouse!`);
-        } else {
-          await targetChannel.send(`⚠️ Greenhouse submit failed: ${result.error}\nApply manually: ${listing.url}`);
-        }
-        return;
-      }
-    }
+    const draftEmbed = {
+      title: `📝 Application Draft: ${listing.title}`,
+      description: descParts.join('\n'),
+      color: 0x3498db,
+      footer: { text: `Listing #${listing.id} | ✅ approve to submit · ❌ discard` },
+    };
+    const draftMsg = await targetChannel.send({ embeds: [draftEmbed] });
+    await draftMsg.react('✅');
+    await draftMsg.react('❌');
 
-    // Manual apply
-    await targetChannel.send(`👉 **Apply here:** ${listing.url}\nCopy the cover letter above and submit manually.`);
+    // Track this message so the reaction handler can find the listing
+    await setListingDiscordMsg(listing.id!, draftMsg.id);
   }
 
   try {

@@ -444,6 +444,8 @@ export async function draftApplication(listingId: number): Promise<{ coverLetter
 
 **Applicant Profile:**
 - Name: ${profile.first_name || 'Jordan'} ${profile.last_name || 'Flessenkemper'}
+- Phone: ${profile.phone || 'Not provided'}
+- Email: ${profile.email || 'Not provided'}
 - Target roles: ${(profile.target_roles || []).join(', ')}
 - Location: ${profile.location || 'New South Wales'}
 - Current/Recent: ${profile.cv_text ? profile.cv_text.slice(0, 2000) : 'DBA with 6+ years experience'}
@@ -459,7 +461,7 @@ export async function draftApplication(listingId: number): Promise<{ coverLetter
 **Instructions:**
 Write TWO sections separated by "---RESUME---":
 
-1. **COVER LETTER** — A concise, professional cover letter (200-350 words). Highlight relevant experience from the profile that matches the job requirements. Be specific about skills and achievements. Australian tone — professional but not overly formal. Do NOT fabricate experience or qualifications.
+1. **COVER LETTER** — A concise, professional cover letter (200-350 words). Highlight relevant experience from the profile that matches the job requirements. Be specific about skills and achievements. Australian tone — professional but not overly formal. Do NOT fabricate experience or qualifications. Include the applicant's phone number and email (if provided) in the sign-off.
 
 2. **RESUME HIGHLIGHTS** — After the "---RESUME---" separator, write 5-8 bullet points highlighting the most relevant skills, experience, and qualifications from the applicant's profile that match this specific role. Each bullet should be a concrete, specific achievement or skill.
 
