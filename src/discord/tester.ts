@@ -889,7 +889,29 @@ async function runCapabilityTest(
   let matchedSnippet = '';
   let lastReason = 'no valid reply observed';
 
-  while (Date.now() - started < timeoutMs) {
+  // ── Adaptive timeout: track bot activity to extend/shorten deadline ──
+  // Instead of a flat timeout, we track last activity (new message or typing).
+  // If the bot is actively producing messages, the deadline auto-extends.
+  // If idle for too long (no new messages), we fail early.
+  const IDLE_TIMEOUT_MS = Math.min(timeoutMs, test.heavyTool ? 90_000 : 60_000);
+  const HARD_CEILING_MS = Math.max(timeoutMs, test.heavyTool ? 300_000 : 240_000);
+  let lastActivityTs = Date.now();
+  let seenMessageIds = new Set<string>();
+
+  while (true) {
+    const now = Date.now();
+    const elapsed = now - started;
+    const idleMs = now - lastActivityTs;
+
+    // Hard ceiling: never exceed maximum regardless of activity
+    if (elapsed >= HARD_CEILING_MS) break;
+
+    // Idle timeout: if no new messages for IDLE_TIMEOUT_MS, give up
+    if (idleMs >= IDLE_TIMEOUT_MS && seenMessageIds.size > 0) break;
+
+    // Original timeout as baseline when no activity has been seen at all
+    if (elapsed >= timeoutMs && seenMessageIds.size === 0) break;
+
     const channelBatches = await Promise.all(
       responseChannels.map(async (channel) => {
         try {
@@ -904,6 +926,14 @@ async function runCapabilityTest(
       .flat()
       .sort((a, b) => a.createdTimestamp - b.createdTimestamp);
     const replies = ordered.filter((m) => isBotOrWebhookReply(m, sent, selfId));
+
+    // Track new messages to detect activity
+    for (const msg of replies) {
+      if (!seenMessageIds.has(msg.id)) {
+        seenMessageIds.add(msg.id);
+        lastActivityTs = Date.now();
+      }
+    }
 
     let shapeOk = false;
     for (const msg of replies) {
@@ -952,10 +982,15 @@ async function runCapabilityTest(
     await sleep(pollIntervalMs);
   }
 
+  const idleMs = Date.now() - lastActivityTs;
+  const timeoutType = idleMs >= IDLE_TIMEOUT_MS && seenMessageIds.size > 0
+    ? `idle timeout (no new messages for ${Math.ceil(idleMs / 1000)}s)`
+    : (Date.now() - started >= HARD_CEILING_MS ? 'hard ceiling reached' : 'timeout');
+
   return {
     passed: false,
     elapsed: Date.now() - started,
-    snippet: matchedSnippet || 'Timeout while waiting for full capability evidence',
+    snippet: matchedSnippet || `Timeout while waiting for full capability evidence (${timeoutType})`,
     reason: lastReason,
   };
 }
