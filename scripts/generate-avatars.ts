@@ -46,41 +46,58 @@ function star(cx: number, cy: number, points: number, outerR: number, innerR: nu
   return coords.join(' ');
 }
 
-// ── Australian flag SVG (1024×512 landscape) ────────────────────────────────
-// Simplified but recognisable: Union Jack canton, Commonwealth Star, Southern Cross.
-function australianFlagSVG(w = 1024, h = 512): string {
-  const cW = w / 2;   // canton width
-  const cH = h / 2;   // canton height
-  const cx = cW / 2;
-  const cy = cH / 2;
+// ── Australian flag SVG (square format for avatar backgrounds) ──────────────
+// Rendered directly as square — no rotation/cropping needed.
+// Accurate proportions: Union Jack canton, Commonwealth Star, Southern Cross.
+function australianFlagSVG(s = 256): string {
+  // Canton occupies the top-left quarter
+  const cW = s / 2;   // canton width
+  const cH = s / 2;   // canton height
+  const cx = cW / 2;  // canton center x
+  const cy = cH / 2;  // canton center y
 
-  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${w} ${h}">
+  // Stroke widths scaled to flag size
+  const diagWhite = Math.round(s * 0.04);
+  const diagRed = Math.round(s * 0.02);
+  const crossWhite = Math.round(s * 0.065);
+  const crossRed = Math.round(s * 0.035);
+
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${s} ${s}">
   <!-- Blue ensign background -->
-  <rect width="${w}" height="${h}" fill="#00008B"/>
+  <rect width="${s}" height="${s}" fill="#00008B"/>
 
-  <!-- Union Jack canton -->
-  <g>
-    <line x1="0" y1="0" x2="${cW}" y2="${cH}" stroke="white" stroke-width="16"/>
-    <line x1="${cW}" y1="0" x2="0" y2="${cH}" stroke="white" stroke-width="16"/>
-    <line x1="0" y1="0" x2="${cW}" y2="${cH}" stroke="#CF142B" stroke-width="8"/>
-    <line x1="${cW}" y1="0" x2="0" y2="${cH}" stroke="#CF142B" stroke-width="8"/>
-    <line x1="${cx}" y1="0" x2="${cx}" y2="${cH}" stroke="white" stroke-width="28"/>
-    <line x1="0" y1="${cy}" x2="${cW}" y2="${cy}" stroke="white" stroke-width="28"/>
-    <line x1="${cx}" y1="0" x2="${cx}" y2="${cH}" stroke="#CF142B" stroke-width="14"/>
-    <line x1="0" y1="${cy}" x2="${cW}" y2="${cy}" stroke="#CF142B" stroke-width="14"/>
+  <!-- Union Jack canton (top-left quarter) -->
+  <g clip-path="url(#canton-clip)">
+    <!-- White diagonal cross (St Andrew's Saltire) -->
+    <line x1="0" y1="0" x2="${cW}" y2="${cH}" stroke="white" stroke-width="${diagWhite}"/>
+    <line x1="${cW}" y1="0" x2="0" y2="${cH}" stroke="white" stroke-width="${diagWhite}"/>
+    <!-- Red diagonal stripes (St Patrick's Saltire — counter-changed) -->
+    <line x1="${cW * 0.5}" y1="0" x2="${cW}" y2="${cH * 0.5}" stroke="#CF142B" stroke-width="${diagRed}"/>
+    <line x1="0" y1="${cH * 0.5}" x2="${cW * 0.5}" y2="${cH}" stroke="#CF142B" stroke-width="${diagRed}"/>
+    <line x1="${cW * 0.5}" y1="${cH}" x2="0" y2="${cH * 0.5}" stroke="#CF142B" stroke-width="${diagRed}"/>
+    <line x1="${cW}" y1="${cH * 0.5}" x2="${cW * 0.5}" y2="0" stroke="#CF142B" stroke-width="${diagRed}"/>
+    <!-- White cross border (St George's) -->
+    <line x1="${cx}" y1="0" x2="${cx}" y2="${cH}" stroke="white" stroke-width="${crossWhite}"/>
+    <line x1="0" y1="${cy}" x2="${cW}" y2="${cy}" stroke="white" stroke-width="${crossWhite}"/>
+    <!-- Red cross (St George's Cross) -->
+    <line x1="${cx}" y1="0" x2="${cx}" y2="${cH}" stroke="#CF142B" stroke-width="${crossRed}"/>
+    <line x1="0" y1="${cy}" x2="${cW}" y2="${cy}" stroke="#CF142B" stroke-width="${crossRed}"/>
   </g>
+  <defs>
+    <clipPath id="canton-clip"><rect width="${cW}" height="${cH}"/></clipPath>
+  </defs>
 
-  <!-- Commonwealth Star (7-pointed, below canton) -->
-  <polygon points="${star(cW / 2, h * 0.75, 7, 42, 20)}" fill="white"/>
+  <!-- Commonwealth Star (7-pointed, below canton centre) -->
+  <polygon points="${star(cW / 2, s * 0.72, 7, s * 0.08, s * 0.038)}" fill="white"/>
 
-  <!-- Southern Cross -->
-  <polygon points="${star(w * 0.75,  h * 0.76, 7, 18, 8)}" fill="white"/>
-  <polygon points="${star(w * 0.625, h * 0.50, 7, 18, 8)}" fill="white"/>
-  <polygon points="${star(w * 0.75,  h * 0.28, 7, 18, 8)}" fill="white"/>
-  <polygon points="${star(w * 0.85,  h * 0.52, 7, 18, 8)}" fill="white"/>
-  <polygon points="${star(w * 0.81,  h * 0.62, 5, 10, 5)}" fill="white"/>
+  <!-- Southern Cross (right side) -->
+  <polygon points="${star(s * 0.75,  s * 0.76, 7, s * 0.035, s * 0.016)}" fill="white"/>
+  <polygon points="${star(s * 0.625, s * 0.50, 7, s * 0.035, s * 0.016)}" fill="white"/>
+  <polygon points="${star(s * 0.75,  s * 0.28, 7, s * 0.035, s * 0.016)}" fill="white"/>
+  <polygon points="${star(s * 0.85,  s * 0.50, 7, s * 0.035, s * 0.016)}" fill="white"/>
+  <polygon points="${star(s * 0.81,  s * 0.62, 5, s * 0.02, s * 0.01)}" fill="white"/>
 
-  <!-- Subtle drape shading (fabric fold effect) -->
+  <!-- Subtle drape shading -->
   <defs>
     <linearGradient id="drape" x1="0" y1="0" x2="1" y2="0">
       <stop offset="0%"   stop-color="black" stop-opacity="0.10"/>
@@ -91,47 +108,25 @@ function australianFlagSVG(w = 1024, h = 512): string {
       <stop offset="100%" stop-color="black" stop-opacity="0.06"/>
     </linearGradient>
   </defs>
-  <rect width="${w}" height="${h}" fill="url(#drape)"/>
+  <rect width="${s}" height="${s}" fill="url(#drape)"/>
 </svg>`;
 }
 
-// ── Lip variants that look professional (exclude pacifier/dummy-looking ones) ─
-// Excluded: variant10 (O-mouth), variant12 (tongue), variant13 (oval/pacifier),
-//           variant15 (pacifier+ring), variant16 (complex), variant20 (dot),
-//           variant29 (oval)
-const SAFE_LIPS = [
-  'variant01','variant02','variant03','variant04','variant05','variant06',
-  'variant07','variant08','variant09','variant11','variant14','variant17',
-  'variant18','variant19','variant21','variant22','variant23','variant24',
-  'variant25','variant26','variant27','variant28','variant30',
-].join(',');
-
-// ── Fetch DiceBear avatar (notionists-neutral — professional, no dummies) ───
+// ── Fetch DiceBear avatar (avataaars — cartoon people with hair, skin, features) ───
 async function fetchAvatar(seed: string): Promise<Buffer> {
-  const url = `https://api.dicebear.com/9.x/notionists-neutral/png?seed=${encodeURIComponent(seed)}&size=${AVATAR_SIZE}&backgroundColor=transparent&lips=${SAFE_LIPS}`;
+  // Restrict eyes/mouth to professional variants (exclude dizzy/hearts/tongue/vomit etc.)
+  const safeEyes = 'default,happy,side,squint,surprised';
+  const safeMouth = 'default,eating,serious,smile,twinkle';
+  const url = `https://api.dicebear.com/9.x/avataaars/png?seed=${encodeURIComponent(seed)}&size=${AVATAR_SIZE}&backgroundColor=transparent&eyes=${safeEyes}&mouth=${safeMouth}`;
   const resp = await fetch(url);
   if (!resp.ok) throw new Error(`DiceBear fetch failed for ${seed}: ${resp.status}`);
   return Buffer.from(await resp.arrayBuffer());
 }
 
-// ── Create flag background (rotated 90° CW → draped vertical orientation) ──
-// After rotation: Union Jack sits at the top-right, flag drapes downward.
+// ── Create flag background (square format — no rotation needed) ─────────────
 async function createFlagBackground(): Promise<Buffer> {
-  const flagSvg = Buffer.from(australianFlagSVG(1024, 512));
-
-  const rotated = await sharp(flagSvg)
-    .png()
-    .rotate(90)
-    .toBuffer();
-
-  const meta = await sharp(rotated).metadata();
-  const cropW = Math.min(meta.width!, meta.height!);
-
-  return sharp(rotated)
-    .extract({ left: 0, top: 0, width: cropW, height: cropW })
-    .resize(SIZE, SIZE)
-    .png()
-    .toBuffer();
+  const flagSvg = Buffer.from(australianFlagSVG(SIZE));
+  return sharp(flagSvg).resize(SIZE, SIZE).png().toBuffer();
 }
 
 // ── Create drop shadow from the avatar's alpha channel ──────────────────────
@@ -213,8 +208,7 @@ async function main(): Promise<void> {
   console.log('\nNext steps:');
   console.log('  1. git add assets/avatars/ && git commit -m "feat: professional agent avatars with Aus flag"');
   console.log('  2. git push origin main');
-  console.log('  3. Update AVATAR_MAP in src/discord/agents.ts with GitHub raw URLs:');
-  console.log('     https://raw.githubusercontent.com/jflessenkemper/ASAP-discord/main/assets/avatars/<agentId>.png');
+  console.log('  3. Upload to GCS or push to GitHub for AVATAR_MAP URLs.');
 }
 
 main().catch((err) => {

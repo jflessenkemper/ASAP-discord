@@ -1,0 +1,54 @@
+{
+  "startedAt": "2026-04-11T04:32:04.806Z",
+  "endedAt": "2026-04-11T04:32:34.891Z",
+  "summary": {
+    "capabilityPassed": 1,
+    "capabilityFailed": 0,
+    "extraFailed": 1,
+    "score": 15,
+    "criticalPassed": false,
+    "detail": "core_fail=0 | orchestration_fail=0 | upgrades_fail=0 | critical_extra_fail=1"
+  },
+  "results": [
+    {
+      "agent": "Sophie (UX Reviewer)",
+      "capability": "a11y-priority",
+      "category": "specialist",
+      "passed": true,
+      "elapsed": 21246,
+      "snippet": "The single most important criterion is WCAG 2.1.1 Keyboard, because if users with motor disabilities cannot navigate and operate the application with a keyboard or switch device, a…"
+    }
+  ],
+  "extras": [
+    {
+      "name": "channel_hygiene",
+      "passed": false,
+      "detail": "groupchat:13 | terminal:0 | upgrades:0",
+      "critical": true
+    },
+    {
+      "name": "elevenlabs_api",
+      "passed": true,
+      "detail": "API reachable",
+      "critical": true
+    },
+    {
+      "name": "elevenlabs_tts",
+      "passed": true,
+      "detail": "audio bytes=36824",
+      "critical": false
+    }
+  ],
+  "config": {
+    "timeoutMs": 180000,
+    "profile": "matrix",
+    "preClear": false,
+    "runElevenApi": true,
+    "runElevenTts": true,
+    "runVoiceBridge": false,
+    "runVoiceActive": false,
+    "capabilityAttempts": 2,
+    "runPostSuccessAction": false,
+    "agentFilter": null
+  }
+}

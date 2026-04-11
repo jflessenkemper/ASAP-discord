@@ -9,12 +9,16 @@ import { postDiagnostic, mirrorAgentResponse, mirrorVoiceTranscript } from '../s
 import { postOpsLine } from '../services/opsFeed';
 import { getWebhook } from '../services/webhooks';
 import { isGeminiOverLimit } from '../usage';
-import { joinVC, leaveVC, speakInVC, speakInVCWithOptions, stopVCPlayback, listenToAllMembersSmart, getConnection, VoiceTranscription } from '../voice/connection';
+import { listenToAllMembersSmart, VoiceTranscription } from '../voice/connection';
 import { isDeepgramAvailable } from '../voice/deepgram';
 import { primeElevenLabsVoiceCache } from '../voice/elevenlabs';
 import { getElevenLabsConvaiReply, isElevenLabsConvaiEnabled } from '../voice/elevenlabsConvai';
 import { isElevenLabsRealtimeAvailable } from '../voice/elevenlabsRealtime';
-import { joinTesterVoiceChannel, leaveTesterVoiceChannel, speakAsTesterInVoice } from '../voice/testerClient';
+import {
+  joinTesterVoiceChannel, leaveTesterVoiceChannel, speakAsTesterInVoice,
+  getTesterVoiceConnection, stopTesterVCPlayback, speakInTesterVC, speakInTesterVCWithOptions,
+  setTesterNickname, restoreTesterNickname, setTesterAvatar, restoreTesterAvatar,
+} from '../voice/testerClient';
 import { textToSpeech } from '../voice/tts';
 
 /** Heartbeat interval to detect stale connections (every 2 minutes) */
@@ -149,7 +153,7 @@ async function speakPipelined(
     if (signal?.aborted) return;
     const audio = await textToSpeech(sentences[0], voice, language);
     if (signal?.aborted) return;
-    if (activeSession?.active && audio) await speakInVCWithOptions(audio, { signal, onPlaybackStart });
+    if (activeSession?.active && audio) await speakInTesterVCWithOptions(audio, { signal, onPlaybackStart });
     return;
   }
 
@@ -164,7 +168,7 @@ async function speakPipelined(
       nextTts = textToSpeech(sentences[i + 1], voice, language);
     }
 
-    await speakInVCWithOptions(audio, { signal, onPlaybackStart });
+    await speakInTesterVCWithOptions(audio, { signal, onPlaybackStart });
   }
 }
 
@@ -426,7 +430,7 @@ function interruptActiveVoiceTurn(reason: string): void {
   activeSession.currentAbortController = null;
   activeSession.outputActive = false;
   activeSession.outputStartedAt = 0;
-  stopVCPlayback();
+  stopTesterVCPlayback();
   postDiagnostic('Voice turn interrupted.', {
     level: 'info',
     source: 'callSession.interrupt',
@@ -465,37 +469,6 @@ async function sendLifecycleNoticeOnce(channel: TextChannel, key: string, conten
   await sendAsAgent(channel, content);
 }
 
-async function setBotNicknameForCall(voiceChannel: VoiceChannel): Promise<string | null> {
-  const member = voiceChannel.guild.members.me;
-  if (!member) return null;
-  const previous = member.nickname ?? null;
-  const desired = String(process.env.VOICE_BOT_NICKNAME_RILEY || 'Riley').trim() || 'Riley';
-  if ((member.displayName || '').trim() === desired) {
-    return previous;
-  }
-  try {
-    await member.setNickname(desired, 'ASAP voice call active');
-  } catch {
-  }
-  return previous;
-}
-
-async function restoreBotNicknameAfterCall(voiceChannel: VoiceChannel, previousNickname: string | null): Promise<void> {
-  const member = voiceChannel.guild.members.me;
-  if (!member) return;
-  const fallback = String(process.env.VOICE_BOT_NICKNAME_DEFAULT || 'As Soon As Possible').trim() || 'As Soon As Possible';
-  const desired = previousNickname ?? fallback;
-  try {
-    if ((member.displayName || '').trim() === desired) {
-      return;
-    }
-    await member.setNickname(desired, 'ASAP voice call ended');
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : 'Unknown';
-    console.warn(`Failed to restore bot nickname to "${desired}": ${msg}`);
-  }
-}
-
 /**
  * Start a voice call session — bot joins VC and begins listening.
  */
@@ -529,12 +502,11 @@ export async function startCall(
   }
 
   const joinStartMs = Date.now();
-  const connection = await joinVC(voiceChannel);
+  await joinTesterVoiceChannel(voiceChannel);
+  const connection = getTesterVoiceConnection()!;
 
   const testerVoiceId = process.env.ASAPTESTER_DISCORD_VOICE_ID || 'lsgXALPNLFUcQfT1dmP1';
   const isTesterInitiated = isTesterBotId(initiator.user.id);
-  const forceTesterJoin = String(process.env.ASAPTESTER_FORCE_JOIN_VOICE || 'false').toLowerCase() === 'true';
-  const shouldJoinTesterVoice = isTesterInitiated || forceTesterJoin;
   const riley = getAgent('executive-assistant' as AgentId);
   const selectedRileyVoice = isTesterInitiated ? testerVoiceId : (riley?.voice || 'Achernar');
 
@@ -570,25 +542,17 @@ export async function startCall(
     previousBotNickname: null,
   };
 
-  activeSession.previousBotNickname = await setBotNicknameForCall(voiceChannel);
-
-  if (shouldJoinTesterVoice) {
-    try {
-      const testerJoinStartMs = Date.now();
-      await joinTesterVoiceChannel(voiceChannel);
-      await postVoiceStageLog('tester_join_vc', `channel=${voiceChannel.name} join_ms=${Date.now() - testerJoinStartMs}`);
-      await sendAsAgent(groupchat, `🧪 ASAPTester joined **${voiceChannel.name}** as a real voice participant.`);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Unknown error';
-      await postVoiceStageLog('tester_join_vc_failed', `channel=${voiceChannel.name} error=${msg}`, 'warn');
-      await sendAsAgent(groupchat, `⚠️ ASAPTester could not join voice: ${msg}`);
-    }
+  // Set ASAPTester's identity to Riley for the call
+  const guildId = voiceChannel.guild.id;
+  activeSession.previousBotNickname = await setTesterNickname(guildId, 'Riley', 'ASAP voice call active');
+  if (riley?.avatarUrl) {
+    void setTesterAvatar(riley.avatarUrl);
   }
 
   activeSession.heartbeatTimer = setInterval(() => {
     if (!activeSession?.active) return;
     try {
-      const conn = getConnection();
+      const conn = getTesterVoiceConnection();
       if (!conn || conn.state.status === VoiceConnectionStatus.Destroyed) {
         console.warn('Voice connection destroyed — ending call');
         void postVoiceStageLog('connection_destroyed', `channel=${voiceChannel.name}`, 'error');
@@ -689,7 +653,7 @@ export async function startCall(
           'TTS preflight'
         );
         if (!activeSession?.active) return;
-        await withTimeout(speakInVC(checkAudio), VOICE_PREFLIGHT_TIMEOUT_MS, 'Voice playback preflight');
+        await withTimeout(speakInTesterVC(checkAudio), VOICE_PREFLIGHT_TIMEOUT_MS, 'Voice playback preflight');
         await postDiagnostic('Voice self-test passed at call start.', {
           level: 'info',
           source: 'callSession.startCall',
@@ -728,7 +692,7 @@ export async function endCall(): Promise<void> {
   session.currentAbortController = null;
   session.outputActive = false;
   session.outputStartedAt = 0;
-  stopVCPlayback();
+  stopTesterVCPlayback();
 
   if (session.heartbeatTimer) {
     clearInterval(session.heartbeatTimer);
@@ -739,7 +703,10 @@ export async function endCall(): Promise<void> {
     unsub();
   }
 
-  await restoreBotNicknameAfterCall(session.voiceChannel, session.previousBotNickname);
+  // Restore ASAPTester's identity
+  const guildId = session.voiceChannel.guild.id;
+  await restoreTesterNickname(guildId, session.previousBotNickname);
+  void restoreTesterAvatar();
 
   if (!VOICE_DISABLE_CALL_LOG) {
     session.transcript.push(`[${new Date().toLocaleTimeString()}] Call ended`);
@@ -747,7 +714,6 @@ export async function endCall(): Promise<void> {
 
     recordVoiceCallEnd();
   leaveTesterVoiceChannel();
-  leaveVC();
 
   const duration = Math.round(
     (Date.now() - session.startTime.getTime()) / 1000 / 60
