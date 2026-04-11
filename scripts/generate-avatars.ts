@@ -29,10 +29,10 @@ const AGENTS: Record<string, string> = {
 };
 
 const SIZE = 256;
-const AVATAR_SIZE = 190;
-const SHADOW_OFFSET = 4;
-const SHADOW_BLUR = 8;
-const SHADOW_OPACITY = 0.45;
+const AVATAR_SIZE = 256;
+const SHADOW_OFFSET = 3;
+const SHADOW_BLUR = 6;
+const SHADOW_OPACITY = 0.4;
 const OUTPUT_DIR = path.resolve(__dirname, '../assets/avatars');
 
 // ── Geometry helper: n-pointed star polygon ─────────────────────────────────
@@ -56,11 +56,18 @@ function australianFlagSVG(s = 256): string {
   const cx = cW / 2;  // canton center x
   const cy = cH / 2;  // canton center y
 
-  // Stroke widths scaled to flag size
-  const diagWhite = Math.round(s * 0.04);
-  const diagRed = Math.round(s * 0.02);
-  const crossWhite = Math.round(s * 0.065);
-  const crossRed = Math.round(s * 0.035);
+  // Stroke widths based on canton height (per Union Jack spec: Flag Institute / jdawiseman.com)
+  // Total diagonal band = cH/5, subdivided 3:2:1 → wider white : red : narrower white
+  // St George's cross = cH/5 red, fimbriated cH/15 white on each side
+  const diagWhite = Math.round(cH / 5);
+  const crossTotal = Math.round(cH / 3);   // white fimbriation + red cross total
+  const crossRed = Math.round(cH / 5);
+
+  // Counterchanged St Patrick's saltire: red strip (cH/15 wide perpendicular)
+  // starts at diagonal centre and extends outward. Axis-aligned offset = cH/(15√2).
+  // Hoist (left): red below diagonal → wider white on top.
+  // Fly (right): red above diagonal → wider white on bottom.
+  const d = Math.round(cH / (15 * Math.SQRT2));
 
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${s} ${s}">
   <!-- Blue ensign background -->
@@ -71,17 +78,21 @@ function australianFlagSVG(s = 256): string {
     <!-- White diagonal cross (St Andrew's Saltire) -->
     <line x1="0" y1="0" x2="${cW}" y2="${cH}" stroke="white" stroke-width="${diagWhite}"/>
     <line x1="${cW}" y1="0" x2="0" y2="${cH}" stroke="white" stroke-width="${diagWhite}"/>
-    <!-- Red diagonal stripes (St Patrick's Saltire — counter-changed) -->
-    <line x1="${cW * 0.5}" y1="0" x2="${cW}" y2="${cH * 0.5}" stroke="#CF142B" stroke-width="${diagRed}"/>
-    <line x1="0" y1="${cH * 0.5}" x2="${cW * 0.5}" y2="${cH}" stroke="#CF142B" stroke-width="${diagRed}"/>
-    <line x1="${cW * 0.5}" y1="${cH}" x2="0" y2="${cH * 0.5}" stroke="#CF142B" stroke-width="${diagRed}"/>
-    <line x1="${cW}" y1="${cH * 0.5}" x2="${cW * 0.5}" y2="0" stroke="#CF142B" stroke-width="${diagRed}"/>
-    <!-- White cross border (St George's) -->
-    <line x1="${cx}" y1="0" x2="${cx}" y2="${cH}" stroke="white" stroke-width="${crossWhite}"/>
-    <line x1="0" y1="${cy}" x2="${cW}" y2="${cy}" stroke="white" stroke-width="${crossWhite}"/>
+    <!-- Red diagonal stripes (St Patrick's Saltire — counterchanged pinwheel) -->
+    <!-- TL arm: red below diagonal (wide white on top, hoist side) -->
+    <polygon points="0,0 ${cx},${cy} ${cx - d},${cy + d} 0,${2 * d}" fill="#C8102E"/>
+    <!-- BR arm: red above diagonal (continues TL pattern) -->
+    <polygon points="${cW},${cH} ${cx},${cy} ${cx + d},${cy - d} ${cW},${cH - 2 * d}" fill="#C8102E"/>
+    <!-- TR arm: red above-left (narrow white on top, fly side) -->
+    <polygon points="${cW},0 ${cx},${cy} ${cx - d},${cy - d} ${cW - 2 * d},0" fill="#C8102E"/>
+    <!-- BL arm: red below-right (continues TR pattern) -->
+    <polygon points="0,${cH} ${cx},${cy} ${cx + d},${cy + d} ${2 * d},${cH}" fill="#C8102E"/>
+    <!-- White cross border (St George's fimbriation) -->
+    <line x1="${cx}" y1="0" x2="${cx}" y2="${cH}" stroke="white" stroke-width="${crossTotal}"/>
+    <line x1="0" y1="${cy}" x2="${cW}" y2="${cy}" stroke="white" stroke-width="${crossTotal}"/>
     <!-- Red cross (St George's Cross) -->
-    <line x1="${cx}" y1="0" x2="${cx}" y2="${cH}" stroke="#CF142B" stroke-width="${crossRed}"/>
-    <line x1="0" y1="${cy}" x2="${cW}" y2="${cy}" stroke="#CF142B" stroke-width="${crossRed}"/>
+    <line x1="${cx}" y1="0" x2="${cx}" y2="${cH}" stroke="#C8102E" stroke-width="${crossRed}"/>
+    <line x1="0" y1="${cy}" x2="${cW}" y2="${cy}" stroke="#C8102E" stroke-width="${crossRed}"/>
   </g>
   <defs>
     <clipPath id="canton-clip"><rect width="${cW}" height="${cH}"/></clipPath>
@@ -155,30 +166,21 @@ async function createShadow(avatarBuf: Buffer): Promise<Buffer> {
     .toBuffer();
 }
 
-// ── Create a semi-transparent dark circle backing for the avatar ─────────────
-async function createBackingCircle(): Promise<Buffer> {
-  const r = Math.round(AVATAR_SIZE / 2);
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${AVATAR_SIZE}" height="${AVATAR_SIZE}">
-    <circle cx="${r}" cy="${r}" r="${r}" fill="rgba(220,225,235,0.82)"/>
-  </svg>`;
-  return sharp(Buffer.from(svg)).png().toBuffer();
-}
-
-// ── Composite: flag background → backing circle → shadow → avatar ───────────
+// ── Composite: flag background → shadow → avatar (bottom-aligned) ───────────
 async function generateAvatar(agentId: string, seed: string, flagBg: Buffer): Promise<void> {
   console.log(`  Generating ${agentId} (seed: ${seed})...`);
 
   const avatarBuf = await fetchAvatar(seed);
   const shadowBuf = await createShadow(avatarBuf);
-  const backingBuf = await createBackingCircle();
 
-  const offset = Math.round((SIZE - AVATAR_SIZE) / 2);
+  // Bottom-align: avatar bottom edge = image bottom edge
+  const offsetX = Math.round((SIZE - AVATAR_SIZE) / 2);
+  const offsetY = SIZE - AVATAR_SIZE;
 
   const result = await sharp(flagBg)
     .composite([
-      { input: backingBuf, left: offset, top: offset },
-      { input: shadowBuf, left: offset + SHADOW_OFFSET, top: offset + SHADOW_OFFSET },
-      { input: avatarBuf, left: offset, top: offset },
+      { input: shadowBuf, left: offsetX + SHADOW_OFFSET, top: offsetY + SHADOW_OFFSET },
+      { input: avatarBuf, left: offsetX, top: offsetY },
     ])
     .png()
     .toBuffer();
