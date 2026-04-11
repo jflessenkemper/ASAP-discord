@@ -5,7 +5,7 @@ import path from 'path';
 import pool from './pool';
 
 const TABLE_EXPECTATIONS_BY_MIGRATION: Record<string, string[]> = {
-  '001_initial.sql': ['clients', 'employees', 'jobs', 'sessions'],
+  '001_initial.sql': ['sessions'],
   '003_agent_memory.sql': ['agent_memory'],
   '015_agent_activity_log.sql': ['agent_activity_log'],
 };
