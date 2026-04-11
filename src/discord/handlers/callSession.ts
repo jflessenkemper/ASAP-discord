@@ -501,14 +501,22 @@ export async function startCall(
     return;
   }
 
-  const joinStartMs = Date.now();
-  await joinTesterVoiceChannel(voiceChannel);
-  const connection = getTesterVoiceConnection()!;
-
   const testerVoiceId = process.env.ASAPTESTER_DISCORD_VOICE_ID || 'lsgXALPNLFUcQfT1dmP1';
   const isTesterInitiated = isTesterBotId(initiator.user.id);
   const riley = getAgent('executive-assistant' as AgentId);
   const selectedRileyVoice = isTesterInitiated ? testerVoiceId : (riley?.voice || 'Achernar');
+
+  // Set ASAPTester's identity to Riley BEFORE joining voice so users see
+  // "Riley" in the voice channel from the moment the bot appears.
+  const guildId = voiceChannel.guild.id;
+  const previousBotNickname = await setTesterNickname(guildId, 'Riley', 'ASAP voice call active');
+  if (riley?.avatarUrl) {
+    await setTesterAvatar(riley.avatarUrl);
+  }
+
+  const joinStartMs = Date.now();
+  await joinTesterVoiceChannel(voiceChannel);
+  const connection = getTesterVoiceConnection()!;
 
   await postVoiceStageLog(
     'join_vc',
@@ -539,15 +547,8 @@ export async function startCall(
     pendingBargeIn: false,
     turnStartedAt: 0,
     rileyVoiceName: selectedRileyVoice,
-    previousBotNickname: null,
+    previousBotNickname,
   };
-
-  // Set ASAPTester's identity to Riley for the call
-  const guildId = voiceChannel.guild.id;
-  activeSession.previousBotNickname = await setTesterNickname(guildId, 'Riley', 'ASAP voice call active');
-  if (riley?.avatarUrl) {
-    void setTesterAvatar(riley.avatarUrl);
-  }
 
   activeSession.heartbeatTimer = setInterval(() => {
     if (!activeSession?.active) return;
