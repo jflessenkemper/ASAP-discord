@@ -189,40 +189,52 @@ function isAustralianLocation(location: string | undefined): boolean {
 
 export async function scanAdzuna(keywords?: string): Promise<{ listings: JobListing[]; skipped: number; total: number }> {
   const profile = await pool.query('SELECT target_roles, location, salary_min FROM job_profile WHERE user_id = $1', ['owner']);
-  const searchTerms = keywords
-    || (profile.rows[0]?.target_roles || []).join(' OR ')
-    || 'software engineer';
+  const roles: string[] = keywords
+    ? [keywords]
+    : (profile.rows[0]?.target_roles || []).length > 0
+      ? profile.rows[0].target_roles
+      : ['software engineer'];
   const where = profile.rows[0]?.location || 'New South Wales';
   const salaryMin = profile.rows[0]?.salary_min;
 
-  let path = `search/1?results_per_page=50&what=${encodeURIComponent(searchTerms)}&where=${encodeURIComponent(where)}&sort_by=date&content-type=application/json`;
-  if (salaryMin) path += `&salary_min=${salaryMin}`;
-
-  const raw = await adzunaFetch(path);
-  const data: AdzunaResponse = JSON.parse(raw);
-
   const seenUrls = await getSeenUrls();
   const titleFilter = await getTitleFilter();
-
   const listings: JobListing[] = [];
+  const seenInBatch = new Set<string>();
   let skipped = 0;
+  let totalApi = 0;
 
-  for (const job of data.results || []) {
-    const url = job.redirect_url || '';
-    if (!url || seenUrls.has(url)) { skipped++; continue; }
-    if (!matchesTitleFilter(job.title || '', titleFilter)) { skipped++; continue; }
+  // Search each role separately (Adzuna doesn't handle long OR queries well)
+  for (const role of roles.slice(0, 5)) {
+    let path = `search/1?results_per_page=20&what=${encodeURIComponent(role)}&where=${encodeURIComponent(where)}&sort_by=date&content-type=application/json`;
+    if (salaryMin) path += `&salary_min=${salaryMin}`;
 
-    listings.push({
-      source: 'adzuna',
-      external_id: String(job.id || ''),
-      title: job.title || '',
-      company: job.company?.display_name || 'Unknown',
-      location: job.location?.display_name || '',
-      salary_min: job.salary_min,
-      salary_max: job.salary_max,
-      url,
-      description: job.description || '',
-    });
+    try {
+      const raw = await adzunaFetch(path);
+      const data: AdzunaResponse = JSON.parse(raw);
+      totalApi += data.count || 0;
+
+      for (const job of data.results || []) {
+        const url = job.redirect_url || '';
+        if (!url || seenUrls.has(url) || seenInBatch.has(url)) { skipped++; continue; }
+        if (!matchesTitleFilter(job.title || '', titleFilter)) { skipped++; continue; }
+
+        seenInBatch.add(url);
+        listings.push({
+          source: 'adzuna',
+          external_id: String(job.id || ''),
+          title: job.title || '',
+          company: job.company?.display_name || 'Unknown',
+          location: job.location?.display_name || '',
+          salary_min: job.salary_min,
+          salary_max: job.salary_max,
+          url,
+          description: job.description || '',
+        });
+      }
+    } catch {
+      // Skip failed role search, continue with others
+    }
   }
 
   // Persist
@@ -231,7 +243,7 @@ export async function scanAdzuna(keywords?: string): Promise<{ listings: JobList
     await markSeen(listings);
   }
 
-  return { listings, skipped, total: data.count || 0 };
+  return { listings, skipped, total: totalApi };
 }
 
 export async function scanPortals(): Promise<{ listings: JobListing[]; errors: string[] }> {
