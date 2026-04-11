@@ -494,6 +494,25 @@ const AGENT_CAPABILITY_TESTS: AgentCapabilityTest[] = [
     expectAny: [/qa|security|review|specialist|audit/i],
     timeoutMs: 120_000,
   },
+  // Tool-proof: Riley job search profile + scan
+  {
+    id: 'executive-assistant',
+    category: 'tool-proof',
+    capability: 'job-search-profile',
+    prompt: 'Use the job_profile_update tool right now to view my current job search profile (call it with no parameters). Then summarize what you see. Do NOT delegate this.',
+    expectAny: [/profile|target.?role|salary|location|no.*profile|not.*set/i],
+    expectToolAudit: ['job_profile_update'],
+    timeoutMs: 150_000,
+  },
+  {
+    id: 'executive-assistant',
+    category: 'tool-proof',
+    capability: 'job-tracker-summary',
+    prompt: 'Use the job_tracker tool right now with action "summary" to check the current job pipeline status. Summarize the result. Do NOT delegate this.',
+    expectAny: [/tracker|summary|scan|listing|no.*listing|total|pipeline|status|count/i],
+    expectToolAudit: ['job_tracker'],
+    timeoutMs: 150_000,
+  },
 ];
 
 const READINESS_TEST_KEYS = new Set([
