@@ -1,0 +1,79 @@
+{
+  "startedAt": "2026-04-11T01:33:11.460Z",
+  "endedAt": "2026-04-11T01:39:04.060Z",
+  "summary": {
+    "capabilityPassed": 3,
+    "capabilityFailed": 1,
+    "extraFailed": 0,
+    "score": 30,
+    "criticalPassed": true,
+    "detail": "core_fail=0 | orchestration_fail=0 | upgrades_fail=0 | critical_extra_fail=0"
+  },
+  "results": [
+    {
+      "agent": "Riley (Executive Assistant)",
+      "capability": "routing-and-next-step",
+      "category": "core",
+      "passed": true,
+      "elapsed": 73290,
+      "snippet": "⏳ Riley is still working (108s elapsed). No action needed yet."
+    },
+    {
+      "agent": "Sophie (UX Reviewer)",
+      "capability": "a11y-priority",
+      "category": "specialist",
+      "passed": false,
+      "elapsed": 75832,
+      "snippet": "Timeout while waiting for full capability evidence (idle timeout (no new messages for 61s))",
+      "reason": "missing any-of expected patterns"
+    },
+    {
+      "agent": "Raj (API Reviewer)",
+      "capability": "http-semantics",
+      "category": "specialist",
+      "passed": true,
+      "elapsed": 13812,
+      "snippet": "A `404 Not Found` status code should be returned when a client requests a resource that does not exist.\n\nSMOKE_APIREVIE_HTTPSEMA_377841"
+    },
+    {
+      "agent": "Elena (DBA)",
+      "capability": "postgres-safety",
+      "category": "specialist",
+      "passed": true,
+      "elapsed": 16052,
+      "snippet": "A key PostgreSQL migration safety practice is to wrap each migration in a transaction, ensuring all changes apply atomically and preventing the database from being left in a partia…"
+    }
+  ],
+  "extras": [
+    {
+      "name": "channel_hygiene",
+      "passed": true,
+      "detail": "groupchat:0 | terminal:0 | upgrades:0",
+      "critical": true
+    },
+    {
+      "name": "elevenlabs_api",
+      "passed": true,
+      "detail": "API reachable",
+      "critical": true
+    },
+    {
+      "name": "elevenlabs_tts",
+      "passed": true,
+      "detail": "audio bytes=37660",
+      "critical": false
+    }
+  ],
+  "config": {
+    "timeoutMs": 180000,
+    "profile": "matrix",
+    "preClear": true,
+    "runElevenApi": true,
+    "runElevenTts": true,
+    "runVoiceBridge": false,
+    "runVoiceActive": false,
+    "capabilityAttempts": 2,
+    "runPostSuccessAction": false,
+    "agentFilter": null
+  }
+}

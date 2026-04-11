@@ -1,0 +1,55 @@
+{
+  "startedAt": "2026-04-11T01:23:51.342Z",
+  "endedAt": "2026-04-11T01:26:11.736Z",
+  "summary": {
+    "capabilityPassed": 0,
+    "capabilityFailed": 1,
+    "extraFailed": 0,
+    "score": 0,
+    "criticalPassed": true,
+    "detail": "core_fail=0 | orchestration_fail=0 | upgrades_fail=0 | critical_extra_fail=0"
+  },
+  "results": [
+    {
+      "agent": "Sophie (UX Reviewer)",
+      "capability": "a11y-priority",
+      "category": "specialist",
+      "passed": false,
+      "elapsed": 66000,
+      "snippet": "Timeout while waiting for full capability evidence (idle timeout (no new messages for 61s))",
+      "reason": "missing any-of expected patterns"
+    }
+  ],
+  "extras": [
+    {
+      "name": "channel_hygiene",
+      "passed": true,
+      "detail": "groupchat:0 | terminal:0 | upgrades:0",
+      "critical": true
+    },
+    {
+      "name": "elevenlabs_api",
+      "passed": true,
+      "detail": "API reachable",
+      "critical": true
+    },
+    {
+      "name": "elevenlabs_tts",
+      "passed": true,
+      "detail": "audio bytes=35152",
+      "critical": false
+    }
+  ],
+  "config": {
+    "timeoutMs": 180000,
+    "profile": "matrix",
+    "preClear": false,
+    "runElevenApi": true,
+    "runElevenTts": true,
+    "runVoiceBridge": false,
+    "runVoiceActive": false,
+    "capabilityAttempts": 2,
+    "runPostSuccessAction": false,
+    "agentFilter": null
+  }
+}

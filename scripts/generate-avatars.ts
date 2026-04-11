@@ -23,7 +23,7 @@ const AGENTS: Record<string, string> = {
   copywriter:            'LivCopywriter',
   developer:             'AceDeveloper',
   lawyer:                'HarperLawyer',
-  'executive-assistant': 'RileyEA',
+  'executive-assistant': 'RileyExecutive',
   'ios-engineer':        'MiaiOS',
   'android-engineer':    'LeoAndroid',
 };
@@ -160,17 +160,28 @@ async function createShadow(avatarBuf: Buffer): Promise<Buffer> {
     .toBuffer();
 }
 
-// ── Composite: flag background → shadow → avatar ────────────────────────────
+// ── Create a semi-transparent dark circle backing for the avatar ─────────────
+async function createBackingCircle(): Promise<Buffer> {
+  const r = Math.round(AVATAR_SIZE / 2);
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${AVATAR_SIZE}" height="${AVATAR_SIZE}">
+    <circle cx="${r}" cy="${r}" r="${r}" fill="rgba(220,225,235,0.82)"/>
+  </svg>`;
+  return sharp(Buffer.from(svg)).png().toBuffer();
+}
+
+// ── Composite: flag background → backing circle → shadow → avatar ───────────
 async function generateAvatar(agentId: string, seed: string, flagBg: Buffer): Promise<void> {
   console.log(`  Generating ${agentId} (seed: ${seed})...`);
 
   const avatarBuf = await fetchAvatar(seed);
   const shadowBuf = await createShadow(avatarBuf);
+  const backingBuf = await createBackingCircle();
 
   const offset = Math.round((SIZE - AVATAR_SIZE) / 2);
 
   const result = await sharp(flagBg)
     .composite([
+      { input: backingBuf, left: offset, top: offset },
       { input: shadowBuf, left: offset + SHADOW_OFFSET, top: offset + SHADOW_OFFSET },
       { input: avatarBuf, left: offset, top: offset },
     ])

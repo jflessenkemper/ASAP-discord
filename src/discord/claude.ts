@@ -190,8 +190,19 @@ function modelForAgent(agentId: string, userMessage: string): string {
   if (VERTEX_OPUS_ONLY_MODE) {
     return DEFAULT_CODING_MODEL;
   }
+  // Per-agent model override via env var (e.g. AGENT_MODEL_OVERRIDE_security_auditor=gemini-2.5-pro)
+  const overrideKey = `AGENT_MODEL_OVERRIDE_${agentId.replace(/-/g, '_')}`;
+  const override = process.env[overrideKey];
+  if (override) {
+    return resolveHealthyModel(override);
+  }
   if (agentId === 'developer' && DEVELOPER_ALWAYS_OPUS) {
     return DEFAULT_CODING_MODEL;
+  }
+  // Riley (EA) gets Opus for best orchestration quality
+  if (agentId === 'executive-assistant') {
+    if (isSimpleFastPathPrompt(userMessage)) return resolveHealthyModel(DEFAULT_FAST_MODEL);
+    return resolveHealthyModel(DEFAULT_CODING_MODEL);
   }
   if (isSimpleFastPathPrompt(userMessage)) {
     return resolveHealthyModel(DEFAULT_FAST_MODEL);
@@ -201,9 +212,6 @@ function modelForAgent(agentId: string, userMessage: string): string {
   }
   if (FORCE_OPUS_FOR_CODE_WORK && isCodeWorkPrompt(userMessage)) {
     return resolveHealthyModel(DEFAULT_CODING_MODEL);
-  }
-  if (agentId === 'executive-assistant' && isHighStakesPrompt(userMessage)) {
-    return resolveHealthyModel(GEMINI_PRO);
   }
   return resolveHealthyModel(DEFAULT_FAST_MODEL);
 }

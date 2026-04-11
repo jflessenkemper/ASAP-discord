@@ -194,8 +194,8 @@ const AGENT_CAPABILITY_TESTS: AgentCapabilityTest[] = [
     id: 'ux-reviewer',
     category: 'specialist',
     capability: 'a11y-priority',
-    prompt: 'Name one accessibility requirement to verify first.',
-    expectAny: [/contrast|keyboard|screen reader|touch target|wcag|aria/i],
+    prompt: 'Name the single most important WCAG accessibility criterion to test first and explain why in one sentence.',
+    expectAny: [/contrast|keyboard|screen.?reader|touch.?target|wcag|aria|focus|color|font|label|alt.?text|tab.?order|heading|semantic|navigation|landmark|role/i],
   },
   {
     id: 'api-reviewer',
