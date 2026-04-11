@@ -1,8 +1,9 @@
 import { createHash } from 'crypto';
 
-import { GoogleGenerativeAI } from '@google/generative-ai';
+import { GoogleAuth } from 'google-auth-library';
 
 import pool from '../db/pool';
+import { ensureGoogleCredentials, getAccessTokenViaGcloud } from '../services/googleCredentials';
 
 import { logAgentEvent } from './activityLog';
 
@@ -15,17 +16,46 @@ const EMBEDDING_MODEL = process.env.EMBEDDING_MODEL || 'text-embedding-004';
 const EMBEDDING_DIMENSIONS = parseInt(process.env.EMBEDDING_DIMENSIONS || '768', 10);
 const VECTOR_SEARCH_LIMIT = parseInt(process.env.VECTOR_SEARCH_LIMIT || '5', 10);
 const VECTOR_SIMILARITY_THRESHOLD = parseFloat(process.env.VECTOR_SIMILARITY_THRESHOLD || '0.6');
+const USE_VERTEX_AI = process.env.GEMINI_USE_VERTEX_AI === 'true';
+const VERTEX_PROJECT_ID = process.env.VERTEX_PROJECT_ID || process.env.GOOGLE_CLOUD_PROJECT || process.env.GCLOUD_PROJECT || '';
+const VERTEX_LOCATION = process.env.VERTEX_LOCATION || 'us-central1';
 
-let client: GoogleGenerativeAI | null = null;
+let vertexAuth: GoogleAuth | null = null;
 let dbAvailable: boolean | null = null;
 
-function getEmbeddingClient(): GoogleGenerativeAI | null {
-  if (!VECTOR_MEMORY_ENABLED) return null;
-  if (!process.env.GEMINI_API_KEY) return null;
-  if (!client) {
-    client = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+async function getVertexAccessToken(): Promise<string> {
+  await ensureGoogleCredentials(VERTEX_PROJECT_ID).catch(() => false);
+
+  if (!vertexAuth) {
+    vertexAuth = new GoogleAuth({ scopes: ['https://www.googleapis.com/auth/cloud-platform'] });
   }
-  return client;
+
+  let authClient: any;
+  let accessToken: any;
+  try {
+    authClient = await vertexAuth.getClient();
+    accessToken = await authClient.getAccessToken();
+  } catch (err) {
+    const msg = String((err as any)?.message || err || '').toLowerCase();
+    if (msg.includes('default credentials') || msg.includes('application default credentials')) {
+      const recovered = await ensureGoogleCredentials(VERTEX_PROJECT_ID).catch(() => false);
+      if (recovered) {
+        vertexAuth = new GoogleAuth({ scopes: ['https://www.googleapis.com/auth/cloud-platform'] });
+        authClient = await vertexAuth.getClient();
+        accessToken = await authClient.getAccessToken();
+      } else {
+        const tokenViaCli = getAccessTokenViaGcloud();
+        if (tokenViaCli) return tokenViaCli;
+        throw new Error('Vertex auth unavailable: Application Default Credentials are not configured');
+      }
+    } else {
+      throw err;
+    }
+  }
+
+  const token = typeof accessToken === 'string' ? accessToken : accessToken?.token;
+  if (!token) throw new Error('Vertex auth failed: could not obtain access token');
+  return token;
 }
 
 async function checkVectorSupport(): Promise<boolean> {
@@ -46,17 +76,50 @@ function contentHash(content: string): string {
 
 // ─── Embedding Generation ───
 
-async function generateEmbedding(text: string): Promise<number[] | null> {
-  const genAI = getEmbeddingClient();
-  if (!genAI) return null;
+async function generateEmbeddingVertex(text: string): Promise<number[] | null> {
+  if (!VERTEX_PROJECT_ID) return null;
 
   try {
+    const token = await getVertexAccessToken();
+    const endpoint = `https://${VERTEX_LOCATION}-aiplatform.googleapis.com/v1/projects/${VERTEX_PROJECT_ID}/locations/${VERTEX_LOCATION}/publishers/google/models/${encodeURIComponent(EMBEDDING_MODEL)}:predict`;
+    const res = await fetch(endpoint, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ instances: [{ content: text.slice(0, 2000) }] }),
+    });
+    if (!res.ok) {
+      const body = await res.text();
+      console.warn(`Vertex embedding ${res.status}: ${body.slice(0, 200)}`);
+      return null;
+    }
+    const json: any = await res.json();
+    const values = json?.predictions?.[0]?.embeddings?.values;
+    if (Array.isArray(values) && values.length > 0) return values;
+    return null;
+  } catch (err) {
+    console.warn('Vertex embedding failed:', err instanceof Error ? err.message : 'Unknown');
+    return null;
+  }
+}
+
+async function generateEmbedding(text: string): Promise<number[] | null> {
+  if (!VECTOR_MEMORY_ENABLED) return null;
+
+  // Prefer Vertex AI (avoids Google AI Studio billing cap)
+  if (USE_VERTEX_AI) {
+    return generateEmbeddingVertex(text);
+  }
+
+  // Fallback: Google AI Studio (API key)
+  if (!process.env.GEMINI_API_KEY) return null;
+
+  try {
+    const { GoogleGenerativeAI } = await import('@google/generative-ai');
+    const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
     const model = genAI.getGenerativeModel({ model: EMBEDDING_MODEL });
     const result = await (model as any).embedContent(text.slice(0, 2000));
     const values = result?.embedding?.values;
-    if (Array.isArray(values) && values.length > 0) {
-      return values;
-    }
+    if (Array.isArray(values) && values.length > 0) return values;
     return null;
   } catch (err) {
     console.warn('Embedding generation failed:', err instanceof Error ? err.message : 'Unknown');

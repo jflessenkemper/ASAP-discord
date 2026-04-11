@@ -1,4 +1,6 @@
-import { GoogleGenerativeAI } from '@google/generative-ai';
+import { GoogleAuth } from 'google-auth-library';
+
+import { ensureGoogleCredentials, getAccessTokenViaGcloud } from '../services/googleCredentials';
 
 import { logAgentEvent } from './activityLog';
 
@@ -21,16 +23,88 @@ const GUARDRAILS_INPUT_ENABLED = process.env.GUARDRAILS_INPUT_ENABLED !== 'false
 const GUARDRAILS_OUTPUT_ENABLED = process.env.GUARDRAILS_OUTPUT_ENABLED !== 'false';
 const GUARDRAILS_MAX_INPUT_CHARS = parseInt(process.env.GUARDRAILS_MAX_INPUT_CHARS || '2000', 10);
 const GUARDRAILS_TIMEOUT_MS = parseInt(process.env.GUARDRAILS_TIMEOUT_MS || '5000', 10);
+const USE_VERTEX_AI = process.env.GEMINI_USE_VERTEX_AI === 'true';
+const VERTEX_PROJECT_ID = process.env.VERTEX_PROJECT_ID || process.env.GOOGLE_CLOUD_PROJECT || process.env.GCLOUD_PROJECT || '';
+const VERTEX_LOCATION = process.env.VERTEX_LOCATION || 'us-central1';
 
-let client: GoogleGenerativeAI | null = null;
+let vertexAuth: GoogleAuth | null = null;
 
-function getGuardrailClient(): GoogleGenerativeAI | null {
-  if (!GUARDRAILS_ENABLED) return null;
-  if (!process.env.GEMINI_API_KEY) return null;
-  if (!client) {
-    client = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+async function getVertexAccessToken(): Promise<string> {
+  await ensureGoogleCredentials(VERTEX_PROJECT_ID).catch(() => false);
+
+  if (!vertexAuth) {
+    vertexAuth = new GoogleAuth({ scopes: ['https://www.googleapis.com/auth/cloud-platform'] });
   }
-  return client;
+
+  let authClient: any;
+  let accessToken: any;
+  try {
+    authClient = await vertexAuth.getClient();
+    accessToken = await authClient.getAccessToken();
+  } catch (err) {
+    const msg = String((err as any)?.message || err || '').toLowerCase();
+    if (msg.includes('default credentials') || msg.includes('application default credentials')) {
+      const recovered = await ensureGoogleCredentials(VERTEX_PROJECT_ID).catch(() => false);
+      if (recovered) {
+        vertexAuth = new GoogleAuth({ scopes: ['https://www.googleapis.com/auth/cloud-platform'] });
+        authClient = await vertexAuth.getClient();
+        accessToken = await authClient.getAccessToken();
+      } else {
+        const tokenViaCli = getAccessTokenViaGcloud();
+        if (tokenViaCli) return tokenViaCli;
+        throw new Error('Vertex auth unavailable: Application Default Credentials are not configured');
+      }
+    } else {
+      throw err;
+    }
+  }
+
+  const token = typeof accessToken === 'string' ? accessToken : accessToken?.token;
+  if (!token) throw new Error('Vertex auth failed: could not obtain access token');
+  return token;
+}
+
+async function callVertexGenerateContent(prompt: string): Promise<string | null> {
+  if (!VERTEX_PROJECT_ID) return null;
+
+  const token = await getVertexAccessToken();
+  const endpoint = `https://${VERTEX_LOCATION}-aiplatform.googleapis.com/v1/projects/${VERTEX_PROJECT_ID}/locations/${VERTEX_LOCATION}/publishers/google/models/${encodeURIComponent(GUARDRAILS_MODEL)}:generateContent`;
+  const res = await fetch(endpoint, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      contents: [{ role: 'user', parts: [{ text: prompt }] }],
+      generationConfig: { maxOutputTokens: 100, temperature: 0 },
+    }),
+    signal: AbortSignal.timeout(GUARDRAILS_TIMEOUT_MS),
+  });
+  if (!res.ok) {
+    const body = await res.text();
+    console.warn(`Vertex guardrails ${res.status}: ${body.slice(0, 200)}`);
+    return null;
+  }
+  const json: any = await res.json();
+  return json?.candidates?.[0]?.content?.parts?.[0]?.text?.trim() ?? null;
+}
+
+async function callGoogleAIGenerateContent(prompt: string): Promise<string | null> {
+  if (!process.env.GEMINI_API_KEY) return null;
+
+  const { GoogleGenerativeAI } = await import('@google/generative-ai');
+  const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+  const model = genAI.getGenerativeModel({ model: GUARDRAILS_MODEL });
+  const result = await model.generateContent({
+    contents: [{ role: 'user', parts: [{ text: prompt }] }],
+    generationConfig: { maxOutputTokens: 100, temperature: 0 },
+  });
+  return result.response.text().trim();
+}
+
+async function classify(prompt: string): Promise<string | null> {
+  if (USE_VERTEX_AI) {
+    return callVertexGenerateContent(prompt);
+  }
+  return callGoogleAIGenerateContent(prompt);
 }
 
 const INPUT_CLASSIFICATION_PROMPT = `You are a security classifier for a Discord bot with AI agents.
@@ -64,9 +138,6 @@ const PASS_RESULT: GuardrailResult = { verdict: 'pass', confidence: 1.0 };
 export async function classifyInput(userMessage: string, agentId: string): Promise<GuardrailResult> {
   if (!GUARDRAILS_ENABLED || !GUARDRAILS_INPUT_ENABLED) return PASS_RESULT;
 
-  const genAI = getGuardrailClient();
-  if (!genAI) return PASS_RESULT;
-
   const truncated = String(userMessage || '').slice(0, GUARDRAILS_MAX_INPUT_CHARS);
   if (!truncated.trim()) return PASS_RESULT;
 
@@ -78,17 +149,9 @@ export async function classifyInput(userMessage: string, agentId: string): Promi
   }
 
   try {
-    const model = genAI.getGenerativeModel({ model: GUARDRAILS_MODEL });
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), GUARDRAILS_TIMEOUT_MS);
+    const text = await classify(INPUT_CLASSIFICATION_PROMPT + truncated);
+    if (!text) return PASS_RESULT;
 
-    const result = await model.generateContent({
-      contents: [{ role: 'user', parts: [{ text: INPUT_CLASSIFICATION_PROMPT + truncated }] }],
-      generationConfig: { maxOutputTokens: 100, temperature: 0 },
-    });
-    clearTimeout(timeout);
-
-    const text = result.response.text().trim();
     const parsed = parseGuardrailResponse(text);
 
     if (parsed.verdict !== 'pass') {
@@ -106,9 +169,6 @@ export async function classifyInput(userMessage: string, agentId: string): Promi
 export async function classifyOutput(aiResponse: string, agentId: string): Promise<GuardrailResult> {
   if (!GUARDRAILS_ENABLED || !GUARDRAILS_OUTPUT_ENABLED) return PASS_RESULT;
 
-  const genAI = getGuardrailClient();
-  if (!genAI) return PASS_RESULT;
-
   const truncated = String(aiResponse || '').slice(0, GUARDRAILS_MAX_INPUT_CHARS);
   if (!truncated.trim()) return PASS_RESULT;
 
@@ -120,17 +180,9 @@ export async function classifyOutput(aiResponse: string, agentId: string): Promi
   }
 
   try {
-    const model = genAI.getGenerativeModel({ model: GUARDRAILS_MODEL });
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), GUARDRAILS_TIMEOUT_MS);
+    const text = await classify(OUTPUT_CLASSIFICATION_PROMPT + truncated);
+    if (!text) return PASS_RESULT;
 
-    const result = await model.generateContent({
-      contents: [{ role: 'user', parts: [{ text: OUTPUT_CLASSIFICATION_PROMPT + truncated }] }],
-      generationConfig: { maxOutputTokens: 100, temperature: 0 },
-    });
-    clearTimeout(timeout);
-
-    const text = result.response.text().trim();
     const parsed = parseGuardrailResponse(text);
 
     if (parsed.verdict !== 'pass') {

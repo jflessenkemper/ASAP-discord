@@ -1188,7 +1188,7 @@ const DEFAULT_MAX_OUTPUT_TOKENS = parseInt(process.env.DEFAULT_MAX_OUTPUT_TOKENS
 const DEFAULT_MAX_OUTPUT_TOKENS_DEVELOPER = parseInt(process.env.DEFAULT_MAX_OUTPUT_TOKENS_DEVELOPER || '1400', 10);
 const DISABLE_GEMINI_QUOTA_FUSE = process.env.DISABLE_GEMINI_QUOTA_FUSE === 'true';
 const GEMINI_QUOTA_FUSE_MS = parseInt(process.env.GEMINI_QUOTA_FUSE_MS || '300000', 10);
-const GEMINI_MAX_RETRIES = parseInt(process.env.GEMINI_MAX_RETRIES || '1', 10);
+const GEMINI_MAX_RETRIES = parseInt(process.env.GEMINI_MAX_RETRIES || '4', 10);
 const GEMINI_RETRY_BASE_DELAY_MS = parseInt(process.env.GEMINI_RETRY_BASE_DELAY_MS || '1500', 10);
 const GEMINI_429_PAUSE_MS = parseInt(process.env.GEMINI_429_PAUSE_MS || '25000', 10);
 const GEMINI_429_BACKOFF_FACTOR = Math.max(1, parseFloat(process.env.GEMINI_429_BACKOFF_FACTOR || '2'));
