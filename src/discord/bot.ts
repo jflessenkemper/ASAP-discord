@@ -475,6 +475,8 @@ export async function startBot(): Promise<void> {
     // Ignore bot traffic except the dedicated smoke-test bot so e2e tests can
     // still exercise the same production routing path. In groupchat, emit a
     // short hint so operators know why a bot-authored trigger was ignored.
+    // Always silently skip our own messages to avoid self-triggered notices.
+    if (message.author.id === client?.user?.id) return;
     if (message.author.bot && !isTesterBotId(message.author.id)) {
       if (botChannels && message.channel.id === botChannels.groupchat.id) {
         const key = `${message.author.id}:${message.channel.id}`;
