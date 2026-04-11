@@ -31,6 +31,7 @@ import { setTelephonyChannels, isTelephonyAvailable, initContacts } from './serv
 import { setupChannels, BotChannels } from './setup';
 import { setCommandAuditCallback, setPRReviewCallback, setDiscordGuild, setToolAuditCallback, setAgentChannelResolver } from './tools';
 import { setLimitsChannel, setCostChannel, startDashboardUpdates, stopDashboardUpdates, initUsageCounters, flushUsageCounters, getUsageReport, getCostOpsSummaryLine } from './usage';
+import { updateListingByMsgId } from '../services/jobSearch';
 
 
 /**
@@ -606,6 +607,32 @@ export async function startBot(): Promise<void> {
       const msg = err instanceof Error ? err.stack || err.message : 'Unknown';
       console.error('Voice auto join/leave handler error:', err instanceof Error ? err.message : 'Unknown');
       void postAgentErrorLog('discord:voice-auto', 'Voice auto join/leave error', { detail: msg, level: 'warn' });
+    }
+  });
+
+  // ── Job approval reactions in #📋-job-applications ─────────────────
+  client.on(Events.MessageReactionAdd, async (reaction, user) => {
+    try {
+      if (user.bot) return;
+      // Fetch partial reaction/message if needed
+      if (reaction.partial) await reaction.fetch();
+      if (reaction.message.partial) await reaction.message.fetch();
+
+      const channel = reaction.message.channel;
+      if (!('name' in channel) || channel.name !== '📋-job-applications') return;
+
+      const emoji = reaction.emoji.name;
+      if (emoji !== '✅' && emoji !== '❌') return;
+
+      const msgId = reaction.message.id;
+      const newStatus = emoji === '✅' ? 'approved' : 'rejected';
+      const listing = await updateListingByMsgId(msgId, newStatus);
+
+      if (listing) {
+        await reaction.message.reply(`${emoji === '✅' ? '✅ Approved' : '❌ Rejected'}: **${listing.title}** @ ${listing.company}`);
+      }
+    } catch (err) {
+      console.error('Job approval reaction error:', err instanceof Error ? err.message : 'Unknown');
     }
   });
 

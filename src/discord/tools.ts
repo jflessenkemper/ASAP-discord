@@ -27,6 +27,18 @@ import { mobileHarnessStart, mobileHarnessStep, mobileHarnessSnapshot, mobileHar
 import { captureAndPostScreenshots } from './services/screenshots';
 import { getWebhook } from './services/webhooks';
 import { setDailyBudgetLimit } from './usage';
+import {
+  scanAdzuna,
+  scanPortals,
+  getListingsByStatus,
+  updateListingStatus,
+  getTrackerSummary,
+  getProfile,
+  upsertProfile,
+  seedDefaultPortals,
+  updateListingScore,
+  setListingDiscordMsg,
+} from '../services/jobSearch';
 
 
 let discordGuild: Guild | null = null;
@@ -1293,6 +1305,103 @@ export const REPO_TOOLS = [
       required: [],
     },
   },
+  {
+    name: 'job_scan',
+    description:
+      'Scan for job listings in Australia/NSW. Searches Adzuna API and tracked company portals (Greenhouse/Ashby/Lever). Returns new listings matching your profile. Deduplicates automatically.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        keywords: {
+          type: 'string',
+          description: 'Optional search keywords to override profile target roles, e.g. "typescript react"',
+        },
+        source: {
+          type: 'string',
+          description: 'Optional: "adzuna", "portals", or "all" (default). Which sources to scan.',
+        },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'job_evaluate',
+    description:
+      'Evaluate a job listing against the user profile. Pass the listing ID to score it 1-5 on role match, skills gap, comp alignment, and location fit.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        listing_id: {
+          type: 'string',
+          description: 'The job_listings.id to evaluate',
+        },
+      },
+      required: ['listing_id'],
+    },
+  },
+  {
+    name: 'job_tracker',
+    description:
+      'View and manage your job application pipeline. Lists jobs by status with counts. Use action "list" (default), "summary", or "update".',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        action: {
+          type: 'string',
+          description: '"list" to list jobs (optionally filtered by status), "summary" for status counts, "update" to change a listing status',
+        },
+        status: {
+          type: 'string',
+          description: 'For list: filter by status (scanned|evaluated|approved|rejected|applied|interview|offer|discarded). For update: new status.',
+        },
+        listing_id: {
+          type: 'string',
+          description: 'For update: the job_listings.id to update',
+        },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'job_profile_update',
+    description:
+      'Create or update the job search profile. Store CV text, target roles, keyword filters, salary range, location, deal-breakers. Also seeds default AU company portals on first use.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        cv_text: { type: 'string', description: 'CV/resume in markdown format' },
+        target_roles: { type: 'string', description: 'Comma-separated target role titles, e.g. "Software Engineer,Full Stack Developer"' },
+        keywords_pos: { type: 'string', description: 'Comma-separated positive title keywords, e.g. "engineer,developer,architect"' },
+        keywords_neg: { type: 'string', description: 'Comma-separated negative title keywords to exclude, e.g. "intern,junior,graduate"' },
+        salary_min: { type: 'string', description: 'Minimum annual salary in AUD' },
+        salary_max: { type: 'string', description: 'Maximum annual salary in AUD' },
+        location: { type: 'string', description: 'Target location, default "New South Wales"' },
+        remote_ok: { type: 'string', description: '"true" or "false" — whether remote Australian jobs are acceptable' },
+        deal_breakers: { type: 'string', description: 'Freeform deal-breaker notes' },
+        preferences: { type: 'string', description: 'Freeform preference notes' },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'job_post_approvals',
+    description:
+      'Post evaluated job listings as approval cards to the #job-applications channel. Each card gets ✅/❌ reactions for the user to approve or reject. Only posts listings with status "evaluated" and score >= 3.0.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        min_score: {
+          type: 'string',
+          description: 'Minimum score to include, default 3.0',
+        },
+        limit: {
+          type: 'string',
+          description: 'Max listings to post, default 10',
+        },
+      },
+      required: [],
+    },
+  },
 ] as const;
 
 /**
@@ -1329,6 +1438,7 @@ const RILEY_TOOL_NAMES = new Set([
   'gcp_preflight', 'gcp_get_env', 'gcp_list_revisions', 'gcp_secret_list', 'gcp_build_status',
   'gcp_logs_query', 'gcp_run_describe', 'gcp_storage_ls', 'gcp_artifact_list', 'gcp_sql_describe', 'gcp_project_info',
   'set_daily_budget', 'db_query_readonly', 'db_schema',
+  'job_scan', 'job_evaluate', 'job_tracker', 'job_profile_update', 'job_post_approvals',
 ]);
 export const RILEY_TOOLS = REPO_TOOLS.filter((t) => RILEY_TOOL_NAMES.has(t.name));
 
@@ -1622,6 +1732,16 @@ async function executeToolInternal(
         return await dbQuery(input.query, input.params);
       case 'db_schema':
         return await dbSchema(input.table);
+      case 'job_scan':
+        return await toolJobScan(input.keywords, input.source);
+      case 'job_evaluate':
+        return await toolJobEvaluate(parseInt(input.listing_id, 10));
+      case 'job_tracker':
+        return await toolJobTracker(input.action, input.status, input.listing_id ? parseInt(input.listing_id, 10) : undefined);
+      case 'job_profile_update':
+        return await toolJobProfileUpdate(input);
+      case 'job_post_approvals':
+        return await toolJobPostApprovals(parseFloat(input.min_score) || 3.0, parseInt(input.limit, 10) || 10);
       default:
         return `Unknown tool: ${toolName}`;
     }
@@ -3963,4 +4083,196 @@ async function dbSchema(table?: string): Promise<string> {
   } catch (err) {
     return `Schema error: ${err instanceof Error ? err.message : 'Unknown'}`;
   }
+}
+
+// ── Job search tool handlers ───────────────────────────────────────
+
+async function toolJobScan(keywords?: string, source?: string): Promise<string> {
+  const src = (source || 'all').toLowerCase();
+  const parts: string[] = [];
+
+  if (src === 'adzuna' || src === 'all') {
+    const adzResult = await scanAdzuna(keywords);
+    parts.push(`**Adzuna**: ${adzResult.listings.length} new listings (${adzResult.skipped} skipped, ${adzResult.total} total on API)`);
+    for (const l of adzResult.listings.slice(0, 15)) {
+      const salary = l.salary_min ? ` | $${Math.round(l.salary_min / 1000)}k–$${Math.round((l.salary_max || l.salary_min) / 1000)}k` : '';
+      parts.push(`  • **${l.title}** @ ${l.company} — ${l.location || 'Unknown'}${salary}`);
+    }
+    if (adzResult.listings.length > 15) parts.push(`  … and ${adzResult.listings.length - 15} more`);
+  }
+
+  if (src === 'portals' || src === 'all') {
+    const portalResult = await scanPortals();
+    parts.push(`**Portals**: ${portalResult.listings.length} new listings`);
+    for (const l of portalResult.listings.slice(0, 15)) {
+      parts.push(`  • **${l.title}** @ ${l.company} — ${l.location || 'Unknown'}`);
+    }
+    if (portalResult.listings.length > 15) parts.push(`  … and ${portalResult.listings.length - 15} more`);
+    if (portalResult.errors.length > 0) {
+      parts.push(`Portal errors: ${portalResult.errors.join('; ')}`);
+    }
+  }
+
+  const total = parts.length > 0 ? parts.join('\n') : 'No new listings found.';
+  return total;
+}
+
+async function toolJobEvaluate(listingId: number): Promise<string> {
+  const listings = await getListingsByStatus('scanned', 500);
+  const listing = listings.find((l) => l.id === listingId);
+  if (!listing) {
+    // Try evaluated too — maybe already evaluated
+    const evaluated = await getListingsByStatus('evaluated', 500);
+    const found = evaluated.find((l) => l.id === listingId);
+    if (found) return `Listing #${listingId} already evaluated: score=${found.score}, evaluation: ${found.evaluation}`;
+    return `Listing #${listingId} not found in scanned listings.`;
+  }
+
+  const profile = await getProfile();
+  // Return listing details + profile for Riley to reason about and call updateListingScore
+  const profileSummary = profile
+    ? `Target roles: ${(profile.target_roles || []).join(', ')} | Location: ${profile.location || 'NSW'} | Salary: $${profile.salary_min || '?'}–$${profile.salary_max || '?'} | Deal-breakers: ${profile.deal_breakers || 'none'}`
+    : 'No profile configured — ask the user to set one up first.';
+
+  return [
+    `**Listing #${listing.id}**: ${listing.title}`,
+    `Company: ${listing.company}`,
+    `Location: ${listing.location || 'Unknown'}`,
+    listing.salary_min ? `Salary: $${Math.round(listing.salary_min / 1000)}k–$${Math.round((listing.salary_max || listing.salary_min) / 1000)}k` : 'Salary: Not specified',
+    `URL: ${listing.url}`,
+    listing.description ? `Description: ${listing.description.slice(0, 800)}` : '',
+    `Source: ${listing.source}`,
+    '',
+    `**Your profile**: ${profileSummary}`,
+    '',
+    'Score this listing 1-5 on: role match, skills alignment, compensation fit, location fit.',
+    'Then call job_tracker with action="update" and the listing_id to save your evaluation.',
+  ].filter(Boolean).join('\n');
+}
+
+async function toolJobTracker(action?: string, status?: string, listingId?: number): Promise<string> {
+  const act = (action || 'summary').toLowerCase();
+
+  if (act === 'summary') {
+    const summary = await getTrackerSummary();
+    if (Object.keys(summary).length === 0) return 'No job listings in the tracker yet. Run job_scan first.';
+    const lines = Object.entries(summary).map(([s, c]) => `  ${s}: ${c}`);
+    return `**Job Tracker Summary**\n${lines.join('\n')}\nTotal: ${Object.values(summary).reduce((a, b) => a + b, 0)}`;
+  }
+
+  if (act === 'list') {
+    const filterStatus = status || 'scanned';
+    const listings = await getListingsByStatus(filterStatus, 25);
+    if (listings.length === 0) return `No listings with status "${filterStatus}".`;
+    const lines = listings.map((l) => {
+      const score = l.score != null ? ` | score=${l.score}` : '';
+      return `  #${l.id}: **${l.title}** @ ${l.company}${score}`;
+    });
+    return `**Listings (${filterStatus})** — ${listings.length} results\n${lines.join('\n')}`;
+  }
+
+  if (act === 'update') {
+    if (!listingId || !status) return 'Provide listing_id and status for update action.';
+    await updateListingStatus(listingId, status);
+    return `Updated listing #${listingId} → ${status}`;
+  }
+
+  if (act === 'score') {
+    if (!listingId) return 'Provide listing_id for scoring.';
+    const score = parseFloat(status || '3');
+    await updateListingScore(listingId, score, '');
+    return `Scored listing #${listingId} = ${score}`;
+  }
+
+  return `Unknown tracker action: ${act}. Use "summary", "list", "update", or "score".`;
+}
+
+async function toolJobProfileUpdate(input: Record<string, string>): Promise<string> {
+  const fields: Record<string, any> = {};
+
+  if (input.cv_text) fields.cv_text = input.cv_text;
+  if (input.target_roles) fields.target_roles = input.target_roles.split(',').map((s: string) => s.trim());
+  if (input.keywords_pos) fields.keywords_pos = input.keywords_pos.split(',').map((s: string) => s.trim());
+  if (input.keywords_neg) fields.keywords_neg = input.keywords_neg.split(',').map((s: string) => s.trim());
+  if (input.salary_min) fields.salary_min = parseInt(input.salary_min, 10);
+  if (input.salary_max) fields.salary_max = parseInt(input.salary_max, 10);
+  if (input.location) fields.location = input.location;
+  if (input.remote_ok) fields.remote_ok = input.remote_ok === 'true';
+  if (input.deal_breakers) fields.deal_breakers = input.deal_breakers;
+  if (input.preferences) fields.preferences = input.preferences;
+
+  if (Object.keys(fields).length === 0) {
+    const profile = await getProfile();
+    if (!profile) return 'No profile exists yet. Provide at least target_roles to create one.';
+    return [
+      '**Current Profile**',
+      `Target roles: ${(profile.target_roles || []).join(', ')}`,
+      `Location: ${profile.location || 'Not set'}`,
+      `Salary: $${profile.salary_min || '?'}–$${profile.salary_max || '?'}`,
+      `Remote OK: ${profile.remote_ok ?? 'Not set'}`,
+      `Positive keywords: ${(profile.keywords_pos || []).join(', ') || 'None'}`,
+      `Negative keywords: ${(profile.keywords_neg || []).join(', ') || 'None'}`,
+      profile.deal_breakers ? `Deal-breakers: ${profile.deal_breakers}` : '',
+      profile.preferences ? `Preferences: ${profile.preferences}` : '',
+      profile.cv_text ? `CV: (${profile.cv_text.length} chars stored)` : 'CV: Not uploaded',
+    ].filter(Boolean).join('\n');
+  }
+
+  await upsertProfile(fields);
+
+  // Seed portals on first profile creation
+  const existing = await getProfile();
+  if (existing) {
+    const seeded = await seedDefaultPortals();
+    if (seeded > 0) {
+      return `Profile updated. Also seeded ${seeded} default AU company portals for scanning.`;
+    }
+  }
+
+  return `Profile updated: ${Object.keys(fields).join(', ')}`;
+}
+
+async function toolJobPostApprovals(minScore: number, limit: number): Promise<string> {
+  const guild = requireGuild();
+  await guild.channels.fetch();
+  const channel = guild.channels.cache.find(
+    (c) => c.type === ChannelType.GuildText && c.name === '📋-job-applications'
+  ) as TextChannel | undefined;
+
+  if (!channel) return 'Error: #📋-job-applications channel not found. Run setup first.';
+
+  const evaluated = await getListingsByStatus('evaluated', 200);
+  const eligible = evaluated.filter((l) => (l.score || 0) >= minScore).slice(0, limit);
+
+  if (eligible.length === 0) return 'No evaluated listings meet the minimum score threshold. Run job_evaluate on scanned listings first.';
+
+  let posted = 0;
+  for (const listing of eligible) {
+    const salary = listing.salary_min
+      ? `💰 $${Math.round(listing.salary_min / 1000)}k–$${Math.round((listing.salary_max || listing.salary_min) / 1000)}k`
+      : '💰 Not specified';
+
+    const embed = {
+      title: `${listing.title}`,
+      description: [
+        `**Company:** ${listing.company}`,
+        `**Location:** ${listing.location || 'Unknown'}`,
+        salary,
+        `**Score:** ${'⭐'.repeat(Math.round(listing.score || 0))} (${listing.score}/5)`,
+        listing.evaluation ? `**Evaluation:** ${listing.evaluation.slice(0, 300)}` : '',
+        `**Source:** ${listing.source}`,
+        `[View listing](${listing.url})`,
+      ].filter(Boolean).join('\n'),
+      color: listing.score && listing.score >= 4 ? 0x00cc44 : listing.score && listing.score >= 3 ? 0xffaa00 : 0xcc4400,
+      footer: { text: `Listing #${listing.id} | React ✅ to approve, ❌ to reject` },
+    };
+
+    const msg = await channel.send({ embeds: [embed] });
+    await msg.react('✅');
+    await msg.react('❌');
+    await setListingDiscordMsg(listing.id!, msg.id);
+    posted++;
+  }
+
+  return `Posted ${posted} job approval cards to #📋-job-applications. React ✅ to approve or ❌ to reject each one.`;
 }

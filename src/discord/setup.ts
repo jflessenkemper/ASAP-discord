@@ -42,6 +42,7 @@ const OPS_CHANNELS = {
 
 const PERSONAL_CHANNELS = {
   careerOps: '💼-career-ops',
+  jobApplications: '📋-job-applications',
 } as const;
 
 const LEGACY_ACCIDENTAL_CHANNELS = new Set([
@@ -92,6 +93,7 @@ export interface BotChannels {
   voiceErrors: TextChannel;
   agentErrors: TextChannel;
   careerOps: TextChannel;
+  jobApplications: TextChannel;
   voiceChannel: VoiceChannel;
 }
 
@@ -543,6 +545,14 @@ export async function setupChannels(guild: Guild): Promise<BotChannels> {
     { owner: 'jflessenkemper', cadence: 'daily', staleAlert: '14d' }
   );
 
+  const jobApplications = await ensureText(
+    PERSONAL_CHANNELS.jobApplications,
+    catPersonal,
+    '📋 Job application approval queue — react ✅ to approve or ❌ to reject',
+    `📋 **Job Applications**\n\nRiley posts job matches here as numbered cards. React ✅ to approve or ❌ to reject.`,
+    { owner: 'jflessenkemper', cadence: 'on-demand', staleAlert: '14d' }
+  );
+
   const agentIds = [...agents.keys()]; // e.g. 'qa', 'developer', 'lawyer'
   for (const oldName of agentIds) {
     const oldChannel = guild.channels.cache.find(
@@ -577,7 +587,7 @@ export async function setupChannels(guild: Guild): Promise<BotChannels> {
     }
   }
 
-  const allTextChannels = [groupchat, threadStatus, decisions, github, upgrades, tools, callLog, limits, cost, screenshots, url, terminal, voiceErrors, agentErrors, careerOps, ...agentChannels.values()];
+  const allTextChannels = [groupchat, threadStatus, decisions, github, upgrades, tools, callLog, limits, cost, screenshots, url, terminal, voiceErrors, agentErrors, careerOps, jobApplications, ...agentChannels.values()];
   console.log('🔗 Pre-creating webhooks for all channels...');
   const webhookResults = await Promise.allSettled(
     allTextChannels.map((channel) => getWebhook(channel))
@@ -588,7 +598,7 @@ export async function setupChannels(guild: Guild): Promise<BotChannels> {
 
   const botId = guild.client.user?.id;
   if (botId) {
-    const opsChannels = [threadStatus, decisions, github, upgrades, tools, callLog, limits, cost, screenshots, url, terminal, voiceErrors, agentErrors, careerOps];
+    const opsChannels = [threadStatus, decisions, github, upgrades, tools, callLog, limits, cost, screenshots, url, terminal, voiceErrors, agentErrors, careerOps, jobApplications];
     const restricted = allTextChannels.filter((channel) => !opsChannels.some((ops) => ops.id === channel.id));
     for (const ch of restricted) {
       try {
@@ -625,7 +635,7 @@ export async function setupChannels(guild: Guild): Promise<BotChannels> {
 
     const hardenSensitive = String(process.env.DISCORD_HARDEN_SENSITIVE_CHANNELS || 'true').toLowerCase() !== 'false';
     if (hardenSensitive) {
-      const sensitiveChannels = [terminal, voiceErrors, agentErrors, limits, cost, callLog, upgrades, careerOps];
+      const sensitiveChannels = [terminal, voiceErrors, agentErrors, limits, cost, callLog, upgrades, careerOps, jobApplications];
       const everyoneRoleId = guild.roles.everyone.id;
       const ownerMember = await guild.fetchOwner().catch(() => null);
       if (!ownerMember) {
@@ -661,5 +671,5 @@ export async function setupChannels(guild: Guild): Promise<BotChannels> {
     }
   }
 
-  return { agentChannels, groupchat, threadStatus, decisions, github, upgrades, tools, callLog, limits, cost, screenshots, url, terminal, voiceErrors, agentErrors, careerOps, voiceChannel };
+  return { agentChannels, groupchat, threadStatus, decisions, github, upgrades, tools, callLog, limits, cost, screenshots, url, terminal, voiceErrors, agentErrors, careerOps, jobApplications, voiceChannel };
 }
