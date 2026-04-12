@@ -513,6 +513,50 @@ const AGENT_CAPABILITY_TESTS: AgentCapabilityTest[] = [
     expectToolAudit: ['job_tracker'],
     timeoutMs: 150_000,
   },
+  // Tool-proof: Riley job scan trigger
+  {
+    id: 'executive-assistant',
+    category: 'tool-proof',
+    capability: 'job-scan-trigger',
+    prompt: 'Use the job_scan tool right now to scan for new job listings. Summarize what you find. Do NOT delegate this.',
+    expectAny: [/scan|listing|found|job|role|no.*new|result|adzuna/i],
+    expectToolAudit: ['job_scan'],
+    timeoutMs: 180_000,
+    heavyTool: true,
+  },
+  // Tool-proof: Riley draft application
+  {
+    id: 'executive-assistant',
+    category: 'tool-proof',
+    capability: 'job-draft-application',
+    prompt: 'Use the job_draft_application tool right now to draft an application for the most recently approved listing. If none are approved, say so. Do NOT delegate this.',
+    expectAny: [/draft|cover.?letter|resume|application|no.*approved|no.*listing|not.*found/i],
+    expectToolAudit: ['job_draft_application'],
+    timeoutMs: 180_000,
+    heavyTool: true,
+  },
+  // Tool-proof: Riley submit application
+  {
+    id: 'executive-assistant',
+    category: 'tool-proof',
+    capability: 'job-submit-application',
+    prompt: 'Use the job_submit_application tool right now to submit the most recently drafted application. If none are drafted, say so. Do NOT delegate this.',
+    expectAny: [/submit|email|sent|greenhouse|no.*draft|manual|not.*found|no.*listing/i],
+    expectToolAudit: ['job_submit_application'],
+    timeoutMs: 180_000,
+    heavyTool: true,
+  },
+  // Tool-proof: Riley evaluate listing
+  {
+    id: 'executive-assistant',
+    category: 'tool-proof',
+    capability: 'job-evaluate-listing',
+    prompt: 'Use the job_evaluate tool right now to evaluate any scanned but unevaluated listings. If there are none, say so. Do NOT delegate this.',
+    expectAny: [/evaluat|score|fit|match|no.*listing|already.*evaluat|none|not.*found/i],
+    expectToolAudit: ['job_evaluate'],
+    timeoutMs: 180_000,
+    heavyTool: true,
+  },
 ];
 
 const READINESS_TEST_KEYS = new Set([
