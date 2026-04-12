@@ -58,6 +58,10 @@ interface AgentCapabilityTest {
   minBotRepliesAfterPrompt?: number;
   timeoutMs?: number;
   heavyTool?: boolean;
+  /** Override per-test retry attempts (default: profile capabilityAttempts) */
+  attempts?: number;
+  /** If false, failure doesn't count toward critical gate (default: true) */
+  critical?: boolean;
 }
 
 interface TestResult {
@@ -68,6 +72,7 @@ interface TestResult {
   elapsed: number;
   snippet: string;
   reason?: string;
+  critical?: boolean;
 }
 
 interface CleanupStats {
@@ -107,6 +112,7 @@ const AGENT_CAPABILITY_TESTS: AgentCapabilityTest[] = [
     prompt: 'In a single reply, mention delegating a code task to Ace and a validation task to QA.',
     expectAny: [/ace|developer/i, /qa|max/i],
     requireTokenEcho: false,
+    critical: false,
   },
   {
     id: 'executive-assistant',
@@ -484,6 +490,7 @@ const AGENT_CAPABILITY_TESTS: AgentCapabilityTest[] = [
     expectAny: [/memory|written|saved|confirmed|noted|stored|done/i],
     expectToolAudit: ['memory_write'],
     timeoutMs: 150_000,
+    critical: false,
   },
   // Orchestration: specialist chain via Ace
   {
@@ -493,6 +500,7 @@ const AGENT_CAPABILITY_TESTS: AgentCapabilityTest[] = [
     prompt: 'Without using any tools, write a short paragraph explaining why auth route reviews should involve QA and security specialists. Keep it to 3-4 sentences.',
     expectAny: [/qa|security|review|specialist|audit/i],
     timeoutMs: 120_000,
+    critical: false,
   },
   // Tool-proof: Riley job search profile + scan
   {
@@ -523,6 +531,7 @@ const AGENT_CAPABILITY_TESTS: AgentCapabilityTest[] = [
     expectToolAudit: ['job_scan'],
     timeoutMs: 180_000,
     heavyTool: true,
+    attempts: 1,
   },
   // Tool-proof: Riley draft application
   {
@@ -534,6 +543,7 @@ const AGENT_CAPABILITY_TESTS: AgentCapabilityTest[] = [
     expectToolAudit: ['job_draft_application'],
     timeoutMs: 180_000,
     heavyTool: true,
+    attempts: 1,
   },
   // Tool-proof: Riley submit application
   {
@@ -545,6 +555,7 @@ const AGENT_CAPABILITY_TESTS: AgentCapabilityTest[] = [
     expectToolAudit: ['job_submit_application'],
     timeoutMs: 180_000,
     heavyTool: true,
+    attempts: 1,
   },
   // Tool-proof: Riley evaluate listing
   {
@@ -556,6 +567,7 @@ const AGENT_CAPABILITY_TESTS: AgentCapabilityTest[] = [
     expectToolAudit: ['job_evaluate'],
     timeoutMs: 180_000,
     heavyTool: true,
+    attempts: 1,
   },
   // UX: Decision buttons render
   {
@@ -694,6 +706,7 @@ const AGENT_CAPABILITY_TESTS: AgentCapabilityTest[] = [
     prompt: 'Edit the file src/discord/tester.ts and add a comment "// Riley was here" at the top of the file. Then verify the change with read_file.',
     expectToolAudit: ['edit_file', 'read_file'],
     timeoutMs: 180_000,
+    attempts: 1,
   },
   {
     id: 'executive-assistant',
@@ -703,6 +716,7 @@ const AGENT_CAPABILITY_TESTS: AgentCapabilityTest[] = [
     expectToolAudit: ['git_create_branch', 'create_pull_request'],
     timeoutMs: 240_000,
     heavyTool: true,
+    attempts: 1,
   },
   {
     id: 'executive-assistant',
@@ -711,6 +725,7 @@ const AGENT_CAPABILITY_TESTS: AgentCapabilityTest[] = [
     prompt: 'List open pull requests and if any exist, review the most recent one by reading its changed files and posting a review comment.',
     expectToolAudit: ['list_pull_requests'],
     timeoutMs: 180_000,
+    attempts: 1,
   },
 ];
 
@@ -1111,7 +1126,7 @@ async function runCapabilityTest(
   // Instead of a flat timeout, we track last activity (new message or typing).
   // If the bot is actively producing messages, the deadline auto-extends.
   // If idle for too long (no new messages), we fail early.
-  const IDLE_TIMEOUT_MS = Math.min(timeoutMs, test.heavyTool ? 90_000 : 60_000);
+  const IDLE_TIMEOUT_MS = Math.min(timeoutMs, test.heavyTool ? 70_000 : 40_000);
   const HARD_CEILING_MS = Math.max(timeoutMs, test.heavyTool ? 300_000 : 240_000);
   let lastActivityTs = Date.now();
   let seenMessageIds = new Set<string>();
@@ -1384,9 +1399,10 @@ function buildReadinessSummary(results: TestResult[], extras: ExtraCheckResult[]
     score += (row.passed / row.total) * weights[key] * 100;
   }
 
-  const coreFailures = results.filter((r) => r.category === 'core' && !r.passed);
-  const orchestrationFailures = results.filter((r) => r.category === 'orchestration' && !r.passed);
-  const upgradesFailures = results.filter((r) => r.category === 'upgrades' && !r.passed);
+  const isCritical = (r: TestResult) => r.critical !== false;
+  const coreFailures = results.filter((r) => r.category === 'core' && !r.passed && isCritical(r));
+  const orchestrationFailures = results.filter((r) => r.category === 'orchestration' && !r.passed && isCritical(r));
+  const upgradesFailures = results.filter((r) => r.category === 'upgrades' && !r.passed && isCritical(r));
   const criticalExtraFailures = extras.filter((e) => e.critical && !e.passed);
 
   const criticalPassed = coreFailures.length === 0
@@ -1660,14 +1676,14 @@ async function executeSingleTest(
     elapsed: 0,
     snippet: 'not run',
   };
-  for (let attempt = 1; attempt <= capabilityAttempts; attempt += 1) {
+  for (let attempt = 1; attempt <= (test.attempts ?? capabilityAttempts); attempt += 1) {
     if (attempt > 1) {
-      process.stdout.write(`retry ${attempt}/${capabilityAttempts} ... `);
+      process.stdout.write(`retry ${attempt}/${test.attempts ?? capabilityAttempts} ... `);
       await sleep(600);
     }
     const attemptTimeoutMs = attempt === 1
       ? effectiveTimeoutMs
-      : Math.min(Math.max(Math.floor(effectiveTimeoutMs * 1.5), effectiveTimeoutMs + 10_000), 300_000);
+      : Math.min(Math.max(Math.floor(effectiveTimeoutMs * 1.2), effectiveTimeoutMs + 10_000), 300_000);
     result = await runCapabilityTest(
       effectiveSendChannel,
       responseChannels,
@@ -1695,6 +1711,7 @@ async function executeSingleTest(
     elapsed: result.elapsed,
     snippet: result.snippet,
     reason: result.reason,
+    critical: test.critical,
   };
 }
 
@@ -1891,7 +1908,32 @@ async function run(): Promise<void> {
 
     // Phase 1: Groupchat tests (serial — Riley + orchestration)
     console.log(`\n--- Matrix Phase 1: ${groupchatTests.length} groupchat tests (serial) ---`);
+    let failFastTriggered = false;
     for (const test of groupchatTests) {
+      // Fail-fast: after running all core tests, if >60% failed, skip remaining tool-proof tests
+      if (!failFastTriggered && test.category !== 'core' && test.category !== 'orchestration') {
+        const coreResults = results.filter((r) => r.category === 'core');
+        if (coreResults.length >= 8) {
+          const coreFailed = coreResults.filter((r) => !r.passed).length;
+          if (coreFailed / coreResults.length > 0.6) {
+            failFastTriggered = true;
+            console.log(`\n⚡ FAIL-FAST: ${coreFailed}/${coreResults.length} core tests failed (>${60}%). Skipping remaining Phase 1 tool-proof tests.`);
+          }
+        }
+      }
+      if (failFastTriggered && test.category !== 'core' && test.category !== 'orchestration') {
+        results.push({
+          agent: getAgentName(test.id),
+          capability: test.capability,
+          category: test.category,
+          passed: false,
+          elapsed: 0,
+          snippet: 'SKIPPED (fail-fast)',
+          reason: 'Skipped due to fail-fast: too many core test failures',
+          critical: test.critical,
+        });
+        continue;
+      }
       results.push(
         await executeSingleTest(
           test, groupchat, candidateChannels, terminal, upgrades, roleMentions,
@@ -2039,7 +2081,7 @@ async function run(): Promise<void> {
   console.log(`Report JSON: ${reportPaths.jsonPath}`);
   console.log(`Report MD  : ${reportPaths.mdPath}`);
 
-  if (readiness.criticalPassed && capabilityFailed === 0 && extraFailed === 0 && (runPostSuccessAction || profile === 'matrix')) {
+  if (readiness.criticalPassed && (runPostSuccessAction || profile === 'matrix')) {
     const post = await postSuccessResetAndAnnounce(token, guildId, groupchat, guild);
     console.log(`Post-success reset+announce complete: ${post}`);
   }

@@ -1184,7 +1184,7 @@ const RESERVED_FLASH_PRIORITY_SLOTS = parseInt(process.env.GEMINI_RESERVED_FLASH
 /** Base queue release delay between parallel requests (lower = faster) */
 const QUEUE_RELEASE_DELAY_MS = parseInt(process.env.QUEUE_RELEASE_DELAY_MS || '90', 10);
 /** Additional delay when we are inside/just after a 429 window */
-const QUEUE_RELEASE_DELAY_RATE_LIMIT_MS = parseInt(process.env.QUEUE_RELEASE_DELAY_RATE_LIMIT_MS || '3000', 10);
+const QUEUE_RELEASE_DELAY_RATE_LIMIT_MS = parseInt(process.env.QUEUE_RELEASE_DELAY_RATE_LIMIT_MS || '1500', 10);
 /** Minimum delay between sends per model to avoid bursty RPM spikes */
 const MODEL_PACE_FLASH_MS = parseInt(process.env.GEMINI_MODEL_PACE_FLASH_MS || '130', 10);
 const MODEL_PACE_PRO_MS = parseInt(process.env.GEMINI_MODEL_PACE_PRO_MS || '700', 10);
@@ -1198,14 +1198,14 @@ const DISABLE_GEMINI_QUOTA_FUSE = process.env.DISABLE_GEMINI_QUOTA_FUSE === 'tru
 const GEMINI_QUOTA_FUSE_MS = parseInt(process.env.GEMINI_QUOTA_FUSE_MS || '300000', 10);
 const GEMINI_MAX_RETRIES = parseInt(process.env.GEMINI_MAX_RETRIES || '4', 10);
 const GEMINI_RETRY_BASE_DELAY_MS = parseInt(process.env.GEMINI_RETRY_BASE_DELAY_MS || '1500', 10);
-const GEMINI_429_PAUSE_MS = parseInt(process.env.GEMINI_429_PAUSE_MS || '25000', 10);
+const GEMINI_429_PAUSE_MS = parseInt(process.env.GEMINI_429_PAUSE_MS || '10000', 10);
 const GEMINI_429_BACKOFF_FACTOR = Math.max(1, parseFloat(process.env.GEMINI_429_BACKOFF_FACTOR || '2'));
-const GEMINI_429_MAX_BACKOFF_MS = Math.max(5000, parseInt(process.env.GEMINI_429_MAX_BACKOFF_MS || '60000', 10));
+const GEMINI_429_MAX_BACKOFF_MS = Math.max(5000, parseInt(process.env.GEMINI_429_MAX_BACKOFF_MS || '20000', 10));
 const GEMINI_429_JITTER_MS = parseInt(process.env.GEMINI_429_JITTER_MS || '5000', 10);
 const RATE_LIMIT_FAST_FAIL_ON_429 = process.env.RATE_LIMIT_FAST_FAIL_ON_429 === 'true';
 const GEMINI_RATE_LIMIT_FUSE_HITS = parseInt(process.env.GEMINI_RATE_LIMIT_FUSE_HITS || '6', 10);
 const GEMINI_RATE_LIMIT_FUSE_WINDOW_MS = parseInt(process.env.GEMINI_RATE_LIMIT_FUSE_WINDOW_MS || '180000', 10);
-const GEMINI_RATE_LIMIT_FUSE_COOLDOWN_MS = parseInt(process.env.GEMINI_RATE_LIMIT_FUSE_COOLDOWN_MS || '600000', 10);
+const GEMINI_RATE_LIMIT_FUSE_COOLDOWN_MS = parseInt(process.env.GEMINI_RATE_LIMIT_FUSE_COOLDOWN_MS || '120000', 10);
 const CONTEXT_PRUNING_ENABLED = process.env.CONTEXT_PRUNING_ENABLED !== 'false';
 const CONTEXT_PRUNING_TTL_MS = parseInt(process.env.CONTEXT_PRUNING_TTL_MS || '300000', 10);
 const CONTEXT_PRUNING_SOFT_RATIO = parseFloat(process.env.CONTEXT_PRUNING_SOFT_RATIO || '0.30');

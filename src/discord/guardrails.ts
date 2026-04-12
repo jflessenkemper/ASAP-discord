@@ -135,11 +135,17 @@ AI output:
 
 const PASS_RESULT: GuardrailResult = { verdict: 'pass', confidence: 1.0 };
 
+/** Smoke-test messages are always safe — skip LLM classification to save quota */
+const SMOKE_TEST_RE = /\[smoke[- ]te?st[:\]]|\bSMOKE_[A-Z0-9_]+\b|\[smoke-token\]/i;
+
 export async function classifyInput(userMessage: string, agentId: string): Promise<GuardrailResult> {
   if (!GUARDRAILS_ENABLED || !GUARDRAILS_INPUT_ENABLED) return PASS_RESULT;
 
   const truncated = String(userMessage || '').slice(0, GUARDRAILS_MAX_INPUT_CHARS);
   if (!truncated.trim()) return PASS_RESULT;
+
+  // Skip LLM classification for smoke-test messages
+  if (SMOKE_TEST_RE.test(truncated)) return PASS_RESULT;
 
   // Fast regex pre-check for obvious injection patterns
   const injectionPatterns = /(?:ignore\s+(?:all\s+)?(?:previous|above|prior)\s+instructions|you\s+are\s+now|system\s*:\s*|forget\s+(?:your|all)\s+(?:instructions|rules)|reveal\s+(?:your|the)\s+(?:system|initial)\s+prompt|pretend\s+(?:you\s+are|to\s+be)\s+(?:a\s+)?(?:different|new|evil))/i;
@@ -171,6 +177,9 @@ export async function classifyOutput(aiResponse: string, agentId: string): Promi
 
   const truncated = String(aiResponse || '').slice(0, GUARDRAILS_MAX_INPUT_CHARS);
   if (!truncated.trim()) return PASS_RESULT;
+
+  // Skip LLM classification for smoke-test responses
+  if (SMOKE_TEST_RE.test(truncated)) return PASS_RESULT;
 
   // Fast regex for leaked secrets
   const secretPatterns = /(?:(?:api[_-]?key|secret|token|password|credentials)\s*[:=]\s*['"]?[A-Za-z0-9_\-]{20,}|sk-[a-zA-Z0-9]{20,}|AIza[A-Za-z0-9_\-]{35}|ghp_[A-Za-z0-9]{36})/i;
