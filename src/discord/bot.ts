@@ -7,6 +7,11 @@ import {
   ChatInputCommandInteraction,
   Message,
   TextChannel,
+  EmbedBuilder,
+  ButtonBuilder,
+  ActionRowBuilder,
+  ButtonStyle,
+  ComponentType,
 } from 'discord.js';
 
 import pool from '../db/pool';
@@ -34,6 +39,7 @@ import { setCommandAuditCallback, setPRReviewCallback, setDiscordGuild, setToolA
 import { setLimitsChannel, setCostChannel, startDashboardUpdates, stopDashboardUpdates, initUsageCounters, flushUsageCounters, getUsageReport, getCostOpsSummaryLine } from './usage';
 import { updateListingByMsgId, draftApplication, getProfile, getPortalByCompany, submitToGreenhouse, getListingById, updateListingStatus, setListingDiscordMsg, guessCompanyEmail, type JobListing } from '../services/jobSearch';
 import { sendJobApplication } from '../services/email';
+import { SYSTEM_COLORS, BUTTON_IDS, jobScoreColor } from './ui/constants';
 
 
 /**
@@ -612,113 +618,116 @@ export async function startBot(): Promise<void> {
     }
   });
 
-  // ── Job approval reactions in #📋-job-applications ─────────────────
-  client.on(Events.MessageReactionAdd, async (reaction, user) => {
+  // ── Button interaction handler for job approvals + draft approvals ──
+  client.on(Events.InteractionCreate, async (interaction) => {
+    if (!interaction.isButton()) return;
+    const customId = interaction.customId;
+
     try {
-      if (user.bot) return;
-      // Fetch partial reaction/message if needed
-      if (reaction.partial) await reaction.fetch();
-      if (reaction.message.partial) await reaction.message.fetch();
+      // ── Job card approve/reject buttons in #📋-job-applications ──
+      if (customId.startsWith(BUTTON_IDS.JOB_APPROVE_PREFIX) || customId.startsWith(BUTTON_IDS.JOB_REJECT_PREFIX)) {
+        const isApprove = customId.startsWith(BUTTON_IDS.JOB_APPROVE_PREFIX);
+        const listingId = parseInt(customId.replace(isApprove ? BUTTON_IDS.JOB_APPROVE_PREFIX : BUTTON_IDS.JOB_REJECT_PREFIX, ''), 10);
+        if (isNaN(listingId)) return;
 
-      const channel = reaction.message.channel;
-      if (!('name' in channel) || channel.name !== '📋-job-applications') return;
+        const newStatus = isApprove ? 'approved' : 'rejected';
+        const listing = await updateListingByMsgId(interaction.message.id, newStatus);
 
-      const emoji = reaction.emoji.name;
-      if (emoji !== '✅' && emoji !== '❌') return;
+        if (listing) {
+          const confirmText = isApprove
+            ? `✅ **Approved**: **${listing.title}** @ ${listing.company}`
+            : `❌ **Rejected**: **${listing.title}** @ ${listing.company}`;
 
-      const msgId = reaction.message.id;
-      const newStatus = emoji === '✅' ? 'approved' : 'rejected';
-      const listing = await updateListingByMsgId(msgId, newStatus);
+          await interaction.update({ content: confirmText, embeds: [], components: [] });
 
-      if (listing) {
-        // Post confirmation then delete the card so only pending approvals remain
-        const confirmChannel = reaction.message.channel as TextChannel;
-        await confirmChannel.send(`${emoji === '✅' ? '✅ Approved' : '❌ Rejected'}: **${listing.title}** @ ${listing.company}`);
-        await reaction.message.delete().catch(() => {});
-
-        // Auto-draft application on approval
-        if (newStatus === 'approved') {
-          handleApprovalDraft(listing, confirmChannel).catch((err) =>
-            console.error('Auto-draft error:', err instanceof Error ? err.message : 'Unknown')
-          );
+          // Auto-draft application on approval
+          if (newStatus === 'approved') {
+            const ch = interaction.channel as TextChannel;
+            handleApprovalDraft(listing, ch).catch((err) =>
+              console.error('Auto-draft error:', err instanceof Error ? err.message : 'Unknown')
+            );
+          }
+        } else {
+          await interaction.reply({ content: 'Listing not found or already processed.', ephemeral: true });
         }
+        return;
       }
-    } catch (err) {
-      console.error('Job approval reaction error:', err instanceof Error ? err.message : 'Unknown');
-    }
-  });
 
-  // ── Draft approval reactions in #💼-career-ops ────────────────────
-  client.on(Events.MessageReactionAdd, async (reaction, user) => {
-    try {
-      if (user.bot) return;
-      if (reaction.partial) await reaction.fetch();
-      if (reaction.message.partial) await reaction.message.fetch();
+      // ── Draft approve/reject buttons in #💼-career-ops ────────────
+      if (customId.startsWith(BUTTON_IDS.DRAFT_APPROVE_PREFIX) || customId.startsWith(BUTTON_IDS.DRAFT_REJECT_PREFIX)) {
+        const isApprove = customId.startsWith(BUTTON_IDS.DRAFT_APPROVE_PREFIX);
+        const listingId = parseInt(customId.replace(isApprove ? BUTTON_IDS.DRAFT_APPROVE_PREFIX : BUTTON_IDS.DRAFT_REJECT_PREFIX, ''), 10);
+        if (isNaN(listingId)) return;
 
-      const channel = reaction.message.channel;
-      if (!('name' in channel) || channel.name !== '💼-career-ops') return;
+        const listing = await updateListingByMsgId(interaction.message.id, isApprove ? 'applied' : 'discarded');
+        if (!listing) {
+          await interaction.reply({ content: 'Listing not found or already processed.', ephemeral: true });
+          return;
+        }
 
-      const emoji = reaction.emoji.name;
-      if (emoji !== '✅' && emoji !== '❌') return;
+        const ch = interaction.channel as TextChannel;
 
-      const msgId = reaction.message.id;
-      const listing = await updateListingByMsgId(msgId, emoji === '✅' ? 'applied' : 'discarded');
-      if (!listing) return;
+        if (isApprove) {
+          await interaction.deferUpdate();
+          const profile = await getProfile();
+          let submitted = false;
 
-      const ch = reaction.message.channel as TextChannel;
-
-      if (emoji === '✅') {
-        const profile = await getProfile();
-        let submitted = false;
-
-        // 1. Try Greenhouse API if portal has a key
-        if (listing.source === 'greenhouse' && profile) {
-          const portal = await getPortalByCompany(listing.company);
-          if (portal?.board_api_key) {
-            const result = await submitToGreenhouse(listing, profile, listing.cover_letter || '', listing.resume_text || '');
-            if (result.success) {
-              await ch.send(`🚀 **Submitted** to ${listing.company} via Greenhouse API!`);
-              submitted = true;
-            } else {
-              await ch.send(`⚠️ Greenhouse API failed: ${result.error} — trying email...`);
+          // 1. Try Greenhouse API if portal has a key
+          if (listing.source === 'greenhouse' && profile) {
+            const portal = await getPortalByCompany(listing.company);
+            if (portal?.board_api_key) {
+              const result = await submitToGreenhouse(listing, profile, listing.cover_letter || '', listing.resume_text || '');
+              if (result.success) {
+                await ch.send(`🚀 **Submitted** to ${listing.company} via Greenhouse API!`);
+                submitted = true;
+              } else {
+                await ch.send(`⚠️ Greenhouse API failed: ${result.error} — trying email...`);
+              }
             }
           }
-        }
 
-        // 2. Fall back to email application
-        if (!submitted && profile) {
-          try {
-            const toEmail = await guessCompanyEmail(listing.company);
-            const fromName = `${profile.first_name || 'Jordan'} ${profile.last_name || 'Flessenkemper'}`;
-            await sendJobApplication(
-              toEmail,
-              fromName,
-              profile.email || 'jordan.flessenkemper@gmail.com',
-              listing.title,
-              listing.company,
-              listing.cover_letter || '',
-              listing.resume_text || '',
-              listing.url,
-              profile.phone || undefined,
-            );
-            await ch.send(`📧 **Application emailed** to ${toEmail} for **${listing.title}** @ ${listing.company}`);
-            submitted = true;
-          } catch (emailErr) {
-            const msg = emailErr instanceof Error ? emailErr.message : 'Unknown';
-            await ch.send(`⚠️ Email send failed: ${msg}\n👉 Apply manually: ${listing.url}`);
+          // 2. Fall back to email application
+          if (!submitted && profile) {
+            try {
+              const toEmail = await guessCompanyEmail(listing.company);
+              const fromName = `${profile.first_name || 'Jordan'} ${profile.last_name || 'Flessenkemper'}`;
+              await sendJobApplication(
+                toEmail,
+                fromName,
+                profile.email || 'jordan.flessenkemper@gmail.com',
+                listing.title,
+                listing.company,
+                listing.cover_letter || '',
+                listing.resume_text || '',
+                listing.url,
+                profile.phone || undefined,
+              );
+              await ch.send(`📧 **Application emailed** to ${toEmail} for **${listing.title}** @ ${listing.company}`);
+              submitted = true;
+            } catch (emailErr) {
+              const msg = emailErr instanceof Error ? emailErr.message : 'Unknown';
+              await ch.send(`⚠️ Email send failed: ${msg}\n👉 Apply manually: ${listing.url}`);
+            }
           }
+
+          if (!submitted) {
+            await ch.send(`✅ **Approved** — apply manually: ${listing.url}`);
+          }
+        } else {
+          await interaction.update({ content: `❌ Draft discarded for **${listing.title}** @ ${listing.company}`, embeds: [], components: [] });
         }
 
-        if (!submitted) {
-          await ch.send(`✅ **Approved** — apply manually: ${listing.url}`);
+        // Remove the original draft message
+        if (isApprove) {
+          await interaction.message.delete().catch(() => {});
         }
-      } else {
-        await ch.send(`❌ Draft discarded for **${listing.title}** @ ${listing.company}`);
+        return;
       }
-
-      await reaction.message.delete().catch(() => {});
     } catch (err) {
-      console.error('Draft approval reaction error:', err instanceof Error ? err.message : 'Unknown');
+      console.error('Button interaction error:', err instanceof Error ? err.message : 'Unknown');
+      if (!interaction.replied && !interaction.deferred) {
+        await interaction.reply({ content: 'Something went wrong processing that button.', ephemeral: true }).catch(() => {});
+      }
     }
   });
 
@@ -745,7 +754,7 @@ export async function startBot(): Promise<void> {
       ? `💰 $${Math.round(listing.salary_min / 1000)}k–$${Math.round((listing.salary_max || listing.salary_min) / 1000)}k`
       : '💰 Not specified';
 
-    // Combine cover letter + resume highlights into a single embed for reaction-based approval
+    // Combine cover letter + resume highlights into a single embed with approval buttons
     const descParts = [
       `**Company:** ${listing.company}`,
       `**Location:** ${listing.location || 'Unknown'}`,
@@ -759,17 +768,28 @@ export async function startBot(): Promise<void> {
       descParts.push('', '**Resume Highlights:**', draft.resumeHighlights.slice(0, 1200));
     }
 
-    const draftEmbed = {
-      title: `📝 Application Draft: ${listing.title}`,
-      description: descParts.join('\n'),
-      color: 0x3498db,
-      footer: { text: `Listing #${listing.id} | ✅ approve to submit · ❌ discard` },
-    };
-    const draftMsg = await targetChannel.send({ embeds: [draftEmbed] });
-    await draftMsg.react('✅');
-    await draftMsg.react('❌');
+    const draftEmbed = new EmbedBuilder()
+      .setTitle(`📝 Application Draft: ${listing.title}`)
+      .setDescription(descParts.join('\n'))
+      .setColor(SYSTEM_COLORS.draft)
+      .setFooter({ text: `Listing #${listing.id}` });
 
-    // Track this message so the reaction handler can find the listing
+    const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`${BUTTON_IDS.DRAFT_APPROVE_PREFIX}${listing.id}`)
+        .setLabel('Approve & Submit')
+        .setEmoji('✅')
+        .setStyle(ButtonStyle.Success),
+      new ButtonBuilder()
+        .setCustomId(`${BUTTON_IDS.DRAFT_REJECT_PREFIX}${listing.id}`)
+        .setLabel('Discard')
+        .setEmoji('❌')
+        .setStyle(ButtonStyle.Danger),
+    );
+
+    const draftMsg = await targetChannel.send({ embeds: [draftEmbed], components: [row] });
+
+    // Track this message so the button handler can find the listing
     await setListingDiscordMsg(listing.id!, draftMsg.id);
   }
 
@@ -827,27 +847,35 @@ async function handleOpsInteraction(interaction: ChatInputCommandInteraction): P
   }
 
   if (view === 'costs') {
-    await interaction.reply({
-      content: `💸 Ops costs\n${getCostOpsSummaryLine()}\n${getUsageReport().split('\n')[1] || ''}`.slice(0, 1900),
-      ephemeral: true,
-    });
+    const embed = new EmbedBuilder()
+      .setTitle('💸 Ops Costs')
+      .setDescription(`${getCostOpsSummaryLine()}\n${getUsageReport().split('\n')[1] || ''}`)
+      .setColor(SYSTEM_COLORS.default)
+      .setTimestamp();
+    await interaction.reply({ embeds: [embed], ephemeral: true });
     return;
   }
 
   if (view === 'threads') {
     const threadLine = await getThreadStatusOpsLine();
-    await interaction.reply({
-      content: `🧵 Ops threads\n${threadLine}`.slice(0, 1900),
-      ephemeral: true,
-    });
+    const embed = new EmbedBuilder()
+      .setTitle('🧵 Ops Threads')
+      .setDescription(threadLine || 'No active threads.')
+      .setColor(SYSTEM_COLORS.default)
+      .setTimestamp();
+    await interaction.reply({ embeds: [embed], ephemeral: true });
     return;
   }
 
   const threadLine = await getThreadStatusOpsLine();
   const costLine = getCostOpsSummaryLine();
   const liveLine = getUsageReport().split('\n')[1] || '';
-  const payload = `📡 Ops now\n${costLine}\n${liveLine}\n${threadLine}`;
-  await interaction.reply({ content: payload.slice(0, 1900), ephemeral: true });
+  const embed = new EmbedBuilder()
+    .setTitle('📡 Ops Now')
+    .setDescription(`${costLine}\n${liveLine}\n${threadLine}`)
+    .setColor(SYSTEM_COLORS.default)
+    .setTimestamp();
+  await interaction.reply({ embeds: [embed], ephemeral: true });
 }
 
 function buildDeployChecklist(phase: string): string {

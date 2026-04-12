@@ -4,6 +4,7 @@ import pool from '../db/pool';
 import { getLiveBillingSnapshot, refreshLiveBillingSnapshot } from '../services/billing';
 
 import { formatOpsLine, postOpsLine } from './services/opsFeed';
+import { statusColor } from './ui/constants';
 
 const DAILY_LIMITS = {
   /** Max LLM input+output tokens per day (Gemini) */
@@ -608,7 +609,7 @@ export function getUsageEmbed(): EmbedBuilder {
     usage.geminiCalls / DAILY_LIMITS.geminiCalls,
     usage.elevenLabsChars / DAILY_LIMITS.elevenLabsChars
   );
-  const color = totalRatio >= 0.9 ? 0xed4245 : totalRatio >= 0.7 ? 0xfee75c : 0x57f287;
+  const color = statusColor(totalRatio);
 
   return new EmbedBuilder()
     .setTitle('📊 ASAP Usage Dashboard')

@@ -17,7 +17,8 @@ const DEFAULT_PUBLIC_APP_URL = 'https://asap-489910.australia-southeast1.run.app
 const CAT_MAIN = 'ASAP';
 const CAT_AGENTS = 'Agents';
 const CAT_OPS = 'Operations';
-const CAT_PERSONAL = '👤-jflessenkemper-personal';
+const OWNER_NAME = process.env.DISCORD_OWNER_NAME || 'jflessenkemper';
+const CAT_PERSONAL = `👤-${OWNER_NAME}-personal`;
 
 const MAIN_CHANNELS = {
   groupchat: '💬-groupchat',
@@ -405,7 +406,7 @@ export async function setupChannels(guild: Guild): Promise<BotChannels> {
     MAIN_CHANNELS.decisions,
     catMain,
     '📋 Riley queues decisions here while you sleep. Reply to any decision to continue the work.',
-    `📋 **Decisions Queue**\n\nWhen the team hits a decision point overnight, Riley posts it here instead of stopping work.\nReply to any decision with your answer — Riley will pick it up and continue.\nReact with a numbered emoji to choose from listed options.`
+    `📋 **Decisions Queue**\n\nWhen the team hits a decision point overnight, Riley posts it here instead of stopping work.\nReply to any decision with your answer — Riley will pick it up and continue.\nClick a button to choose from listed options.`
   );
 
   let voiceChannel = guild.channels.cache.find(
@@ -548,8 +549,8 @@ export async function setupChannels(guild: Guild): Promise<BotChannels> {
   const jobApplications = await ensureText(
     PERSONAL_CHANNELS.jobApplications,
     catPersonal,
-    '📋 Job approval queue — ✅ approve (auto-drafts application) · ❌ reject · cards vanish after you react',
-    `📋 **Job Applications**\n\n**How it works:**\n1. Ask Riley to scan & evaluate jobs in #💼-career-ops\n2. Riley posts the best matches here as cards\n3. React ✅ to approve — Riley auto-drafts a tailored cover letter & resume highlights, then posts them in #💼-career-ops\n4. React ❌ to reject\n5. Cards disappear after you react so only pending approvals are shown`,
+    '📋 Job approval queue — click Approve or Reject on each card · cards update after you choose',
+    `📋 **Job Applications**\n\n**How it works:**\n1. Ask Riley to scan & evaluate jobs in #💼-career-ops\n2. Riley posts the best matches here as cards\n3. Click **Approve** — Riley auto-drafts a tailored cover letter & resume highlights, then posts them in #💼-career-ops\n4. Click **Reject** to skip\n5. Cards update after you choose so only pending approvals remain`,
     { owner: 'jflessenkemper', cadence: 'on-demand', staleAlert: '14d' }
   );
 

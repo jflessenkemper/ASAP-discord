@@ -557,6 +557,24 @@ const AGENT_CAPABILITY_TESTS: AgentCapabilityTest[] = [
     timeoutMs: 180_000,
     heavyTool: true,
   },
+  // UX: Decision buttons render
+  {
+    id: 'executive-assistant',
+    category: 'core',
+    capability: 'decision-buttons-render',
+    prompt: 'Post a decision to the decisions channel with two options: "Deploy now" and "Wait until tomorrow". Use numbered options like 1) Deploy now 2) Wait until tomorrow.',
+    expectAny: [/decision|deploy|wait|option|posted|button/i],
+    timeoutMs: 120_000,
+  },
+  // UX: Ops embed format
+  {
+    id: 'executive-assistant',
+    category: 'core',
+    capability: 'ops-embed-format',
+    prompt: 'Run /ops now and tell me the current costs and thread status. Do NOT delegate this.',
+    expectAny: [/cost|thread|spend|ops|status|budget/i],
+    timeoutMs: 120_000,
+  },
 ];
 
 const READINESS_TEST_KEYS = new Set([

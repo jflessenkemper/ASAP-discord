@@ -10,6 +10,10 @@ import {
   ChannelType,
   TextChannel,
   CategoryChannel,
+  EmbedBuilder,
+  ButtonBuilder,
+  ActionRowBuilder,
+  ButtonStyle,
 } from 'discord.js';
 
 import {
@@ -43,6 +47,7 @@ import {
   submitToGreenhouse,
   getPortalByCompany,
 } from '../services/jobSearch';
+import { jobScoreColor, SYSTEM_COLORS, BUTTON_IDS } from './ui/constants';
 
 
 let discordGuild: Guild | null = null;
@@ -4295,15 +4300,19 @@ async function toolJobPostApprovals(minScore: number, limit: number): Promise<st
 
   if (eligible.length === 0) return 'No evaluated listings meet the minimum score threshold. Run job_evaluate on scanned listings first.';
 
+  const PAGE_SIZE = 10;
+  const page = eligible.slice(0, PAGE_SIZE);
+  const hasMore = eligible.length > PAGE_SIZE;
+
   let posted = 0;
-  for (const listing of eligible) {
+  for (const listing of page) {
     const salary = listing.salary_min
       ? `💰 $${Math.round(listing.salary_min / 1000)}k–$${Math.round((listing.salary_max || listing.salary_min) / 1000)}k`
       : '💰 Not specified';
 
-    const embed = {
-      title: `${listing.title}`,
-      description: [
+    const embed = new EmbedBuilder()
+      .setTitle(listing.title)
+      .setDescription([
         `**Company:** ${listing.company}`,
         `**Location:** ${listing.location || 'Unknown'}`,
         salary,
@@ -4311,19 +4320,37 @@ async function toolJobPostApprovals(minScore: number, limit: number): Promise<st
         listing.evaluation ? `**Evaluation:** ${listing.evaluation.slice(0, 300)}` : '',
         `**Source:** ${listing.source}`,
         `[View listing](${listing.url})`,
-      ].filter(Boolean).join('\n'),
-      color: listing.score && listing.score >= 4 ? 0x00cc44 : listing.score && listing.score >= 3 ? 0xffaa00 : 0xcc4400,
-      footer: { text: `Listing #${listing.id} | React ✅ to approve, ❌ to reject` },
-    };
+      ].filter(Boolean).join('\n'))
+      .setColor(jobScoreColor(listing.score))
+      .setFooter({ text: `Listing #${listing.id} · ${posted + 1}/${eligible.length}` });
 
-    const msg = await channel.send({ embeds: [embed] });
-    await msg.react('✅');
-    await msg.react('❌');
+    const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`${BUTTON_IDS.JOB_APPROVE_PREFIX}${listing.id}`)
+        .setLabel('Approve')
+        .setEmoji('✅')
+        .setStyle(ButtonStyle.Success),
+      new ButtonBuilder()
+        .setCustomId(`${BUTTON_IDS.JOB_REJECT_PREFIX}${listing.id}`)
+        .setLabel('Reject')
+        .setEmoji('❌')
+        .setStyle(ButtonStyle.Danger),
+      new ButtonBuilder()
+        .setStyle(ButtonStyle.Link)
+        .setLabel('View Listing')
+        .setEmoji('🔗')
+        .setURL(listing.url),
+    );
+
+    const msg = await channel.send({ embeds: [embed], components: [row] });
     await setListingDiscordMsg(listing.id!, msg.id);
     posted++;
   }
 
-  return `Posted ${posted} job approval cards to #📋-job-applications. React ✅ to approve or ❌ to reject each one.`;
+  const remaining = eligible.length - PAGE_SIZE;
+  const moreNote = hasMore ? ` Showing first ${PAGE_SIZE} of ${eligible.length} — ${remaining} more available. Run again with a higher limit to see more.` : '';
+
+  return `Posted ${posted} job approval cards to #📋-job-applications. Click Approve or Reject on each card.${moreNote}`;
 }
 
 async function toolJobDraftApplication(listingId: number): Promise<string> {
@@ -4357,9 +4384,9 @@ async function toolJobDraftApplication(listingId: number): Promise<string> {
       ? `💰 $${Math.round(listing.salary_min / 1000)}k–$${Math.round((listing.salary_max || listing.salary_min) / 1000)}k`
       : '💰 Not specified';
 
-    await channel.send({ embeds: [{
-      title: `📝 Application Draft: ${listing.title}`,
-      description: [
+    await channel.send({ embeds: [new EmbedBuilder()
+      .setTitle(`📝 Application Draft: ${listing.title}`)
+      .setDescription([
         `**Company:** ${listing.company}`,
         `**Location:** ${listing.location || 'Unknown'}`,
         salary,
@@ -4367,18 +4394,18 @@ async function toolJobDraftApplication(listingId: number): Promise<string> {
         '',
         '**Cover Letter:**',
         draft.coverLetter.slice(0, 3800),
-      ].join('\n'),
-      color: 0x3498db,
-      footer: { text: `Listing #${listing.id}` },
-    }]});
+      ].join('\n'))
+      .setColor(SYSTEM_COLORS.draft)
+      .setFooter({ text: `Listing #${listing.id}` }),
+    ]});
 
     if (draft.resumeHighlights) {
-      await channel.send({ embeds: [{
-        title: `📋 Resume Highlights: ${listing.title}`,
-        description: draft.resumeHighlights.slice(0, 3800),
-        color: 0x2ecc71,
-        footer: { text: `Listing #${listing.id} | Tailored for ${listing.company}` },
-      }]});
+      await channel.send({ embeds: [new EmbedBuilder()
+        .setTitle(`📋 Resume Highlights: ${listing.title}`)
+        .setDescription(draft.resumeHighlights.slice(0, 3800))
+        .setColor(SYSTEM_COLORS.success)
+        .setFooter({ text: `Listing #${listing.id} | Tailored for ${listing.company}` }),
+      ]});
     }
   }
 

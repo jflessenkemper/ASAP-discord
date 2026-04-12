@@ -2,7 +2,7 @@ import { execFileSync } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 
-import { Message, TextChannel, GuildMember, EmbedBuilder, ThreadAutoArchiveDuration } from 'discord.js';
+import { Message, TextChannel, GuildMember, EmbedBuilder, ThreadAutoArchiveDuration, ButtonBuilder, ActionRowBuilder, ButtonStyle, ComponentType } from 'discord.js';
 
 import { triggerCloudBuild, listRevisions, getCurrentRevision, rollbackToRevision } from '../../services/cloudrun';
 import {
@@ -28,6 +28,7 @@ import { getWebhook, sendWebhookMessage, WebhookCapableChannel } from '../servic
 import { approveAdditionalBudget, getContextEfficiencyReport, getUsageReport, refreshLiveBillingData, refreshUsageDashboard } from '../usage';
 
 import { startCall, endCall, isCallActive, injectVoiceTranscriptForTesting, processTesterVoiceTurnForCall } from './callSession';
+import { SYSTEM_COLORS, BUTTON_IDS } from '../ui/constants';
 import { isDesignDeliverableDetailed, shouldSkipContractEnforcement, buildAceDesignContext, buildAceStandardContext } from './designDeliverable';
 import { documentToChannel } from './documentation';
 import { goalState, GOAL_THREAD_COUNTER_RE } from './goalState';
@@ -2986,8 +2987,8 @@ export async function handleDecisionReply(
 }
 
 /**
- * Post a reaction-based decision embed.
- * Parses numbered options from Riley's response and adds reaction buttons.
+ * Post a button-based decision embed.
+ * Parses numbered options from Riley's response and adds interactive buttons.
  */
 async function postDecisionEmbed(
   targetChannel: TextChannel,
@@ -3010,15 +3011,13 @@ async function postDecisionEmbed(
     }
   }
 
-  const numberReactions = ['1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣'];
-  const yesNoReactions = ['✅', '❌'];
   const hasYesNoCue = /\byes\b.*\bno\b|\bapprove\b.*\breject\b|\bgo\b.*\bno-go\b|\bship\b.*\bhold\b/i.test(decisionText);
   const usingYesNo = options.length === 0 && hasYesNoCue;
 
-  const reactionSet = usingYesNo ? yesNoReactions : numberReactions;
   const choiceSet = usingYesNo ? ['Yes', 'No'] : options.slice(0, 5);
+  const choiceEmojis = usingYesNo ? ['✅', '❌'] : ['1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣'];
 
-  if (choiceSet.length === 0) return; // No parseable options
+  if (choiceSet.length === 0) return;
 
   const isDecisionsChannel = decisionsChannel && targetChannel.id === decisionsChannel.id;
 
@@ -3026,52 +3025,81 @@ async function postDecisionEmbed(
     .setTitle('📋 Decision Review (Optional)')
     .setDescription(
       choiceSet
-        .map((opt, i) => `${reactionSet[i]} ${opt}`)
+        .map((opt, i) => `${choiceEmojis[i]} ${opt}`)
         .join('\n\n')
     )
-    .setColor(0x3a8dff)
-    .setFooter({ text: isDecisionsChannel ? 'Work continues automatically. React to steer plan or type your preference.' : 'Work continues automatically. React to steer plan.' });
+    .setColor(SYSTEM_COLORS.decision)
+    .setFooter({ text: isDecisionsChannel ? 'Work continues automatically. Click a button or type your preference.' : 'Work continues automatically. Click a button to steer plan.' });
 
-  const decisionMsg = await targetChannel.send({ embeds: [embed] });
+  // Build button rows (max 5 per row)
+  const buttons = choiceSet.map((label, i) =>
+    new ButtonBuilder()
+      .setCustomId(`${BUTTON_IDS.DECISION_PREFIX}${i}`)
+      .setLabel(label.slice(0, 80))
+      .setEmoji(choiceEmojis[i])
+      .setStyle(usingYesNo && i === 1 ? ButtonStyle.Danger : ButtonStyle.Primary)
+  );
+  const row = new ActionRowBuilder<ButtonBuilder>().addComponents(buttons);
 
-  for (let i = 0; i < choiceSet.length; i++) {
-    await decisionMsg.react(reactionSet[i]).catch(() => {});
-  }
+  const decisionMsg = await targetChannel.send({ embeds: [embed], components: [row] });
 
   const timeoutMs = isDecisionsChannel ? 12 * 60 * 60 * 1000 : 5 * 60 * 1000;
-  const filter = (reaction: any, user: any) => {
-    return reactionSet.includes(reaction.emoji.name || '') && !user.bot;
-  };
 
-  decisionMsg.awaitReactions({ filter, max: 1, time: timeoutMs })
-    .then(async (collected) => {
-      const reaction = collected.first();
-      if (!reaction) return;
-      const choiceIndex = reactionSet.indexOf(reaction.emoji.name || '');
-      const choice = choiceSet[choiceIndex] || `Option ${choiceIndex + 1}`;
-      const users = await reaction.users.fetch();
-      const reactUser = users.find((u) => !u.bot);
-      const userName = reactUser?.username || 'User';
+  // Use persistent-style collector for long-lived decisions
+  const collector = decisionMsg.createMessageComponentCollector({
+    componentType: ComponentType.Button,
+    time: timeoutMs,
+    max: 1,
+    filter: (i) => !i.user.bot,
+  });
 
-      console.log(`Decision: ${userName} chose option ${choiceIndex + 1}: "${choice}"`);
+  collector.on('collect', async (btnInteraction) => {
+    const choiceIndex = parseInt(btnInteraction.customId.replace(BUTTON_IDS.DECISION_PREFIX, ''), 10);
+    const choice = choiceSet[choiceIndex] || `Option ${choiceIndex + 1}`;
+    const userName = btnInteraction.user.username;
 
-      const riley = getAgent('executive-assistant' as AgentId);
-      if (riley) {
-        try {
-          await sendWebhookMessage(targetChannel, { content: `✅ **${userName}** chose: **${choice}**`, username: `${riley.emoji} ${riley.name}`, avatarURL: riley.avatarUrl });
-        } catch {
-          await targetChannel.send(`✅ **${userName}** chose: **${choice}**`);
-        }
-      } else {
-        await targetChannel.send(`✅ **${userName}** chose: **${choice}**`);
+    console.log(`Decision: ${userName} chose option ${choiceIndex + 1}: "${choice}"`);
+
+    // Disable all buttons after choice
+    const disabledRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
+      buttons.map((b, i) =>
+        ButtonBuilder.from(b.toJSON())
+          .setDisabled(true)
+          .setStyle(i === choiceIndex ? ButtonStyle.Success : ButtonStyle.Secondary)
+      )
+    );
+
+    const riley = getAgent('executive-assistant' as AgentId);
+    const confirmText = `✅ **${userName}** chose: **${choice}**`;
+
+    try {
+      await btnInteraction.update({ components: [disabledRow] });
+    } catch { /* ignore if already replied */ }
+
+    if (riley) {
+      try {
+        await sendWebhookMessage(targetChannel, { content: confirmText, username: `${riley.emoji} ${riley.name}`, avatarURL: riley.avatarUrl });
+      } catch {
+        await targetChannel.send(confirmText);
       }
+    } else {
+      await targetChannel.send(confirmText);
+    }
 
-      const decisionMessage = `[Plan preference from decisions reactions] ${userName} selected ${choice}. Continue execution and adjust plan accordingly.`;
-      const workspaceChannel = await ensureGoalWorkspace(groupchat, userName, decisionMessage);
-      await handleRileyMessage(decisionMessage, userName, undefined, groupchat, undefined, workspaceChannel);
-    })
-    .catch(() => {
-    });
+    const decisionMessage = `[Plan preference from decisions buttons] ${userName} selected ${choice}. Continue execution and adjust plan accordingly.`;
+    const workspaceChannel = await ensureGoalWorkspace(groupchat, userName, decisionMessage);
+    await handleRileyMessage(decisionMessage, userName, undefined, groupchat, undefined, workspaceChannel);
+  });
+
+  collector.on('end', async (collected) => {
+    if (collected.size === 0) {
+      // Timeout — disable buttons
+      const disabledRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
+        buttons.map((b) => ButtonBuilder.from(b.toJSON()).setDisabled(true).setStyle(ButtonStyle.Secondary))
+      );
+      await decisionMsg.edit({ components: [disabledRow] }).catch(() => {});
+    }
+  });
 }
 
 /** Persist groupHistory to disk. Called after every interaction. */
