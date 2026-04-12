@@ -502,7 +502,7 @@ export async function startBot(): Promise<void> {
         const prev = nonTesterTriggerNoticeAt.get(key) || 0;
         if (now - prev >= NON_TESTER_TRIGGER_NOTICE_COOLDOWN_MS) {
           nonTesterTriggerNoticeAt.set(key, now);
-          await botChannels.groupchat.send('ℹ️ Workflow trigger ignored: use ASAPTester for Riley task routing in groupchat.').catch(() => {});
+          console.log(`Workflow trigger ignored for bot ${message.author.id} in groupchat`);
         }
       }
       return;

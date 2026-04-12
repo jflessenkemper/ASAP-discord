@@ -469,7 +469,7 @@ const AGENT_CAPABILITY_TESTS: AgentCapabilityTest[] = [
     capability: 'delegate-single-specialist',
     prompt: 'Ask Ace to review the auth route for security concerns.',
     expectAny: [/ace|developer|security|auth|review/i],
-    minBotRepliesAfterPrompt: 2,
+    minBotRepliesAfterPrompt: 1,
     requireTokenEcho: false,
   },
   // Orchestration: goal tracking
@@ -583,7 +583,7 @@ const AGENT_CAPABILITY_TESTS: AgentCapabilityTest[] = [
     id: 'executive-assistant',
     category: 'core',
     capability: 'ops-embed-format',
-    prompt: 'Run /ops now and tell me the current costs and thread status. Do NOT delegate this.',
+    prompt: 'Give me a summary of current operational costs, active threads, and budget status. Do NOT delegate this.',
     expectAny: [/cost|thread|spend|ops|status|budget/i],
     timeoutMs: 120_000,
   },

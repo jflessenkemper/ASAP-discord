@@ -248,7 +248,14 @@ function enforceRileyResponseContract(
     && /\bfix location\s*:/i.test(normalized)
     && /\bverification evidence\s*:/i.test(normalized)
     && /\bresidual risk\s*:/i.test(normalized);
-  if (hasContract) return normalized;
+  if (hasContract) {
+    // Strip existing contract block from visible output, log internally
+    const stripped = normalized
+      .replace(/\n\s*Status:[\s\S]*$/i, '')
+      .trim();
+    console.log('[riley-contract]', normalized.slice(stripped.length));
+    return stripped || normalized;
+  }
 
   const status = inferRileyStatus(normalized, completionClaimed, completionVerified);
   const rootCause = normalized.split(/(?<=[.!?])\s+/)[0]?.slice(0, 180) || 'Investigation in progress.';
@@ -260,15 +267,10 @@ function enforceRileyResponseContract(
     ? 'Monitor regressions in the same user flow after next deploy.'
     : 'User flow remains at risk until verification passes.';
 
-  return [
-    normalized,
-    '',
-    `Status: ${status}`,
-    `Root cause: ${rootCause}`,
-    `Fix location: ${fixLocations.length > 0 ? fixLocations.join(', ') : 'No concrete file path provided yet.'}`,
-    `Verification evidence: ${verificationEvidence}`,
-    `Residual risk: ${residualRisk}`,
-  ].join('\n');
+  // Log contract internally for audit trail, do NOT append to visible output
+  console.log('[riley-contract]', JSON.stringify({ status, rootCause, fixLocations: fixLocations.join(', '), verificationEvidence, residualRisk }));
+
+  return normalized;
 }
 
 async function emitRileyStallAlert(
@@ -1632,14 +1634,19 @@ async function handleRileyMessage(
   let hasVisibleRileyResponse = false;
   let noResponseTimer: NodeJS.Timeout | null = null;
   let progressTimer: NodeJS.Timeout | null = null;
+  const progressMessages: Message[] = [];
   try {
     progressTimer = setTimeout(() => {
       if (hasVisibleRileyResponse || signal?.aborted) return;
       const seconds = Math.round(Math.max(0, RILEY_PROGRESS_PING_MS) / 1000);
       const progressText = `⏳ Riley is still working (${seconds}s elapsed). No action needed yet.`;
-      void sendAgentMessage(workspaceChannel, riley, progressText).catch(() => {});
+      void sendWebhookMessage(workspaceChannel, {
+        content: progressText,
+        username: `${riley.emoji} ${riley.name}`,
+        avatarURL: riley.avatarUrl,
+      }).then((msg) => progressMessages.push(msg)).catch(() => {});
       if (workspaceChannel.id !== groupchat.id) {
-        void groupchat.send(progressText).catch(() => {});
+        void groupchat.send(progressText).then((msg) => progressMessages.push(msg)).catch(() => {});
       }
     }, Math.max(5_000, RILEY_PROGRESS_PING_MS));
 
@@ -1755,6 +1762,11 @@ async function handleRileyMessage(
 
     if (!signal?.aborted && displayResponse) {
       hasVisibleRileyResponse = true;
+      // Auto-delete "still working" progress messages before posting real response
+      for (const pm of progressMessages) {
+        pm.delete().catch(() => {});
+      }
+      progressMessages.length = 0;
       await sendAgentMessage(rileyWorkChannel, riley, displayResponse);
       if (workspaceChannel.id !== rileyWorkChannel.id) {
         await sendAgentMessage(workspaceChannel, riley, displayResponse);

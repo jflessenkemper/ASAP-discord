@@ -284,11 +284,16 @@ async function handleAgentMessageInner(
           .then(() => true)
           .catch(() => false);
         if (!edited) {
-          await sendWebhookMessage(channel, {
+          const fallbackMsg = await sendWebhookMessage(channel, {
             content: beat,
             username: `${agent.emoji} ${agent.name}`,
             avatarURL: agent.avatarUrl,
-          }).catch(() => {});
+          }).catch(() => null);
+          // Track fallback so cleanup deletes it before the real response
+          if (fallbackMsg) {
+            pendingThinking = fallbackMsg;
+            pendingThinkingMessages.set(channelId, fallbackMsg);
+          }
         }
         lastProgressSignalAt = Date.now();
         heartbeatDelayMs = Math.min(60_000, Math.floor(heartbeatDelayMs * 1.6));
@@ -646,7 +651,16 @@ function renderAgentMessage(raw: string): string {
   const withoutActionTags = raw.replace(/\[ACTION:[^\]]+\]/g, '').trim();
   if (!withoutActionTags) return '';
 
-  const withoutSpeakerLabel = withoutActionTags
+  // Strip smoke-test tokens & metadata that leak into visible output
+  const withoutSmokeTokens = withoutActionTags
+    .replace(/\[smoke[- ]?token[^\]]*\]/gi, '')
+    .replace(/\bSMOKE_[A-Z0-9_]+\b/g, '')
+    .replace(/\[smoke test:[^\]]*\]/gi, '')
+    .replace(/^Next step: Riley will post.*$/gm, '')
+    .trim();
+  if (!withoutSmokeTokens) return '';
+
+  const withoutSpeakerLabel = withoutSmokeTokens
     .replace(/^\s*\[[^\]\r\n]{1,40}\]:\s*/u, '')
     .replace(/^\s*(?:Riley|Ace|Max|Kane|Sophie|Raj|Elena|Jude|Harper|Kai|Liv|Mia|Leo)\s*:\s*/i, '');
   if (!withoutSpeakerLabel) return '';

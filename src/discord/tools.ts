@@ -1599,9 +1599,28 @@ export async function executeTool(
     if (cacheable && !/^Error:/i.test(String(result || '').trim())) {
       setCachedToolResult(key, result);
     }
+    // Global audit: log every tool invocation so #terminal evidence is available
+    if (toolAuditCallback && context?.agentId) {
+      const summary = String(result || '').slice(0, 200);
+      toolAuditCallback(context.agentId, toolName, summary);
+    }
     return result;
   } finally {
     if (cacheable) toolInFlight.delete(key);
+  }
+}
+
+const GITHUB_TOOL_TIMEOUT_MS = 120_000;
+
+async function withGitHubTimeout(promise: Promise<string>, toolName: string): Promise<string> {
+  let timer: NodeJS.Timeout;
+  const timeout = new Promise<string>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`GitHub operation "${toolName}" timed out after ${GITHUB_TOOL_TIMEOUT_MS / 1000}s`)), GITHUB_TOOL_TIMEOUT_MS);
+  });
+  try {
+    return await Promise.race([promise, timeout]);
+  } finally {
+    clearTimeout(timer!);
   }
 }
 
@@ -1630,15 +1649,15 @@ async function executeToolInternal(
       case 'run_command':
         return runCommand(input.command, input.cwd);
       case 'git_create_branch':
-        return await gitCreateBranch(input.branch_name, input.base_branch);
+        return await withGitHubTimeout(gitCreateBranch(input.branch_name, input.base_branch), toolName);
       case 'create_pull_request':
-        return await ghCreatePR(input.title, input.body, input.head, input.base);
+        return await withGitHubTimeout(ghCreatePR(input.title, input.body, input.head, input.base), toolName);
       case 'merge_pull_request':
-        return await ghMergePR(parseInt(input.pr_number, 10), input.commit_title, context?.agentId);
+        return await withGitHubTimeout(ghMergePR(parseInt(input.pr_number, 10), input.commit_title, context?.agentId), toolName);
       case 'add_pr_comment':
-        return await ghAddComment(parseInt(input.pr_number, 10), input.body);
+        return await withGitHubTimeout(ghAddComment(parseInt(input.pr_number, 10), input.body), toolName);
       case 'list_pull_requests':
-        return await ghListPRs();
+        return await withGitHubTimeout(ghListPRs(), toolName);
       case 'run_tests':
         clearToolResultCache(scope);
         return runTests(input.test_pattern);

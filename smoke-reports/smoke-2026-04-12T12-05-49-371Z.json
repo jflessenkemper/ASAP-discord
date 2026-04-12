@@ -1,0 +1,628 @@
+{
+  "startedAt": "2026-04-12T10:46:20.418Z",
+  "endedAt": "2026-04-12T12:05:49.371Z",
+  "summary": {
+    "capabilityPassed": 60,
+    "capabilityFailed": 11,
+    "extraFailed": 0,
+    "score": 79.1,
+    "criticalPassed": false,
+    "detail": "core_fail=4 | orchestration_fail=2 | upgrades_fail=0 | critical_extra_fail=0"
+  },
+  "results": [
+    {
+      "agent": "Riley (Executive Assistant)",
+      "capability": "routing-and-next-step",
+      "category": "core",
+      "passed": true,
+      "elapsed": 13922,
+      "snippet": "As the executive assistant for the ASAP project, I translate Jordan's goals into actionable plans and coordinate the team to get the work done.\n\nNext, I'll have <@&1488498029844500…"
+    },
+    {
+      "agent": "Riley (Executive Assistant)",
+      "capability": "repo-memory-tool-awareness",
+      "category": "memory",
+      "passed": true,
+      "elapsed": 12723,
+      "snippet": "To work with repository memory, I use `repo_memory_index` to build or refresh the searchable index and `repo_memory_search` to query it for relevant information before resorting to…"
+    },
+    {
+      "agent": "Riley (Executive Assistant)",
+      "capability": "delegate-ace-qa",
+      "category": "orchestration",
+      "passed": true,
+      "elapsed": 16557,
+      "snippet": "<@&1488498029844500572>, please handle the code implementation for this task. Once it's ready, please coordinate with QA for a full validation pass.\n\nSM\n\nNext step: Riley will post…",
+      "critical": false
+    },
+    {
+      "agent": "Riley (Executive Assistant)",
+      "capability": "ace-only-delegation",
+      "category": "orchestration",
+      "passed": true,
+      "elapsed": 12582,
+      "snippet": "Of course. Under my `ace-only-delegation` policy, I would assign the entire task to <@&1488498029844500572>. I'd instruct him to handle the implementation first, and then it would …"
+    },
+    {
+      "agent": "Riley (Executive Assistant)",
+      "capability": "repo-memory-evidence",
+      "category": "memory",
+      "passed": true,
+      "elapsed": 20221,
+      "snippet": "From the search results, one of the source files is `src/discord/tester.ts`.\n\n[smoke-token]\n\nNext step: Riley will post a concrete action with owner and ETA.\n\nStatus: partially fix…"
+    },
+    {
+      "agent": "Riley (Executive Assistant)",
+      "capability": "action-status",
+      "category": "core",
+      "passed": true,
+      "elapsed": 101219,
+      "snippet": "Of course, here is the current status of our active goals and threads.\n\n[smoke-token]\n\nNext step: Riley will post a concrete action with owner and ETA.\n\nStatus: partially fixed\nRoo…"
+    },
+    {
+      "agent": "Riley (Executive Assistant)",
+      "capability": "action-agents",
+      "category": "core",
+      "passed": true,
+      "elapsed": 8290,
+      "snippet": "Of course, here is the full list of agents on our team.\n\n[smoke-token]\n\nNext step: Riley will post a concrete action with owner and ETA.\n\nStatus: partially fixed\nRoot cause: Of cou…"
+    },
+    {
+      "agent": "Riley (Executive Assistant)",
+      "capability": "action-health",
+      "category": "core",
+      "passed": true,
+      "elapsed": 26466,
+      "snippet": "The main application is online and healthy, currently running revision `asap-00064-gz6`. However, I've noticed that the last several automated builds have failed, which means we ca…"
+    },
+    {
+      "agent": "Riley (Executive Assistant)",
+      "capability": "action-urls",
+      "category": "core",
+      "passed": true,
+      "elapsed": 14591,
+      "snippet": "Of course. Here are the live application and build console links.\n\n[smoke-token]\n\nNext step: Riley will post a concrete action with owner and ETA.\n\nStatus: partially fixed\nRoot cau…"
+    },
+    {
+      "agent": "Riley (Executive Assistant)",
+      "capability": "action-limits",
+      "category": "core",
+      "passed": true,
+      "elapsed": 11505,
+      "snippet": "Of course. Here is the current summary of our budget and token usage.\n\n[smoke-token]\n\nNext step: Riley will post a concrete action with owner and ETA.\n\nStatus: partially fixed\nRoot…"
+    },
+    {
+      "agent": "Riley (Executive Assistant)",
+      "capability": "context-report",
+      "category": "core",
+      "passed": true,
+      "elapsed": 19375,
+      "snippet": "I'm not able to provide a single \"context efficiency\" number, as it's a mix of factors like prompt size, tool verbosity,\n\nNext step: Riley will post a concrete action with owner an…"
+    },
+    {
+      "agent": "Riley (Executive Assistant)",
+      "capability": "delegate-single-specialist",
+      "category": "orchestration",
+      "passed": false,
+      "elapsed": 49051,
+      "snippet": "Of course. <@&1488498029844500572>, please review the auth route for any potential security concerns and let me know what you find.\n\n[smoke-token]\n\nNext step: Riley will post a con…",
+      "reason": "expected at least 2 bot/webhook replies"
+    },
+    {
+      "agent": "Riley (Executive Assistant)",
+      "capability": "goal-tracking",
+      "category": "orchestration",
+      "passed": true,
+      "elapsed": 12589,
+      "snippet": "Our primary active goal is to improve application security.\n\nAce recently completed a security review of the authentication routes and identified vulnerabilities related to CSRF (C…"
+    },
+    {
+      "agent": "Riley (Executive Assistant)",
+      "capability": "memory-write",
+      "category": "memory",
+      "passed": true,
+      "elapsed": 16366,
+      "snippet": "done\n[smoke-token]\n\nNext step: Riley will post a concrete action with owner and ETA.\n\nStatus: fixed\nRoot cause: done\n[smoke-token]\n\nNext step: Riley will post a concrete action wit…",
+      "critical": false
+    },
+    {
+      "agent": "Ace (Developer)",
+      "capability": "specialist-chain",
+      "category": "orchestration",
+      "passed": true,
+      "elapsed": 11059,
+      "snippet": "Auth route reviews should involve QA and security specialists to ensure comprehensive coverage. While developers focus on core functionality, a security specialist like Kane brings…",
+      "critical": false
+    },
+    {
+      "agent": "Riley (Executive Assistant)",
+      "capability": "job-search-profile",
+      "category": "tool-proof",
+      "passed": true,
+      "elapsed": 19870,
+      "snippet": "I've retrieved the current job search profile. Here's a summary:\n\nThe profile is for Jordan Flessenkemper (jordan.flessenkemper@gmail.com, 0436012231).\n\nIt targets a range of techn…"
+    },
+    {
+      "agent": "Riley (Executive Assistant)",
+      "capability": "job-tracker-summary",
+      "category": "tool-proof",
+      "passed": true,
+      "elapsed": 12403,
+      "snippet": "I've checked the job pipeline. The current status is:\n\n*   Scanned: 47 jobs\n*   Total: 47 jobs\n\nThere are currently no jobs in the evaluated, applied, or interview stages.\n\n[smoke-…"
+    },
+    {
+      "agent": "Riley (Executive Assistant)",
+      "capability": "job-scan-trigger",
+      "category": "tool-proof",
+      "passed": true,
+      "elapsed": 20146,
+      "snippet": "I've completed the job scan.\n\nThe scan found 3 new listings from Adzuna:\n*   Implementation Consultant (Software) at Onset ($130k–$140k)\n*   Solution Developer at Katz Recruitment …"
+    },
+    {
+      "agent": "Riley (Executive Assistant)",
+      "capability": "job-draft-application",
+      "category": "tool-proof",
+      "passed": true,
+      "elapsed": 18298,
+      "snippet": "I can't draft an application because there are no listings with an \"approved\" status in the pipeline. To draft an application, a job must first\n\nNext step: Riley will post a concre…"
+    },
+    {
+      "agent": "Riley (Executive Assistant)",
+      "capability": "job-submit-application",
+      "category": "tool-proof",
+      "passed": true,
+      "elapsed": 17564,
+      "snippet": "I can't submit an application right now because there are no applications with a \"drafted\" status in the pipeline. An application must be drafted before it\n\nStatus: partially fixed…"
+    },
+    {
+      "agent": "Riley (Executive Assistant)",
+      "capability": "job-evaluate-listing",
+      "category": "tool-proof",
+      "passed": true,
+      "elapsed": 31176,
+      "snippet": "I've evaluated the \"Data Engineers - AWS / Snowflake\" role at Novon.\n\nIt seems like a strong potential match. The role aligns well\n\nNext step: Riley will post a concrete action wit…"
+    },
+    {
+      "agent": "Riley (Executive Assistant)",
+      "capability": "decision-buttons-render",
+      "category": "core",
+      "passed": true,
+      "elapsed": 16737,
+      "snippet": "I've posted the decision to the #decisions channel for you.\n\n[smoke-token]\n\nNext step: Riley will post a concrete action with owner and ETA.\n\nStatus: partially fixed\nRoot cause: I'…"
+    },
+    {
+      "agent": "Riley (Executive Assistant)",
+      "capability": "ops-embed-format",
+      "category": "core",
+      "passed": false,
+      "elapsed": 150142,
+      "snippet": "Timeout while waiting for full capability evidence (idle timeout (no new messages for 41s))",
+      "reason": "missing any-of expected patterns"
+    },
+    {
+      "agent": "Riley (Executive Assistant)",
+      "capability": "goal-create",
+      "category": "core",
+      "passed": false,
+      "elapsed": 173661,
+      "snippet": "Timeout while waiting for full capability evidence (idle timeout (no new messages for 46s))",
+      "reason": "missing tool-audit evidence for list_threads"
+    },
+    {
+      "agent": "Riley (Executive Assistant)",
+      "capability": "goal-status-report",
+      "category": "core",
+      "passed": true,
+      "elapsed": 13753,
+      "snippet": "We have one active goal: Audit Test Coverage & Identify Gaps.\n\nStatus:\n*   `@ace` ran the test suite and generated an initial coverage report (76.81%).\n*   He discovered significan…"
+    },
+    {
+      "agent": "Riley (Executive Assistant)",
+      "capability": "goal-stall-detection",
+      "category": "core",
+      "passed": true,
+      "elapsed": 9769,
+      "snippet": "I monitor active goals, and if there's no progress for over seven minutes, I'm responsible for getting things moving again.\n\nMy process is to:\n1.  Detect the stall: My own internal…"
+    },
+    {
+      "agent": "Riley (Executive Assistant)",
+      "capability": "goal-completion",
+      "category": "core",
+      "passed": true,
+      "elapsed": 14733,
+      "snippet": "Excellent. The TypeScript health check is complete.\n\nAce ran the typechecker, and it found no errors in either the client or server code. The codebase is clean.\n\nGoal complete. [sm…"
+    },
+    {
+      "agent": "Riley (Executive Assistant)",
+      "capability": "thread-status-report",
+      "category": "core",
+      "passed": false,
+      "elapsed": 161424,
+      "snippet": "Timeout while waiting for full capability evidence (idle timeout (no new messages for 45s))",
+      "reason": "missing tool-audit evidence for list_threads"
+    },
+    {
+      "agent": "Riley (Executive Assistant)",
+      "capability": "thread-cleanup-awareness",
+      "category": "core",
+      "passed": true,
+      "elapsed": 17751,
+      "snippet": "Based on the latest activity, the following threads are stale and should be closed:\n\n*   `Goal-0099`\n*   `Goal-0098`\n*   `Goal-0097`\n*   `Goal-0096`\n*   `Goal-0095`\n*   `Goal-0094`…"
+    },
+    {
+      "agent": "Riley (Executive Assistant)",
+      "capability": "budget-exhaustion-awareness",
+      "category": "core",
+      "passed": true,
+      "elapsed": 17227,
+      "snippet": "When the daily budget is exhausted, my primary role is to manage the situation without unnecessarily interrupting Jordan. Here's how I handle it:\n\nFirst, the system has a budget au…"
+    },
+    {
+      "agent": "Riley (Executive Assistant)",
+      "capability": "rate-limit-awareness",
+      "category": "core",
+      "passed": true,
+      "elapsed": 17548,
+      "snippet": "Of course. When I encounter a 429 \"Too Many Requests\" error from an API, I don't just fail. I automatically apply an exponential backoff and retry strategy.\n\nHere's how it works:\n1…"
+    },
+    {
+      "agent": "Riley (Executive Assistant)",
+      "capability": "dedup-awareness",
+      "category": "core",
+      "passed": true,
+      "elapsed": 11725,
+      "snippet": "I have a built-in mechanism to handle duplicate messages automatically. When I receive a message, I generate a unique signature for it and check it against a cache of signatures fr…"
+    },
+    {
+      "agent": "Riley (Executive Assistant)",
+      "capability": "upgrades-triage-digest",
+      "category": "core",
+      "passed": true,
+      "elapsed": 16250,
+      "snippet": "Of course. I've reviewed the `#🆙-upgrades` backlog to get a sense of our current priorities.\n\nBased on the latest digest, here\n\nNext step: Riley will post a concrete action with o…"
+    },
+    {
+      "agent": "Riley (Executive Assistant)",
+      "capability": "upgrades-act-on-top",
+      "category": "orchestration",
+      "passed": true,
+      "elapsed": 1712,
+      "snippet": "⚠️ Ace had an error."
+    },
+    {
+      "agent": "Riley (Executive Assistant)",
+      "capability": "job-buttons-approval",
+      "category": "tool-proof",
+      "passed": false,
+      "elapsed": 85097,
+      "snippet": "Of course. I'll kick off a job scan and get the top results ready for your approval.\n\n<@&1488498029844500572>, please run a full job\n\nStatus: fixed\nRoot cause: Of course.\nFix locat…",
+      "reason": "missing tool-audit evidence for job_scan, job_post_approvals"
+    },
+    {
+      "agent": "Riley (Executive Assistant)",
+      "capability": "self-edit-file",
+      "category": "tool-proof",
+      "passed": false,
+      "elapsed": 54261,
+      "snippet": "Of course. I'll have that file updated right away.\n\n<@&1488498029844500572>, please edit the file `src/discord/tester.ts` to add\n\nNext step: Riley will post a concrete action with …",
+      "reason": "missing tool-audit evidence for edit_file, read_file"
+    },
+    {
+      "agent": "Riley (Executive Assistant)",
+      "capability": "create-branch-pr",
+      "category": "tool-proof",
+      "passed": false,
+      "elapsed": 2203320,
+      "snippet": "Of course. I'll get that branch and PR created right away.\n\n<@&1488498029844500572>, please create a git branch named `riley/smoke-\n\nStatus: partially fixed\nRoot cause: Of course.\n…",
+      "reason": "missing tool-audit evidence for git_create_branch, create_pull_request"
+    },
+    {
+      "agent": "Riley (Executive Assistant)",
+      "capability": "review-ace-pr",
+      "category": "orchestration",
+      "passed": false,
+      "elapsed": 11,
+      "snippet": "Send failed: getaddrinfo EAI_AGAIN discord.com",
+      "reason": "send failed"
+    },
+    {
+      "agent": "Ace (Developer)",
+      "capability": "evidence-format-contract",
+      "category": "core",
+      "passed": false,
+      "elapsed": 68422,
+      "snippet": "Timeout while waiting for full capability evidence (idle timeout (no new messages for 41s))",
+      "reason": "missing expected pattern /\\brisk|follow.?up/i"
+    },
+    {
+      "agent": "Ace (Developer)",
+      "capability": "tool-audit-proof",
+      "category": "tool-proof",
+      "passed": true,
+      "elapsed": 42548,
+      "snippet": "🔧 [search_files] Searching for `\"quality\":` in server/package.json to locate relevant code paths"
+    },
+    {
+      "agent": "Ace (Developer)",
+      "capability": "upgrades-post",
+      "category": "upgrades",
+      "passed": true,
+      "elapsed": 27592,
+      "snippet": "Thinking…"
+    },
+    {
+      "agent": "Ace (Developer)",
+      "capability": "read-and-summarize",
+      "category": "tool-proof",
+      "passed": true,
+      "elapsed": 15884,
+      "snippet": "🔧 [read_file] Reading `server/src/routes/health.ts` to gather implementation context"
+    },
+    {
+      "agent": "Ace (Developer)",
+      "capability": "search-codebase",
+      "category": "tool-proof",
+      "passed": true,
+      "elapsed": 21226,
+      "snippet": "🔧 [search_files] Searching for `withAuth` in src/routes to locate relevant code paths"
+    },
+    {
+      "agent": "Ace (Developer)",
+      "capability": "design-deliverable",
+      "category": "specialist",
+      "passed": true,
+      "elapsed": 12025,
+      "snippet": "<div id='status'>OK</div>\nSMOKE_DEVELOPE_DESIGNDE_971241"
+    },
+    {
+      "agent": "Ace (Developer)",
+      "capability": "db-schema-inspect",
+      "category": "tool-proof",
+      "passed": true,
+      "elapsed": 7970,
+      "snippet": "🔧 [db_schema] Inspecting schema"
+    },
+    {
+      "agent": "Ace (Developer)",
+      "capability": "git-branch-awareness",
+      "category": "tool-proof",
+      "passed": true,
+      "elapsed": 11738,
+      "snippet": "The last three commits are:\n*   `d7ad417 fix(discord): retry screenshots channel resolution on build-complete`\n*   `414da2c fix(discord): route build-complete screenshots through a…"
+    },
+    {
+      "agent": "Max (QA)",
+      "capability": "regression-test-design",
+      "category": "specialist",
+      "passed": true,
+      "elapsed": 28608,
+      "snippet": "Max (QA): A high-risk regression test ensures that a contractor is never matched with a job that is inside their service area polygon if they are missing even one of the niche skil…"
+    },
+    {
+      "agent": "Max (QA)",
+      "capability": "tool-audit-proof",
+      "category": "tool-proof",
+      "passed": true,
+      "elapsed": 54608,
+      "snippet": "🔧 [list_threads] Using list_threads"
+    },
+    {
+      "agent": "Max (QA)",
+      "capability": "upgrades-post",
+      "category": "upgrades",
+      "passed": true,
+      "elapsed": 55680,
+      "snippet": "Thinking…"
+    },
+    {
+      "agent": "Kane (Security Auditor)",
+      "capability": "auth-risk-and-mitigation",
+      "category": "specialist",
+      "passed": true,
+      "elapsed": 72590,
+      "snippet": "The employee login endpoint is vulnerable to user enumeration, which can be mitigated by returning a generic error message for both invalid usernames and incorrect passwords, preve…"
+    },
+    {
+      "agent": "Kane (Security Auditor)",
+      "capability": "upgrades-post",
+      "category": "upgrades",
+      "passed": true,
+      "elapsed": 67092,
+      "snippet": "Thinking…"
+    },
+    {
+      "agent": "Kane (Security Auditor)",
+      "capability": "code-review",
+      "category": "tool-proof",
+      "passed": true,
+      "elapsed": 30900,
+      "snippet": "🔧 [read_file] Reading `server/src/routes/auth.ts` to gather implementation context"
+    },
+    {
+      "agent": "Sophie (UX Reviewer)",
+      "capability": "a11y-priority",
+      "category": "specialist",
+      "passed": true,
+      "elapsed": 50598,
+      "snippet": "The most important WCAG criterion to test first is 2.1.1 Keyboard (Level A), because if a user cannot reach or operate an interactive element using a keyboard, all other accessibil…"
+    },
+    {
+      "agent": "Raj (API Reviewer)",
+      "capability": "http-semantics",
+      "category": "specialist",
+      "passed": true,
+      "elapsed": 20723,
+      "snippet": "A `404 Not Found` status code should be returned when a client requests a resource that does not exist.\n\nSMOKE_APIREVIE_HTTPSEMA_794338"
+    },
+    {
+      "agent": "Raj (API Reviewer)",
+      "capability": "route-review",
+      "category": "tool-proof",
+      "passed": true,
+      "elapsed": 98227,
+      "snippet": "🔧 [search_files] Searching for `router.get` in server/src/routes/ to locate relevant code paths"
+    },
+    {
+      "agent": "Elena (DBA)",
+      "capability": "postgres-safety",
+      "category": "specialist",
+      "passed": true,
+      "elapsed": 15184,
+      "snippet": "A key PostgreSQL migration safety practice is to wrap each migration in a transaction, ensuring all changes apply atomically and preventing the database from being left in a partia…"
+    },
+    {
+      "agent": "Elena (DBA)",
+      "capability": "schema-inspect",
+      "category": "tool-proof",
+      "passed": true,
+      "elapsed": 57605,
+      "snippet": "🔧 [db_schema] Inspecting schema"
+    },
+    {
+      "agent": "Kai (Performance)",
+      "capability": "measurement",
+      "category": "specialist",
+      "passed": true,
+      "elapsed": 17271,
+      "snippet": "I would track the initial JavaScript bundle size, because a large bundle directly increases download and parse times, which is a major cause of slow initial page loads, especially …"
+    },
+    {
+      "agent": "Kai (Performance)",
+      "capability": "code-analysis",
+      "category": "tool-proof",
+      "passed": true,
+      "elapsed": 25541,
+      "snippet": "⏳ Kai (Performance) is still working on this..."
+    },
+    {
+      "agent": "Jude (DevOps)",
+      "capability": "tool-audit-proof",
+      "category": "tool-proof",
+      "passed": true,
+      "elapsed": 15118,
+      "snippet": "🔧 [gcp_run_describe] Getting Cloud Run service status and URL"
+    },
+    {
+      "agent": "Jude (DevOps)",
+      "capability": "deployment-inspect",
+      "category": "tool-proof",
+      "passed": true,
+      "elapsed": 135397,
+      "snippet": "TOOL_USED:gcp_list_revisions. asap-00118-sc4 SMOKE_DEVOPS_DEPLOYME_809717"
+    },
+    {
+      "agent": "Jude (DevOps)",
+      "capability": "gcp-describe",
+      "category": "tool-proof",
+      "passed": true,
+      "elapsed": 30163,
+      "snippet": "🔧 [gcp_run_describe] Getting Cloud Run service status and URL"
+    },
+    {
+      "agent": "Liv (Copywriter)",
+      "capability": "microcopy-tone",
+      "category": "specialist",
+      "passed": true,
+      "elapsed": 122295,
+      "snippet": "Sorry, those login details weren't recognised. Please check them and have another go. SMOKE_COPYWRIT_MICROCOP_794351"
+    },
+    {
+      "agent": "Harper (Lawyer)",
+      "capability": "au-contractor-distinction",
+      "category": "specialist",
+      "passed": true,
+      "elapsed": 17315,
+      "snippet": "A key distinction is the ability to delegate or subcontract work. An employee is engaged to perform the work personally. In contrast, an independent contractor typically has the ri…"
+    },
+    {
+      "agent": "Mia (iOS Engineer)",
+      "capability": "ios-stack",
+      "category": "specialist",
+      "passed": true,
+      "elapsed": 21182,
+      "snippet": "The primary language for modern iOS development is Swift, used with the SwiftUI framework for building user interfaces. SMOKE_IOSENGIN_IOSSTACK_794356"
+    },
+    {
+      "agent": "Mia (iOS Engineer)",
+      "capability": "code-read",
+      "category": "tool-proof",
+      "passed": true,
+      "elapsed": 69107,
+      "snippet": "🔧 [search_files] Searching for `swift|swiftui` to locate relevant code paths"
+    },
+    {
+      "agent": "Leo (Android Engineer)",
+      "capability": "android-stack",
+      "category": "specialist",
+      "passed": true,
+      "elapsed": 15256,
+      "snippet": "The primary language for modern Android development is Kotlin, and the recommended UI framework is Jetpack Compose. SMOKE_ANDROIDE_ANDROIDS_794358"
+    },
+    {
+      "agent": "Leo (Android Engineer)",
+      "capability": "code-read",
+      "category": "tool-proof",
+      "passed": true,
+      "elapsed": 35047,
+      "snippet": "🔧 [search_files] Searching for `Kotlin|Jetpack Compose` to locate relevant code paths"
+    },
+    {
+      "agent": "Ace (Developer)",
+      "capability": "typecheck-execution",
+      "category": "tool-proof",
+      "passed": true,
+      "elapsed": 36685,
+      "snippet": "Server typecheck failed.\nSMOKE_DEVELOPE_TYPECHEC_003724"
+    },
+    {
+      "agent": "Ace (Developer)",
+      "capability": "run-tests-execution",
+      "category": "tool-proof",
+      "passed": false,
+      "elapsed": 91661,
+      "snippet": "Timeout while waiting for full capability evidence (idle timeout (no new messages for 75s))",
+      "reason": "missing any-of expected patterns"
+    },
+    {
+      "agent": "Max (QA)",
+      "capability": "run-tests-readonly",
+      "category": "tool-proof",
+      "passed": false,
+      "elapsed": 148093,
+      "snippet": "Timeout while waiting for full capability evidence (idle timeout (no new messages for 74s))",
+      "reason": "missing any-of expected patterns"
+    }
+  ],
+  "extras": [
+    {
+      "name": "channel_hygiene",
+      "passed": true,
+      "detail": "groupchat:0 | terminal:0 | upgrades:0",
+      "critical": true
+    },
+    {
+      "name": "elevenlabs_api",
+      "passed": true,
+      "detail": "API reachable",
+      "critical": true
+    },
+    {
+      "name": "elevenlabs_tts",
+      "passed": true,
+      "detail": "audio bytes=37660",
+      "critical": false
+    }
+  ],
+  "config": {
+    "timeoutMs": 180000,
+    "profile": "matrix",
+    "preClear": true,
+    "runElevenApi": true,
+    "runElevenTts": true,
+    "runVoiceBridge": false,
+    "runVoiceActive": false,
+    "capabilityAttempts": 2,
+    "runPostSuccessAction": false,
+    "agentFilter": null
+  }
+}

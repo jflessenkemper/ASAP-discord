@@ -123,12 +123,9 @@ function australianFlagSVG(s = 256): string {
 </svg>`;
 }
 
-// ── Fetch DiceBear avatar (avataaars — cartoon people with hair, skin, features) ───
+// ── Fetch DiceBear avatar (notionists — clean, minimal Notion-style line art) ───
 async function fetchAvatar(seed: string): Promise<Buffer> {
-  // Restrict eyes/mouth to professional variants (exclude dizzy/hearts/tongue/vomit etc.)
-  const safeEyes = 'default,happy,side,squint,surprised';
-  const safeMouth = 'default,eating,serious,smile,twinkle';
-  const url = `https://api.dicebear.com/9.x/avataaars/png?seed=${encodeURIComponent(seed)}&size=${AVATAR_SIZE}&backgroundColor=transparent&eyes=${safeEyes}&mouth=${safeMouth}`;
+  const url = `https://api.dicebear.com/9.x/notionists/png?seed=${encodeURIComponent(seed)}&size=${AVATAR_SIZE}&backgroundColor=transparent`;
   const resp = await fetch(url);
   if (!resp.ok) throw new Error(`DiceBear fetch failed for ${seed}: ${resp.status}`);
   return Buffer.from(await resp.arrayBuffer());
