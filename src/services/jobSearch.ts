@@ -421,9 +421,9 @@ export async function saveDraft(listingId: number, coverLetter: string, resumeTe
   );
 }
 
-export async function getPortalByCompany(company: string): Promise<{ company_name: string; api_type: string; api_url: string; board_api_key?: string } | null> {
+export async function getPortalByCompany(company: string): Promise<{ company_name: string; careers_url: string; api_type: string; api_url: string; board_api_key?: string } | null> {
   const res = await pool.query(
-    'SELECT company_name, api_type, api_url, board_api_key FROM job_portals WHERE company_name ILIKE $1 AND enabled = TRUE',
+    'SELECT company_name, careers_url, api_type, api_url, board_api_key FROM job_portals WHERE company_name ILIKE $1 AND enabled = TRUE',
     [company]
   );
   return res.rows[0] || null;
@@ -496,6 +496,23 @@ Output the cover letter text first, then "---RESUME---", then the resume highlig
 
   await saveDraft(listingId, coverLetter, resumeHighlights);
   return { coverLetter, resumeHighlights };
+}
+
+/**
+ * Guess a company's careers/HR email from portal data or company name.
+ * Extracts domain from careers_url, falls back to sanitised company name.
+ */
+export async function guessCompanyEmail(company: string): Promise<string> {
+  const portal = await getPortalByCompany(company);
+  if (portal?.careers_url) {
+    try {
+      const host = new URL(portal.careers_url).hostname.replace(/^www\./, '');
+      return `careers@${host}`;
+    } catch { /* fall through */ }
+  }
+  // Fallback: derive domain from company name
+  const slug = company.toLowerCase().replace(/[^a-z0-9]/g, '');
+  return `careers@${slug}.com`;
 }
 
 /**

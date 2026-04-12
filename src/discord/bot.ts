@@ -32,7 +32,8 @@ import { setTelephonyChannels, isTelephonyAvailable, initContacts } from './serv
 import { setupChannels, BotChannels } from './setup';
 import { setCommandAuditCallback, setPRReviewCallback, setDiscordGuild, setToolAuditCallback, setAgentChannelResolver } from './tools';
 import { setLimitsChannel, setCostChannel, startDashboardUpdates, stopDashboardUpdates, initUsageCounters, flushUsageCounters, getUsageReport, getCostOpsSummaryLine } from './usage';
-import { updateListingByMsgId, draftApplication, getProfile, getPortalByCompany, submitToGreenhouse, getListingById, updateListingStatus, setListingDiscordMsg, type JobListing } from '../services/jobSearch';
+import { updateListingByMsgId, draftApplication, getProfile, getPortalByCompany, submitToGreenhouse, getListingById, updateListingStatus, setListingDiscordMsg, guessCompanyEmail, type JobListing } from '../services/jobSearch';
+import { sendJobApplication } from '../services/email';
 
 
 /**
@@ -667,21 +668,48 @@ export async function startBot(): Promise<void> {
       const ch = reaction.message.channel as TextChannel;
 
       if (emoji === '✅') {
-        // Attempt Greenhouse auto-submit
         const profile = await getProfile();
+        let submitted = false;
+
+        // 1. Try Greenhouse API if portal has a key
         if (listing.source === 'greenhouse' && profile) {
           const portal = await getPortalByCompany(listing.company);
           if (portal?.board_api_key) {
             const result = await submitToGreenhouse(listing, profile, listing.cover_letter || '', listing.resume_text || '');
             if (result.success) {
-              await ch.send(`🚀 **Submitted** to ${listing.company} via Greenhouse!`);
+              await ch.send(`🚀 **Submitted** to ${listing.company} via Greenhouse API!`);
+              submitted = true;
             } else {
-              await ch.send(`⚠️ Greenhouse submit failed: ${result.error}\n👉 Apply manually: ${listing.url}`);
+              await ch.send(`⚠️ Greenhouse API failed: ${result.error} — trying email...`);
             }
-          } else {
-            await ch.send(`✅ **Approved** — apply manually: ${listing.url}`);
           }
-        } else {
+        }
+
+        // 2. Fall back to email application
+        if (!submitted && profile) {
+          try {
+            const toEmail = await guessCompanyEmail(listing.company);
+            const fromName = `${profile.first_name || 'Jordan'} ${profile.last_name || 'Flessenkemper'}`;
+            await sendJobApplication(
+              toEmail,
+              fromName,
+              profile.email || 'jordan.flessenkemper@gmail.com',
+              listing.title,
+              listing.company,
+              listing.cover_letter || '',
+              listing.resume_text || '',
+              listing.url,
+              profile.phone || undefined,
+            );
+            await ch.send(`📧 **Application emailed** to ${toEmail} for **${listing.title}** @ ${listing.company}`);
+            submitted = true;
+          } catch (emailErr) {
+            const msg = emailErr instanceof Error ? emailErr.message : 'Unknown';
+            await ch.send(`⚠️ Email send failed: ${msg}\n👉 Apply manually: ${listing.url}`);
+          }
+        }
+
+        if (!submitted) {
           await ch.send(`✅ **Approved** — apply manually: ${listing.url}`);
         }
       } else {
