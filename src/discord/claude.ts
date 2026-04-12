@@ -46,7 +46,7 @@ const PROJECT_CONTEXT_LIGHT_MAX_CHARS = parseInt(process.env.PROJECT_CONTEXT_LIG
 const PROJECT_CONTEXT_LIGHT = PROJECT_CONTEXT.slice(0, PROJECT_CONTEXT_LIGHT_MAX_CHARS);
 
 const GEMINI_FLASH = process.env.GEMINI_FLASH_MODEL || 'gemini-flash-latest';
-const GEMINI_FLASH_LITE = process.env.GEMINI_FLASH_LITE_MODEL || 'gemini-2.0-flash-lite';
+const GEMINI_FLASH_LITE = process.env.GEMINI_FLASH_LITE_MODEL || 'gemini-2.0-flash';
 const GEMINI_PRO = process.env.GEMINI_PRO_MODEL || 'gemini-2.5-pro';
 const ANTHROPIC_OPUS = process.env.ANTHROPIC_CODING_MODEL || 'claude-opus-4-6';
 const DEFAULT_CODING_MODEL = process.env.CODING_AGENT_MODEL || ANTHROPIC_OPUS;

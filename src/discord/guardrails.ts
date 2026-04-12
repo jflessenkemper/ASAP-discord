@@ -18,7 +18,7 @@ export interface GuardrailResult {
 }
 
 const GUARDRAILS_ENABLED = process.env.GUARDRAILS_ENABLED !== 'false';
-const GUARDRAILS_MODEL = process.env.GUARDRAILS_MODEL || 'gemini-2.0-flash-lite';
+const GUARDRAILS_MODEL = process.env.GUARDRAILS_MODEL || 'gemini-2.0-flash';
 const GUARDRAILS_INPUT_ENABLED = process.env.GUARDRAILS_INPUT_ENABLED !== 'false';
 const GUARDRAILS_OUTPUT_ENABLED = process.env.GUARDRAILS_OUTPUT_ENABLED !== 'false';
 const GUARDRAILS_MAX_INPUT_CHARS = parseInt(process.env.GUARDRAILS_MAX_INPUT_CHARS || '2000', 10);
