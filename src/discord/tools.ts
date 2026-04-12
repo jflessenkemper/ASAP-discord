@@ -1469,6 +1469,10 @@ export const REVIEW_TOOLS = REPO_TOOLS.filter((t) => REVIEW_TOOL_NAMES.has(t.nam
  * Riley keeps a leaner coordination/ops-only surface so orchestration stays focused.
  * She can inspect state, run smoke checks, and communicate, but large code/deploy mutations
  * are delegated to the specialist agents.
+ *
+ * As EA she also has code mutation, PR workflow, and deploy tools so she can
+ * self-improve, approve Ace's PRs, and implement upgrades autonomously.
+ * Deploy and merge are gated by tests+typecheck enforcement at the tool level.
  */
 const RILEY_TOOL_NAMES = new Set([
   'read_file', 'search_files', 'list_directory', 'check_file_exists', 'fetch_url',
@@ -1482,6 +1486,10 @@ const RILEY_TOOL_NAMES = new Set([
   'gcp_logs_query', 'gcp_run_describe', 'gcp_storage_ls', 'gcp_artifact_list', 'gcp_sql_describe', 'gcp_project_info',
   'set_daily_budget', 'db_query_readonly', 'db_schema',
   'job_scan', 'job_evaluate', 'job_tracker', 'job_profile_update', 'job_post_approvals',
+  // ── Riley autonomy: code mutation, PR workflow, deploy ──
+  'write_file', 'edit_file', 'batch_edit', 'run_command',
+  'git_create_branch', 'create_pull_request', 'merge_pull_request', 'add_pr_comment', 'list_pull_requests',
+  'gcp_deploy', 'gcp_rollback',
 ]);
 export const RILEY_TOOLS = REPO_TOOLS.filter((t) => RILEY_TOOL_NAMES.has(t.name));
 
@@ -1626,7 +1634,7 @@ async function executeToolInternal(
       case 'create_pull_request':
         return await ghCreatePR(input.title, input.body, input.head, input.base);
       case 'merge_pull_request':
-        return await ghMergePR(parseInt(input.pr_number, 10), input.commit_title);
+        return await ghMergePR(parseInt(input.pr_number, 10), input.commit_title, context?.agentId);
       case 'add_pr_comment':
         return await ghAddComment(parseInt(input.pr_number, 10), input.body);
       case 'list_pull_requests':
@@ -1712,8 +1720,29 @@ async function executeToolInternal(
         return await gcpPreflight();
       case 'gcp_build_image':
         return await gcpBuildImage(input.tag);
-      case 'gcp_deploy':
-        return await gcpDeploy(input.tag);
+      case 'gcp_deploy': {
+        // Riley gets tests+typecheck gate before deploy + audit notification
+        if (context?.agentId === 'executive-assistant') {
+          const testResult = runTests();
+          if (testResult.includes('FAIL') || testResult.includes('Command failed')) {
+            return `❌ Deploy blocked — tests failed:\n${testResult.slice(0, 1000)}`;
+          }
+          const tcResult = runTypecheck('server');
+          if (tcResult.includes('❌')) {
+            return `❌ Deploy blocked — typecheck failed:\n${tcResult.slice(0, 1000)}`;
+          }
+        }
+        const deployResult = await gcpDeploy(input.tag);
+        if (context?.agentId === 'executive-assistant' && deployResult.startsWith('✅')) {
+          const auditCb = getToolAuditCallback();
+          if (auditCb) auditCb(context.agentId, 'gcp_deploy', `Riley self-deployed: ${input.tag || 'latest'}`);
+          // Notify groupchat via send_channel_message
+          const notifyMsg = `🚀 **Riley self-deployed** to Cloud Run: ${input.tag || 'latest'}. Tests + typecheck passed. @jordan`;
+          await discordSendMessage('groupchat', notifyMsg, undefined, context.agentId).catch(() => {});
+          await discordSendMessage('upgrades', `🚀 Riley self-deployed revision: ${input.tag || 'latest'}`, undefined, context.agentId).catch(() => {});
+        }
+        return deployResult;
+      }
       case 'gcp_set_env':
         return await gcpSetEnv(input.variables);
       case 'gcp_get_env':
@@ -2308,14 +2337,26 @@ async function ghCreatePR(title: string, body: string, head: string, base?: stri
   }
 }
 
-async function ghMergePR(prNumber: number, commitTitle?: string): Promise<string> {
+async function ghMergePR(prNumber: number, commitTitle?: string, agentId?: string): Promise<string> {
   const testResult = runTests();
   if (testResult.includes('FAIL') || testResult.includes('Command failed')) {
     return `❌ Cannot merge PR #${prNumber} — tests failed:\n${testResult.slice(0, 1000)}`;
   }
 
+  // Riley gets an extra typecheck gate on merge
+  if (agentId === 'executive-assistant') {
+    const tcResult = runTypecheck('server');
+    if (tcResult.includes('❌')) {
+      return `❌ Cannot merge PR #${prNumber} — typecheck failed:\n${tcResult.slice(0, 1000)}`;
+    }
+  }
+
   try {
     const result = await mergePullRequest(prNumber, commitTitle);
+    const auditCb = getToolAuditCallback();
+    if (auditCb && agentId) {
+      auditCb(agentId, 'merge_pull_request', `Merged PR #${prNumber} — tests+typecheck passed`);
+    }
     return `✅ ${result}`;
   } catch (err) {
     return `Error merging PR: ${err instanceof Error ? err.message : 'Unknown'}`;

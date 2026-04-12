@@ -1827,6 +1827,18 @@ export async function handoffVoiceInstructionToRileyText(
 }
 
 /**
+ * Internal bridge: dispatch an upgrade implementation task to Riley's
+ * normal orchestration flow. Called by the upgrades triage loop.
+ */
+export async function dispatchUpgradeToRiley(
+  upgradeDescription: string,
+  groupchat: TextChannel
+): Promise<void> {
+  const prompt = `[Upgrades triage — auto-dispatch] The following upgrade has been accepted by multiple agents and is ready for implementation. Review it and either implement it yourself or delegate to @ace:\n\n${upgradeDescription}`;
+  await handleRileyMessage(prompt, 'system', undefined, groupchat);
+}
+
+/**
  * Parse and execute [ACTION:xxx] tags from Riley's response.
  */
 async function executeActions(

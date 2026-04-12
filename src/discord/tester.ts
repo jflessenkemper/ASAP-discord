@@ -41,7 +41,7 @@ import { getAgent, getAgentAliases, resolveAgentId } from './agents';
 import { setupChannels } from './setup';
 
 type CheckPattern = RegExp;
-type Category = 'core' | 'specialist' | 'tool-proof' | 'orchestration' | 'upgrades' | 'memory';
+type Category = 'core' | 'specialist' | 'tool-proof' | 'orchestration' | 'upgrades' | 'memory' | 'ux';
 type SmokeProfile = 'full' | 'readiness' | 'matrix';
 
 interface AgentCapabilityTest {
@@ -574,6 +574,143 @@ const AGENT_CAPABILITY_TESTS: AgentCapabilityTest[] = [
     prompt: 'Run /ops now and tell me the current costs and thread status. Do NOT delegate this.',
     expectAny: [/cost|thread|spend|ops|status|budget/i],
     timeoutMs: 120_000,
+  },
+
+  // ── Goal lifecycle tests ──────────────────────────────────────────────
+  {
+    id: 'executive-assistant',
+    category: 'core',
+    capability: 'goal-create',
+    prompt: 'Create a goal to audit the current test coverage and list gaps.',
+    expectAll: [/goal-\d{4}/i],
+    expectToolAudit: ['list_threads'],
+    timeoutMs: 180_000,
+  },
+  {
+    id: 'executive-assistant',
+    category: 'core',
+    capability: 'goal-status-report',
+    prompt: 'What goals are currently active? Report their status.',
+    expectAny: [/active|in.progress|running|no.*active|goal/i],
+    timeoutMs: 150_000,
+  },
+  {
+    id: 'executive-assistant',
+    category: 'core',
+    capability: 'goal-stall-detection',
+    prompt: 'Describe what happens when a goal stalls for more than 7 minutes with no progress. What mechanism detects and responds to this?',
+    expectAny: [/stall|nudge|inactive|idle|timeout|watchdog/i],
+    timeoutMs: 150_000,
+  },
+  {
+    id: 'executive-assistant',
+    category: 'core',
+    capability: 'goal-completion',
+    prompt: 'Start a goal to check TypeScript health, run typecheck, and mark the goal complete.',
+    expectAny: [/complete|done|finished|closed|passed|clean/i],
+    expectToolAudit: ['typecheck'],
+    timeoutMs: 180_000,
+  },
+
+  // ── Thread lifecycle tests ────────────────────────────────────────────
+  {
+    id: 'executive-assistant',
+    category: 'core',
+    capability: 'thread-status-report',
+    prompt: 'List all open threads with their age and activity status.',
+    expectAll: [/thread/i],
+    expectToolAudit: ['list_threads'],
+    timeoutMs: 150_000,
+  },
+  {
+    id: 'executive-assistant',
+    category: 'core',
+    capability: 'thread-cleanup-awareness',
+    prompt: 'Which threads are stale and should be closed? Explain the criteria you use.',
+    expectAny: [/idle|stale|inactive|close|archive|old/i],
+    timeoutMs: 120_000,
+  },
+
+  // ── System resilience tests ───────────────────────────────────────────
+  {
+    id: 'executive-assistant',
+    category: 'core',
+    capability: 'budget-exhaustion-awareness',
+    prompt: 'What happens when the daily budget is exhausted? Describe your behavior.',
+    expectAny: [/stop|pause|limit|budget|refuse|block/i],
+    timeoutMs: 120_000,
+  },
+  {
+    id: 'executive-assistant',
+    category: 'core',
+    capability: 'rate-limit-awareness',
+    prompt: 'How do you handle API rate limits (429 responses)? Describe your retry strategy.',
+    expectAny: [/retry|backoff|exponential|wait|delay/i],
+    timeoutMs: 120_000,
+  },
+  {
+    id: 'executive-assistant',
+    category: 'core',
+    capability: 'dedup-awareness',
+    prompt: 'How do you handle duplicate messages sent within seconds of each other?',
+    expectAny: [/dedup|ignore|skip|fingerprint|duplicate|discard/i],
+    timeoutMs: 120_000,
+  },
+
+  // ── Upgrades triage tests ─────────────────────────────────────────────
+  {
+    id: 'executive-assistant',
+    category: 'core',
+    capability: 'upgrades-triage-digest',
+    prompt: 'Summarize the current upgrades backlog. What are the top accepted items?',
+    expectAny: [/accepted|deferred|backlog|upgrade|triage/i],
+    timeoutMs: 150_000,
+  },
+  {
+    id: 'executive-assistant',
+    category: 'orchestration',
+    capability: 'upgrades-act-on-top',
+    prompt: 'Pick the highest-priority accepted upgrade from #upgrades and delegate its implementation to Ace.',
+    expectAny: [/ace|delegate|implement|assign|@ace/i],
+    timeoutMs: 180_000,
+  },
+
+  // ── Button UX validation ──────────────────────────────────────────────
+  {
+    id: 'executive-assistant',
+    category: 'tool-proof',
+    capability: 'job-buttons-approval',
+    prompt: 'Run a job scan and show me listings with approval buttons in the job applications channel.',
+    expectToolAudit: ['job_scan', 'job_post_approvals'],
+    timeoutMs: 180_000,
+    heavyTool: true,
+  },
+
+  // ── Riley autonomy tests ──────────────────────────────────────────────
+  {
+    id: 'executive-assistant',
+    category: 'tool-proof',
+    capability: 'self-edit-file',
+    prompt: 'Edit the file src/discord/tester.ts and add a comment "// Riley was here" at the top of the file. Then verify the change with read_file.',
+    expectToolAudit: ['edit_file', 'read_file'],
+    timeoutMs: 180_000,
+  },
+  {
+    id: 'executive-assistant',
+    category: 'tool-proof',
+    capability: 'create-branch-pr',
+    prompt: 'Create a git branch called "riley/smoke-test-branch", make a trivial change (add a comment to any file), commit it, and create a pull request titled "Riley smoke test PR". Then list open PRs to confirm.',
+    expectToolAudit: ['git_create_branch', 'create_pull_request'],
+    timeoutMs: 240_000,
+    heavyTool: true,
+  },
+  {
+    id: 'executive-assistant',
+    category: 'orchestration',
+    capability: 'review-ace-pr',
+    prompt: 'List open pull requests and if any exist, review the most recent one by reading its changed files and posting a review comment.',
+    expectToolAudit: ['list_pull_requests'],
+    timeoutMs: 180_000,
   },
 ];
 
@@ -1237,8 +1374,8 @@ function buildReadinessSummary(results: TestResult[], extras: ExtraCheckResult[]
   }
 
   const weights: Record<Category, number> = profile === 'matrix'
-    ? { core: 0.20, specialist: 0.15, 'tool-proof': 0.25, orchestration: 0.15, upgrades: 0.10, memory: 0.15 }
-    : { core: 0.25, specialist: 0.20, 'tool-proof': 0.20, orchestration: 0.15, upgrades: 0.10, memory: 0.10 };
+    ? { core: 0.18, specialist: 0.14, 'tool-proof': 0.23, orchestration: 0.14, upgrades: 0.09, memory: 0.13, ux: 0.09 }
+    : { core: 0.22, specialist: 0.18, 'tool-proof': 0.18, orchestration: 0.13, upgrades: 0.09, memory: 0.09, ux: 0.11 };
 
   let score = 0;
   for (const key of Object.keys(weights) as Category[]) {

@@ -2323,9 +2323,19 @@ GOVERNANCE:
 - Ace is the Tool Master. If tooling is missing, stale, or unreliable, direct @ace to prepare it before the rest of the team proceeds.
 - If a run hits the safety cap, restart with a tighter prompt or hand it to the best specialist instead of letting one loop sprawl.
 - If you state that a deployment/screenshots/URL/cleanup action is happening, you MUST include explicit action tags in the same message: [ACTION:DEPLOY], [ACTION:SCREENSHOTS], [ACTION:URLS], [ACTION:CLEANUP:<count>].
-- You are allowed to self-improve: if your own orchestration/routing/tooling is causing friction, direct @ace to patch the Discord bot code and deploy the improvement in the same run.
 - If groupchat gets noisy/disjointed, run [ACTION:CLEANUP:<count>] to delete recent bot/webhook clutter before posting the consolidated update.
 ${budgetGovernance}
+SELF-IMPROVEMENT & AUTONOMY:
+- You have full code mutation tools: write_file, edit_file, batch_edit, run_command.
+- You have the complete PR workflow: git_create_branch, create_pull_request, merge_pull_request, add_pr_comment, list_pull_requests.
+- You have deploy tools: gcp_deploy, gcp_rollback.
+- You may write code, create branches, commit, create PRs, and merge them yourself. Tests + typecheck are enforced automatically before merge/deploy.
+- You may review and merge Ace's PRs after verifying quality.
+- You may implement improvements from the #upgrades backlog directly, or delegate to @ace and then review/merge his PR.
+- Self-modification flow: create branch → make changes → run tests/typecheck → create PR → merge → deploy.
+- After any self-deploy, notify @jordan in #groupchat with a summary of what changed.
+- Post all self-improvement actions to #upgrades with a summary.
+- You do NOT have access to: gcp_secret_set (secrets are human-managed), db_query (write DB), or Discord channel create/delete/rename.
 ` : agent.id === 'developer' ? `
 GOVERNANCE:
 - You are the Tool Master. Own tool readiness for the whole team.

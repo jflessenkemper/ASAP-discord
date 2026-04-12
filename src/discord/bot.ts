@@ -24,7 +24,7 @@ import { startCall, endCall, isCallActive, processTesterVoiceTurnForCall } from 
 import { setBotChannels } from './handlers/documentation';
 import { setGitHubChannel } from './handlers/github';
 import { setDecisionsChannel, setThreadStatusChannel, handleDecisionReply } from './handlers/groupchat';
-import { handleGroupchatMessage } from './handlers/groupchat';
+import { handleGroupchatMessage, dispatchUpgradeToRiley } from './handlers/groupchat';
 import { getThreadStatusOpsLine } from './handlers/groupchat';
 import { autoReviewPR } from './handlers/review';
 import { handleAgentMessage } from './handlers/textChannel';
@@ -226,6 +226,15 @@ async function runUpgradesTriage(channels: BotChannels): Promise<void> {
 
   if (triageMessage && !triageMessage.pinned) {
     await triageMessage.pin().catch(() => {});
+  }
+
+  // ── Actionable dispatch: auto-send top accepted upgrade to Riley ──
+  // Rate limit: max 1 per triage cycle, only items with consensus (count >= 2)
+  const actionable = top.find((e) => e.label === 'accepted' && e.count >= 2);
+  if (actionable && channels.groupchat) {
+    await dispatchUpgradeToRiley(actionable.sample, channels.groupchat).catch((err) => {
+      console.warn('Upgrades auto-dispatch failed:', err instanceof Error ? err.message : 'Unknown');
+    });
   }
 }
 
