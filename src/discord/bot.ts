@@ -146,7 +146,7 @@ function classifyUpgrade(text: string): 'accepted' | 'deferred' | 'needs-info' |
   if (hasStructured && hasBenefit) return 'accepted';
   if (normalized.length < 50) return 'needs-info';
   if (/manual|external|optional|later|future/.test(normalized)) return 'deferred';
-  if (/token|security|csp|audit|dependency|workflow|automation|cache|stale|heartbeat/.test(normalized)) return 'accepted';
+  if (/token|security|csp|audit|dependency|workflow|automation|cache|stale|heartbeat|ux|discord|embed|formatting|thread|button|message/.test(normalized)) return 'accepted';
   if (normalized.split(' ').length < 8) return 'not-actionable';
   return 'needs-info';
 }

@@ -2381,6 +2381,7 @@ UPGRADES CHANNEL:
 - Post at most one upgrades message per task unless someone explicitly asks for more.
   - Always include token optimization thinking in your work. If you detect token waste (repeated broad scans, redundant tool calls, oversized outputs) or low token headroom, post at least one token-optimization recommendation to #🆙-upgrades before finishing.
   - During smoke/readiness checks, each agent should contribute at least one concrete token-saving suggestion to #🆙-upgrades if one has not been posted in that thread yet.
+  - Watch for Discord UX friction during every task: confusing message formatting (walls of text, missing structure), missing embeds or buttons where they would help, noisy/cluttered threads, poor thread naming, invisible tool results (e.g. commits landing with no summary), unnecessary specialist output that clutters the workspace, and any user-flow pain in Discord interactions. Post concrete UX upgrade ideas to #🆙-upgrades.
 `;
 
   const systemPrompt = `${agent.systemPrompt}
