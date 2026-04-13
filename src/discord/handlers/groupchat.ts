@@ -716,7 +716,11 @@ async function syncGoalSequence(groupchat: TextChannel): Promise<void> {
 function buildGoalThreadName(senderName: string, content: string): string {
   const goalId = goalState.nextThreadSequence().toString().padStart(4, '0');
   const sender = sanitizeThreadName(senderName).replace(/\s+/g, '-').toLowerCase() || 'user';
-  const preview = sanitizeThreadName(content).split(' ').slice(0, 8).join(' ');
+  // Extract a concise task-oriented preview by stripping filler words
+  const FILLER = new Set(['hey', 'hi', 'hello', 'please', 'can', 'you', 'could', 'would', 'riley', 'the', 'a', 'an', 'i', 'we', 'need', 'want', 'to', 'me', 'my', 'our', 'this', 'that', 'it', 'is', 'for', 'on', 'in', 'of', 'and', 'or', 'with', 'some', 'just', 'also']);
+  const words = sanitizeThreadName(content).split(' ').filter(Boolean);
+  const meaningful = words.filter(w => !FILLER.has(w.toLowerCase()));
+  const preview = (meaningful.length >= 3 ? meaningful : words).slice(0, 6).join(' ');
   return sanitizeThreadName(`Goal-${goalId} ${sender} ${preview}`) || `Goal-${goalId}`;
 }
 
@@ -734,10 +738,36 @@ async function closeGoalWorkspace(
 
   if (thread && !thread.archived) {
     const finalThreadName = String(thread.name || 'workspace');
+    const goalText = goalState.goal || finalThreadName;
+    const elapsed = Date.now() - goalState.startedAt;
+    const durationStr = elapsed < 60_000
+      ? `${Math.round(elapsed / 1000)}s`
+      : elapsed < 3_600_000
+        ? `${Math.round(elapsed / 60_000)}m`
+        : `${(elapsed / 3_600_000).toFixed(1)}h`;
+
+    // Send a completion embed instead of plain text
+    const completionEmbed = new EmbedBuilder()
+      .setTitle('✅ Goal Complete')
+      .setDescription(goalText.slice(0, 200))
+      .addFields(
+        { name: 'Duration', value: durationStr, inline: true },
+        { name: 'Thread', value: thread.id ? `<#${thread.id}>` : finalThreadName, inline: true },
+      )
+      .setColor(SYSTEM_COLORS.success)
+      .setFooter({ text: reason })
+      .setTimestamp();
+
+    // Post embed to thread before archiving
     await sendWebhookMessage(thread, {
-      content: `✅ Task complete. Closing this workspace thread (${reason}).`,
+      content: '',
       username: '📋 Riley (Executive Assistant)',
+      embeds: [completionEmbed],
     }).catch(() => {});
+
+    // Also post to groupchat so it's visible outside the thread
+    await groupchat.send({ embeds: [completionEmbed] }).catch(() => {});
+
     await thread.setArchived(true, reason).catch(() => {});
 
     if (decisionsChannel) {
@@ -2590,6 +2620,7 @@ interface AceDispatchResult {
   response: string;
   qualityFailed: boolean;
   designTask: boolean;
+  fileChanges: string[];
 }
 
 async function dispatchAceWithQualityGate(
@@ -2610,8 +2641,10 @@ async function dispatchAceWithQualityGate(
   // If Ace used edit_file/write_file/run_command/etc., real work was done
   // regardless of how short or formulaic the text response is.
   const MUTATING_TOOLS = new Set(['edit_file', 'write_file', 'batch_edit', 'run_command', 'git_create_branch', 'create_pull_request']);
+  const FILE_TOOLS = new Set(['edit_file', 'write_file', 'batch_edit']);
   const toolsUsed = new Set<string>();
   let mutatingToolCount = 0;
+  const fileChanges: string[] = [];
 
   let aceResponse = await dispatchToAgent('developer', aceContext, aceChannel, {
     signal,
@@ -2620,9 +2653,10 @@ async function dispatchAceWithQualityGate(
     documentLine: '✅ {response}',
     workspaceChannel,
     suppressVisibleOutput: shouldSuppressAceVisibleOutput,
-    onToolUse: (toolName) => {
+    onToolUse: (toolName, summary) => {
       toolsUsed.add(toolName);
       if (MUTATING_TOOLS.has(toolName)) mutatingToolCount++;
+      if (FILE_TOOLS.has(toolName) && summary) fileChanges.push(summary);
     },
   });
 
@@ -2675,7 +2709,7 @@ async function dispatchAceWithQualityGate(
 
   const qualityFailed = !designTask && !signal?.aborted && needsQualityRetry();
   console.log(`AGENT_CHAIN aceQualityFailed=${qualityFailed} designTask=${designTask} needsRetry=${needsQualityRetry()} mutatingTools=${mutatingToolCount} toolsUsed=${[...toolsUsed].join(',')} aceLen=${aceResponse.trim().length} aceSnippet="${aceResponse.slice(0, 120)}"`);
-  return { response: aceResponse, qualityFailed, designTask };
+  return { response: aceResponse, qualityFailed, designTask, fileChanges };
 }
 
 async function runSpecialistFallback(
@@ -2734,11 +2768,22 @@ async function handleAgentChain(
         const aceChannel = getAgentWorkChannel('developer', groupchat);
         aceChannel.sendTyping().catch(() => {});
 
-        const { response: aceResponse, qualityFailed: aceQualityFailed, designTask } =
+        const { response: aceResponse, qualityFailed: aceQualityFailed, designTask, fileChanges } =
           await dispatchAceWithQualityGate(rileyResponse, aceChannel, workspaceChannel, signal);
 
         if (aceQualityFailed) {
           consolidatedErrors.push('Ace completion quality check failed after retries.');
+        }
+
+        // Post a compact diff preview if files were changed
+        if (fileChanges.length > 0 && !signal?.aborted) {
+          const diffLines = fileChanges.slice(0, 15).map(s => `\`${s.slice(0, 100)}\``).join('\n');
+          const diffEmbed = new EmbedBuilder()
+            .setTitle(`📝 Files Changed (${fileChanges.length})`)
+            .setDescription(diffLines)
+            .setColor(SYSTEM_COLORS.info)
+            .setTimestamp();
+          await workspaceChannel.send({ embeds: [diffEmbed] }).catch(() => {});
         }
 
         if (!signal?.aborted && hasAceCompletionContract(aceResponse)) {

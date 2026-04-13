@@ -519,7 +519,12 @@ export async function sendAgentMessage(
   if (!rendered.trim()) {
     return;
   }
-  const duplicateDecision = shouldSuppressCareerOpsDuplicate(channel, rendered);
+
+  // Compact very long text-only responses (>3800 chars = 3+ Discord messages)
+  // to avoid wall-of-text spam. Preserve key sections and truncate the rest.
+  const compacted = compactLongResponse(rendered);
+
+  const duplicateDecision = shouldSuppressCareerOpsDuplicate(channel, compacted);
   if (duplicateDecision.suppress) {
     if (duplicateDecision.notice) {
       await sendWebhookMessage(channel, {
@@ -530,8 +535,8 @@ export async function sendAgentMessage(
     }
     return;
   }
-  const chunks = splitMessage(rendered, 1900);
-  const codeAttachment = extractLongCodeAttachment(rendered);
+  const chunks = splitMessage(compacted, 1900);
+  const codeAttachment = extractLongCodeAttachment(compacted);
 
   try {
     if (codeAttachment) {
@@ -542,8 +547,8 @@ export async function sendAgentMessage(
         avatarURL: agent.avatarUrl,
         files: [codeAttachment.attachment],
       });
-    } else if (shouldProgressivelyReveal(rendered)) {
-      await sendProgressiveWebhookMessage(channel, agent, rendered);
+    } else if (shouldProgressivelyReveal(compacted)) {
+      await sendProgressiveWebhookMessage(channel, agent, compacted);
     } else {
       for (const chunk of chunks) {
         await sendWebhookMessage(channel, {
@@ -553,12 +558,12 @@ export async function sendAgentMessage(
         });
       }
     }
-    await mirrorAgentResponse(agent.name, channel.name, rendered);
+    await mirrorAgentResponse(agent.name, channel.name, compacted);
   } catch (err) {
     console.warn(`Webhook send failed for ${agent.name}, falling back to a single plain send path:`, err instanceof Error ? err.message : 'Unknown');
     clearWebhookCache();
     if (channel instanceof TextChannel) {
-      await sendAgentFallbackMessage(channel, agent, rendered).catch(() => {});
+      await sendAgentFallbackMessage(channel, agent, compacted).catch(() => {});
     }
   }
 }
@@ -568,6 +573,35 @@ function shouldProgressivelyReveal(rendered: string): boolean {
   if (rendered.length < 260 || rendered.length > 1800) return false;
   if (rendered.includes('```')) return false;
   return true;
+}
+
+/**
+ * Compact very long text-only responses to avoid wall-of-text spam.
+ * Responses under 3800 chars (≤2 Discord messages) pass through unchanged.
+ * Longer responses are truncated: keep key sections (Result, Evidence, Risk)
+ * and the first ~1500 chars, then append a truncation note.
+ */
+function compactLongResponse(text: string): string {
+  if (text.length <= 3800) return text;
+  // Don't compact responses with code blocks — those use the file attachment path
+  if (text.includes('```')) return text;
+
+  // Extract key contract sections if present
+  const sectionRe = /^((?:Result|Evidence|Risk|Follow-up|Summary|Status)[:/].*?)$/gim;
+  const sections: string[] = [];
+  let m: RegExpExecArray | null;
+  while ((m = sectionRe.exec(text)) !== null) {
+    sections.push(m[1].trim());
+  }
+
+  // Keep first ~1500 chars of the original response
+  const head = text.slice(0, 1500).replace(/\s+\S*$/, ''); // break on word boundary
+
+  // Append extracted sections that aren't already in the head
+  const extra = sections.filter(s => !head.includes(s)).slice(0, 5);
+  const extraBlock = extra.length > 0 ? '\n\n' + extra.join('\n') : '';
+
+  return head + extraBlock + '\n\n*(Response compacted — full details in workspace thread)*';
 }
 
 function extractLongCodeAttachment(rendered: string): { summary: string; attachment: AttachmentBuilder } | null {
