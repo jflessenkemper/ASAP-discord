@@ -21,7 +21,6 @@ import { buildHandoffContext, formatHandoffPrompt, formatHandoffResult, buildHan
 import { appendToMemory, getMemoryContext, loadMemory, saveMemory, clearMemory, compressMemory } from '../memory';
 import { getAllModelHealth } from '../modelHealth';
 import { postAgentErrorLog } from '../services/agentErrors';
-import { formatOpsLine } from '../services/opsFeed';
 import { captureAndPostScreenshots } from '../services/screenshots';
 import { makeOutboundCall, makeAsapTesterCall, startConferenceCall, isTelephonyAvailable } from '../services/telephony';
 import { getWebhook, sendWebhookMessage, WebhookCapableChannel } from '../services/webhooks';
@@ -576,61 +575,40 @@ export async function postThreadStatusSnapshotNow(reason = 'hourly'): Promise<vo
 
   const riley = getAgent('executive-assistant' as AgentId);
   const timestamp = new Date().toLocaleString('en-AU', { timeZone: 'Australia/Sydney' });
-  const label = reason === 'hourly' ? 'hourly' : 'manual';
+  const label = reason === 'hourly' ? '🕐 Hourly' : '📋 Manual';
   const currentGoal = goalState.goal
-    ? `goal=${goalState.goal.replace(/\s+/g, ' ').slice(0, 72)} status=${(goalState.status || 'in-progress').replace(/\s+/g, ' ').slice(0, 48)}`
-    : 'goal=none status=idle';
+    ? `**Goal:** ${goalState.goal.replace(/\s+/g, ' ').slice(0, 120)}\n**Status:** ${(goalState.status || 'in-progress').replace(/\s+/g, ' ').slice(0, 60)}`
+    : '**Goal:** None\n**Status:** Idle';
   const report = await buildThreadStatusReport(threadStatusSourceChannel);
-  const content = formatOpsLine({
-    actor: 'executive-assistant',
-    scope: 'thread-status',
-    metric: `type=${label}`,
-    delta: `at=${timestamp} ${currentGoal} ${report}`,
-    action: 'none',
-    severity: 'info',
-  });
+  const content = `${label} Thread Status — ${timestamp}\n\n${currentGoal}\n\n${report}`;
 
   await clearThreadStatusMessages(threadStatusChannel).catch(() => {});
 
   if (riley) {
     await sendWebhookMessage(threadStatusChannel, {
-      content,
+      content: content.slice(0, 1900),
       username: `${riley.emoji} ${riley.name}`,
       avatarURL: riley.avatarUrl,
     }).catch(async () => {
-      await threadStatusChannel?.send(content).catch(() => {});
+      await threadStatusChannel?.send(content.slice(0, 1900)).catch(() => {});
     });
   } else {
-    await threadStatusChannel.send(content).catch(() => {});
+    await threadStatusChannel.send(content.slice(0, 1900)).catch(() => {});
   }
 
 }
 
 export async function getThreadStatusOpsLine(): Promise<string> {
   if (!threadStatusSourceChannel) {
-    return formatOpsLine({
-      actor: 'executive-assistant',
-      scope: 'thread-status',
-      metric: 'snapshot',
-      delta: 'source-channel=unavailable',
-      action: 'check groupchat channel wiring',
-      severity: 'warn',
-    });
+    return '⚠️ Thread status source channel unavailable — check groupchat channel wiring';
   }
 
   const report = await buildThreadStatusReport(threadStatusSourceChannel);
   const currentGoal = goalState.goal
-    ? `goal=${goalState.goal.replace(/\s+/g, ' ').slice(0, 60)} status=${(goalState.status || 'in-progress').replace(/\s+/g, ' ').slice(0, 40)}`
-    : 'goal=none status=idle';
+    ? `**Goal:** ${goalState.goal.replace(/\s+/g, ' ').slice(0, 80)}\n**Status:** ${(goalState.status || 'in-progress').replace(/\s+/g, ' ').slice(0, 50)}`
+    : '**Goal:** None — **Status:** Idle';
 
-  return formatOpsLine({
-    actor: 'executive-assistant',
-    scope: 'thread-status',
-    metric: 'snapshot',
-    delta: `${currentGoal} ${report}`,
-    action: 'none',
-    severity: 'info',
-  });
+  return `${currentGoal}\n\n${report}`;
 }
 
 export function setThreadStatusChannel(channel: TextChannel | null, groupchat?: TextChannel | null): void {
@@ -884,7 +862,7 @@ async function buildThreadStatusReport(groupchat: TextChannel): Promise<string> 
     .slice(0, 8);
 
   if (threads.length === 0) {
-    return '📈 open=0 | ✅ ready=0 | ⏳ active=0 | 🧵 top=none';
+    return '📈 **0** threads open — no active work';
   }
 
   const now = Date.now();
@@ -894,20 +872,21 @@ async function buildThreadStatusReport(groupchat: TextChannel): Promise<string> 
     const lastTs = last?.createdTimestamp || thread.createdTimestamp || now;
     const idleMs = Math.max(0, now - lastTs);
     const ready = idleMs >= THREAD_CLOSE_REVIEW_IDLE_MS;
-    const shortName = thread.name
-      .replace(/\s+/g, '_')
-      .slice(0, 22);
+    const threadName = thread.name.replace(/\s+/g, ' ').slice(0, 60);
+    const idleLabel = formatRelativeTime(idleMs);
+    const icon = ready ? '✅' : '⏳';
     return {
       ready,
-      summary: `${ready ? '✅' : '⏳'}${shortName}:${formatRelativeTime(idleMs)}`,
+      line: `${icon} **${threadName}** — idle ${idleLabel}`,
     };
   }));
 
   const readyCount = rows.filter((row) => row.ready).length;
   const activeCount = Math.max(0, rows.length - readyCount);
-  const top = rows.slice(0, 5).map((row) => row.summary).join(' | ');
+  const header = `📈 **${threads.length}** open — ⏳ **${activeCount}** active, ✅ **${readyCount}** ready to close`;
+  const threadLines = rows.slice(0, 6).map((row) => row.line).join('\n');
 
-  return `📈 open=${threads.length} | ✅ ready=${readyCount} | ⏳ active=${activeCount} | 🧵 top=${top || 'none'}`;
+  return `${header}\n${threadLines}`;
 }
 
 async function fetchStatusSummary(url: string): Promise<string> {

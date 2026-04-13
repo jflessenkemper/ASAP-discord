@@ -11,28 +11,13 @@ import fs from 'fs';
 import path from 'path';
 import sharp from 'sharp';
 
-// ── Agent seeds (same seeds keep faces consistent across regenerations) ──
-const AGENTS: Record<string, string> = {
-  qa:                    'MaxQA',
-  'ux-reviewer':         'SophieUX',
-  'security-auditor':    'KaneSecurity',
-  'api-reviewer':        'RajAPI',
-  dba:                   'ElenaDBA',
-  performance:           'KaiPerformance',
-  devops:                'JudeDevOps',
-  copywriter:            'LivCopywriter',
-  developer:             'AceDeveloper',
-  lawyer:                'HarperLawyer',
-  'executive-assistant': 'RileyExecutive',
-  'ios-engineer':        'MiaiOS',
-  'android-engineer':    'LeoAndroid',
-};
-
 const SIZE = 256;
-const AVATAR_SIZE = 256;
+const AVATAR_SIZE = 200;           // avatar is smaller than the image …
+const CIRCLE_RADIUS = 108;         // … and sits inside a white circle
+const CIRCLE_BORDER = 4;           // subtle border ring
 const SHADOW_OFFSET = 3;
 const SHADOW_BLUR = 6;
-const SHADOW_OPACITY = 0.4;
+const SHADOW_OPACITY = 0.35;
 const OUTPUT_DIR = path.resolve(__dirname, '../assets/avatars');
 
 // ── Geometry helper: n-pointed star polygon ─────────────────────────────────
@@ -123,9 +108,46 @@ function australianFlagSVG(s = 256): string {
 </svg>`;
 }
 
-// ── Fetch DiceBear avatar (notionists — clean, minimal Notion-style line art) ───
+// ── Agent appearance configuration ──────────────────────────────────────────
+// Professional stylized illustrations with diversity matching agent names.
+// Uses DiceBear "personas" style for clean, corporate-style illustrated avatars.
+interface AvatarStyle {
+  seed: string;
+  /** DiceBear personas clothing: blazer, shirt, dress */
+  clothing?: string;
+  /** Skin tone hint (DiceBear uses seed for variation, but we nudge via seed suffix) */
+  skinColor?: string;
+}
+
+const AGENT_STYLES: Record<string, AvatarStyle> = {
+  qa:                    { seed: 'MaxQA-professional',       clothing: 'blazer' },
+  'ux-reviewer':         { seed: 'SophieUX-corporate',      clothing: 'dress' },
+  'security-auditor':    { seed: 'KaneSecurity-formal',     clothing: 'blazer' },
+  'api-reviewer':        { seed: 'RajAPI-business',         clothing: 'shirt' },
+  dba:                   { seed: 'ElenaDBA-executive',       clothing: 'dress' },
+  performance:           { seed: 'KaiPerformance-sharp',     clothing: 'blazer' },
+  devops:                { seed: 'JudeDevOps-smart',         clothing: 'shirt' },
+  copywriter:            { seed: 'LivCopywriter-elegant',    clothing: 'dress' },
+  developer:             { seed: 'AceDeveloper-polished',    clothing: 'blazer' },
+  lawyer:                { seed: 'HarperLawyer-barrister',   clothing: 'blazer' },
+  'executive-assistant': { seed: 'RileyExecutive-leader',    clothing: 'blazer' },
+  'ios-engineer':        { seed: 'MiaiOS-classy',           clothing: 'dress' },
+  'android-engineer':    { seed: 'LeoAndroid-suited',        clothing: 'blazer' },
+};
+
+// ── Fetch DiceBear avatar (avataaars — colourful illustrated faces) ──────────
 async function fetchAvatar(seed: string): Promise<Buffer> {
-  const url = `https://api.dicebear.com/9.x/notionists/png?seed=${encodeURIComponent(seed)}&size=${AVATAR_SIZE}&backgroundColor=transparent`;
+  const params = new URLSearchParams({
+    seed,
+    size: String(AVATAR_SIZE),
+    backgroundColor: 'transparent',
+    clothing: 'blazerAndShirt,blazerAndSweater,collarAndSweater',
+    mouth: 'default,smile,twinkle',
+    eyes: 'default,happy',
+    eyebrows: 'default,defaultNatural,flatNatural',
+    accessoriesProbability: '0',
+  });
+  const url = `https://api.dicebear.com/9.x/avataaars/png?${params}`;
   const resp = await fetch(url);
   if (!resp.ok) throw new Error(`DiceBear fetch failed for ${seed}: ${resp.status}`);
   return Buffer.from(await resp.arrayBuffer());
@@ -137,47 +159,57 @@ async function createFlagBackground(): Promise<Buffer> {
   return sharp(flagSvg).resize(SIZE, SIZE).png().toBuffer();
 }
 
-// ── Create drop shadow from the avatar's alpha channel ──────────────────────
-async function createShadow(avatarBuf: Buffer): Promise<Buffer> {
-  const { width, height } = await sharp(avatarBuf).metadata();
-  const w = width!;
-  const h = height!;
+// ── Create white circular backdrop SVG ───────────────────────────────────────
+function circleBackdropSVG(): string {
+  const cx = SIZE / 2;
+  const cy = SIZE / 2;
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${SIZE}" height="${SIZE}">
+    <circle cx="${cx}" cy="${cy}" r="${CIRCLE_RADIUS}" fill="white"/>
+    <circle cx="${cx}" cy="${cy}" r="${CIRCLE_RADIUS}" fill="none" stroke="rgba(0,0,0,0.12)" stroke-width="${CIRCLE_BORDER}"/>
+  </svg>`;
+}
 
-  const { data, info } = await sharp(avatarBuf)
-    .ensureAlpha()
-    .raw()
-    .toBuffer({ resolveWithObject: true });
-
-  // Black silhouette at reduced opacity
-  const shadow = Buffer.alloc(info.size);
-  for (let i = 0; i < info.size; i += 4) {
-    shadow[i]     = 0;
-    shadow[i + 1] = 0;
-    shadow[i + 2] = 0;
-    shadow[i + 3] = Math.round(data[i + 3] * SHADOW_OPACITY);
-  }
-
-  return sharp(shadow, { raw: { width: w, height: h, channels: 4 } })
-    .blur(SHADOW_BLUR)
+// ── Circle-mask an avatar into a round portrait ─────────────────────────────
+async function circleClip(avatarBuf: Buffer): Promise<Buffer> {
+  const r = CIRCLE_RADIUS - CIRCLE_BORDER;
+  const dim = r * 2;
+  const mask = Buffer.from(
+    `<svg width="${dim}" height="${dim}"><circle cx="${r}" cy="${r}" r="${r}" fill="white"/></svg>`,
+  );
+  return sharp(avatarBuf)
+    .resize(dim, dim, { fit: 'cover', position: 'top' })
+    .composite([{ input: mask, blend: 'dest-in' }])
     .png()
     .toBuffer();
 }
 
-// ── Composite: flag background → shadow → avatar (bottom-aligned) ───────────
-async function generateAvatar(agentId: string, seed: string, flagBg: Buffer): Promise<void> {
+// ── Composite: flag → white circle → shadow → clipped avatar ────────────────
+async function generateAvatar(agentId: string, seed: string, flagBg: Buffer, circleBg: Buffer): Promise<void> {
   console.log(`  Generating ${agentId} (seed: ${seed})...`);
 
-  const avatarBuf = await fetchAvatar(seed);
-  const shadowBuf = await createShadow(avatarBuf);
+  const avatarRaw = await fetchAvatar(seed);
+  const avatarClipped = await circleClip(avatarRaw);
+  const { width: aw, height: ah } = await sharp(avatarClipped).metadata();
 
-  // Bottom-align: avatar bottom edge = image bottom edge
-  const offsetX = Math.round((SIZE - AVATAR_SIZE) / 2);
-  const offsetY = SIZE - AVATAR_SIZE;
+  // Centre the clipped avatar on the image
+  const offsetX = Math.round((SIZE - aw!) / 2);
+  const offsetY = Math.round((SIZE - ah!) / 2);
+
+  // Simple shadow: slightly offset dark circle
+  const shadowR = CIRCLE_RADIUS - CIRCLE_BORDER;
+  const shadowSvg = Buffer.from(
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${SIZE}" height="${SIZE}">
+       <circle cx="${SIZE / 2 + SHADOW_OFFSET}" cy="${SIZE / 2 + SHADOW_OFFSET}"
+               r="${shadowR}" fill="rgba(0,0,0,${SHADOW_OPACITY})"/>
+     </svg>`,
+  );
+  const shadowBuf = await sharp(shadowSvg).blur(SHADOW_BLUR).png().toBuffer();
 
   const result = await sharp(flagBg)
     .composite([
-      { input: shadowBuf, left: offsetX + SHADOW_OFFSET, top: offsetY + SHADOW_OFFSET },
-      { input: avatarBuf, left: offsetX, top: offsetY },
+      { input: shadowBuf },
+      { input: circleBg },
+      { input: avatarClipped, left: offsetX, top: offsetY },
     ])
     .png()
     .toBuffer();
@@ -198,9 +230,12 @@ async function main(): Promise<void> {
   fs.writeFileSync(path.join(OUTPUT_DIR, '_flag-background.png'), flagBg);
   console.log('  ✓ Flag background saved\n');
 
-  console.log(`Generating ${Object.keys(AGENTS).length} agent avatars...\n`);
-  for (const [agentId, seed] of Object.entries(AGENTS)) {
-    await generateAvatar(agentId, seed, flagBg);
+  // White circle backdrop (rendered once, reused for every agent)
+  const circleBg = await sharp(Buffer.from(circleBackdropSVG())).png().toBuffer();
+
+  console.log(`Generating ${Object.keys(AGENT_STYLES).length} agent avatars...\n`);
+  for (const [agentId, style] of Object.entries(AGENT_STYLES)) {
+    await generateAvatar(agentId, style.seed, flagBg, circleBg);
   }
 
   console.log('\n✅ All avatars generated in assets/avatars/');

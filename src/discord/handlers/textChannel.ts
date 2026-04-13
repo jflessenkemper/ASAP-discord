@@ -520,7 +520,7 @@ export async function sendAgentMessage(
     return;
   }
 
-  // Compact very long text-only responses (>3800 chars = 3+ Discord messages)
+  // Compact very long text-only responses (>8000 chars = 4+ Discord messages)
   // to avoid wall-of-text spam. Preserve key sections and truncate the rest.
   const compacted = compactLongResponse(rendered);
 
@@ -577,12 +577,12 @@ function shouldProgressivelyReveal(rendered: string): boolean {
 
 /**
  * Compact very long text-only responses to avoid wall-of-text spam.
- * Responses under 3800 chars (≤2 Discord messages) pass through unchanged.
+ * Responses under 8000 chars (≤4 Discord messages) pass through unchanged.
  * Longer responses are truncated: keep key sections (Result, Evidence, Risk)
- * and the first ~1500 chars, then append a truncation note.
+ * and the first ~3500 chars, then append a truncation note.
  */
 function compactLongResponse(text: string): string {
-  if (text.length <= 3800) return text;
+  if (text.length <= 8000) return text;
   // Don't compact responses with code blocks — those use the file attachment path
   if (text.includes('```')) return text;
 
@@ -594,11 +594,11 @@ function compactLongResponse(text: string): string {
     sections.push(m[1].trim());
   }
 
-  // Keep first ~1500 chars of the original response
-  const head = text.slice(0, 1500).replace(/\s+\S*$/, ''); // break on word boundary
+  // Keep first ~3500 chars of the original response
+  const head = text.slice(0, 3500).replace(/\s+\S*$/, ''); // break on word boundary
 
   // Append extracted sections that aren't already in the head
-  const extra = sections.filter(s => !head.includes(s)).slice(0, 5);
+  const extra = sections.filter(s => !head.includes(s)).slice(0, 8);
   const extraBlock = extra.length > 0 ? '\n\n' + extra.join('\n') : '';
 
   return head + extraBlock + '\n\n*(Response compacted — full details in workspace thread)*';

@@ -133,6 +133,26 @@ export function formatOpsLine(input: OpsLineInput): string {
   return `${severityEmoji(severity)} severity=${severity} | agent=${actor} | scope=${scope} | metric=${metric} | delta=${delta} | action=${action} | corr=${corr} | age=${age}`;
 }
 
+/**
+ * Human-readable format for tool audit entries shown in the terminal channel.
+ * Example: 💻 **Ace** ran `db_query` → selected 5 users (2s ago)
+ */
+export function formatToolAuditHuman(input: OpsLineInput): string {
+  const emoji = severityEmoji(input.severity || 'info');
+  const actor = sanitizeValue(input.actor, 40);
+  const metric = sanitizeValue(input.metric, 80);
+  const delta = sanitizeValue(input.delta, 350);
+  const age = ageLabel(input.occurredAtMs);
+
+  // Capitalise first letter of actor name
+  const displayName = actor.charAt(0).toUpperCase() + actor.slice(1).replace(/-/g, ' ');
+
+  if (delta && delta !== 'none' && delta !== 'batched') {
+    return `${emoji} **${displayName}** ran \`${metric}\` → ${delta} _(${age} ago)_`;
+  }
+  return `${emoji} **${displayName}** ran \`${metric}\` _(${age} ago)_`;
+}
+
 function summarizeDigest(entries: DigestEntry[]): string {
   const tally = new Map<string, number>();
   for (const entry of entries) {

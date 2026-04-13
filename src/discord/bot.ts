@@ -31,7 +31,7 @@ import { handleAgentMessage } from './handlers/textChannel';
 import { flushPendingWrites, initMemory } from './memory';
 import { setAgentErrorChannel, postAgentErrorLog } from './services/agentErrors';
 import { runModelHealthChecks } from './services/modelHealth';
-import { flushAllOpsDigests, postOpsLine } from './services/opsFeed';
+import { flushAllOpsDigests, formatToolAuditHuman, postOpsLine } from './services/opsFeed';
 import { setScreenshotsChannel } from './services/screenshots';
 import { setTelephonyChannels, isTelephonyAvailable, initContacts } from './services/telephony';
 import { setupChannels, BotChannels } from './setup';
@@ -441,25 +441,30 @@ export async function startBot(): Promise<void> {
             : '';
           suppressedDbAudits = 0;
           lastDbAuditPost = now;
-          void postOpsLine(terminalChannel, {
+
+          const input = {
             actor: tag,
             scope: 'tool-audit:db',
             metric: toolName,
             delta: `batched${suppressedNote}`,
             action: 'none',
-            severity: 'info',
-          });
+            severity: 'info' as const,
+          };
+          const line = formatToolAuditHuman(input);
+          void terminalChannel.send(line.slice(0, 1900)).catch(() => {});
           return;
         }
 
-        void postOpsLine(terminalChannel, {
+        const input = {
           actor: tag,
           scope: 'tool-audit',
           metric: toolName,
           delta: summary.replace(/\s+/g, ' ').trim(),
           action: 'none',
-          severity: 'info',
-        });
+          severity: 'info' as const,
+        };
+        const line = formatToolAuditHuman(input);
+        void terminalChannel.send(line.slice(0, 1900)).catch(() => {});
       });
 
       setPRReviewCallback(async (prNumber, prTitle, changedFiles, diffSummary) => {
