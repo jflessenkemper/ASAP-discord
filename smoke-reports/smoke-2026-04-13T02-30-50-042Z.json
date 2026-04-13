@@ -1,0 +1,70 @@
+{
+  "startedAt": "2026-04-13T02:27:53.690Z",
+  "endedAt": "2026-04-13T02:30:50.042Z",
+  "summary": {
+    "capabilityPassed": 3,
+    "capabilityFailed": 0,
+    "extraFailed": 0,
+    "score": 41,
+    "criticalPassed": true,
+    "detail": "core_fail=0 | orchestration_fail=0 | upgrades_fail=0 | critical_extra_fail=0"
+  },
+  "results": [
+    {
+      "agent": "Riley (Executive Assistant)",
+      "capability": "goal-create",
+      "category": "core",
+      "passed": true,
+      "elapsed": 29796,
+      "snippet": "New Goal: Audit the current test coverage and list gaps."
+    },
+    {
+      "agent": "Riley (Executive Assistant)",
+      "capability": "job-buttons-approval",
+      "category": "tool-proof",
+      "passed": true,
+      "elapsed": 41019,
+      "snippet": "I've run a job scan across Adzuna and all tracked company portals, but no new listings were found. As there are no new jobs, I'm unable to post any for approval."
+    },
+    {
+      "agent": "Riley (Executive Assistant)",
+      "capability": "create-branch-pr",
+      "category": "tool-proof",
+      "passed": true,
+      "elapsed": 2713,
+      "snippet": "Goal-0108 asaptester smoke test create-branch-pr Use your git create bra"
+    }
+  ],
+  "extras": [
+    {
+      "name": "channel_hygiene",
+      "passed": true,
+      "detail": "groupchat:0 | terminal:0 | upgrades:0",
+      "critical": true
+    },
+    {
+      "name": "elevenlabs_api",
+      "passed": true,
+      "detail": "API reachable",
+      "critical": true
+    },
+    {
+      "name": "elevenlabs_tts",
+      "passed": true,
+      "detail": "audio bytes=33062",
+      "critical": false
+    }
+  ],
+  "config": {
+    "timeoutMs": 180000,
+    "profile": "matrix",
+    "preClear": true,
+    "runElevenApi": true,
+    "runElevenTts": true,
+    "runVoiceBridge": false,
+    "runVoiceActive": false,
+    "capabilityAttempts": 2,
+    "runPostSuccessAction": false,
+    "agentFilter": null
+  }
+}

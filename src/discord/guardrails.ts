@@ -28,8 +28,15 @@ const VERTEX_PROJECT_ID = process.env.VERTEX_PROJECT_ID || process.env.GOOGLE_CL
 const VERTEX_LOCATION = process.env.VERTEX_LOCATION || 'us-central1';
 
 let vertexAuth: GoogleAuth | null = null;
+let guardrailsTokenCache: { token: string; expiresAtMs: number } | null = null;
 
 async function getVertexAccessToken(): Promise<string> {
+  // Reuse cached token if it has >60s remaining
+  const now = Date.now();
+  if (guardrailsTokenCache && guardrailsTokenCache.expiresAtMs - now > 60_000) {
+    return guardrailsTokenCache.token;
+  }
+
   await ensureGoogleCredentials(VERTEX_PROJECT_ID).catch(() => false);
 
   if (!vertexAuth) {
@@ -51,7 +58,10 @@ async function getVertexAccessToken(): Promise<string> {
         accessToken = await authClient.getAccessToken();
       } else {
         const tokenViaCli = getAccessTokenViaGcloud();
-        if (tokenViaCli) return tokenViaCli;
+        if (tokenViaCli) {
+          guardrailsTokenCache = { token: tokenViaCli, expiresAtMs: Date.now() + 45 * 60_000 };
+          return tokenViaCli;
+        }
         throw new Error('Vertex auth unavailable: Application Default Credentials are not configured');
       }
     } else {
@@ -61,6 +71,8 @@ async function getVertexAccessToken(): Promise<string> {
 
   const token = typeof accessToken === 'string' ? accessToken : accessToken?.token;
   if (!token) throw new Error('Vertex auth failed: could not obtain access token');
+
+  guardrailsTokenCache = { token, expiresAtMs: Date.now() + 45 * 60_000 };
   return token;
 }
 

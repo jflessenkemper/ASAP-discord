@@ -1320,6 +1320,7 @@ interface AgentDispatchOptions {
   persistUserContent?: string;
   workspaceChannel?: WebhookCapableChannel;
   suppressVisibleOutput?: (response: string) => boolean;
+  onToolUse?: (toolName: string, summary: string) => void;
 }
 
 async function dispatchToAgent(
@@ -1341,6 +1342,7 @@ async function dispatchToAgent(
     contextMessage,
     async (toolName, summary) => {
       sendToolNotification(outputChannel, agent, `[${toolName}] ${summary}`).catch(() => {});
+      options.onToolUse?.(toolName, summary);
     },
     {
       maxTokens: options.maxTokens,
@@ -1745,11 +1747,15 @@ async function handleRileyMessage(
       const evidenceSince = Math.max(Date.now() - 2 * 60 * 60 * 1000, goalState.startedAt - 60_000);
       completionVerified = await hasRecentRuntimeVerificationEvidence(groupchat, workspaceChannel, evidenceSince);
       if (!completionVerified) {
-        displayResponse = '⏳ Verification pending: I cannot mark this as complete yet because there is no checkable runtime evidence in screenshots/harness output. I will keep this open until proof is posted.';
+        // Append a verification note instead of overwriting the entire response.
+        // The original content has useful context that should not be lost.
+        displayResponse += '\n\n⏳ **Verification pending**: completion cannot be confirmed yet — no runtime evidence in screenshots/harness output. Keeping this open until proof is posted.';
       }
     }
 
-    const statusBlocked = /\bblocked\b|\bverification pending\b/i.test(displayResponse);
+    // Use the actual verification result instead of re-scanning text for "blocked"/"verification pending"
+    // which would false-positive on our appended verification note.
+    const statusBlocked = !completionVerified || /\bblocked\b/i.test(displayResponse.replace(/⏳.*verification pending.*/i, ''));
     displayResponse = enforceRileyResponseContract(
       displayResponse,
       completionClaimed && !statusBlocked,
@@ -2600,6 +2606,13 @@ async function dispatchAceWithQualityGate(
     ? buildAceDesignContext(rileyResponse)
     : buildAceStandardContext(rileyResponse);
 
+  // Track mutating tool calls to inform the quality gate.
+  // If Ace used edit_file/write_file/run_command/etc., real work was done
+  // regardless of how short or formulaic the text response is.
+  const MUTATING_TOOLS = new Set(['edit_file', 'write_file', 'batch_edit', 'run_command', 'git_create_branch', 'create_pull_request']);
+  const toolsUsed = new Set<string>();
+  let mutatingToolCount = 0;
+
   let aceResponse = await dispatchToAgent('developer', aceContext, aceChannel, {
     signal,
     maxTokens: designTask ? 4000 : undefined,
@@ -2607,14 +2620,22 @@ async function dispatchAceWithQualityGate(
     documentLine: '✅ {response}',
     workspaceChannel,
     suppressVisibleOutput: shouldSuppressAceVisibleOutput,
+    onToolUse: (toolName) => {
+      toolsUsed.add(toolName);
+      if (MUTATING_TOOLS.has(toolName)) mutatingToolCount++;
+    },
   });
 
-  const needsQualityRetry = () => (
-    aceResponse.trim().length < 90
-    || LOW_SIGNAL_COMPLETION_RE.test(aceResponse)
-    || isAceSelfDelegationResponse(aceResponse)
-    || !hasAceCompletionContract(aceResponse)
-  );
+  const needsQualityRetry = () => {
+    // If Ace used mutating tools, real work was done — skip text-based quality checks
+    if (mutatingToolCount > 0) return false;
+    return (
+      aceResponse.trim().length < 90
+      || LOW_SIGNAL_COMPLETION_RE.test(aceResponse)
+      || isAceSelfDelegationResponse(aceResponse)
+      || !hasAceCompletionContract(aceResponse)
+    );
+  };
 
   // Design deliverables: Ace's file creation via tools IS the deliverable.
   // The quality gate (Result/Evidence/Risk) is irrelevant — skip retries.
@@ -2653,7 +2674,7 @@ async function dispatchAceWithQualityGate(
   }
 
   const qualityFailed = !designTask && !signal?.aborted && needsQualityRetry();
-  console.log(`AGENT_CHAIN aceQualityFailed=${qualityFailed} designTask=${designTask} needsRetry=${needsQualityRetry()} aceLen=${aceResponse.trim().length} aceSnippet="${aceResponse.slice(0, 120)}"`);
+  console.log(`AGENT_CHAIN aceQualityFailed=${qualityFailed} designTask=${designTask} needsRetry=${needsQualityRetry()} mutatingTools=${mutatingToolCount} toolsUsed=${[...toolsUsed].join(',')} aceLen=${aceResponse.trim().length} aceSnippet="${aceResponse.slice(0, 120)}"`);
   return { response: aceResponse, qualityFailed, designTask };
 }
 
@@ -2669,12 +2690,10 @@ async function runSpecialistFallback(
   const errors: string[] = [];
   const inferredSpecialists = inferSpecialistsForContext(`${rileyResponse}\n${aceResponse}`)
     .filter((id) => id !== 'developer');
-  const forcedFallback = aceQualityFailed ? ['qa'] : [];
-  const fallbackAgents = [...new Set([...forcedFallback, ...inferredSpecialists])].slice(0, 2);
+  // Don't force QA fallback when Ace quality fails — it wastes tokens routing code tasks
+  // to agents that can't write code. Only run genuinely inferred specialists.
+  const fallbackAgents = [...new Set(inferredSpecialists)].slice(0, 2);
   if (fallbackAgents.length > 0) {
-    if (aceQualityFailed) {
-      findings.push('Forced specialist fallback executed due to weak Ace completion output.');
-    }
     const autoSpecialistRun = await handleSubAgents(fallbackAgents, aceResponse, groupchat, workspaceChannel, signal);
     findings.push(...autoSpecialistRun.findings);
     errors.push(...autoSpecialistRun.errors);
