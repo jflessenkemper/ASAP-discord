@@ -642,6 +642,44 @@ const AGENT_CAPABILITY_TESTS: AgentCapabilityTest[] = [
     timeoutMs: 120_000,
   },
 
+  // ── Discord UX tests ─────────────────────────────────────────────────
+  {
+    id: 'executive-assistant',
+    category: 'ux',
+    capability: 'completion-embed',
+    prompt: 'Create a goal to verify TypeScript compiles cleanly. Run typecheck, then close the thread when done.',
+    expectAny: [/goal complete|complete|closed|clean|passed/i],
+    expectToolAudit: ['typecheck'],
+    timeoutMs: 240_000,
+  },
+  {
+    id: 'executive-assistant',
+    category: 'ux',
+    capability: 'thread-name-quality',
+    prompt: 'Hey Riley, can you please check if the search codebase tool is working correctly by searching for the main entry point?',
+    expectAny: [/search|found|index|entry/i],
+    expectNone: [/hey.*riley.*can.*you.*please/i],
+    timeoutMs: 180_000,
+  },
+  {
+    id: 'developer',
+    category: 'ux',
+    capability: 'file-change-preview',
+    prompt: 'Edit the file src/discord/handlers/goalState.ts: add a comment "// UX smoke test" at the top of the file, then revert it immediately by removing that comment.',
+    expectAny: [/edit|file|goalState|changed|reverted/i],
+    expectToolAudit: ['edit_file'],
+    timeoutMs: 180_000,
+  },
+  {
+    id: 'developer',
+    category: 'ux',
+    capability: 'response-compaction',
+    prompt: 'List every single file in the src/discord/ directory recursively and describe what each one does in detail. Be very thorough and verbose — include line counts, exports, and dependencies for each file.',
+    expectAny: [/discord|handler|bot|claude|tester|agent/i],
+    expectNone: [/undefined|error|cannot/i],
+    timeoutMs: 180_000,
+  },
+
   // ── System resilience tests ───────────────────────────────────────────
   {
     id: 'executive-assistant',
