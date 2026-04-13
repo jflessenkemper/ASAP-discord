@@ -1,0 +1,105 @@
+{
+  "startedAt": "2026-04-13T02:09:44.212Z",
+  "endedAt": "2026-04-13T02:19:53.175Z",
+  "summary": {
+    "capabilityPassed": 4,
+    "capabilityFailed": 3,
+    "extraFailed": 0,
+    "score": 33.7,
+    "criticalPassed": false,
+    "detail": "core_fail=1 | orchestration_fail=0 | upgrades_fail=0 | critical_extra_fail=0"
+  },
+  "results": [
+    {
+      "agent": "Riley (Executive Assistant)",
+      "capability": "ops-embed-format",
+      "category": "core",
+      "passed": true,
+      "elapsed": 29951,
+      "snippet": "Here is the summary of active project threads:\n\n*   `Goal-0105` (active, idle 16s)\n*   `Goal-0104` (ready for review, idle 36m)\n*   `Goal-0103` (ready for review, idle 14h)\n*   `Go…"
+    },
+    {
+      "agent": "Riley (Executive Assistant)",
+      "capability": "goal-create",
+      "category": "core",
+      "passed": false,
+      "elapsed": 108544,
+      "snippet": "Timeout while waiting for full capability evidence (idle timeout (no new messages for 41s))",
+      "reason": "missing tool-audit evidence for list_threads"
+    },
+    {
+      "agent": "Riley (Executive Assistant)",
+      "capability": "thread-status-report",
+      "category": "core",
+      "passed": true,
+      "elapsed": 18412,
+      "snippet": "Here is the list of currently open threads:\n\n*   `Goal-0105` (active, idle 48s)\n*   `Goal-0104` (ready for review, idle 39m)\n*   `Goal-0103` (ready for review, idle 14h)\n*   `Goal-…"
+    },
+    {
+      "agent": "Riley (Executive Assistant)",
+      "capability": "job-buttons-approval",
+      "category": "tool-proof",
+      "passed": false,
+      "elapsed": 97536,
+      "snippet": "I've run a new job scan, but no new listings were found from Adzuna or the tracked company portals. Because no new jobs were found, I can't post any for approval.",
+      "reason": "missing tool-audit evidence for job_scan, job_post_approvals"
+    },
+    {
+      "agent": "Riley (Executive Assistant)",
+      "capability": "self-edit-file",
+      "category": "tool-proof",
+      "passed": true,
+      "elapsed": 25134,
+      "snippet": "Thinking…"
+    },
+    {
+      "agent": "Riley (Executive Assistant)",
+      "capability": "create-branch-pr",
+      "category": "tool-proof",
+      "passed": false,
+      "elapsed": 73148,
+      "snippet": "Thinking…",
+      "reason": "missing tool-audit evidence for git_create_branch, create_pull_request"
+    },
+    {
+      "agent": "Riley (Executive Assistant)",
+      "capability": "review-ace-pr",
+      "category": "orchestration",
+      "passed": true,
+      "elapsed": 9207,
+      "snippet": "Thinking…"
+    }
+  ],
+  "extras": [
+    {
+      "name": "channel_hygiene",
+      "passed": true,
+      "detail": "groupchat:0 | terminal:0 | upgrades:0",
+      "critical": true
+    },
+    {
+      "name": "elevenlabs_api",
+      "passed": true,
+      "detail": "API reachable",
+      "critical": true
+    },
+    {
+      "name": "elevenlabs_tts",
+      "passed": true,
+      "detail": "audio bytes=34316",
+      "critical": false
+    }
+  ],
+  "config": {
+    "timeoutMs": 180000,
+    "profile": "matrix",
+    "preClear": true,
+    "runElevenApi": true,
+    "runElevenTts": true,
+    "runVoiceBridge": false,
+    "runVoiceActive": false,
+    "capabilityAttempts": 2,
+    "runPostSuccessAction": false,
+    "agentFilter": null
+  }
+}
