@@ -12,9 +12,7 @@ import path from 'path';
 import sharp from 'sharp';
 
 const SIZE = 256;
-const AVATAR_SIZE = 200;           // avatar is smaller than the image …
-const CIRCLE_RADIUS = 108;         // … and sits inside a white circle
-const CIRCLE_BORDER = 4;           // subtle border ring
+const AVATAR_SIZE = 220;           // avatar is slightly smaller than image for margins
 const SHADOW_OFFSET = 3;
 const SHADOW_BLUR = 6;
 const SHADOW_OPACITY = 0.35;
@@ -159,57 +157,46 @@ async function createFlagBackground(): Promise<Buffer> {
   return sharp(flagSvg).resize(SIZE, SIZE).png().toBuffer();
 }
 
-// ── Create white circular backdrop SVG ───────────────────────────────────────
-function circleBackdropSVG(): string {
-  const cx = SIZE / 2;
-  const cy = SIZE / 2;
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="${SIZE}" height="${SIZE}">
-    <circle cx="${cx}" cy="${cy}" r="${CIRCLE_RADIUS}" fill="white"/>
-    <circle cx="${cx}" cy="${cy}" r="${CIRCLE_RADIUS}" fill="none" stroke="rgba(0,0,0,0.12)" stroke-width="${CIRCLE_BORDER}"/>
-  </svg>`;
-}
+// ── Create drop shadow from the avatar's alpha channel ──────────────────────
+async function createShadow(avatarBuf: Buffer): Promise<Buffer> {
+  const { width, height } = await sharp(avatarBuf).metadata();
+  const w = width!;
+  const h = height!;
 
-// ── Circle-mask an avatar into a round portrait ─────────────────────────────
-async function circleClip(avatarBuf: Buffer): Promise<Buffer> {
-  const r = CIRCLE_RADIUS - CIRCLE_BORDER;
-  const dim = r * 2;
-  const mask = Buffer.from(
-    `<svg width="${dim}" height="${dim}"><circle cx="${r}" cy="${r}" r="${r}" fill="white"/></svg>`,
-  );
-  return sharp(avatarBuf)
-    .resize(dim, dim, { fit: 'cover', position: 'top' })
-    .composite([{ input: mask, blend: 'dest-in' }])
+  const { data, info } = await sharp(avatarBuf)
+    .ensureAlpha()
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+
+  const shadow = Buffer.alloc(info.size);
+  for (let i = 0; i < info.size; i += 4) {
+    shadow[i]     = 0;
+    shadow[i + 1] = 0;
+    shadow[i + 2] = 0;
+    shadow[i + 3] = Math.round(data[i + 3] * SHADOW_OPACITY);
+  }
+
+  return sharp(shadow, { raw: { width: w, height: h, channels: 4 } })
+    .blur(SHADOW_BLUR)
     .png()
     .toBuffer();
 }
 
-// ── Composite: flag → white circle → shadow → clipped avatar ────────────────
-async function generateAvatar(agentId: string, seed: string, flagBg: Buffer, circleBg: Buffer): Promise<void> {
+// ── Composite: flag → shadow → avatar (bottom-centred) ──────────────────────
+async function generateAvatar(agentId: string, seed: string, flagBg: Buffer): Promise<void> {
   console.log(`  Generating ${agentId} (seed: ${seed})...`);
 
-  const avatarRaw = await fetchAvatar(seed);
-  const avatarClipped = await circleClip(avatarRaw);
-  const { width: aw, height: ah } = await sharp(avatarClipped).metadata();
+  const avatarBuf = await fetchAvatar(seed);
+  const shadowBuf = await createShadow(avatarBuf);
 
-  // Centre the clipped avatar on the image
-  const offsetX = Math.round((SIZE - aw!) / 2);
-  const offsetY = Math.round((SIZE - ah!) / 2);
-
-  // Simple shadow: slightly offset dark circle
-  const shadowR = CIRCLE_RADIUS - CIRCLE_BORDER;
-  const shadowSvg = Buffer.from(
-    `<svg xmlns="http://www.w3.org/2000/svg" width="${SIZE}" height="${SIZE}">
-       <circle cx="${SIZE / 2 + SHADOW_OFFSET}" cy="${SIZE / 2 + SHADOW_OFFSET}"
-               r="${shadowR}" fill="rgba(0,0,0,${SHADOW_OPACITY})"/>
-     </svg>`,
-  );
-  const shadowBuf = await sharp(shadowSvg).blur(SHADOW_BLUR).png().toBuffer();
+  // Bottom-centre the avatar on the flag
+  const offsetX = Math.round((SIZE - AVATAR_SIZE) / 2);
+  const offsetY = SIZE - AVATAR_SIZE;
 
   const result = await sharp(flagBg)
     .composite([
-      { input: shadowBuf },
-      { input: circleBg },
-      { input: avatarClipped, left: offsetX, top: offsetY },
+      { input: shadowBuf, left: offsetX + SHADOW_OFFSET, top: offsetY + SHADOW_OFFSET },
+      { input: avatarBuf, left: offsetX, top: offsetY },
     ])
     .png()
     .toBuffer();
@@ -230,12 +217,9 @@ async function main(): Promise<void> {
   fs.writeFileSync(path.join(OUTPUT_DIR, '_flag-background.png'), flagBg);
   console.log('  ✓ Flag background saved\n');
 
-  // White circle backdrop (rendered once, reused for every agent)
-  const circleBg = await sharp(Buffer.from(circleBackdropSVG())).png().toBuffer();
-
   console.log(`Generating ${Object.keys(AGENT_STYLES).length} agent avatars...\n`);
   for (const [agentId, style] of Object.entries(AGENT_STYLES)) {
-    await generateAvatar(agentId, style.seed, flagBg, circleBg);
+    await generateAvatar(agentId, style.seed, flagBg);
   }
 
   console.log('\n✅ All avatars generated in assets/avatars/');
