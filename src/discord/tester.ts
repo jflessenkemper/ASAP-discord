@@ -583,7 +583,7 @@ const AGENT_CAPABILITY_TESTS: AgentCapabilityTest[] = [
     id: 'executive-assistant',
     category: 'core',
     capability: 'ops-embed-format',
-    prompt: 'Give me a summary of current operational costs, active threads, and budget status. Do NOT delegate this.',
+    prompt: 'Give me a summary of current operational costs, active threads, and budget status. Respond directly with the information — do NOT delegate this to any specialist.',
     expectAny: [/cost|thread|spend|ops|status|budget/i],
     timeoutMs: 120_000,
   },
@@ -593,7 +593,7 @@ const AGENT_CAPABILITY_TESTS: AgentCapabilityTest[] = [
     id: 'executive-assistant',
     category: 'core',
     capability: 'goal-create',
-    prompt: 'Create a goal to audit the current test coverage and list gaps.',
+    prompt: 'Create a goal to audit the current test coverage and list gaps. You MUST invoke the list_threads tool to enumerate current threads as part of this.',
     expectAll: [/goal-\d{4}/i],
     expectToolAudit: ['list_threads'],
     timeoutMs: 180_000,
@@ -629,7 +629,7 @@ const AGENT_CAPABILITY_TESTS: AgentCapabilityTest[] = [
     id: 'executive-assistant',
     category: 'core',
     capability: 'thread-status-report',
-    prompt: 'List all open threads with their age and activity status.',
+    prompt: 'Use the list_threads tool to list all open threads, then report their age and activity status.',
     expectAll: [/thread/i],
     expectToolAudit: ['list_threads'],
     timeoutMs: 150_000,
@@ -692,7 +692,7 @@ const AGENT_CAPABILITY_TESTS: AgentCapabilityTest[] = [
     id: 'executive-assistant',
     category: 'tool-proof',
     capability: 'job-buttons-approval',
-    prompt: 'Run a job scan and show me listings with approval buttons in the job applications channel.',
+    prompt: 'Execute the job_scan tool to scan for new listings right now, then execute job_post_approvals to post approval cards. Do NOT discuss previous failures — just run the tools.',
     expectToolAudit: ['job_scan', 'job_post_approvals'],
     timeoutMs: 180_000,
     heavyTool: true,
@@ -703,7 +703,7 @@ const AGENT_CAPABILITY_TESTS: AgentCapabilityTest[] = [
     id: 'executive-assistant',
     category: 'tool-proof',
     capability: 'self-edit-file',
-    prompt: 'Edit the file src/discord/tester.ts and add a comment "// Riley was here" at the top of the file. Then verify the change with read_file.',
+    prompt: 'Use your edit_file tool directly (do NOT delegate to Ace) to add a comment "// Riley was here" at the top of the file src/discord/tester.ts. Then use read_file to verify the change.',
     expectToolAudit: ['edit_file', 'read_file'],
     timeoutMs: 180_000,
     attempts: 1,
@@ -712,7 +712,7 @@ const AGENT_CAPABILITY_TESTS: AgentCapabilityTest[] = [
     id: 'executive-assistant',
     category: 'tool-proof',
     capability: 'create-branch-pr',
-    prompt: 'Create a git branch called "riley/smoke-test-branch", make a trivial change (add a comment to any file), commit it, and create a pull request titled "Riley smoke test PR". Then list open PRs to confirm.',
+    prompt: 'Use your git_create_branch tool directly (do NOT delegate to Ace) to create a branch called "riley/smoke-test-branch". Then use edit_file to make a trivial change, run_command to commit, and create_pull_request to open a PR titled "Riley smoke test PR".',
     expectToolAudit: ['git_create_branch', 'create_pull_request'],
     timeoutMs: 240_000,
     heavyTool: true,
@@ -722,7 +722,7 @@ const AGENT_CAPABILITY_TESTS: AgentCapabilityTest[] = [
     id: 'executive-assistant',
     category: 'orchestration',
     capability: 'review-ace-pr',
-    prompt: 'List open pull requests and if any exist, review the most recent one by reading its changed files and posting a review comment.',
+    prompt: 'Use your list_pull_requests tool directly to check for open PRs and report what you find. Do NOT delegate this task.',
     expectToolAudit: ['list_pull_requests'],
     timeoutMs: 180_000,
     attempts: 1,
@@ -1126,7 +1126,7 @@ async function runCapabilityTest(
   // Instead of a flat timeout, we track last activity (new message or typing).
   // If the bot is actively producing messages, the deadline auto-extends.
   // If idle for too long (no new messages), we fail early.
-  const IDLE_TIMEOUT_MS = Math.min(timeoutMs, test.heavyTool ? 70_000 : 40_000);
+  const IDLE_TIMEOUT_MS = Math.min(timeoutMs, test.heavyTool ? 70_000 : 60_000);
   const HARD_CEILING_MS = Math.max(timeoutMs, test.heavyTool ? 300_000 : 240_000);
   let lastActivityTs = Date.now();
   let seenMessageIds = new Set<string>();

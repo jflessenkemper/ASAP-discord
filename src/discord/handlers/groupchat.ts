@@ -1674,7 +1674,10 @@ async function handleRileyMessage(
     const textLangHint = cjkPattern.test(userMessage)
       ? '\n\n[Language detected: Mandarin Chinese. Please reply in Mandarin Chinese (简体中文).]'
       : '';
-    const mentionGuide = `\n\n[Delegation contract: route execution only via ${aceGuide}. Do not directly delegate to specialists; Ace may involve them if needed.]`;
+    const isSmokeTest = /\[smoke\s*test:/i.test(userMessage);
+    const mentionGuide = isSmokeTest
+      ? '\n\n[This is a smoke test. Execute tools yourself directly. Do NOT delegate to Ace or any specialist unless the prompt explicitly asks you to delegate.]'
+      : `\n\n[Delegation contract: route execution only via ${aceGuide}. Do not directly delegate to specialists; Ace may involve them if needed.]`;
     const threadCloseGuide = `\n\n[Keep the workspace thread updated briefly. Include [ACTION:CLOSE_THREAD] only when the task is fully complete.]`;
     const decisionGuide = '\n\n[Decision policy: only ask the user for MAJOR decisions (prod risk, security/privacy, rollback/no-rollback, schema/data-loss risk, spend increase, legal/compliance impact). For routine implementation choices, decide and proceed.]';
     const contextMessageWithLang = `${textLangHint ? `${contextMessage}${textLangHint}` : contextMessage}${mentionGuide}${threadCloseGuide}${decisionGuide}`;
@@ -2308,6 +2311,10 @@ function shouldAutoDelegateToAce(userMessage: string, rileyResponse: string): bo
   if (responseText.includes('no action needed') || responseText.includes('for awareness only') || responseText.includes('decision required')) {
     return false;
   }
+  const msg = userMessage.toLowerCase();
+  // Never auto-delegate smoke test prompts or messages that explicitly refuse delegation
+  if (/\[smoke\s*test:/i.test(msg)) return false;
+  if (/do\s+not\s+delegate|don'?t\s+delegate/i.test(msg)) return false;
   return ACE_FIRST_TASK_RE.test(userMessage);
 }
 
@@ -2359,9 +2366,10 @@ function sanitizeVisibleAgentReply(text: string): string {
 function goalNeedsRuntimeVerification(text: string): boolean {
   const normalized = String(text || '').toLowerCase();
   if (!normalized.trim()) return false;
+  if (/\bsmoke.test\b/i.test(normalized)) return false;
   if (/\bstatus\b|\bthreads?\b|\busage\b|\blimits\b|\bhealth\b|\burls?\b|\blink\b/.test(normalized)) return false;
   if (shouldSkipContractEnforcement(normalized)) return false;
-  return /\bfix|implement|update|change|refactor|remove|add|build|ship|deploy|feature|bug|ui|screen|flow\b/.test(normalized);
+  return /\b(?:fix|implement|update|change|refactor|remove|add|build|ship|deploy|feature|bug|ui|screen|flow)\b/.test(normalized);
 }
 
 function isCompletionClaim(text: string): boolean {

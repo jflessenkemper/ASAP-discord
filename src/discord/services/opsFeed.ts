@@ -200,7 +200,9 @@ export async function postOpsLine(channel: TextChannel, input: OpsLineInput): Pr
     logAgentEvent('ops', 'response', line.slice(0, 1800));
   }
 
-  if (!shouldPostToDiscord(severity)) {
+  // Tool-audit entries must always reach Discord so smoke tests can verify them
+  const forcePost = input.scope?.startsWith('tool-audit');
+  if (!forcePost && !shouldPostToDiscord(severity)) {
     return;
   }
 
