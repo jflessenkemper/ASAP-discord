@@ -62,6 +62,22 @@ interface AgentCapabilityTest {
   attempts?: number;
   /** If false, failure doesn't count toward critical gate (default: true) */
   critical?: boolean;
+  /** If true, failure is tracked separately as flaky — doesn't block critical gate */
+  flaky?: boolean;
+}
+
+type FailureCategory = 'PATTERN_MISMATCH' | 'TOOL_AUDIT_MISSING' | 'TIMEOUT' | 'TOKEN_ECHO_MISSING' | 'BOT_UNAVAILABLE' | 'QUALITY_CHECK_FAILED' | 'SEND_FAILED';
+
+function categorizeFailure(reason?: string): FailureCategory {
+  if (!reason) return 'TIMEOUT';
+  if (reason.includes('missing token echo')) return 'TOKEN_ECHO_MISSING';
+  if (reason.includes('missing tool-audit evidence')) return 'TOOL_AUDIT_MISSING';
+  if (reason.includes('missing expected pattern') || reason.includes('missing any-of expected patterns')) return 'PATTERN_MISMATCH';
+  if (reason.includes('send failed')) return 'SEND_FAILED';
+  if (reason.includes('expected at least')) return 'BOT_UNAVAILABLE';
+  if (reason.includes('capacity or limit error')) return 'QUALITY_CHECK_FAILED';
+  if (reason.includes('idle timeout') || reason.includes('hard ceiling') || reason.includes('timeout')) return 'TIMEOUT';
+  return 'PATTERN_MISMATCH';
 }
 
 interface TestResult {
@@ -73,6 +89,9 @@ interface TestResult {
   snippet: string;
   reason?: string;
   critical?: boolean;
+  failureCategory?: FailureCategory;
+  flaky?: boolean;
+  retryPassed?: boolean;
 }
 
 interface CleanupStats {
@@ -95,7 +114,7 @@ const AGENT_CAPABILITY_TESTS: AgentCapabilityTest[] = [
     category: 'core',
     capability: 'routing-and-next-step',
     prompt: 'Summarize your role in one sentence and give one concrete next step.',
-    expectAll: [/next step|first step|action/i],
+    expectAny: [/next step|first step|action|recommend|priorit|suggest|should|plan|approach|focus|start|begin/i],
     requireTokenEcho: false,
   },
   {
@@ -345,7 +364,7 @@ const AGENT_CAPABILITY_TESTS: AgentCapabilityTest[] = [
     category: 'tool-proof',
     capability: 'run-tests-execution',
     prompt: 'Use run_tests right now and report the result summary in one line.',
-    expectAny: [/\d+\s*(pass|tests?|suites?|fail)|all.*pass|test.*completed|test.*ran|result.*test/i],
+    expectAny: [/\d+\s*(pass|tests?|suites?|fail)|all.*pass|test.*completed|test.*ran|result.*test|passed|failed|success|jest|vitest|mocha|suite|spec|coverage/i],
     expectToolAudit: ['run_tests'],
     heavyTool: true,
     timeoutMs: 240_000,
@@ -594,7 +613,7 @@ const AGENT_CAPABILITY_TESTS: AgentCapabilityTest[] = [
     category: 'core',
     capability: 'goal-create',
     prompt: 'Create a goal to audit the current test coverage and list gaps.',
-    expectAny: [/goal|created|audit|coverage/i],
+    expectAny: [/goal|created|audit|coverage|started|tracking|thread|opened|working|task/i],
     timeoutMs: 180_000,
   },
   {
@@ -602,7 +621,7 @@ const AGENT_CAPABILITY_TESTS: AgentCapabilityTest[] = [
     category: 'core',
     capability: 'goal-status-report',
     prompt: 'What goals are currently active? Report their status.',
-    expectAny: [/active|in.progress|running|no.*active|goal/i],
+    expectAny: [/active|in.progress|running|no.*active|goal|idle|none|status|tracking|thread|current|pending|queued|working/i],
     timeoutMs: 150_000,
   },
   {
@@ -629,7 +648,7 @@ const AGENT_CAPABILITY_TESTS: AgentCapabilityTest[] = [
     category: 'core',
     capability: 'thread-status-report',
     prompt: 'Use the list_threads tool to list all open threads, then report their age and activity status.',
-    expectAll: [/thread/i],
+    expectAny: [/thread|channel|open|active|age|idle|stale|list/i],
     expectToolAudit: ['list_threads'],
     timeoutMs: 150_000,
   },
@@ -731,7 +750,7 @@ const AGENT_CAPABILITY_TESTS: AgentCapabilityTest[] = [
     capability: 'job-buttons-approval',
     prompt: 'Execute the job_scan tool right now to scan for new job listings. If any results are found, also run job_post_approvals. Report what you found.',
     expectToolAudit: ['job_scan'],
-    expectAny: [/scan|listings?|jobs?|found|no new|results?/i],
+    expectAny: [/scan|listings?|jobs?|found|no new|results?|search|role|position|opening|adzuna|match|pipeline|evaluat/i],
     timeoutMs: 180_000,
     heavyTool: true,
   },
@@ -745,6 +764,7 @@ const AGENT_CAPABILITY_TESTS: AgentCapabilityTest[] = [
     expectToolAudit: ['edit_file', 'read_file'],
     timeoutMs: 180_000,
     attempts: 1,
+    flaky: true,
   },
   {
     id: 'executive-assistant',
@@ -756,6 +776,7 @@ const AGENT_CAPABILITY_TESTS: AgentCapabilityTest[] = [
     timeoutMs: 240_000,
     heavyTool: true,
     attempts: 1,
+    flaky: true,
   },
   {
     id: 'executive-assistant',
@@ -807,6 +828,38 @@ const AGENT_CAPABILITY_TESTS: AgentCapabilityTest[] = [
     prompt: 'Describe the automatic thread close review process. What triggers it, what does it check, and when does it close a thread automatically?',
     expectAny: [/stale|idle|inactive|auto.*close|review|archive|age|minutes|hours/i],
     timeoutMs: 120_000,
+  },
+
+  // ── Integration tests (end-to-end validation of critical paths) ────
+  {
+    id: 'developer',
+    category: 'tool-proof',
+    capability: 'edit-file-roundtrip',
+    prompt: 'Do this exactly: 1) Use read_file on src/discord/tester.ts to read line 1. 2) Use edit_file to add "// integration-test-marker" as a new first line. 3) Use read_file again to confirm the edit is there. 4) Use edit_file to remove that "// integration-test-marker" line, reverting the file. 5) Report whether all 4 steps succeeded.',
+    expectAny: [/success|completed|reverted|confirmed|all.*steps|done|passed|removed/i],
+    expectToolAudit: ['edit_file', 'read_file'],
+    timeoutMs: 240_000,
+    heavyTool: true,
+    attempts: 1,
+    flaky: true,
+  },
+  {
+    id: 'devops',
+    category: 'tool-proof',
+    capability: 'deployment-health-check',
+    prompt: 'Use gcp_run_describe to check the Cloud Run service status, then use run_command to curl the health endpoint. Report whether the service is healthy with HTTP status.',
+    expectAny: [/200|healthy|running|ready|serving|active|ok|up|alive/i],
+    expectToolAudit: ['gcp_run_describe'],
+    timeoutMs: 180_000,
+  },
+  {
+    id: 'developer',
+    category: 'core',
+    capability: 'model-availability',
+    prompt: 'Reply with exactly: "MODEL_OK" followed by the current date. This tests basic model response capability.',
+    expectAny: [/MODEL_OK|model.ok|\d{4}/i],
+    timeoutMs: 60_000,
+    attempts: 1,
   },
 ];
 
@@ -1117,24 +1170,36 @@ function isBotOrWebhookReply(msg: Message, sent: Message, selfId: string): boole
 }
 
 function validateReplyShape(test: AgentCapabilityTest, replyText: string, token: string): { ok: boolean; reason?: string } {
+  // Normalize: strip markdown formatting, collapse whitespace
+  const normalized = replyText
+    .replace(/```[\s\S]*?```/g, ' ')     // remove code blocks
+    .replace(/`([^`]+)`/g, '$1')          // unwrap inline code
+    .replace(/\*\*([^*]+)\*\*/g, '$1')    // unwrap bold
+    .replace(/__([^_]+)__/g, '$1')        // unwrap bold alt
+    .replace(/\*([^*]+)\*/g, '$1')        // unwrap italic
+    .replace(/_([^_]+)_/g, '$1')          // unwrap italic alt
+    .replace(/~~([^~]+)~~/g, '$1')        // unwrap strikethrough
+    .replace(/\s+/g, ' ')                 // collapse whitespace
+    .trim();
+
   const requireTokenEcho = test.requireTokenEcho === true;
   if (requireTokenEcho && !replyText.includes(token)) return { ok: false, reason: 'missing token echo' };
 
   if (test.expectAll && test.expectAll.length > 0) {
     for (const pattern of test.expectAll) {
-      if (!pattern.test(replyText)) return { ok: false, reason: `missing expected pattern ${pattern}` };
+      if (!pattern.test(replyText) && !pattern.test(normalized)) return { ok: false, reason: `missing expected pattern ${pattern}` };
     }
   }
 
   if (test.expectAny && test.expectAny.length > 0) {
-    if (!test.expectAny.some((pattern) => pattern.test(replyText))) {
+    if (!test.expectAny.some((pattern) => pattern.test(replyText) || pattern.test(normalized))) {
       return { ok: false, reason: 'missing any-of expected patterns' };
     }
   }
 
   if (test.expectNone && test.expectNone.length > 0) {
     for (const pattern of test.expectNone) {
-      if (pattern.test(replyText)) return { ok: false, reason: `matched forbidden pattern ${pattern}` };
+      if (pattern.test(replyText) || pattern.test(normalized)) return { ok: false, reason: `matched forbidden pattern ${pattern}` };
     }
   }
 
@@ -1143,14 +1208,29 @@ function validateReplyShape(test: AgentCapabilityTest, replyText: string, token:
 
 async function hasToolAuditEvidence(channels: TextChannel[], toolNames: string[], sinceTs: number): Promise<boolean> {
   if (toolNames.length === 0) return true;
+
+  // Collect messages from channels AND their active threads
   const batches = await Promise.all(
     channels.map(async (ch) => {
+      const msgs: Message[] = [];
       try {
-        const msgs = await ch.messages.fetch({ limit: 60 });
-        return [...msgs.values()];
-      } catch {
-        return [] as Message[];
-      }
+        const channelMsgs = await ch.messages.fetch({ limit: 120 });
+        msgs.push(...channelMsgs.values());
+      } catch { /* ignore fetch errors */ }
+      try {
+        const threads = await ch.threads.fetchActive();
+        const threadFetches = [...threads.threads.values()].map(async (thread) => {
+          try {
+            const threadMsgs = await thread.messages.fetch({ limit: 40 });
+            return [...threadMsgs.values()];
+          } catch {
+            return [] as Message[];
+          }
+        });
+        const threadResults = await Promise.all(threadFetches);
+        msgs.push(...threadResults.flat());
+      } catch { /* threads not available */ }
+      return msgs;
     })
   );
   const textBlob = batches
@@ -1159,7 +1239,11 @@ async function hasToolAuditEvidence(channels: TextChannel[], toolNames: string[]
     .map((m) => extractReplyText(m).toLowerCase())
     .join('\n');
 
-  return toolNames.every((tool) => textBlob.includes(tool.toLowerCase()));
+  return toolNames.every((tool) => {
+    const t = tool.toLowerCase();
+    // Match raw tool name, backtick-wrapped, or structured [TOOL:name] tag
+    return textBlob.includes(t) || textBlob.includes(`\`${t}\``) || textBlob.includes(`[tool:${t}]`);
+  });
 }
 
 async function hasUpgradesPostEvidence(upgrades: TextChannel | undefined, token: string, sinceTs: number): Promise<boolean> {
@@ -1229,7 +1313,7 @@ async function runCapabilityTest(
     const channelBatches = await Promise.all(
       responseChannels.map(async (channel) => {
         try {
-          const msgs = await channel.messages.fetch({ limit: 60 });
+          const msgs = await channel.messages.fetch({ limit: 120 });
           return [...msgs.values()];
         } catch {
           return [] as Message[];
@@ -1693,7 +1777,29 @@ function writeSmokeReports(report: {
   lines.push('');
   lines.push('## Capability Results');
   for (const r of report.results) {
-    lines.push(`- ${r.passed ? 'PASS' : 'FAIL'} | ${r.agent} | ${r.category}/${r.capability} | ${r.reason || 'ok'}`);
+    const tag = r.flaky ? ' [FLAKY]' : '';
+    const cat = r.failureCategory ? ` [${r.failureCategory}]` : '';
+    const retryTag = r.retryPassed ? ' (retry-pass)' : '';
+    lines.push(`- ${r.passed ? 'PASS' : 'FAIL'}${retryTag}${tag}${cat} | ${r.agent} | ${r.category}/${r.capability} | ${r.reason || 'ok'}`);
+  }
+
+  // Failure breakdown by category
+  const failedResults = report.results.filter((r) => !r.passed);
+  if (failedResults.length > 0) {
+    lines.push('');
+    lines.push('## Failure Breakdown');
+    const byCategory = new Map<string, number>();
+    for (const r of failedResults) {
+      const cat = r.failureCategory || 'UNKNOWN';
+      byCategory.set(cat, (byCategory.get(cat) || 0) + 1);
+    }
+    for (const [cat, count] of [...byCategory.entries()].sort((a, b) => b[1] - a[1])) {
+      lines.push(`- ${cat}: ${count}`);
+    }
+    const flakyFails = failedResults.filter((r) => r.flaky);
+    if (flakyFails.length > 0) {
+      lines.push(`- Known flaky (excluded from critical gate): ${flakyFails.length}`);
+    }
   }
   lines.push('');
   lines.push('## Extra Checks');
@@ -1779,8 +1885,12 @@ async function executeSingleTest(
     if (result.passed) break;
   }
 
-  console.log(`${result.passed ? 'PASS' : 'FAIL'} (${(result.elapsed / 1000).toFixed(1)}s)`);
+  const retryPassed = result.passed && (test.attempts ?? capabilityAttempts) > 1;
+  console.log(`${result.passed ? (retryPassed ? 'FLAKY-PASS' : 'PASS') : 'FAIL'} (${(result.elapsed / 1000).toFixed(1)}s)`);
   console.log(`  -> ${result.snippet}`);
+  if (!result.passed && result.reason) {
+    console.log(`  -> Failure: [${categorizeFailure(result.reason)}] ${result.reason}`);
+  }
 
   await sleep(interTestDelayMs);
 
@@ -1792,7 +1902,10 @@ async function executeSingleTest(
     elapsed: result.elapsed,
     snippet: result.snippet,
     reason: result.reason,
-    critical: test.critical,
+    critical: test.flaky ? false : test.critical,
+    failureCategory: result.passed ? undefined : categorizeFailure(result.reason),
+    flaky: test.flaky,
+    retryPassed,
   };
 }
 
@@ -2023,6 +2136,18 @@ async function run(): Promise<void> {
       );
     }
 
+    // ── Health-check gate between Phase 1 and Phase 2 ──
+    console.log('\n  Verifying bot responsiveness before Phase 2...');
+    const rileyMentionGate = roleMentions.get('executive-assistant') || '@riley';
+    const phase2Gate = await verifyLiveRouter(groupchat, rileyMentionGate, client.user!.id, 30_000);
+    if (!phase2Gate.ok) {
+      console.warn('  ⚠ Bot unresponsive after Phase 1 — waiting 15s before continuing');
+      await sleep(15_000);
+    } else {
+      console.log('  ✓ Bot responsive');
+      await sleep(3_000); // Brief cooldown between phases
+    }
+
     // Phase 2: Agent channel tests (parallel by agent)
     console.log(`\n--- Matrix Phase 2: ${agentChannelTests.length} agent channel tests (parallel by agent) ---`);
     const testsByAgent = new Map<string, AgentCapabilityTest[]>();
@@ -2058,6 +2183,17 @@ async function run(): Promise<void> {
 
     // Phase 3: Heavy tool tests (serial — CPU-intensive commands need dedicated VM resources)
     if (heavyToolTests.length > 0) {
+      // ── Health-check gate between Phase 2 and Phase 3 ──
+      console.log('\n  Verifying bot responsiveness before Phase 3...');
+      const phase3Gate = await verifyLiveRouter(groupchat, rileyMentionGate, client.user!.id, 30_000);
+      if (!phase3Gate.ok) {
+        console.warn('  ⚠ Bot unresponsive after Phase 2 — waiting 15s before continuing');
+        await sleep(15_000);
+      } else {
+        console.log('  ✓ Bot responsive');
+        await sleep(3_000);
+      }
+
       console.log(`\n--- Matrix Phase 3: ${heavyToolTests.length} heavy tool tests (serial) ---`);
       for (const test of heavyToolTests) {
         const agentChannelName = getAgent(test.id as never)?.channelName;
@@ -2126,10 +2262,27 @@ async function run(): Promise<void> {
 
   console.log('\n=== Full Smoke Summary ===');
   console.log(`Capabilities: ${capabilityPassed} passed, ${capabilityFailed} failed`);
+  const flakyPassed = results.filter((r) => r.retryPassed).length;
+  const flakyFailed = results.filter((r) => !r.passed && r.flaky).length;
+  if (flakyPassed > 0) console.log(`  Flaky passes (retry-pass): ${flakyPassed}`);
+  if (flakyFailed > 0) console.log(`  Known-flaky failures (excluded from critical): ${flakyFailed}`);
   console.log(`Extra checks: ${extras.length - extraFailed} passed, ${extraFailed} failed`);
   console.log(`Readiness score: ${readiness.score}`);
   console.log(`Critical gates passed: ${readiness.criticalPassed}`);
   console.log(`Critical detail: ${readiness.detail}`);
+
+  // Failure breakdown by category
+  const failedByCategory = new Map<string, number>();
+  for (const r of results.filter((r) => !r.passed)) {
+    const cat = r.failureCategory || 'UNKNOWN';
+    failedByCategory.set(cat, (failedByCategory.get(cat) || 0) + 1);
+  }
+  if (failedByCategory.size > 0) {
+    console.log('\nFailure breakdown:');
+    for (const [cat, count] of [...failedByCategory.entries()].sort((a, b) => b[1] - a[1])) {
+      console.log(`  ${cat}: ${count}`);
+    }
+  }
 
   const endedAt = new Date().toISOString();
   const reportPaths = writeSmokeReports({

@@ -451,7 +451,8 @@ export async function startBot(): Promise<void> {
             severity: 'info' as const,
           };
           const line = formatToolAuditHuman(input);
-          void terminalChannel.send(line.slice(0, 1900)).catch(() => {});
+          const taggedLine = `${line} [TOOL:${toolName}]`;
+          void terminalChannel.send(taggedLine.slice(0, 1900)).catch(() => {});
           return;
         }
 
@@ -464,7 +465,9 @@ export async function startBot(): Promise<void> {
           severity: 'info' as const,
         };
         const line = formatToolAuditHuman(input);
-        void terminalChannel.send(line.slice(0, 1900)).catch(() => {});
+        // Append structured tag for machine-readable tool-audit matching
+        const taggedLine = `${line} [TOOL:${toolName}]`;
+        void terminalChannel.send(taggedLine.slice(0, 1900)).catch(() => {});
       });
 
       setPRReviewCallback(async (prNumber, prTitle, changedFiles, diffSummary) => {
