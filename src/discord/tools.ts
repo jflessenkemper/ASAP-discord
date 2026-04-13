@@ -216,7 +216,7 @@ export const REPO_TOOLS = [
   {
     name: 'edit_file',
     description:
-      'Replace an exact string in a file with a new string. The old_string must appear exactly once. Include surrounding context lines to be unambiguous.',
+      'Replace an exact string in a file with a new string. The old_string must appear exactly once. IMPORTANT: Always use read_file first to see the exact current content, then copy the old_string verbatim from the read_file output. Do not guess or reconstruct the old_string from memory. Include 2-3 surrounding context lines to be unambiguous.',
     input_schema: {
       type: 'object' as const,
       properties: {
@@ -696,7 +696,7 @@ export const REPO_TOOLS = [
   {
     name: 'batch_edit',
     description:
-      'Apply multiple file edits in a single tool call. More efficient than calling edit_file multiple times. Each edit replaces an exact string in a file (old_string must appear exactly once). Edits are applied sequentially — later edits see the results of earlier ones.',
+      'Apply multiple file edits in a single tool call. More efficient than calling edit_file multiple times. Each edit replaces an exact string in a file (old_string must appear exactly once). IMPORTANT: Always read_file first to see exact current content before constructing old_string values. Edits are applied sequentially — later edits see the results of earlier ones.',
     input_schema: {
       type: 'object' as const,
       properties: {
@@ -1947,17 +1947,77 @@ function editFile(relativePath: string, oldString: string, newString: string): s
     return `File not found: ${relativePath}`;
   }
   const content = fs.readFileSync(abs, 'utf-8');
+
+  // 1. Try exact match first
   const count = content.split(oldString).length - 1;
-  if (count === 0) {
-    return `old_string not found in ${relativePath}. Check whitespace and exact content.`;
+  if (count === 1) {
+    const updated = content.replace(oldString, newString);
+    fs.writeFileSync(abs, updated, 'utf-8');
+    scheduleRepoMemoryAutoUpsert(relativePath);
+    return `Edited ${relativePath} successfully.`;
   }
   if (count > 1) {
     return `old_string found ${count} times in ${relativePath}. It must appear exactly once. Add more surrounding context to be unambiguous.`;
   }
-  const updated = content.replace(oldString, newString);
-  fs.writeFileSync(abs, updated, 'utf-8');
-  scheduleRepoMemoryAutoUpsert(relativePath);
-  return `Edited ${relativePath} successfully.`;
+
+  // 2. Fallback: normalize line endings and trailing whitespace per line
+  const normalizeWs = (s: string) => s.replace(/\r\n/g, '\n').split('\n').map(l => l.trimEnd()).join('\n');
+  const contentNorm = normalizeWs(content);
+  const oldNorm = normalizeWs(oldString);
+  const normCount = contentNorm.split(oldNorm).length - 1;
+  if (normCount === 1) {
+    // Find the original range by locating normalized match position
+    const normIdx = contentNorm.indexOf(oldNorm);
+    // Map normalized index back to original by counting chars line-by-line
+    const contentLines = content.split('\n');
+    const normLines = contentNorm.split('\n');
+    let origStart = 0;
+    let normPos = 0;
+    let foundStart = -1;
+    let foundEnd = -1;
+    for (let i = 0; i < contentLines.length; i++) {
+      const lineEnd = normPos + normLines[i].length;
+      if (foundStart === -1 && normIdx >= normPos && normIdx <= lineEnd) {
+        foundStart = origStart + (normIdx - normPos);
+      }
+      const endTarget = normIdx + oldNorm.length;
+      if (foundEnd === -1 && endTarget >= normPos && endTarget <= lineEnd) {
+        foundEnd = origStart + (endTarget - normPos);
+      }
+      normPos += normLines[i].length + 1; // +1 for \n
+      origStart += contentLines[i].length + 1;
+    }
+    if (foundStart >= 0 && foundEnd > foundStart) {
+      const originalOld = content.slice(foundStart, foundEnd);
+      const updated = content.replace(originalOld, newString);
+      fs.writeFileSync(abs, updated, 'utf-8');
+      scheduleRepoMemoryAutoUpsert(relativePath);
+      return `Edited ${relativePath} successfully (matched after normalizing trailing whitespace).`;
+    }
+  }
+
+  // 3. Show helpful context: find the closest matching lines
+  const oldLines = oldString.split('\n');
+  const firstNonEmpty = oldLines.find(l => l.trim().length > 0)?.trim() || oldLines[0].trim();
+  const fileLines = content.split('\n');
+  const matchingLineNums: number[] = [];
+  for (let i = 0; i < fileLines.length; i++) {
+    if (fileLines[i].includes(firstNonEmpty)) {
+      matchingLineNums.push(i + 1);
+    }
+  }
+
+  let hint = `old_string not found in ${relativePath}.`;
+  if (matchingLineNums.length > 0) {
+    const lineNum = matchingLineNums[0];
+    const start = Math.max(0, lineNum - 2);
+    const end = Math.min(fileLines.length, lineNum + oldLines.length + 1);
+    const snippet = fileLines.slice(start, end).map((l, i) => `${start + i + 1}: ${l}`).join('\n');
+    hint += ` The first line of old_string ("${firstNonEmpty.slice(0, 60)}") was found at line ${lineNum}. Actual content around that area:\n${snippet}\nUse read_file to see the exact content, then retry with the correct old_string.`;
+  } else {
+    hint += ` None of the lines in old_string were found. The file may have changed. Use read_file to see the current content.`;
+  }
+  return hint;
 }
 
 function batchEdit(edits: Array<{ path: string; old_string: string; new_string: string }>): string {
