@@ -128,7 +128,7 @@ const AGENT_STYLES: Record<string, AvatarStyle> = {
   copywriter:            { seed: 'LivCopywriter-elegant',    clothing: 'dress' },
   developer:             { seed: 'AceDeveloper-polished',    clothing: 'blazer' },
   lawyer:                { seed: 'HarperLawyer-barrister',   clothing: 'blazer' },
-  'executive-assistant': { seed: 'RileyExecutive-leader',    clothing: 'blazer' },
+  'executive-assistant': { seed: 'RileyCoordinator-vibrant',  clothing: 'blazer' },
   'ios-engineer':        { seed: 'MiaiOS-classy',           clothing: 'dress' },
   'android-engineer':    { seed: 'LeoAndroid-suited',        clothing: 'blazer' },
 };

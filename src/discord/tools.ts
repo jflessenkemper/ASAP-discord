@@ -1594,12 +1594,17 @@ export async function executeTool(
   const runPromise = executeToolInternal(toolName, input, context);
   if (cacheable) toolInFlight.set(key, runPromise);
 
+  // Fire audit at entry so [TOOL:name] appears even if the tool throws
+  if (toolAuditCallback && context?.agentId) {
+    toolAuditCallback(context.agentId, toolName, '(started)');
+  }
+
   try {
     const result = await runPromise;
     if (cacheable && !/^Error:/i.test(String(result || '').trim())) {
       setCachedToolResult(key, result);
     }
-    // Global audit: log every tool invocation so #terminal evidence is available
+    // Post completion audit with result summary
     if (toolAuditCallback && context?.agentId) {
       const summary = String(result || '').slice(0, 200);
       toolAuditCallback(context.agentId, toolName, summary);

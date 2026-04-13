@@ -24,7 +24,7 @@ const TEXT_MAX_TOKENS_DEVELOPER = parseInt(process.env.TEXT_MAX_TOKENS_DEVELOPER
 const STREAM_EDIT_THROTTLE_MS = parseInt(process.env.STREAM_EDIT_THROTTLE_MS || '80', 10);
 const STREAM_MAX_PREVIEW_CHARS = parseInt(process.env.STREAM_MAX_PREVIEW_CHARS || '1800', 10);
 const STREAM_EDIT_MIN_CHAR_DELTA = parseInt(process.env.STREAM_EDIT_MIN_CHAR_DELTA || '35', 10);
-const TEXT_AGENT_RESPONSE_TIMEOUT_MS = parseInt(process.env.TEXT_AGENT_RESPONSE_TIMEOUT_MS || '120000', 10);
+const TEXT_AGENT_RESPONSE_TIMEOUT_MS = parseInt(process.env.TEXT_AGENT_RESPONSE_TIMEOUT_MS || '240000', 10);
 const TEXT_PROGRESS_HEARTBEAT_MS = parseInt(process.env.TEXT_PROGRESS_HEARTBEAT_MS || '15000', 10);
 const CAREER_OPS_DUPLICATE_WINDOW_MS = parseInt(process.env.CAREER_OPS_DUPLICATE_WINDOW_MS || '600000', 10);
 const CAREER_OPS_SUPPRESSION_NOTICE_COOLDOWN_MS = parseInt(process.env.CAREER_OPS_SUPPRESSION_NOTICE_COOLDOWN_MS || '120000', 10);
@@ -438,16 +438,34 @@ async function handleAgentMessageInner(
     const userFacing = classifyAgentError(err);
     console.error(`Agent ${agent.name} error:`, errMsg);
     try {
-      if (pendingThinking) {
+      if (pendingThinking && timedOut) {
+        // Edit the Thinking message in-place to show timeout — avoids dead placeholder
+        const timeoutMsg = `⏱️ ${agent.name} timed out on this request. Try a narrower question or ask Riley to break it down in #groupchat.`;
+        await pendingThinking.edit(timeoutMsg).catch(async () => {
+          await pendingThinking!.delete().catch(() => {});
+          await sendWebhookMessage(channel, {
+            content: timeoutMsg,
+            username: `${agent.emoji} ${agent.name}`,
+            avatarURL: agent.avatarUrl,
+          }).catch(() => {});
+        });
+        pendingThinkingMessages.delete(channelId);
+      } else if (pendingThinking) {
         pendingThinking.delete().catch(() => {});
         pendingThinkingMessages.delete(channelId);
+        await sendWebhookMessage(channel, {
+          content: `⚠️ ${agent.name}: ${userFacing}`,
+          username: `${agent.emoji} ${agent.name}`,
+          avatarURL: agent.avatarUrl,
+        });
+      } else {
+        await sendWebhookMessage(channel, {
+          content: `⚠️ ${agent.name}: ${userFacing}`,
+          username: `${agent.emoji} ${agent.name}`,
+          avatarURL: agent.avatarUrl,
+        });
       }
-      await sendWebhookMessage(channel, {
-        content: `⚠️ ${agent.name}: ${userFacing}`,
-        username: `${agent.emoji} ${agent.name}`,
-        avatarURL: agent.avatarUrl,
-      });
-      if (timedOut) {
+      if (timedOut && !pendingThinking) {
         await sendWebhookMessage(channel, {
           content: 'ℹ️ Timeout hint: ask a narrower question or split this into smaller steps. Riley can orchestrate the breakdown in #groupchat.',
           username: `${agent.emoji} ${agent.name}`,

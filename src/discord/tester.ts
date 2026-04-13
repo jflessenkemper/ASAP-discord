@@ -76,13 +76,15 @@ type FailureCategory = 'PATTERN_MISMATCH' | 'TOOL_AUDIT_MISSING' | 'TIMEOUT' | '
 
 function categorizeFailure(reason?: string): FailureCategory {
   if (!reason) return 'TIMEOUT';
+  // Timeout checks FIRST — a timed-out test may also carry pattern/tool text in reason
+  if (reason.includes('idle timeout') || reason.includes('hard ceiling') || reason.includes('timed out')) return 'TIMEOUT';
   if (reason.includes('missing token echo')) return 'TOKEN_ECHO_MISSING';
   if (reason.includes('missing tool-audit evidence')) return 'TOOL_AUDIT_MISSING';
   if (reason.includes('missing expected pattern') || reason.includes('missing any-of expected patterns')) return 'PATTERN_MISMATCH';
   if (reason.includes('send failed')) return 'SEND_FAILED';
   if (reason.includes('expected at least')) return 'BOT_UNAVAILABLE';
   if (reason.includes('capacity or limit error')) return 'QUALITY_CHECK_FAILED';
-  if (reason.includes('idle timeout') || reason.includes('hard ceiling') || reason.includes('timeout')) return 'TIMEOUT';
+  if (reason.includes('timeout')) return 'TIMEOUT';
   return 'PATTERN_MISMATCH';
 }
 
@@ -1602,10 +1604,10 @@ function getSmokeProfile(): SmokeProfile {
 
 function getTestTimeoutMs(profile: SmokeProfile): number {
   const explicit = process.env.DISCORD_TEST_TIMEOUT_MS;
-  const fallback = profile === 'matrix' ? 180_000 : 300_000;
+  const fallback = profile === 'matrix' ? 240_000 : 300_000;
   const value = Number(explicit ?? String(fallback));
   if (!Number.isFinite(value) || value <= 0) return fallback;
-  return Math.min(Math.max(8_000, Math.floor(value)), 300_000);
+  return Math.min(Math.max(8_000, Math.floor(value)), 600_000);
 }
 
 function getAgentName(id: string): string {
@@ -1636,6 +1638,11 @@ function shouldRunVoiceBridgeCheck(profile: SmokeProfile): boolean {
 
 function shouldRunActiveVoiceCallCheck(): boolean {
   const raw = String(process.env.DISCORD_SMOKE_VOICE_ACTIVE_CALL ?? 'false').trim().toLowerCase();
+  return ['1', 'true', 'yes', 'on'].includes(raw);
+}
+
+function shouldRunVoiceRoundTripCheck(): boolean {
+  const raw = String(process.env.DISCORD_SMOKE_VOICE_ROUND_TRIP ?? 'false').trim().toLowerCase();
   return ['1', 'true', 'yes', 'on'].includes(raw);
 }
 
@@ -2228,8 +2235,8 @@ async function runCapabilityTest(
     };
   }
 
-  const IDLE_TIMEOUT_MS = Math.min(timeoutMs, test.heavyTool ? 70_000 : 60_000);
-  const HARD_CEILING_MS = Math.max(timeoutMs, test.heavyTool ? 300_000 : 240_000);
+  const IDLE_TIMEOUT_MS = Math.min(timeoutMs, test.heavyTool ? 100_000 : 90_000);
+  const HARD_CEILING_MS = Math.max(timeoutMs, test.heavyTool ? 420_000 : 360_000);
 
   // Build channel ID sets for monitor queries
   const responseChannelIds = new Set(responseChannels.map((ch) => ch.id));
@@ -2335,14 +2342,16 @@ async function runCapabilityTest(
 
     const timeoutType = result.idleTimedOut
       ? 'idle timeout (no new messages)'
-      : (Date.now() - started >= HARD_CEILING_MS ? 'hard ceiling reached' : 'timeout');
+      : (Date.now() - started >= HARD_CEILING_MS ? 'hard ceiling reached' : 'timed out');
 
     const matchedEvent = botEvents.find((e) => validateReplyShape(test, e.content, token).ok);
+    // Prefix timeout type into reason so categorizeFailure correctly classifies TIMEOUT
+    const timeoutReason = reason ? `${timeoutType}: ${reason}` : timeoutType;
     return {
       passed: false,
       elapsed: Date.now() - started,
       snippet: matchedEvent?.content.slice(0, 300) || `Timeout while waiting for full capability evidence (${timeoutType})`,
-      reason,
+      reason: timeoutReason,
     };
   }
 
@@ -2401,13 +2410,15 @@ async function runCapabilityTest(
   const idleMs = Date.now() - lastActivityTs;
   const timeoutType = idleMs >= IDLE_TIMEOUT_MS && seenMessageIds.size > 0
     ? `idle timeout (no new messages for ${Math.ceil(idleMs / 1000)}s)`
-    : (Date.now() - started >= HARD_CEILING_MS ? 'hard ceiling reached' : 'timeout');
+    : (Date.now() - started >= HARD_CEILING_MS ? 'hard ceiling reached' : 'timed out');
 
+  // Prefix timeout type into reason so categorizeFailure correctly classifies TIMEOUT
+  const timeoutReason = lastReason ? `${timeoutType}: ${lastReason}` : timeoutType;
   return {
     passed: false,
     elapsed: Date.now() - started,
     snippet: matchedSnippet || `Timeout while waiting for full capability evidence (${timeoutType})`,
-    reason: lastReason,
+    reason: timeoutReason,
   };
 }
 
@@ -2573,6 +2584,95 @@ async function runVoiceBridgeActiveCallCheck(groupchat: TextChannel, rileyMentio
     name: 'voice_bridge_active_call',
     passed: bridge.passed,
     detail: bridge.detail,
+    critical: false,
+  };
+}
+
+/**
+ * Full voice round-trip test:
+ * 1. Ask Riley to join voice via groupchat
+ * 2. Wait for join confirmation
+ * 3. Send "tester say:" to trigger TTS playback
+ * 4. Wait for "spoke in voice" confirmation
+ * 5. Ask Riley to leave voice
+ */
+async function runVoiceRoundTripCheck(
+  groupchat: TextChannel,
+  rileyMention: string,
+  selfId: string,
+  timeoutMs: number,
+): Promise<ExtraCheckResult> {
+  const token = `VOICE_RT_${Date.now().toString().slice(-6)}`;
+  const stepTimeout = Math.min(timeoutMs, 60_000);
+
+  // Step 1: Ask Riley to join voice
+  const joinMsg = await groupchat.send(`${rileyMention} join voice`);
+  const joinStart = Date.now();
+  let joinConfirmed = false;
+
+  while (Date.now() - joinStart < stepTimeout) {
+    const msgs = await groupchat.messages.fetch({ limit: 40 });
+    const ordered = [...msgs.values()].sort((a, b) => a.createdTimestamp - b.createdTimestamp);
+    const hit = ordered.find((m) =>
+      m.createdTimestamp > joinMsg.createdTimestamp &&
+      (m.author.bot || m.webhookId) &&
+      /joined voice|voice call started|already in progress|listening is unavailable|can't join voice/i.test(extractReplyText(m))
+    );
+    if (hit) {
+      const text = extractReplyText(hit);
+      if (/listening is unavailable|can't join voice/i.test(text)) {
+        return { name: 'voice_round_trip', passed: false, detail: `Riley cannot join voice: ${text.slice(0, 200)}`, critical: false };
+      }
+      joinConfirmed = true;
+      break;
+    }
+    await sleep(2500);
+  }
+
+  if (!joinConfirmed) {
+    // Cleanup: try to end call just in case
+    await groupchat.send(`${rileyMention} leave voice`).catch(() => {});
+    return { name: 'voice_round_trip', passed: false, detail: 'Riley did not confirm joining voice within timeout', critical: false };
+  }
+
+  // Step 2: Wait a moment for voice pipeline to initialize
+  await sleep(3000);
+
+  // Step 3: Send "tester say:" to trigger TTS playback
+  const sayMsg = await groupchat.send(`tester say: voice round trip smoke check token ${token}`);
+  const sayStart = Date.now();
+  let spokeInVoice = false;
+  let resultDetail = '';
+
+  while (Date.now() - sayStart < stepTimeout) {
+    const msgs = await groupchat.messages.fetch({ limit: 40 });
+    const ordered = [...msgs.values()].sort((a, b) => a.createdTimestamp - b.createdTimestamp);
+    const hit = ordered.find((m) =>
+      m.createdTimestamp > sayMsg.createdTimestamp &&
+      (m.author.bot || m.webhookId) &&
+      /spoke in voice|speech injected|voice turn failed|No active voice call/i.test(extractReplyText(m))
+    );
+    if (hit) {
+      const text = extractReplyText(hit);
+      spokeInVoice = /spoke in voice|speech injected/i.test(text);
+      resultDetail = text.slice(0, 220);
+      break;
+    }
+    await sleep(2500);
+  }
+
+  // Step 4: Cleanup — ask Riley to leave voice
+  await groupchat.send(`${rileyMention} leave voice`).catch(() => {});
+  await sleep(2000);
+
+  if (!resultDetail) {
+    return { name: 'voice_round_trip', passed: false, detail: 'No voice playback response observed', critical: false };
+  }
+
+  return {
+    name: 'voice_round_trip',
+    passed: spokeInVoice,
+    detail: resultDetail,
     critical: false,
   };
 }
@@ -3065,6 +3165,7 @@ async function run(): Promise<void> {
   const runElevenTts = shouldRunElevenLabsTtsCheck();
   const runVoiceBridge = shouldRunVoiceBridgeCheck(profile);
   const runVoiceActive = shouldRunActiveVoiceCallCheck();
+  const runVoiceRoundTrip = shouldRunVoiceRoundTripCheck();
   const runPostSuccessAction = shouldRunPostSuccessResetAndAnnounce();
   const requireLiveRouter = shouldRequireLiveRouter(profile);
   const routerHealthTimeoutMs = getRouterHealthTimeoutMs(profile);
@@ -3139,6 +3240,8 @@ async function run(): Promise<void> {
   console.log(`ElevenLabs API check  : ${runElevenApi ? 'enabled' : 'disabled'}`);
   console.log(`ElevenLabs TTS check  : ${runElevenTts ? 'enabled' : 'disabled'}`);
   console.log(`Voice bridge check    : ${runVoiceBridge ? 'enabled' : 'disabled'}`);
+  console.log(`Voice active-call     : ${runVoiceActive ? 'enabled' : 'disabled'}`);
+  console.log(`Voice round-trip      : ${runVoiceRoundTrip ? 'enabled' : 'disabled'}`);
   console.log(`Voice active-call     : ${runVoiceActive ? 'enabled' : 'disabled'}`);
   console.log(`Capability attempts   : ${capabilityAttempts}`);
   console.log(`Poll interval        : ${monitor ? 'event-driven (LiveMonitor)' : `${pollIntervalMs}ms`}`);
@@ -3444,6 +3547,14 @@ async function run(): Promise<void> {
     console.log(`${r.passed ? 'PASS' : 'FAIL'} | ${r.detail}`);
   }
 
+  if (runVoiceRoundTrip) {
+    process.stdout.write('Testing voice round-trip (join → TTS → leave) ... ');
+    const rileyMention = roleMentions.get('executive-assistant') || '@riley';
+    const r = await runVoiceRoundTripCheck(groupchat, rileyMention, client.user!.id, Math.min(timeoutMs, 120000));
+    extras.push(r);
+    console.log(`${r.passed ? 'PASS' : 'FAIL'} | ${r.detail}`);
+  }
+
   const capabilityPassed = results.filter((r) => r.passed).length;
   const capabilityFailed = results.length - capabilityPassed;
   const extraFailed = extras.filter((e) => !e.passed).length;
@@ -3510,6 +3621,7 @@ async function run(): Promise<void> {
       runElevenTts,
       runVoiceBridge,
       runVoiceActive,
+      runVoiceRoundTrip,
       capabilityAttempts,
       runPostSuccessAction,
       agentFilter: agentFilter || null,

@@ -33,8 +33,16 @@ const FALLBACK_CHAINS: Record<string, string[]> = {
   'gemini-2.5-flash': ['gemini-2.5-pro', 'claude-opus-4-6'],
   'gemini-flash-latest': ['gemini-2.5-flash', 'gemini-2.5-pro', 'claude-opus-4-6'],
   'gemini-2.5-pro': ['gemini-2.5-flash', 'claude-opus-4-6'],
-  'claude-opus-4-6': ['gemini-2.5-pro', 'gemini-2.5-flash'],
+  'claude-opus-4-6': ['claude-sonnet-4-6', 'gemini-2.5-pro', 'gemini-2.5-flash'],
+  'claude-sonnet-4-6': ['claude-opus-4-6', 'gemini-2.5-pro', 'gemini-2.5-flash'],
 };
+
+/**
+ * Check if a model resolved differently from the preferred model (i.e. is on fallback).
+ */
+export function isOnFallbackModel(preferredModel: string): boolean {
+  return resolveHealthyModel(preferredModel) !== preferredModel;
+}
 
 function getHealth(modelName: string): ModelHealth {
   const key = normalizeModel(modelName);
