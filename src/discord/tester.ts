@@ -1042,6 +1042,210 @@ function extractReplyText(msg: Message): string {
   return (msg.content || msg.embeds[0]?.description || msg.embeds[0]?.title || '').slice(0, 2000);
 }
 
+// ── Live Monitor: event-driven message collection with real-time logging ──
+
+interface LiveEvent {
+  ts: number;
+  channel: string;
+  channelId: string;
+  author: string;
+  authorId: string;
+  isBot: boolean;
+  isWebhook: boolean;
+  content: string;
+  msgId: string;
+  attachments: number;
+  embeds: number;
+  threadId?: string;
+  threadName?: string;
+}
+
+class LiveMonitor {
+  private events: LiveEvent[] = [];
+  private listeners: Array<(event: LiveEvent) => void> = [];
+  private client: Client;
+  private selfId: string;
+  private channelNames = new Map<string, string>();
+  private startTs: number;
+  private eventCount = 0;
+  private logEnabled = true;
+
+  constructor(client: Client, selfId: string) {
+    this.client = client;
+    this.selfId = selfId;
+    this.startTs = Date.now();
+    this.client.on('messageCreate', this.handleMessage);
+  }
+
+  registerChannels(channels: TextChannel[]) {
+    for (const ch of channels) {
+      this.channelNames.set(ch.id, ch.name);
+    }
+  }
+
+  private handleMessage = (msg: Message) => {
+    if (msg.author.id === this.selfId) return;
+
+    const channelName = this.channelNames.get(msg.channelId)
+      || (msg.channel as any)?.name
+      || msg.channelId;
+
+    const isThread = msg.channel?.isThread?.() ?? false;
+    const threadName = isThread ? (msg.channel as ThreadChannel).name : undefined;
+    const threadId = isThread ? msg.channel.id : undefined;
+    if (isThread && !this.channelNames.has(msg.channelId)) {
+      this.channelNames.set(msg.channelId, threadName || msg.channelId);
+    }
+
+    const event: LiveEvent = {
+      ts: msg.createdTimestamp,
+      channel: channelName,
+      channelId: msg.channelId,
+      author: msg.author.username || msg.author.id,
+      authorId: msg.author.id,
+      isBot: msg.author.bot,
+      isWebhook: !!msg.webhookId,
+      content: extractReplyText(msg),
+      msgId: msg.id,
+      attachments: msg.attachments.size,
+      embeds: msg.embeds.length,
+      threadId,
+      threadName,
+    };
+    this.events.push(event);
+    this.eventCount++;
+
+    for (const listener of this.listeners) {
+      try { listener(event); } catch { /* listener errors don't stop the monitor */ }
+    }
+
+    if (this.logEnabled) {
+      const elapsed = ((Date.now() - this.startTs) / 1000).toFixed(1);
+      const location = threadName ? `🧵${threadName}` : `#${channelName}`;
+      const tag = event.isWebhook ? '🔗' : event.isBot ? '🤖' : '👤';
+      const preview = event.content.slice(0, 160).replace(/\n/g, ' ');
+      const extras: string[] = [];
+      if (event.attachments > 0) extras.push(`${event.attachments} attach`);
+      if (event.embeds > 0) extras.push(`${event.embeds} embed`);
+      const suffix = extras.length > 0 ? ` [${extras.join(', ')}]` : '';
+      const toolMatch = event.content.match(/\[TOOL:(\w+)\]/);
+      const toolTag = toolMatch ? ` ⚙️${toolMatch[1]}` : '';
+      console.log(`  📡 [${elapsed}s] ${tag} ${event.author} → ${location}: ${preview}${suffix}${toolTag}`);
+    }
+  };
+
+  onMessage(listener: (event: LiveEvent) => void): () => void {
+    this.listeners.push(listener);
+    return () => {
+      const idx = this.listeners.indexOf(listener);
+      if (idx >= 0) this.listeners.splice(idx, 1);
+    };
+  }
+
+  getEventsSince(sinceTs: number, filter?: { channelIds?: Set<string>; botsOnly?: boolean }): LiveEvent[] {
+    return this.events.filter((e) => {
+      if (e.ts < sinceTs) return false;
+      if (filter?.channelIds && !filter.channelIds.has(e.channelId)) return false;
+      if (filter?.botsOnly && !e.isBot && !e.isWebhook) return false;
+      return true;
+    });
+  }
+
+  hasToolEvidence(toolNames: string[], sinceTs: number, channelIds: Set<string>): boolean {
+    if (toolNames.length === 0) return true;
+    const relevantEvents = this.getEventsSince(sinceTs, { channelIds });
+    const textBlob = relevantEvents.map((e) => e.content.toLowerCase()).join('\n');
+    return toolNames.every((tool) => {
+      const t = tool.toLowerCase();
+      return textBlob.includes(t) || textBlob.includes(`\`${t}\``) || textBlob.includes(`[tool:${t}]`);
+    });
+  }
+
+  hasUpgradesEvidence(token: string, sinceTs: number, upgradesChannelId: string): boolean {
+    const events = this.getEventsSince(sinceTs, { channelIds: new Set([upgradesChannelId]) });
+    return events.some((e) => {
+      if (e.content.includes(token)) return true;
+      return /\b(upgrade|improvement|enhancement|token|optimi[sz]e|blocker)\b/i.test(e.content);
+    });
+  }
+
+  waitFor(
+    condition: (events: LiveEvent[]) => boolean,
+    opts: { sinceTs: number; timeoutMs: number; channelIds?: Set<string>; botsOnly?: boolean; idleTimeoutMs?: number },
+  ): Promise<{ met: boolean; elapsed: number; idleTimedOut?: boolean }> {
+    const started = Date.now();
+    let lastEventTs = Date.now();
+    const idleTimeoutMs = opts.idleTimeoutMs || opts.timeoutMs;
+
+    const existing = this.getEventsSince(opts.sinceTs, { channelIds: opts.channelIds, botsOnly: opts.botsOnly });
+    if (condition(existing)) {
+      return Promise.resolve({ met: true, elapsed: Date.now() - started });
+    }
+
+    return new Promise((resolve) => {
+      let idleTimer: ReturnType<typeof setInterval> | null = null;
+
+      const hardTimer = setTimeout(() => {
+        cleanup();
+        resolve({ met: false, elapsed: Date.now() - started });
+      }, opts.timeoutMs);
+
+      if (idleTimeoutMs < opts.timeoutMs) {
+        idleTimer = setInterval(() => {
+          const idle = Date.now() - lastEventTs;
+          if (idle >= idleTimeoutMs && this.getEventsSince(opts.sinceTs, { channelIds: opts.channelIds, botsOnly: opts.botsOnly }).length > 0) {
+            cleanup();
+            resolve({ met: false, elapsed: Date.now() - started, idleTimedOut: true });
+          }
+        }, 2000);
+      }
+
+      const unsub = this.onMessage(() => {
+        lastEventTs = Date.now();
+        const events = this.getEventsSince(opts.sinceTs, { channelIds: opts.channelIds, botsOnly: opts.botsOnly });
+        if (condition(events)) {
+          cleanup();
+          resolve({ met: true, elapsed: Date.now() - started });
+        }
+      });
+
+      const cleanup = () => {
+        clearTimeout(hardTimer);
+        if (idleTimer) clearInterval(idleTimer);
+        unsub();
+      };
+    });
+  }
+
+  get totalEvents() { return this.eventCount; }
+  setLogging(enabled: boolean) { this.logEnabled = enabled; }
+
+  destroy() {
+    this.client.off('messageCreate', this.handleMessage);
+    this.listeners.length = 0;
+  }
+
+  printSummary() {
+    const byChannel = new Map<string, number>();
+    const byAuthor = new Map<string, number>();
+    const toolsDetected = new Set<string>();
+    for (const e of this.events) {
+      byChannel.set(e.channel, (byChannel.get(e.channel) || 0) + 1);
+      byAuthor.set(e.author, (byAuthor.get(e.author) || 0) + 1);
+      const tm = e.content.match(/\[TOOL:(\w+)\]/g);
+      if (tm) tm.forEach((t) => toolsDetected.add(t.replace(/\[TOOL:|]/g, '')));
+    }
+    console.log(`\n📊 Live Monitor: ${this.eventCount} events in ${((Date.now() - this.startTs) / 1000).toFixed(0)}s`);
+    console.log(`  Channels: ${[...byChannel.entries()].sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k}(${v})`).join(' ')}`);
+    console.log(`  Authors:  ${[...byAuthor.entries()].sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k}(${v})`).join(' ')}`);
+    if (toolsDetected.size > 0) {
+      console.log(`  Tools:    ${[...toolsDetected].join(', ')}`);
+    }
+  }
+}
+
+let monitor: LiveMonitor | null = null;
+
 function findTextChannelByNameIncludes(guild: any, needle: string): TextChannel | undefined {
   for (const ch of guild.channels.cache.values()) {
     if (ch.type === ChannelType.GuildText && String(ch.name || '').toLowerCase().includes(needle.toLowerCase())) {
@@ -1266,7 +1470,7 @@ async function runCapabilityTest(
   mention: string,
   selfId: string,
   timeoutMs: number,
-  pollIntervalMs: number,
+  _pollIntervalMs: number,
 ): Promise<{ passed: boolean; elapsed: number; snippet: string; reason?: string }> {
   const started = Date.now();
   const token = makeToken(test.id, test.capability);
@@ -1284,15 +1488,106 @@ async function runCapabilityTest(
     };
   }
 
-  let matchedSnippet = '';
-  let lastReason = 'no valid reply observed';
-
-  // ── Adaptive timeout: track bot activity to extend/shorten deadline ──
-  // Instead of a flat timeout, we track last activity (new message or typing).
-  // If the bot is actively producing messages, the deadline auto-extends.
-  // If idle for too long (no new messages), we fail early.
   const IDLE_TIMEOUT_MS = Math.min(timeoutMs, test.heavyTool ? 70_000 : 60_000);
   const HARD_CEILING_MS = Math.max(timeoutMs, test.heavyTool ? 300_000 : 240_000);
+
+  // Build channel ID sets for monitor queries
+  const responseChannelIds = new Set(responseChannels.map((ch) => ch.id));
+  const toolChannelIds = new Set<string>();
+  if (terminal) toolChannelIds.add(terminal.id);
+  for (const ch of responseChannels) toolChannelIds.add(ch.id);
+  const upgradesChannelId = upgrades?.id;
+
+  // If monitor is available, use event-driven approach (zero polling)
+  if (monitor) {
+    const sinceTs = sent.createdTimestamp || started;
+
+    const result = await monitor.waitFor(
+      (events) => {
+        const botEvents = events.filter((e) =>
+          (e.isBot || e.isWebhook) && e.ts >= sinceTs && responseChannelIds.has(e.channelId)
+        );
+
+        // Check for capacity errors — return true to break out, we re-check below
+        for (const e of botEvents) {
+          if (/daily token limit reached|rate limit|quota exhausted|budget exceeded|request interrupted by user/i.test(e.content)) {
+            return true;
+          }
+        }
+
+        const minRepliesOk = (test.minBotRepliesAfterPrompt || 1) <= botEvents.length;
+        if (!minRepliesOk) return false;
+
+        let shapeOk = false;
+        for (const e of botEvents) {
+          if (validateReplyShape(test, e.content, token).ok) { shapeOk = true; break; }
+        }
+        if (!shapeOk) return false;
+
+        if (!monitor!.hasToolEvidence(test.expectToolAudit || [], sinceTs, toolChannelIds)) return false;
+
+        if (test.expectUpgradesPost && upgradesChannelId) {
+          if (!monitor!.hasUpgradesEvidence(token, sinceTs, upgradesChannelId)) return false;
+        }
+
+        return true;
+      },
+      { sinceTs, timeoutMs: HARD_CEILING_MS, idleTimeoutMs: IDLE_TIMEOUT_MS },
+    );
+
+    // Gather final state
+    const botEvents = monitor.getEventsSince(sinceTs, { botsOnly: true })
+      .filter((e) => responseChannelIds.has(e.channelId));
+
+    // Check for capacity errors
+    for (const e of botEvents) {
+      if (/daily token limit reached|rate limit|quota exhausted|budget exceeded|request interrupted by user/i.test(e.content)) {
+        return { passed: false, elapsed: Date.now() - started, snippet: e.content.slice(0, 300), reason: 'agent capacity or limit error' };
+      }
+    }
+
+    if (result.met) {
+      const matchedEvent = botEvents.find((e) => validateReplyShape(test, e.content, token).ok);
+      return { passed: true, elapsed: Date.now() - started, snippet: matchedEvent?.content.slice(0, 300) || 'Capability validated' };
+    }
+
+    // Determine failure reason
+    let reason = 'no valid reply observed';
+    const minRepliesOk = (test.minBotRepliesAfterPrompt || 1) <= botEvents.length;
+    if (!minRepliesOk) {
+      reason = `expected at least ${test.minBotRepliesAfterPrompt ?? 1} bot/webhook replies`;
+    } else {
+      let shapeOk = false;
+      for (const e of botEvents) {
+        const verdict = validateReplyShape(test, e.content, token);
+        if (verdict.ok) { shapeOk = true; break; }
+        reason = verdict.reason || reason;
+      }
+      if (shapeOk) {
+        if (!monitor.hasToolEvidence(test.expectToolAudit || [], sinceTs, toolChannelIds)) {
+          reason = `missing tool-audit evidence for ${String(test.expectToolAudit).replace(/,/g, ', ')}`;
+        } else if (test.expectUpgradesPost) {
+          reason = 'missing upgrades channel post with token';
+        }
+      }
+    }
+
+    const timeoutType = result.idleTimedOut
+      ? 'idle timeout (no new messages)'
+      : (Date.now() - started >= HARD_CEILING_MS ? 'hard ceiling reached' : 'timeout');
+
+    const matchedEvent = botEvents.find((e) => validateReplyShape(test, e.content, token).ok);
+    return {
+      passed: false,
+      elapsed: Date.now() - started,
+      snippet: matchedEvent?.content.slice(0, 300) || `Timeout while waiting for full capability evidence (${timeoutType})`,
+      reason,
+    };
+  }
+
+  // ── Fallback: original polling approach if monitor is not available ──
+  let matchedSnippet = '';
+  let lastReason = 'no valid reply observed';
   let lastActivityTs = Date.now();
   let seenMessageIds = new Set<string>();
 
@@ -1300,14 +1595,8 @@ async function runCapabilityTest(
     const now = Date.now();
     const elapsed = now - started;
     const idleMs = now - lastActivityTs;
-
-    // Hard ceiling: never exceed maximum regardless of activity
     if (elapsed >= HARD_CEILING_MS) break;
-
-    // Idle timeout: if no new messages for IDLE_TIMEOUT_MS, give up
     if (idleMs >= IDLE_TIMEOUT_MS && seenMessageIds.size > 0) break;
-
-    // Original timeout as baseline when no activity has been seen at all
     if (elapsed >= timeoutMs && seenMessageIds.size === 0) break;
 
     const channelBatches = await Promise.all(
@@ -1320,64 +1609,32 @@ async function runCapabilityTest(
         }
       })
     );
-    const ordered = channelBatches
-      .flat()
-      .sort((a, b) => a.createdTimestamp - b.createdTimestamp);
+    const ordered = channelBatches.flat().sort((a, b) => a.createdTimestamp - b.createdTimestamp);
     const replies = ordered.filter((m) => isBotOrWebhookReply(m, sent, selfId));
-
-    // Track new messages to detect activity
     for (const msg of replies) {
-      if (!seenMessageIds.has(msg.id)) {
-        seenMessageIds.add(msg.id);
-        lastActivityTs = Date.now();
-      }
+      if (!seenMessageIds.has(msg.id)) { seenMessageIds.add(msg.id); lastActivityTs = Date.now(); }
     }
-
     let shapeOk = false;
     for (const msg of replies) {
       const text = extractReplyText(msg);
       if (/daily token limit reached|rate limit|quota exhausted|budget exceeded|request interrupted by user/i.test(text)) {
-        return {
-          passed: false,
-          elapsed: Date.now() - started,
-          snippet: text.slice(0, 300),
-          reason: 'agent capacity or limit error',
-        };
+        return { passed: false, elapsed: Date.now() - started, snippet: text.slice(0, 300), reason: 'agent capacity or limit error' };
       }
       const verdict = validateReplyShape(test, text, token);
-      if (verdict.ok) {
-        shapeOk = true;
-        matchedSnippet = text.slice(0, 300);
-        break;
-      }
+      if (verdict.ok) { shapeOk = true; matchedSnippet = text.slice(0, 300); break; }
       lastReason = verdict.reason || lastReason;
     }
-
     const minRepliesOk = (test.minBotRepliesAfterPrompt || 1) <= replies.length;
     if (!minRepliesOk) lastReason = `expected at least ${test.minBotRepliesAfterPrompt ?? 1} bot/webhook replies`;
-
-    const toolChannels = terminal
-      ? [terminal, ...responseChannels.filter((ch) => ch.id !== terminal.id)]
-      : responseChannels;
+    const toolChannels = terminal ? [terminal, ...responseChannels.filter((ch) => ch.id !== terminal.id)] : responseChannels;
     const toolOk = await hasToolAuditEvidence(toolChannels, test.expectToolAudit || [], sent.createdTimestamp || started);
-    if (!toolOk && (test.expectToolAudit || []).length > 0) {
-      lastReason = `missing tool-audit evidence for ${String(test.expectToolAudit).replace(/,/g, ', ')}`;
-    }
-
+    if (!toolOk && (test.expectToolAudit || []).length > 0) lastReason = `missing tool-audit evidence for ${String(test.expectToolAudit).replace(/,/g, ', ')}`;
     const upgradesOk = !test.expectUpgradesPost || await hasUpgradesPostEvidence(upgrades, token, sent.createdTimestamp || started);
-    if (!upgradesOk && test.expectUpgradesPost) {
-      lastReason = 'missing upgrades channel post with token';
-    }
-
+    if (!upgradesOk && test.expectUpgradesPost) lastReason = 'missing upgrades channel post with token';
     if (shapeOk && minRepliesOk && toolOk && upgradesOk) {
-      return {
-        passed: true,
-        elapsed: Date.now() - started,
-        snippet: matchedSnippet || 'Capability validated',
-      };
+      return { passed: true, elapsed: Date.now() - started, snippet: matchedSnippet || 'Capability validated' };
     }
-
-    await sleep(pollIntervalMs);
+    await sleep(_pollIntervalMs);
   }
 
   const idleMs = Date.now() - lastActivityTs;
@@ -1400,8 +1657,22 @@ async function verifyLiveRouter(
   timeoutMs: number,
 ): Promise<{ ok: boolean; detail: string }> {
   const sent = await groupchat.send(`${mention} status`);
-  const started = Date.now();
+  const sinceTs = sent.createdTimestamp || Date.now();
 
+  if (monitor) {
+    const result = await monitor.waitFor(
+      (events) => events.some((e) => (e.isBot || e.isWebhook) && e.ts >= sinceTs && e.channelId === groupchat.id),
+      { sinceTs, timeoutMs, channelIds: new Set([groupchat.id]), botsOnly: true },
+    );
+    if (result.met) {
+      const hit = monitor.getEventsSince(sinceTs, { channelIds: new Set([groupchat.id]), botsOnly: true })[0];
+      return { ok: true, detail: `live reply from ${hit?.author || 'bot'}` };
+    }
+    return { ok: false, detail: `No bot/webhook reply observed within ${Math.round(timeoutMs / 1000)}s` };
+  }
+
+  // Fallback polling
+  const started = Date.now();
   while (Date.now() - started < timeoutMs) {
     const msgs = await groupchat.messages.fetch({ limit: 50 }).catch(() => null);
     if (!msgs) {
@@ -1969,6 +2240,11 @@ async function run(): Promise<void> {
     throw new Error('Could not find groupchat channel. Set DISCORD_GROUPCHAT_ID if needed.');
   }
 
+  // ── Initialize live monitor for event-driven test observation ──
+  monitor = new LiveMonitor(client, client.user!.id);
+  monitor.registerChannels(candidateChannels);
+  console.log(`📡 Live monitor active — watching ${candidateChannels.length} channels in real-time`);
+
   const hygiene = await assertChannelHygiene(guild, profile);
 
   console.log('\n=== ASAP Agent Full Capability Smoke Matrix ===');
@@ -2314,6 +2590,13 @@ async function run(): Promise<void> {
 
   console.log(`Report JSON: ${reportPaths.jsonPath}`);
   console.log(`Report MD  : ${reportPaths.mdPath}`);
+
+  // Print live monitor summary
+  if (monitor) {
+    monitor.printSummary();
+    monitor.destroy();
+    monitor = null;
+  }
 
   if (readiness.criticalPassed && (runPostSuccessAction || profile === 'matrix')) {
     const post = await postSuccessResetAndAnnounce(token, guildId, groupchat, guild);
