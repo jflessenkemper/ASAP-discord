@@ -15,6 +15,8 @@
  *   npm run discord:test:dist -- --agent=developer
  *   npm run discord:test:dist -- --rerun-failed          # rerun only tests that failed in the last report
  *   npm run discord:test:dist -- --rerun-failed --pm2-logs  # rerun failures + capture bot-side PM2 logs
+ *   npm run discord:test:dist -- --goal="build X"        # goal mode: post a complex task, observe all agents (60min timeout)
+ *   npm run discord:test:dist -- --prompt="quick check"  # freeform mode: observe agents for 10min
  *
  * Env vars:
  *   DISCORD_TEST_BOT_TOKEN                     required
@@ -31,6 +33,8 @@
  *   DISCORD_SMOKE_ELEVENLABS_VOICE_BRIDGE      optional (default true)
  *   DISCORD_SMOKE_VOICE_ACTIVE_CALL            optional (default false)
  *   DISCORD_SMOKE_POST_SUCCESS_RESET_AND_ANNOUNCE optional (default false)
+ *   DISCORD_SMOKE_FREEFORM_TIMEOUT_MS             optional (default 600000; goal mode default 3600000)
+ *   DISCORD_SMOKE_FREEFORM_SILENCE_MS             optional (default 300000; goal mode default 600000)
  *   DISCORD_SMOKE_REQUIRE_LIVE_ROUTER          optional (readiness default true)
  */
 import 'dotenv/config';
@@ -2639,6 +2643,7 @@ async function runFreeformObservation(
   selfId: string,
   timeoutMs: number,
   pollIntervalMs: number,
+  silenceMs?: number,
 ): Promise<FreeformResult> {
   const started = Date.now();
   const observations: string[] = [];
@@ -2665,7 +2670,7 @@ async function runFreeformObservation(
   const seenIds = new Set<string>();
   const responses: FreeformResponse[] = [];
   let lastNewResponseAt = Date.now();
-  const silenceThresholdMs = 300_000; // 5 min of silence = likely done (design tasks need longer)
+  const silenceThresholdMs = silenceMs ?? (timeoutMs > 600_000 ? 600_000 : 300_000); // longer silence window for goal-mode
 
   console.log('Watching for responses (channels + threads)...\n');
 
@@ -3069,9 +3074,13 @@ async function run(): Promise<void> {
   const pollIntervalMs = getPollIntervalMs(profile);
   const agentFilter = process.argv.find((a) => a.startsWith('--agent='))?.slice('--agent='.length);
   const testsFilter = process.argv.find((a) => a.startsWith('--tests='))?.slice('--tests='.length);
-  const freeformPrompt = process.argv.find((a) => a.startsWith('--prompt='))?.slice('--prompt='.length);
+  const freeformPrompt = process.argv.find((a) => a.startsWith('--prompt='))?.slice('--prompt='.length)
+    || process.argv.find((a) => a.startsWith('--goal='))?.slice('--goal='.length);
+  const isGoalMode = process.argv.some((a) => a.startsWith('--goal='));
   const rerunFailed = process.argv.includes('--rerun-failed');
   const capturePm2Logs = process.argv.includes('--pm2-logs');
+  const freeformTimeoutMs = parseInt(process.env.DISCORD_SMOKE_FREEFORM_TIMEOUT_MS || (isGoalMode ? '3600000' : '600000'), 10);
+  const freeformSilenceMs = parseInt(process.env.DISCORD_SMOKE_FREEFORM_SILENCE_MS || (isGoalMode ? '600000' : '300000'), 10);
 
   if (!token) throw new Error('Missing DISCORD_TEST_BOT_TOKEN');
   if (!guildId) throw new Error('Missing DISCORD_GUILD_ID');
@@ -3165,14 +3174,16 @@ async function run(): Promise<void> {
 
   // ── Freeform prompt mode: post a custom message, observe all agent responses ──
   if (freeformPrompt) {
+    console.log(`${isGoalMode ? '🎯 Goal' : '💬 Freeform'} mode — timeout ${Math.round(freeformTimeoutMs / 60000)}min, silence threshold ${Math.round(freeformSilenceMs / 60000)}min`);
     const freeformResult = await runFreeformObservation(
       groupchat,
       candidateChannels,
       freeformPrompt,
       roleMentions.get('executive-assistant') || '@riley',
       client.user!.id,
-      600_000,
+      freeformTimeoutMs,
       pollIntervalMs,
+      freeformSilenceMs,
     );
 
     const dir = ensureReportsDir();
