@@ -766,6 +766,48 @@ const AGENT_CAPABILITY_TESTS: AgentCapabilityTest[] = [
     timeoutMs: 180_000,
     attempts: 1,
   },
+
+  // ── Web harness & verification tests ──────────────────────────────────
+  {
+    id: 'qa',
+    category: 'tool-proof',
+    capability: 'capture-screenshots-e2e',
+    prompt: 'Use the capture_screenshots tool right now to capture the current state of the deployed app. Report how many screenshots were taken and whether the hero screen loaded.',
+    expectAny: [/screenshot|capture|hero|screen|image|taken|posted/i],
+    expectToolAudit: ['capture_screenshots'],
+    timeoutMs: 180_000,
+    heavyTool: true,
+    attempts: 1,
+    critical: false,
+  },
+  {
+    id: 'qa',
+    category: 'tool-proof',
+    capability: 'mobile-harness-interactive',
+    prompt: 'Use mobile_harness_start to open the app, then mobile_harness_snapshot to capture the current screen, then mobile_harness_stop to end the session. Report what you saw on screen.',
+    expectAny: [/harness|session|screen|started|snapshot|stopped|mobile|viewport/i],
+    expectToolAudit: ['mobile_harness_start', 'mobile_harness_snapshot', 'mobile_harness_stop'],
+    timeoutMs: 180_000,
+    heavyTool: true,
+    attempts: 1,
+    critical: false,
+  },
+  {
+    id: 'executive-assistant',
+    category: 'core',
+    capability: 'verification-gate-awareness',
+    prompt: 'When Ace claims a UI fix is done, what happens automatically before the thread can close? Describe the verification gate process.',
+    expectAny: [/harness|screenshot|capture|evidence|verification|auto/i],
+    timeoutMs: 120_000,
+  },
+  {
+    id: 'executive-assistant',
+    category: 'core',
+    capability: 'thread-auto-close-review',
+    prompt: 'Describe the automatic thread close review process. What triggers it, what does it check, and when does it close a thread automatically?',
+    expectAny: [/stale|idle|inactive|auto.*close|review|archive|age|minutes|hours/i],
+    timeoutMs: 120_000,
+  },
 ];
 
 const READINESS_TEST_KEYS = new Set([
