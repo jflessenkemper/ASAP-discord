@@ -1075,12 +1075,42 @@ class LiveMonitor {
     this.selfId = selfId;
     this.startTs = Date.now();
     this.client.on('messageCreate', this.handleMessage);
+    this.client.on('messageUpdate', this.handleMessageUpdate);
   }
 
   registerChannels(channels: TextChannel[]) {
     for (const ch of channels) {
       this.channelNames.set(ch.id, ch.name);
     }
+  }
+
+  private handleMessageUpdate = (_old: Message | any, msg: Message | any) => {
+    if (!msg?.author || msg.author.id === this.selfId) return;
+    const channelName = this.channelNames.get(msg.channelId) || (msg.channel as any)?.name || msg.channelId;
+    const existing = this.events.find((e) => e.msgId === msg.id);
+    if (existing) {
+      const oldLen = existing.content.length;
+      existing.content = extractReplyText(msg);
+      existing.attachments = msg.attachments?.size ?? 0;
+      existing.embeds = msg.embeds?.length ?? 0;
+      if (this.logEnabled) {
+        const elapsed = ((Date.now() - this.startTs) / 1000).toFixed(1);
+        const location = existing.threadName ? `🧵${existing.threadName}` : `#${channelName}`;
+        const preview = existing.content.slice(0, 120).replace(/\n/g, ' ');
+        console.log(`  ✏️  [${elapsed}s] ${existing.author} edited → ${location}: ${oldLen}→${existing.content.length} chars | ${preview}`);
+      }
+      // Re-notify listeners so waitFor can re-evaluate conditions
+      for (const listener of this.listeners) {
+        try { listener(existing); } catch { /* */ }
+      }
+    }
+  };
+
+  logSelf(channelName: string, content: string) {
+    if (!this.logEnabled) return;
+    const elapsed = ((Date.now() - this.startTs) / 1000).toFixed(1);
+    const preview = content.slice(0, 160).replace(/\n/g, ' ');
+    console.log(`  📤 [${elapsed}s] 🧪 TEST → #${channelName}: ${preview}`);
   }
 
   private handleMessage = (msg: Message) => {
@@ -1222,6 +1252,7 @@ class LiveMonitor {
 
   destroy() {
     this.client.off('messageCreate', this.handleMessage);
+    this.client.off('messageUpdate', this.handleMessageUpdate);
     this.listeners.length = 0;
   }
 
@@ -1241,6 +1272,9 @@ class LiveMonitor {
     if (toolsDetected.size > 0) {
       console.log(`  Tools:    ${[...toolsDetected].join(', ')}`);
     }
+    const edits = this.events.filter((e) => e.content.length !== e.content.length).length; // placeholder
+    const threadEvents = this.events.filter((e) => !!e.threadId).length;
+    if (threadEvents > 0) console.log(`  Threads:  ${threadEvents} events in threads`);
   }
 }
 
@@ -1479,6 +1513,7 @@ async function runCapabilityTest(
   let sent: Message;
   try {
     sent = await groupchat.send(prompt);
+    if (monitor) monitor.logSelf(groupchat.name, prompt);
   } catch (err) {
     return {
       passed: false,
@@ -1538,6 +1573,27 @@ async function runCapabilityTest(
     // Gather final state
     const botEvents = monitor.getEventsSince(sinceTs, { botsOnly: true })
       .filter((e) => responseChannelIds.has(e.channelId));
+
+    // Log condition breakdown for diagnostics
+    {
+      const minReplies = test.minBotRepliesAfterPrompt || 1;
+      const gotReplies = botEvents.length;
+      let shapeMatched = false;
+      for (const e of botEvents) {
+        if (validateReplyShape(test, e.content, token).ok) { shapeMatched = true; break; }
+      }
+      const toolsNeeded = test.expectToolAudit || [];
+      const toolsOk = monitor.hasToolEvidence(toolsNeeded, sinceTs, toolChannelIds);
+      const upgradesOk = !test.expectUpgradesPost || !upgradesChannelId || monitor.hasUpgradesEvidence(token, sinceTs, upgradesChannelId);
+      const elapsed = ((Date.now() - started) / 1000).toFixed(1);
+      const conds = [
+        `replies:${gotReplies}/${minReplies}${gotReplies >= minReplies ? '✓' : '✗'}`,
+        `shape:${shapeMatched ? '✓' : '✗'}`,
+        toolsNeeded.length > 0 ? `tools[${toolsNeeded.join(',')}]:${toolsOk ? '✓' : '✗'}` : null,
+        test.expectUpgradesPost ? `upgrades:${upgradesOk ? '✓' : '✗'}` : null,
+      ].filter(Boolean).join(' ');
+      console.log(`    🔍 [${elapsed}s] ${result.met ? '✅' : '❌'} conditions: ${conds}${result.idleTimedOut ? ' (idle timeout)' : ''}`);
+    }
 
     // Check for capacity errors
     for (const e of botEvents) {
@@ -1657,6 +1713,7 @@ async function verifyLiveRouter(
   timeoutMs: number,
 ): Promise<{ ok: boolean; detail: string }> {
   const sent = await groupchat.send(`${mention} status`);
+  if (monitor) monitor.logSelf(groupchat.name, `${mention} status`);
   const sinceTs = sent.createdTimestamp || Date.now();
 
   if (monitor) {
@@ -1890,11 +1947,12 @@ async function runFreeformObservation(
   console.log('\n=== Freeform Observation Mode ===');
   console.log(`Prompt: ${fullPrompt}`);
   console.log(`Timeout: ${timeoutMs / 1000}s`);
-  console.log(`Polling: ${pollIntervalMs}ms\n`);
+  console.log(`Polling: ${monitor ? 'event-driven (LiveMonitor)' : `${pollIntervalMs}ms`}\n`);
 
   let sent: Message;
   try {
     sent = await groupchat.send(fullPrompt);
+    if (monitor) monitor.logSelf(groupchat.name, fullPrompt);
   } catch (err) {
     return {
       elapsed: Date.now() - started,
@@ -2126,7 +2184,9 @@ async function executeSingleTest(
   if (!roleMentions.get(test.id)) {
     console.warn(`Role mention not found for ${test.id}; falling back to handle ${mention}`);
   }
-  process.stdout.write(`Testing ${getAgentName(test.id)} :: ${test.category}/${test.capability} ... `);
+  const sendChName = effectiveSendChannel.name;
+  const watchChNames = responseChannels.map((ch) => ch.name).join(', ');
+  process.stdout.write(`Testing ${getAgentName(test.id)} :: ${test.category}/${test.capability} [send:#${sendChName} watch:#${watchChNames}] ... `);
 
   const effectiveTimeoutMs = test.timeoutMs ?? timeoutMs;
   let result: { passed: boolean; elapsed: number; snippet: string; reason?: string } = {
@@ -2261,7 +2321,7 @@ async function run(): Promise<void> {
   console.log(`Voice bridge check    : ${runVoiceBridge ? 'enabled' : 'disabled'}`);
   console.log(`Voice active-call     : ${runVoiceActive ? 'enabled' : 'disabled'}`);
   console.log(`Capability attempts   : ${capabilityAttempts}`);
-  console.log(`Poll interval        : ${pollIntervalMs}ms`);
+  console.log(`Poll interval        : ${monitor ? 'event-driven (LiveMonitor)' : `${pollIntervalMs}ms`}`);
   console.log(`Budget boost          : ${budgetBoostAmount > 0 ? `$${budgetBoostAmount}` : 'disabled'}`);
   console.log(`Require live router   : ${requireLiveRouter ? 'enabled' : 'disabled'}`);
   console.log(`Router health timeout : ${Math.round(routerHealthTimeoutMs / 1000)}s`);
@@ -2377,6 +2437,7 @@ async function run(): Promise<void> {
     );
 
     // Phase 1: Groupchat tests (serial — Riley + orchestration)
+    const phase1Start = Date.now();
     console.log(`\n--- Matrix Phase 1: ${groupchatTests.length} groupchat tests (serial) ---`);
     let failFastTriggered = false;
     for (const test of groupchatTests) {
@@ -2413,7 +2474,11 @@ async function run(): Promise<void> {
     }
 
     // ── Health-check gate between Phase 1 and Phase 2 ──
-    console.log('\n  Verifying bot responsiveness before Phase 2...');
+    const phase1Elapsed = ((Date.now() - phase1Start) / 1000).toFixed(1);
+    const phase1Passed = results.filter((r) => r.passed).length;
+    const phase1Failed = results.length - phase1Passed;
+    console.log(`\n  Phase 1 complete: ${phase1Passed} passed, ${phase1Failed} failed in ${phase1Elapsed}s (${monitor?.totalEvents ?? 0} events captured)`);
+    console.log('  Verifying bot responsiveness before Phase 2...');
     const rileyMentionGate = roleMentions.get('executive-assistant') || '@riley';
     const phase2Gate = await verifyLiveRouter(groupchat, rileyMentionGate, client.user!.id, 30_000);
     if (!phase2Gate.ok) {
@@ -2425,6 +2490,7 @@ async function run(): Promise<void> {
     }
 
     // Phase 2: Agent channel tests (parallel by agent)
+    const phase2Start = Date.now();
     console.log(`\n--- Matrix Phase 2: ${agentChannelTests.length} agent channel tests (parallel by agent) ---`);
     const testsByAgent = new Map<string, AgentCapabilityTest[]>();
     for (const test of agentChannelTests) {
@@ -2457,6 +2523,14 @@ async function run(): Promise<void> {
     );
     results.push(...parallelResults.flat());
 
+    // Phase 2 summary
+    {
+      const phase2Elapsed = ((Date.now() - phase2Start) / 1000).toFixed(1);
+      const p2results = parallelResults.flat();
+      const p2passed = p2results.filter((r) => r.passed).length;
+      console.log(`\n  Phase 2 complete: ${p2passed}/${p2results.length} passed in ${phase2Elapsed}s (${monitor?.totalEvents ?? 0} total events)`);
+    }
+
     // Phase 3: Heavy tool tests (serial — CPU-intensive commands need dedicated VM resources)
     if (heavyToolTests.length > 0) {
       // ── Health-check gate between Phase 2 and Phase 3 ──
@@ -2470,6 +2544,7 @@ async function run(): Promise<void> {
         await sleep(3_000);
       }
 
+      const phase3Start = Date.now();
       console.log(`\n--- Matrix Phase 3: ${heavyToolTests.length} heavy tool tests (serial) ---`);
       for (const test of heavyToolTests) {
         const agentChannelName = getAgent(test.id as never)?.channelName;
@@ -2486,6 +2561,9 @@ async function run(): Promise<void> {
           ),
         );
       }
+      const phase3Elapsed = ((Date.now() - phase3Start) / 1000).toFixed(1);
+      const p3passed = results.slice(-heavyToolTests.length).filter((r) => r.passed).length;
+      console.log(`\n  Phase 3 complete: ${p3passed}/${heavyToolTests.length} passed in ${phase3Elapsed}s`);
     }
   } else {
     // ── Standard serial execution (full / readiness profiles) ──
