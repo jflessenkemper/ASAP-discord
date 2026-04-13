@@ -13,6 +13,8 @@
  * Usage:
  *   npm run discord:test:dist
  *   npm run discord:test:dist -- --agent=developer
+ *   npm run discord:test:dist -- --rerun-failed          # rerun only tests that failed in the last report
+ *   npm run discord:test:dist -- --rerun-failed --pm2-logs  # rerun failures + capture bot-side PM2 logs
  *
  * Env vars:
  *   DISCORD_TEST_BOT_TOKEN                     required
@@ -2768,6 +2770,86 @@ async function runFreeformObservation(
   return { elapsed, responses, observations };
 }
 
+// ── Recursive engine helpers ────────────────────────────────────────────────
+
+/**
+ * Read the most recent smoke report JSON and extract the set of failed test keys.
+ * Returns an empty set if no report exists or all tests passed.
+ */
+function getFailedKeysFromLastReport(): Set<string> {
+  const dir = path.join(process.cwd(), 'smoke-reports');
+  if (!fs.existsSync(dir)) return new Set();
+  const files = fs.readdirSync(dir)
+    .filter((f) => f.startsWith('smoke-') && f.endsWith('.json'))
+    .sort()
+    .reverse();
+  if (files.length === 0) return new Set();
+
+  try {
+    const data = JSON.parse(fs.readFileSync(path.join(dir, files[0]), 'utf-8'));
+    const failed = new Set<string>();
+    for (const r of data.results || []) {
+      if (!r.passed) {
+        // Reverse-lookup the test key from agent name + capability
+        const match = AGENT_CAPABILITY_TESTS.find(
+          (t) => t.capability === r.capability && getAgentName(t.id) === r.agent,
+        );
+        if (match) failed.add(testKey(match));
+      }
+    }
+    console.log(`📄 Last report: ${files[0]} — ${(data.results || []).length} tests, ${failed.size} failed`);
+    return failed;
+  } catch (err) {
+    console.warn(`⚠ Failed to parse last smoke report: ${err instanceof Error ? err.message : String(err)}`);
+    return new Set();
+  }
+}
+
+/**
+ * Suggest a concrete fix action for each failure category.
+ */
+function suggestFix(result: TestResult): string {
+  const cat = result.failureCategory || categorizeFailure(result.reason);
+  switch (cat) {
+    case 'PATTERN_MISMATCH':
+      return `Broaden expectAny/expectAll regex for "${result.capability}", or verify the agent prompt produces the expected pattern. Snippet: "${result.snippet?.slice(0, 100)}"`;
+    case 'TOOL_AUDIT_MISSING':
+      return `Verify tool is in agent's toolset (agents.ts). Check bot.ts setToolAuditCallback emits [TOOL:name]. The agent may not have invoked the tool — check if the prompt is specific enough.`;
+    case 'TIMEOUT':
+      return `Agent did not respond in time. Check PM2 logs for errors, Claude API rate limits, or bot crash. Consider increasing timeoutMs for this test or marking as heavyTool.`;
+    case 'TOKEN_ECHO_MISSING':
+      return `Bot response didn't contain the expected confirmation token. Check if the agent's response was truncated or if the token pattern is too strict.`;
+    case 'BOT_UNAVAILABLE':
+      return `Bot produced fewer replies than expected. Check if bot is running (pm2 status), if the channel exists, and if the agent is routing correctly.`;
+    case 'QUALITY_CHECK_FAILED':
+      return `Response hit a quality/capacity filter. Check Claude API quota, daily budget limits, or content moderation triggers.`;
+    case 'SEND_FAILED':
+      return `Could not send the test prompt to Discord. Check bot permissions, channel existence, and rate limits.`;
+    default:
+      return `Unknown failure — check PM2 logs and bot console output for errors.`;
+  }
+}
+
+/**
+ * Capture PM2 logs from the bot VM for the test window via SSH.
+ * Returns the log text or an error message.
+ */
+async function capturePm2LogsFromVM(testStartedAt: string): Promise<string> {
+  const { execSync } = await import('child_process');
+  const zone = process.env.GCP_VM_ZONE || 'australia-southeast1-c';
+  const vmName = process.env.GCP_VM_NAME || 'asap-bot-vm';
+  const project = process.env.GCP_PROJECT || 'asap-489910';
+
+  try {
+    // Get the last 300 lines of PM2 logs (covers ~10-15 min of activity)
+    const cmd = `gcloud compute ssh ${vmName} --zone=${zone} --project=${project} --command="pm2 logs asap-bot --lines 300 --nostream 2>&1" --quiet 2>&1`;
+    const output = execSync(cmd, { timeout: 30_000, encoding: 'utf-8', maxBuffer: 1024 * 1024 });
+    return output;
+  } catch (err) {
+    return `⚠ PM2 log capture failed: ${err instanceof Error ? err.message : String(err)}`;
+  }
+}
+
 function ensureReportsDir(): string {
   const dir = path.join(process.cwd(), 'smoke-reports');
   fs.mkdirSync(dir, { recursive: true });
@@ -2781,6 +2863,7 @@ function writeSmokeReports(report: {
   results: TestResult[];
   extras: ExtraCheckResult[];
   config: Record<string, any>;
+  pm2Logs?: string;
 }): { jsonPath: string; mdPath: string } {
   const dir = ensureReportsDir();
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
@@ -2828,11 +2911,38 @@ function writeSmokeReports(report: {
     if (flakyFails.length > 0) {
       lines.push(`- Known flaky (excluded from critical gate): ${flakyFails.length}`);
     }
+
+    // Fix suggestions for each failure
+    lines.push('');
+    lines.push('## Fix Suggestions');
+    for (const r of failedResults) {
+      lines.push(`- **${r.agent}/${r.capability}** [${r.failureCategory || 'UNKNOWN'}]: ${suggestFix(r)}`);
+    }
+
+    // Rerun command
+    lines.push('');
+    lines.push('## Rerun Failed Tests');
+    lines.push('```sh');
+    lines.push('npm run discord:test:dist -- --rerun-failed');
+    lines.push('```');
   }
   lines.push('');
   lines.push('## Extra Checks');
   for (const e of report.extras) {
     lines.push(`- ${e.passed ? 'PASS' : 'FAIL'} | ${e.name} | critical=${e.critical} | ${e.detail}`);
+  }
+
+  if (report.pm2Logs) {
+    lines.push('');
+    lines.push('## Bot PM2 Logs (last 300 lines)');
+    lines.push('');
+    lines.push('<details><summary>PM2 log output</summary>');
+    lines.push('');
+    lines.push('```');
+    lines.push(report.pm2Logs.slice(-15000)); // Cap at 15KB to keep report manageable
+    lines.push('```');
+    lines.push('');
+    lines.push('</details>');
   }
 
   fs.writeFileSync(mdPath, lines.join('\n'), 'utf-8');
@@ -2960,6 +3070,8 @@ async function run(): Promise<void> {
   const agentFilter = process.argv.find((a) => a.startsWith('--agent='))?.slice('--agent='.length);
   const testsFilter = process.argv.find((a) => a.startsWith('--tests='))?.slice('--tests='.length);
   const freeformPrompt = process.argv.find((a) => a.startsWith('--prompt='))?.slice('--prompt='.length);
+  const rerunFailed = process.argv.includes('--rerun-failed');
+  const capturePm2Logs = process.argv.includes('--pm2-logs');
 
   if (!token) throw new Error('Missing DISCORD_TEST_BOT_TOKEN');
   if (!guildId) throw new Error('Missing DISCORD_GUILD_ID');
@@ -3027,6 +3139,8 @@ async function run(): Promise<void> {
   console.log(`Post-success reset+announce: ${runPostSuccessAction ? 'enabled' : 'disabled'}`);
   if (agentFilter) console.log(`Filter                : --agent=${agentFilter}`);
   if (testsFilter) console.log(`Filter                : --tests=${testsFilter}`);
+  if (rerunFailed) console.log(`Rerun failed          : enabled`);
+  if (capturePm2Logs) console.log(`PM2 log capture       : enabled`);
   if (freeformPrompt) console.log(`Freeform prompt       : ${freeformPrompt.slice(0, 80)}${freeformPrompt.length > 80 ? '...' : ''}`);
 
   if (budgetBoostAmount > 0) {
@@ -3103,7 +3217,7 @@ async function run(): Promise<void> {
     ? AGENT_CAPABILITY_TESTS.filter((test) => READINESS_TEST_KEYS.has(testKey(test)))
     : AGENT_CAPABILITY_TESTS;
 
-  const testsToRun = agentFilter
+  let testsToRun = agentFilter
     ? profileTests.filter(
         (t) => t.id === agentFilter
           || resolveAgentId(agentFilter || '') === t.id
@@ -3115,6 +3229,17 @@ async function run(): Promise<void> {
         return caps.some((c) => t.capability.toLowerCase() === c || testKey(t).toLowerCase().includes(c));
       })
     : profileTests;
+
+  // ── --rerun-failed: read the most recent smoke report, filter to only failed tests ──
+  if (rerunFailed) {
+    const failedKeys = getFailedKeysFromLastReport();
+    if (failedKeys.size === 0) {
+      console.log('⚠ --rerun-failed: no previous failures found (or no smoke report exists). Running all tests.');
+    } else {
+      testsToRun = testsToRun.filter((t) => failedKeys.has(testKey(t)));
+      console.log(`🔄 --rerun-failed: ${failedKeys.size} failures found → running ${testsToRun.length} matching tests`);
+    }
+  }
 
   if (testsToRun.length === 0) {
     await client.destroy();
@@ -3335,6 +3460,21 @@ async function run(): Promise<void> {
     for (const [cat, count] of [...failedByCategory.entries()].sort((a, b) => b[1] - a[1])) {
       console.log(`  ${cat}: ${count}`);
     }
+
+    // Print fix suggestions for failed tests
+    console.log('\n📋 Fix Suggestions:');
+    for (const r of results.filter((r) => !r.passed)) {
+      console.log(`  ${r.agent}/${r.capability}: ${suggestFix(r)}`);
+    }
+  }
+
+  // ── Capture PM2 logs from bot VM if requested ──
+  let pm2LogOutput: string | undefined;
+  if (capturePm2Logs) {
+    console.log('\n📦 Capturing PM2 logs from bot VM...');
+    pm2LogOutput = await capturePm2LogsFromVM(startedAt);
+    const lineCount = pm2LogOutput.split('\n').length;
+    console.log(`  Captured ${lineCount} lines of PM2 logs`);
   }
 
   const endedAt = new Date().toISOString();
@@ -3362,7 +3502,10 @@ async function run(): Promise<void> {
       capabilityAttempts,
       runPostSuccessAction,
       agentFilter: agentFilter || null,
+      rerunFailed,
+      capturePm2Logs,
     },
+    pm2Logs: pm2LogOutput,
   });
 
   console.log(`Report JSON: ${reportPaths.jsonPath}`);
