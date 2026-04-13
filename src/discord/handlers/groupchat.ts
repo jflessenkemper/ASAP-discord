@@ -1756,6 +1756,20 @@ async function handleRileyMessage(
       const evidenceSince = Math.max(Date.now() - 2 * 60 * 60 * 1000, goalState.startedAt - 60_000);
       completionVerified = await hasRecentRuntimeVerificationEvidence(groupchat, workspaceChannel, evidenceSince);
       if (!completionVerified) {
+        // Auto-trigger web harness capture before blocking on missing evidence
+        const appUrl = process.env.FRONTEND_URL || 'https://asap-489910.australia-southeast1.run.app';
+        try {
+          await captureAndPostScreenshots(appUrl, `auto-verify ${(goalState.goal || 'completion').slice(0, 40)}`, {
+            targetChannel: workspaceChannel as TextChannel,
+            clearTargetChannel: false,
+          });
+          // Re-check — screenshots were just posted
+          completionVerified = await hasRecentRuntimeVerificationEvidence(groupchat, workspaceChannel, evidenceSince);
+        } catch (err) {
+          console.warn('Auto-harness capture failed:', err instanceof Error ? err.message : 'Unknown');
+        }
+      }
+      if (!completionVerified) {
         // Append a verification note instead of overwriting the entire response.
         // The original content has useful context that should not be lost.
         displayResponse += '\n\n⏳ **Verification pending**: completion cannot be confirmed yet — no runtime evidence in screenshots/harness output. Keeping this open until proof is posted.';
@@ -2114,9 +2128,23 @@ async function executeActions(
           const goalNeedsEvidence = goalNeedsRuntimeVerification(goalState.goal || '');
           if (goalNeedsEvidence) {
             const evidenceSince = Math.max(Date.now() - 2 * 60 * 60 * 1000, goalState.startedAt - 60_000);
-            const hasEvidence = await hasRecentRuntimeVerificationEvidence(groupchat, workspaceChannel, evidenceSince);
+            let hasEvidence = await hasRecentRuntimeVerificationEvidence(groupchat, workspaceChannel, evidenceSince);
             if (!hasEvidence) {
-              await sendAsRiley('🛑 Cannot close this thread yet. Runtime verification evidence is missing. Please provide checkable proof via screenshots or mobile harness/puppeteer output before closing.');
+              // Auto-trigger web harness before refusing to close
+              const appUrl = process.env.FRONTEND_URL || 'https://asap-489910.australia-southeast1.run.app';
+              try {
+                await sendAsRiley('📸 Auto-capturing web harness verification before closing...');
+                await captureAndPostScreenshots(appUrl, `close-verify ${(goalState.goal || '').slice(0, 40)}`, {
+                  targetChannel: workspaceChannel as TextChannel,
+                  clearTargetChannel: false,
+                });
+                hasEvidence = await hasRecentRuntimeVerificationEvidence(groupchat, workspaceChannel, evidenceSince);
+              } catch (err) {
+                console.warn('Auto-harness on close failed:', err instanceof Error ? err.message : 'Unknown');
+              }
+            }
+            if (!hasEvidence) {
+              await sendAsRiley('🛑 Cannot close this thread yet. Runtime verification evidence is missing. Web harness capture was attempted but may have failed — check the app URL is reachable.');
               break;
             }
           }
@@ -2813,8 +2841,27 @@ async function handleAgentChain(
   }
 
   if (!signal?.aborted && needsRuntimeEvidence) {
+    // Auto-capture web harness screenshots when Ace made file changes,
+    // so verification evidence is produced without manual intervention.
     const evidenceSince = Math.max(Date.now() - 2 * 60 * 60 * 1000, goalState.startedAt - 60_000);
-    const hasEvidence = await hasRecentRuntimeVerificationEvidence(groupchat, workspaceChannel, evidenceSince);
+    let hasEvidence = await hasRecentRuntimeVerificationEvidence(groupchat, workspaceChannel, evidenceSince);
+    if (!hasEvidence) {
+      const appUrl = process.env.FRONTEND_URL || 'https://asap-489910.australia-southeast1.run.app';
+      try {
+        const riley = getAgent('executive-assistant' as AgentId);
+        if (riley) {
+          await sendAgentMessage(workspaceChannel, riley, '📸 Auto-capturing web harness verification screenshots...');
+        }
+        await captureAndPostScreenshots(appUrl, `auto-verify ${goalState.goal?.slice(0, 40) || 'goal'}`, {
+          targetChannel: workspaceChannel as TextChannel,
+          clearTargetChannel: false,
+        });
+        // Re-check after capture — screenshots were posted to workspaceChannel
+        hasEvidence = await hasRecentRuntimeVerificationEvidence(groupchat, workspaceChannel, evidenceSince);
+      } catch (err) {
+        console.warn('Auto-harness capture failed:', err instanceof Error ? err.message : 'Unknown');
+      }
+    }
     if (!hasEvidence) {
       consolidatedErrors.push('Required runtime verification evidence is missing (screenshots or mobile harness/puppeteer output).');
       const riley = getAgent('executive-assistant' as AgentId);

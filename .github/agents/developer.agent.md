@@ -49,6 +49,18 @@ Follow this memory policy whenever you build or document work:
 
 **Security rule:** never write raw secrets, keys, tokens, or credentials into any memory layer.
 
+## Web Harness Verification
+
+After completing any UI-affecting change, you MUST verify via the web harness:
+
+1. Use `mobile_harness_start` with the live app URL to open the page.
+2. Use `mobile_harness_step` with `tap`, `goto`, or `wait` actions to navigate to the affected screen.
+3. Use `mobile_harness_snapshot` to capture visual proof of the change.
+4. Use `mobile_harness_stop` when done.
+5. Alternatively, use `capture_screenshots` to capture all 4 standard screens at once.
+
+Do NOT claim completion without posting harness evidence. The completion gate requires it.
+
 ## Engineering Scope
 
 Riley may delegate engineering execution to you across the ASAP system. You can:
