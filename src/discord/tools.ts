@@ -52,6 +52,9 @@ import {
 } from '../services/jobSearch';
 import { jobScoreColor, SYSTEM_COLORS, BUTTON_IDS } from './ui/constants';
 import { errMsg } from '../utils/errors';
+import { gcpExec, gcpDeploy, gcpBuildImage, gcpPreflight, gcpSetEnv, gcpGetEnv, gcpListRevisions, gcpRollback, gcpSecretSet, gcpSecretBind, gcpSecretList, gcpBuildStatus, gcpLogsQuery, gcpRunDescribe, gcpStorageLs, gcpArtifactList, gcpSqlDescribe, gcpVmSsh, gcpProjectInfo } from './toolsGcp';
+import { DDL_PATTERN, sanitizeSql, isReadOnlySql, dbQuery, dbQueryReadonly, dbSchema } from './toolsDb';
+import { getCircuitBreakerForTool } from './circuitBreaker';
 
 
 let discordGuild: Guild | null = null;
@@ -131,12 +134,10 @@ const TOOL_RESULT_CACHE_TTL_MS = Math.max(1_000, Number(process.env.TOOL_RESULT_
 const TOOL_RESULT_CACHE_MAX_ENTRIES = Math.max(200, Number(process.env.TOOL_RESULT_CACHE_MAX_ENTRIES || '2000'));
 const HOT_SEARCH_INDEX_TTL_MS = Math.max(5_000, Number(process.env.HOT_SEARCH_INDEX_TTL_MS || '120000'));
 const HOT_SEARCH_INDEX_MAX_CHUNKS = Math.max(200, Number(process.env.HOT_SEARCH_INDEX_MAX_CHUNKS || '5000'));
-const DB_SCHEMA_CACHE_TTL_MS = Math.max(30_000, Number(process.env.DB_SCHEMA_CACHE_TTL_MS || '300000'));
 
 type ToolCacheEntry = { result: string; expiresAt: number };
 const toolResultCache = new Map<string, ToolCacheEntry>();
 const toolInFlight = new Map<string, Promise<string>>();
-const dbSchemaCache = new Map<string, ToolCacheEntry>();
 
 type HotSearchChunk = { path: string; text: string; textLower: string; tokens: Set<string> };
 let hotSearchIndexBuiltAt = 0;
@@ -1539,6 +1540,12 @@ type PromptTool = {
   input_schema: any;
 };
 
+/**
+ * Tool input as parsed from the AI model's JSON.
+ * Values are typically strings, but can be objects/arrays for tools like batch_edit.
+ */
+export type ToolInput = Record<string, any>;
+
 function compactSchemaNode(node: any): any {
   if (Array.isArray(node)) return node.map((item) => compactSchemaNode(item));
   if (!node || typeof node !== 'object') return node;
@@ -1612,7 +1619,7 @@ export function agentCanUseTool(agentId: string, toolName: string): boolean {
 
 export async function executeTool(
   toolName: string,
-  input: Record<string, string>,
+  input: ToolInput,
   context?: { agentId?: string; threadKey?: string }
 ): Promise<string> {
   const scope = context?.threadKey || context?.agentId || 'global';
@@ -1621,6 +1628,12 @@ export async function executeTool(
 
   if (context?.agentId && !agentCanUseTool(context.agentId, toolName)) {
     return `Error: Tool "${toolName}" is not allowed for agent "${context.agentId}".`;
+  }
+
+  // Circuit breaker check — short-circuit if service is persistently failing
+  const breaker = getCircuitBreakerForTool(toolName);
+  if (breaker && !breaker.isAvailable()) {
+    return `Error: Service for "${toolName}" is temporarily unavailable (circuit breaker open). Will auto-recover after cooldown.`;
   }
 
   if (cacheable) {
@@ -1649,9 +1662,18 @@ export async function executeTool(
   try {
     let result = await runPromise;
     // One automatic retry for transient tool failures (network errors, timeouts)
-    if (RETRYABLE_TOOLS.has(toolName) && /^Error:.*(?:ECONNREFUSED|ETIMEDOUT|ENOTFOUND|timeout|socket hang up|503|502|500)/i.test(String(result || ''))) {
+    const isTransientError = RETRYABLE_TOOLS.has(toolName) && /^Error:.*(?:ECONNREFUSED|ETIMEDOUT|ENOTFOUND|timeout|socket hang up|503|502|500)/i.test(String(result || ''));
+    if (isTransientError) {
       console.warn(`[tool-retry] ${toolName} transient failure, retrying once...`);
       result = await executeToolInternal(toolName, input, context);
+    }
+    // Track success/failure in circuit breaker
+    if (breaker) {
+      if (/^Error:/i.test(String(result || '').trim())) {
+        breaker.recordFailure();
+      } else {
+        breaker.recordSuccess();
+      }
     }
     if (cacheable && !/^Error:/i.test(String(result || '').trim())) {
       setCachedToolResult(key, result);
@@ -1683,7 +1705,7 @@ async function withGitHubTimeout(promise: Promise<string>, toolName: string): Pr
 
 async function executeToolInternal(
   toolName: string,
-  input: Record<string, string>,
+  input: ToolInput,
   context?: { agentId?: string; threadKey?: string }
 ): Promise<string> {
   try {
@@ -1919,12 +1941,12 @@ async function executeToolInternal(
   }
 }
 
-function normalizeToolInput(input: Record<string, string>): string {
+function normalizeToolInput(input: ToolInput): string {
   const entries = Object.entries(input || {}).sort(([a], [b]) => a.localeCompare(b));
   return JSON.stringify(entries);
 }
 
-function buildToolCacheKey(scope: string, toolName: string, input: Record<string, string>): string {
+function buildToolCacheKey(scope: string, toolName: string, input: ToolInput): string {
   const raw = `${scope}::${toolName}::${normalizeToolInput(input)}`;
   return createHash('sha1').update(raw).digest('hex');
 }
@@ -3127,345 +3149,7 @@ function runTypecheck(target: 'client' | 'server' | 'both'): string {
 }
 
 
-const GCP_PROJECT =
-  process.env.GOOGLE_CLOUD_PROJECT ||
-  process.env.GCLOUD_PROJECT ||
-  process.env.GCS_PROJECT_ID ||
-  'asap-489910';
-const GCP_REGION = process.env.CLOUD_RUN_REGION || 'australia-southeast1';
-const GCP_SERVICE = process.env.CLOUD_RUN_SERVICE || 'asap';
-const GCP_TIMEOUT = 120_000;
-
-function gcpExec(cmd: string): string {
-  try {
-    return execSync(cmd, {
-      cwd: REPO_ROOT,
-      timeout: GCP_TIMEOUT,
-      maxBuffer: 1024 * 1024,
-      encoding: 'utf-8',
-      env: { ...process.env },
-      shell: '/bin/sh',
-    }).trim();
-  } catch (err: unknown) {
-    const e = err as { stdout?: string; stderr?: string; message?: string };
-    throw new Error((e.stderr || e.stdout || e.message || 'Command failed').trim().slice(0, 2000));
-  }
-}
-
-async function gcpDeploy(tag?: string): Promise<string> {
-  const built = await gcpBuildImage(tag);
-  if (!built.startsWith('✅')) return built;
-  const imageMatch = built.match(/Image:\s*(\S+)/);
-  const imageRef = imageMatch?.[1];
-  if (!imageRef) return `❌ Deploy failed: built image reference was not returned.`;
-
-  try {
-    gcpExec(
-      `gcloud run deploy ${GCP_SERVICE} --image=${imageRef} --project=${GCP_PROJECT} --region=${GCP_REGION} --platform=managed --quiet`
-    );
-    const status = gcpExec(
-      `gcloud run services describe ${GCP_SERVICE} --region=${GCP_REGION} --project=${GCP_PROJECT} --format="yaml(status.url,status.latestReadyRevisionName,status.traffic)"`
-    );
-    return `✅ Deployed ${imageRef} to Cloud Run service ${GCP_SERVICE}.\n\n${status}`;
-  } catch (err) {
-    return `❌ Deploy failed after image build (${imageRef}): ${errMsg(err)}`;
-  }
-}
-
-async function gcpBuildImage(tag?: string): Promise<string> {
-  const nowTag = new Date().toISOString().replace(/[^0-9]/g, '').slice(0, 14);
-  const safeTag = tag ? tag.replace(/[^a-zA-Z0-9_.-]/g, '').slice(0, 50) : `agent-${nowTag}`;
-  const imageRef = `gcr.io/${GCP_PROJECT}/${GCP_SERVICE}:${safeTag}`;
-
-  try {
-    const result = gcpExec(
-      `gcloud builds submit --project=${GCP_PROJECT} --region=${GCP_REGION} --tag=${imageRef} --timeout=600`
-    );
-    return `✅ Built and pushed image.\nImage: ${imageRef}\n\n${result.slice(-1000)}`;
-  } catch (err) {
-    return `❌ Image build failed: ${errMsg(err)}`;
-  }
-}
-
-async function gcpPreflight(): Promise<string> {
-  const checks: Array<{ name: string; ok: boolean; detail: string }> = [];
-
-  const runCheck = (name: string, cmd: string, required = true) => {
-    try {
-      const out = gcpExec(cmd);
-      checks.push({ name, ok: true, detail: out.split('\n')[0] || 'ok' });
-    } catch (err) {
-      const detail = err instanceof Error ? err.message.split('\n')[0] : 'Unknown error';
-      checks.push({ name, ok: !required, detail: required ? detail : `Optional check failed: ${detail}` });
-    }
-  };
-
-  runCheck('gcloud available', 'gcloud --version');
-  runCheck('active project', 'gcloud config get-value project');
-  runCheck('authenticated account', 'gcloud auth list --filter=status:ACTIVE --format="value(account)"');
-  runCheck('Cloud Run API', `gcloud services list --enabled --project=${GCP_PROJECT} --filter="name:run.googleapis.com" --format="value(name)"`);
-  runCheck('Cloud Build API', `gcloud services list --enabled --project=${GCP_PROJECT} --filter="name:cloudbuild.googleapis.com" --format="value(name)"`);
-  runCheck('Secret Manager API', `gcloud services list --enabled --project=${GCP_PROJECT} --filter="name:secretmanager.googleapis.com" --format="value(name)"`);
-  runCheck('Cloud Run service', `gcloud run services describe ${GCP_SERVICE} --project=${GCP_PROJECT} --region=${GCP_REGION} --format="value(status.url)"`);
-
-  const failed = checks.filter((c) => !c.ok);
-  const lines = checks.map((c) => `${c.ok ? '✅' : '❌'} ${c.name}: ${c.detail || 'ok'}`);
-  lines.unshift(`Project: ${GCP_PROJECT} | Region: ${GCP_REGION} | Service: ${GCP_SERVICE}`);
-  lines.unshift(failed.length === 0 ? '✅ GCP preflight passed.' : `❌ GCP preflight failed (${failed.length} check${failed.length === 1 ? '' : 's'}).`);
-  return lines.join('\n');
-}
-
-async function gcpSetEnv(variables: string): Promise<string> {
-  const safeVars = variables
-    .split(',')
-    .map(v => v.trim())
-    .filter(v => /^[A-Z_][A-Z0-9_]*=.+$/.test(v))
-    .join(',');
-  if (!safeVars) return 'Invalid format. Use KEY=VALUE pairs separated by commas.';
-
-  try {
-    execFileSync('gcloud', [
-      'run', 'services', 'update', GCP_SERVICE,
-      `--project=${GCP_PROJECT}`,
-      `--region=${GCP_REGION}`,
-      `--update-env-vars=${safeVars}`,
-    ], {
-      cwd: REPO_ROOT,
-      timeout: GCP_TIMEOUT,
-      maxBuffer: 1024 * 1024,
-      encoding: 'utf-8',
-      env: { ...process.env },
-    }).trim();
-    return `✅ Environment variables updated: ${safeVars.replace(/=.*/g, '=***').split(',').join(', ')}`;
-  } catch (err) {
-    return `❌ Failed to update env vars: ${errMsg(err)}`;
-  }
-}
-
-async function gcpGetEnv(): Promise<string> {
-  try {
-    const result = gcpExec(
-      `gcloud run services describe ${GCP_SERVICE} --project=${GCP_PROJECT} --region=${GCP_REGION} --format="yaml(spec.template.spec.containers[0].env)"`
-    );
-    return result || 'No environment variables set.';
-  } catch (err) {
-    return `❌ Failed to get env vars: ${errMsg(err)}`;
-  }
-}
-
-async function gcpListRevisions(limit: number): Promise<string> {
-  const safeLimit = Math.min(Math.max(limit, 1), 50);
-  try {
-    const result = gcpExec(
-      `gcloud run revisions list --service=${GCP_SERVICE} --project=${GCP_PROJECT} --region=${GCP_REGION} --limit=${safeLimit} --format="table(name,active,creationTimestamp.date(),status.conditions[0].type)"`
-    );
-    return result || 'No revisions found.';
-  } catch (err) {
-    return `❌ Failed to list revisions: ${errMsg(err)}`;
-  }
-}
-
-async function gcpRollback(revision: string): Promise<string> {
-  const safeRevision = revision.replace(/[^a-zA-Z0-9_.-]/g, '').slice(0, 100);
-  if (!safeRevision) return 'Invalid revision name.';
-
-  try {
-    gcpExec(
-      `gcloud run services update-traffic ${GCP_SERVICE} --project=${GCP_PROJECT} --region=${GCP_REGION} --to-revisions=${safeRevision}=100`
-    );
-    return `✅ Rolled back to revision: ${safeRevision}`;
-  } catch (err) {
-    return `❌ Rollback failed: ${errMsg(err)}`;
-  }
-}
-
-async function gcpSecretSet(name: string, value: string): Promise<string> {
-  const safeName = name.replace(/[^A-Z0-9_-]/gi, '').slice(0, 100);
-  if (!safeName) return 'Invalid secret name. Use alphanumeric characters, hyphens, and underscores.';
-
-  try {
-    let exists = false;
-    try {
-      gcpExec(`gcloud secrets describe ${safeName} --project=${GCP_PROJECT}`);
-      exists = true;
-    } catch { /* doesn't exist */ }
-
-    const args = exists
-      ? ['secrets', 'versions', 'add', safeName, `--project=${GCP_PROJECT}`, '--data-file=-']
-      : ['secrets', 'create', safeName, `--project=${GCP_PROJECT}`, '--data-file=-'];
-
-    execFileSync('gcloud', args, {
-      cwd: REPO_ROOT,
-      timeout: GCP_TIMEOUT,
-      encoding: 'utf-8',
-      input: value,
-    });
-
-    return `✅ Secret "${safeName}" set successfully in Secret Manager. Bind it to Cloud Run with gcp_secret_bind if the app should consume it.`;
-  } catch (err) {
-    return `❌ Failed to set secret: ${errMsg(err)}`;
-  }
-}
-
-async function gcpSecretBind(bindings: string): Promise<string> {
-  const normalized = bindings
-    .split(',')
-    .map((item) => item.trim())
-    .filter(Boolean);
-
-  if (normalized.length === 0) {
-    return '❌ Invalid bindings. Use comma-separated ENV_VAR=SECRET_NAME[:VERSION] pairs.';
-  }
-
-  const parsed: string[] = [];
-  for (const item of normalized) {
-    const match = item.match(/^([A-Z_][A-Z0-9_]*)=([A-Za-z0-9_-]+)(?::([A-Za-z0-9._-]+))?$/);
-    if (!match) {
-      return `❌ Invalid binding "${item}". Expected ENV_VAR=SECRET_NAME[:VERSION].`;
-    }
-    const [, envVar, secretName, version] = match;
-    parsed.push(`${envVar}=${secretName}:${version || 'latest'}`);
-  }
-
-  try {
-    gcpExec(
-      `gcloud run services update ${GCP_SERVICE} --project=${GCP_PROJECT} --region=${GCP_REGION} --update-secrets=${parsed.join(',')}`
-    );
-    return `✅ Bound ${parsed.length} secret mapping${parsed.length === 1 ? '' : 's'} to Cloud Run service ${GCP_SERVICE}: ${parsed.join(', ')}`;
-  } catch (err) {
-    return `❌ Failed to bind secrets: ${errMsg(err)}`;
-  }
-}
-
-async function gcpSecretList(): Promise<string> {
-  try {
-    const result = gcpExec(
-      `gcloud secrets list --project=${GCP_PROJECT} --format="table(name,createTime.date(),replication.automatic)"`
-    );
-    return result || 'No secrets found.';
-  } catch (err) {
-    return `❌ Failed to list secrets: ${errMsg(err)}`;
-  }
-}
-
-async function gcpBuildStatus(limit: number): Promise<string> {
-  const safeLimit = Math.min(Math.max(limit, 1), 20);
-  try {
-    const result = gcpExec(
-      `gcloud builds list --project=${GCP_PROJECT} --region=${GCP_REGION} --limit=${safeLimit} --format="table(id.slice(0:8),status,createTime.date(),duration,source.storageSource.bucket)"`
-    );
-    return result || 'No builds found.';
-  } catch (err) {
-    return `❌ Failed to get build status: ${errMsg(err)}`;
-  }
-}
-
-const GCP_SQL_INSTANCE = 'asap-db';
-const GCP_BOT_VM = 'asap-bot-vm';
-const GCP_BOT_ZONE = 'australia-southeast1-c';
-
-/** Safe command prefixes allowed to run on the GCE VM via gcp_vm_ssh */
-const VM_ALLOWED_PREFIXES = [
-  'pm2 status', 'pm2 restart', 'pm2 logs', 'pm2 list',
-  'git pull', 'git log', 'git status', 'git rev-parse', 'git fetch',
-  'npm run build', 'npm ci', 'npm install',
-  'node --version',
-  'df -h', 'free -h', 'uptime', 'cat /proc/loadavg',
-];
-
-async function gcpLogsQuery(filter: string, limit: number): Promise<string> {
-  const safeLimit = Math.min(Math.max(limit || 50, 1), 200);
-  if (/[`$\\]/.test(filter)) return '❌ Invalid characters in filter expression.';
-  try {
-    const result = gcpExec(
-      `gcloud logging read "${filter.replace(/"/g, '\\"')}" --project=${GCP_PROJECT} --limit=${safeLimit} --format="table(timestamp.date(),resource.type,severity,textPayload.slice(0:120))"`
-    );
-    return result || 'No log entries matched.';
-  } catch (err) {
-    return `❌ Failed to query logs: ${errMsg(err)}`;
-  }
-}
-
-async function gcpRunDescribe(): Promise<string> {
-  try {
-    const result = gcpExec(
-      `gcloud run services describe ${GCP_SERVICE} --region=${GCP_REGION} --project=${GCP_PROJECT} --format="yaml(status.url,status.conditions,status.traffic,spec.template.metadata.name,spec.template.spec.containers[0].resources)"`
-    );
-    return result || 'No service info returned.';
-  } catch (err) {
-    return `❌ Failed to describe Cloud Run service: ${errMsg(err)}`;
-  }
-}
-
-async function gcpStorageLs(bucket: string, prefix?: string): Promise<string> {
-  if (!/^[a-z0-9][a-z0-9._-]{1,61}[a-z0-9]$/i.test(bucket)) return '❌ Invalid bucket name.';
-  if (prefix && !/^[a-zA-Z0-9_./-]+$/.test(prefix)) return '❌ Invalid prefix.';
-  const path = prefix ? `gs://${bucket}/${prefix}` : `gs://${bucket}/`;
-  try {
-    const result = gcpExec(`gcloud storage ls "${path}"`);
-    return result || 'Empty bucket or prefix.';
-  } catch (err) {
-    return `❌ Failed to list bucket: ${errMsg(err)}`;
-  }
-}
-
-async function gcpArtifactList(limit: number): Promise<string> {
-  const safeLimit = Math.min(Math.max(limit || 20, 1), 100);
-  try {
-    const result = gcpExec(
-      `gcloud artifacts docker images list ${GCP_REGION}-docker.pkg.dev/${GCP_PROJECT}/asap --include-tags --limit=${safeLimit} --sort-by="~create_time" --format="table(package.basename(),tags,create_time.date())"`
-    );
-    return result || 'No images found.';
-  } catch (err) {
-    return `❌ Failed to list artifacts: ${errMsg(err)}`;
-  }
-}
-
-async function gcpSqlDescribe(): Promise<string> {
-  try {
-    const result = gcpExec(
-      `gcloud sql instances describe ${GCP_SQL_INSTANCE} --project=${GCP_PROJECT} --format="table(name,state,databaseVersion,settings.tier,ipAddresses[0].ipAddress,connectionName)"`
-    );
-    return result || 'No SQL instance info returned.';
-  } catch (err) {
-    return `❌ Failed to describe Cloud SQL: ${errMsg(err)}`;
-  }
-}
-
-async function gcpVmSsh(command: string): Promise<string> {
-  const trimmed = command.trim();
-  const allowed = VM_ALLOWED_PREFIXES.some((prefix) => trimmed.startsWith(prefix));
-  if (!allowed) {
-    return `❌ Command not in VM allowlist. Allowed: pm2 status/restart/logs/list, git pull/log/status/rev-parse/fetch, npm run build/ci/install, node --version, df -h, free -h, uptime.`;
-  }
-  if (/[;&|`$<>()\n\\]/.test(trimmed)) {
-    return '❌ Command contains disallowed characters.';
-  }
-  try {
-    const escaped = trimmed.replace(/"/g, '\\"');
-    const result = gcpExec(
-      `gcloud compute ssh ${GCP_BOT_VM} --zone=${GCP_BOT_ZONE} --project=${GCP_PROJECT} --quiet --command="${escaped}"`
-    );
-    return result || '(no output)';
-  } catch (err) {
-    return `❌ SSH command failed: ${errMsg(err)}`;
-  }
-}
-
-async function gcpProjectInfo(): Promise<string> {
-  try {
-    const info = gcpExec(
-      `gcloud projects describe ${GCP_PROJECT} --format="yaml(name,projectId,projectNumber,lifecycleState)"`
-    );
-    const apis = gcpExec(
-      `gcloud services list --enabled --project=${GCP_PROJECT} --format="table(name,title)" --limit=60`
-    );
-    return `## Project\n${info}\n\n## Enabled APIs\n${apis}`;
-  } catch (err) {
-    return `❌ Failed to get project info: ${errMsg(err)}`;
-  }
-}
-
+// GCP operations → ./toolsGcp.ts
 
 function fetchUrl(url: string, method?: string, headersStr?: string, body?: string): Promise<string> {
   const MAX_REDIRECTS = 5;
@@ -4265,133 +3949,11 @@ async function repoMemoryAddOss(title: string, content: string, tagsRaw?: string
 }
 
 
-const DDL_PATTERN = /\b(drop|truncate|alter|create|grant|revoke|vacuum|reindex)\b/i;
+// DB operations → ./toolsDb.ts
 
-async function dbQuery(query: string, paramsStr?: string): Promise<string> {
-  try {
-    const cleaned = sanitizeSql(query);
-    if (DDL_PATTERN.test(cleaned)) {
-      return 'Blocked: db_query does not allow DDL/admin statements (DROP, TRUNCATE, ALTER, CREATE, GRANT, REVOKE, VACUUM, REINDEX). Use SELECT, INSERT, UPDATE, or DELETE only.';
-    }
-    const pool = (await import('../db/pool')).default;
-    let params: any[] = [];
-    if (paramsStr) {
-      try { params = JSON.parse(paramsStr); } catch { return 'Error: params must be a valid JSON array'; }
-    }
-
-    const result = await pool.query(query, params);
-
-    if (result.command === 'SELECT' || result.rows?.length > 0) {
-      const rows = result.rows || [];
-      if (rows.length === 0) return 'Query returned 0 rows.';
-
-      const cols = Object.keys(rows[0]);
-      const header = cols.join(' | ');
-      const separator = cols.map(() => '---').join(' | ');
-      const body = rows.slice(0, 100).map((row: Record<string, any>) =>
-        cols.map((c) => {
-          const val = row[c];
-          if (val === null) return 'NULL';
-          if (typeof val === 'object') return JSON.stringify(val).slice(0, 100);
-          return String(val).slice(0, 100);
-        }).join(' | ')
-      ).join('\n');
-
-      const output = `${header}\n${separator}\n${body}`;
-      const extra = rows.length > 100 ? `\n\n... and ${rows.length - 100} more rows` : '';
-      return `${rows.length} row(s) returned:\n\n${output}${extra}`;
-    }
-
-    return `Query executed: ${result.command} — ${result.rowCount ?? 0} row(s) affected.`;
-  } catch (err) {
-    return `SQL Error: ${errMsg(err)}`;
-  }
-}
-
-function sanitizeSql(sql: string): string {
-  return sql
-    .replace(/--.*$/gm, '')
-    .replace(/\/\*[\s\S]*?\*\//g, '')
-    .trim();
-}
-
-function isReadOnlySql(sql: string): boolean {
-  const cleaned = sanitizeSql(sql).replace(/;\s*$/, '').trim().toLowerCase();
-  if (!cleaned) return false;
-
-  if (cleaned.includes(';')) return false;
-
-  if (/^(select|with|explain|show)\b/.test(cleaned)) {
-    if (/\b(insert|update|delete|alter|drop|create|truncate|grant|revoke|comment|vacuum|analyze|refresh|reindex|call|do|copy)\b/.test(cleaned)) {
-      return false;
-    }
-    return true;
-  }
-  return false;
-}
-
-async function dbQueryReadonly(query: string, paramsStr?: string): Promise<string> {
-  if (!isReadOnlySql(query)) {
-    return 'Blocked: db_query_readonly only allows single-statement SELECT/WITH/EXPLAIN/SHOW queries with no write/mutation keywords.';
-  }
-  return dbQuery(query, paramsStr);
-}
-
-async function dbSchema(table?: string): Promise<string> {
-  try {
-    const cacheKey = String(table || '__all__').toLowerCase();
-    const cached = dbSchemaCache.get(cacheKey);
-    if (cached && cached.expiresAt > Date.now()) {
-      return `${cached.result}\n\n(cache: hit)`;
-    }
-
-    const pool = (await import('../db/pool')).default;
-
-    if (table) {
-      const safeTable = table.replace(/[^a-zA-Z0-9_]/g, '');
-      const { rows } = await pool.query(
-        `SELECT column_name, data_type, is_nullable, column_default
-         FROM information_schema.columns
-         WHERE table_schema = 'public' AND table_name = $1
-         ORDER BY ordinal_position`, [safeTable]
-      );
-      if (rows.length === 0) return `Table "${safeTable}" not found.`;
-
-      const { rows: constraints } = await pool.query(
-        `SELECT tc.constraint_type, kcu.column_name, ccu.table_name AS references_table, ccu.column_name AS references_column
-         FROM information_schema.table_constraints tc
-         JOIN information_schema.key_column_usage kcu ON tc.constraint_name = kcu.constraint_name
-         LEFT JOIN information_schema.constraint_column_usage ccu ON tc.constraint_name = ccu.constraint_name AND tc.constraint_type = 'FOREIGN KEY'
-         WHERE tc.table_schema = 'public' AND tc.table_name = $1`, [safeTable]
-      );
-
-      const lines = rows.map((r: any) => {
-        const nullable = r.is_nullable === 'YES' ? ' (nullable)' : '';
-        const def = r.column_default ? ` default=${r.column_default}` : '';
-        const constraint = constraints.find((c: any) => c.column_name === r.column_name);
-        const cstr = constraint ? ` [${constraint.constraint_type}${constraint.references_table ? ` → ${constraint.references_table}.${constraint.references_column}` : ''}]` : '';
-        return `  ${r.column_name}: ${r.data_type}${nullable}${def}${cstr}`;
-      });
-
-      const result = `Table: ${safeTable}\n${lines.join('\n')}`;
-      dbSchemaCache.set(cacheKey, { result, expiresAt: Date.now() + DB_SCHEMA_CACHE_TTL_MS });
-      return result;
-    }
-
-    const { rows } = await pool.query(
-      `SELECT table_name, (SELECT COUNT(*) FROM information_schema.columns c WHERE c.table_name = t.table_name AND c.table_schema = 'public') AS columns
-       FROM information_schema.tables t
-       WHERE table_schema = 'public' AND table_type = 'BASE TABLE'
-       ORDER BY table_name`
-    );
-    if (rows.length === 0) return 'No tables found in public schema.';
-    const result = rows.map((r: any) => `📋 ${r.table_name} (${r.columns} columns)`).join('\n');
-    dbSchemaCache.set(cacheKey, { result, expiresAt: Date.now() + DB_SCHEMA_CACHE_TTL_MS });
-    return result;
-  } catch (err) {
-    return `Schema error: ${errMsg(err)}`;
-  }
-}
+// Re-export security functions for testing + path safety for testing
+export { DDL_PATTERN, sanitizeSql, isReadOnlySql } from './toolsDb';
+export { safePath, BLOCKED_PATHS };
 
 // ── Job search tool handlers ───────────────────────────────────────
 
@@ -4495,7 +4057,7 @@ async function toolJobTracker(action?: string, status?: string, listingId?: numb
   return `Unknown tracker action: ${act}. Use "summary", "list", "update", or "score".`;
 }
 
-async function toolJobProfileUpdate(input: Record<string, string>): Promise<string> {
+async function toolJobProfileUpdate(input: ToolInput): Promise<string> {
   const fields: Record<string, any> = {};
 
   if (input.cv_text) fields.cv_text = input.cv_text;

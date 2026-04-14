@@ -1111,7 +1111,7 @@ export const AGENT_CAPABILITY_TESTS: AgentCapabilityTest[] = [
     id: 'security-auditor',
     category: 'self-improvement',
     capability: 'ddl-blocker-awareness',
-    prompt: 'Use search_files to find DDL_PATTERN in src/discord/tools.ts. Read the db_query function. What SQL statements does the DDL blocker prevent? Why is this important for agents with db_query access?',
+    prompt: 'Use search_files to find DDL_PATTERN in src/discord/toolsDb.ts. Read the dbQuery function. What SQL statements does the DDL blocker prevent? Why is this important for agents with db_query access?',
     expectAll: [/DDL|DROP|TRUNCATE|ALTER|CREATE/i, /block|prevent|reject|denied/i],
     expectToolAudit: ['search_files'],
     timeoutMs: 180_000,
@@ -1214,6 +1214,33 @@ export const AGENT_CAPABILITY_TESTS: AgentCapabilityTest[] = [
   // ══════════════════════════════════════════════════════════════════════
   // ── SELF-IMPROVEMENT & AUTONOMOUS CAPABILITY ──────────────────────────
   // ══════════════════════════════════════════════════════════════════════
+  {
+    id: 'developer',
+    category: 'self-improvement',
+    capability: 'circuit-breaker-awareness',
+    prompt: 'Use read_file to read src/discord/circuitBreaker.ts. Describe: what is the CircuitBreaker class? What are its 3 states? How does the TOOL_SERVICE_MAP group tools into services? What happens when a service accumulates too many failures?',
+    expectAll: [/closed|open|half.?open/i, /fail|threshold|cooldown/i],
+    expectToolAudit: ['read_file'],
+    timeoutMs: 120_000,
+  },
+  {
+    id: 'developer',
+    category: 'self-improvement',
+    capability: 'self-healing-heartbeat-awareness',
+    prompt: 'Use search_files to find "staleHealAttempts" in src/discord/bot.ts. Read the runChannelHeartbeat function. Describe: when a feed is stale, what self-healing actions does the heartbeat take? How does it prevent infinite healing loops?',
+    expectAll: [/heal|recover|restart|refresh/i, /limit|max|cooldown|attempt/i],
+    expectToolAudit: ['search_files'],
+    timeoutMs: 120_000,
+  },
+  {
+    id: 'developer',
+    category: 'self-improvement',
+    capability: 'domain-module-awareness',
+    prompt: 'Use search_files to find "toolsGcp" and "toolsDb" imports in src/discord/tools.ts. Read the import lines. What functions were extracted to toolsGcp.ts? What functions were extracted to toolsDb.ts? Why is this split beneficial?',
+    expectAll: [/gcp|deploy|gcpExec/i, /db|DDL|sanitizeSql|isReadOnlySql/i],
+    expectToolAudit: ['search_files'],
+    timeoutMs: 120_000,
+  },
   {
     id: 'executive-assistant',
     category: 'self-improvement',

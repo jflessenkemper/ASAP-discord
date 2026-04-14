@@ -36,7 +36,7 @@ import { setScreenshotsChannel } from './services/screenshots';
 import { setTelephonyChannels, isTelephonyAvailable, initContacts } from './services/telephony';
 import { setupChannels, BotChannels } from './setup';
 import { setCommandAuditCallback, setPRReviewCallback, setDiscordGuild, setToolAuditCallback, setAgentChannelResolver } from './tools';
-import { setLimitsChannel, setCostChannel, startDashboardUpdates, stopDashboardUpdates, initUsageCounters, flushUsageCounters, getUsageReport, getCostOpsSummaryLine } from './usage';
+import { setLimitsChannel, setCostChannel, startDashboardUpdates, stopDashboardUpdates, initUsageCounters, flushUsageCounters, getUsageReport, getCostOpsSummaryLine, refreshUsageDashboard } from './usage';
 import { updateListingByMsgId, draftApplication, getProfile, getPortalByCompany, submitToGreenhouse, getListingById, updateListingStatus, setListingDiscordMsg, guessCompanyEmail, type JobListing } from '../services/jobSearch';
 import { sendJobApplication } from '../services/email';
 import { SYSTEM_COLORS, BUTTON_IDS, jobScoreColor } from './ui/constants';
@@ -56,6 +56,10 @@ let botChannels: BotChannels | null = null;
 let channelHeartbeatTimer: ReturnType<typeof setInterval> | null = null;
 let upgradesTriageTimer: ReturnType<typeof setInterval> | null = null;
 const staleAlertDedupe = new Map<string, number>();
+/** Tracks recovery attempts per feed to prevent infinite heal loops. */
+const staleHealAttempts = new Map<string, { count: number; lastAttemptAt: number }>();
+const HEAL_MAX_ATTEMPTS = 3;
+const HEAL_COOLDOWN_MS = 15 * 60 * 1000; // 15 min between heal attempts
 const DEFAULT_TESTER_BOT_ID = '1487426371209789450';
 const RUNTIME_INSTANCE_TAG = (process.env.RUNTIME_INSTANCE_TAG || process.env.HOSTNAME || `pid-${process.pid}`).slice(0, 80);
 const nonTesterTriggerNoticeAt = new Map<string, number>();
@@ -102,6 +106,7 @@ async function runChannelHeartbeat(channels: BotChannels): Promise<void> {
   const contracts = getFeedContracts(channels);
   const now = Date.now();
   const parts: string[] = [];
+  const healed: string[] = [];
 
   for (const contract of contracts) {
     const ts = await latestChannelMessageTimestamp(contract.channel);
@@ -118,15 +123,39 @@ async function runChannelHeartbeat(channels: BotChannels): Promise<void> {
           detail: `channel=#${contract.channel.name} cadence=${contract.cadence} age=${ts ? formatAge(age) : 'no-messages'} threshold=${formatAge(contract.staleMs)}`,
         });
       }
+
+      // Self-healing: attempt to restart the feed producer
+      const healState = staleHealAttempts.get(contract.key) || { count: 0, lastAttemptAt: 0 };
+      if (healState.count < HEAL_MAX_ATTEMPTS && now - healState.lastAttemptAt >= HEAL_COOLDOWN_MS) {
+        healState.count++;
+        healState.lastAttemptAt = now;
+        staleHealAttempts.set(contract.key, healState);
+
+        try {
+          if (contract.key === 'limits') {
+            await refreshUsageDashboard();
+            healed.push(`limits(restart-dashboard)`);
+          } else if (contract.key === 'upgrades') {
+            void runUpgradesTriage(channels).catch(() => {});
+            healed.push(`upgrades(trigger-triage)`);
+          }
+        } catch (err) {
+          console.error(`[heartbeat-heal] Failed to heal ${contract.key}:`, errMsg(err));
+        }
+      }
+    } else {
+      // Feed is healthy — reset heal attempts
+      staleHealAttempts.delete(contract.key);
     }
   }
 
+  const healNote = healed.length > 0 ? ` | healed: ${healed.join(', ')}` : '';
   await postOpsLine(channels.threadStatus, {
     actor: 'executive-assistant',
     scope: 'channel-heartbeat',
     metric: `feeds=${contracts.length}`,
-    delta: parts.join(' | '),
-    action: 'none',
+    delta: parts.join(' | ') + healNote,
+    action: healed.length > 0 ? 'heal' : 'none',
     severity: parts.some((p) => p.startsWith('⚠️')) ? 'error' : 'info',
   });
 }
