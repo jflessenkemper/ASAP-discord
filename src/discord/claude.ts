@@ -727,7 +727,7 @@ async function callDirectAnthropicAPI(
     method: 'POST',
     headers: {
       'x-api-key': ANTHROPIC_DIRECT_API_KEY,
-      'anthropic-version': VERTEX_ANTHROPIC_VERSION,
+      'anthropic-version': '2023-06-01',
       'content-type': 'application/json',
     },
     body: JSON.stringify(requestBody),
