@@ -1074,6 +1074,55 @@ export const AGENT_CAPABILITY_TESTS: AgentCapabilityTest[] = [
   },
 
   // ══════════════════════════════════════════════════════════════════════
+  // ── CODE HEALTH & HELPER AWARENESS ────────────────────────────────────
+  // ══════════════════════════════════════════════════════════════════════
+  {
+    id: 'developer',
+    category: 'self-improvement',
+    capability: 'errmsg-helper-awareness',
+    prompt: 'Use read_file to read src/utils/errors.ts. What does errMsg() do? Then use search_files to find one file that imports it. When should a developer use errMsg() instead of writing "err instanceof Error ? err.message : …"?',
+    expectAny: [/errMsg|error.*message|unknown.*error|catch|instanceof/i],
+    expectToolAudit: ['read_file', 'search_files'],
+    timeoutMs: 180_000,
+  },
+  {
+    id: 'developer',
+    category: 'self-improvement',
+    capability: 'memory-helper-awareness',
+    prompt: 'Use read_file to examine the exported functions upsertMemory, appendMemoryRow, and readMemoryRow in src/discord/memory.ts. Explain when to use each one. Why should new code use these helpers instead of raw INSERT INTO agent_memory SQL?',
+    expectAny: [/upsertMemory|appendMemoryRow|readMemoryRow|helper|dedup|single.*source|ON CONFLICT/i],
+    expectToolAudit: ['read_file'],
+    timeoutMs: 180_000,
+  },
+  {
+    id: 'developer',
+    category: 'self-improvement',
+    capability: 'timeline-helper-awareness',
+    prompt: 'Use search_files to find addTimelineEntry in src/routes/jobs.ts. Read the function. What columns does it insert into? When should new job timeline events use this helper instead of writing raw SQL?',
+    expectAny: [/addTimelineEntry|job_timeline|event_type|description|created_by/i],
+    expectToolAudit: ['search_files'],
+    timeoutMs: 180_000,
+  },
+  {
+    id: 'developer',
+    category: 'self-improvement',
+    capability: 'dedup-discipline',
+    prompt: 'Search the codebase for raw "err instanceof Error" occurrences using search_files. How many remain? Are they using the errMsg() helper from src/utils/errors.ts, or are they raw inline checks? If you find raw inline checks, propose how to fix them.',
+    expectAny: [/errMsg|helper|import|src\/utils\/errors|few|remaining|intentional|custom/i],
+    expectToolAudit: ['search_files'],
+    timeoutMs: 180_000,
+  },
+  {
+    id: 'developer',
+    category: 'self-improvement',
+    capability: 'raw-sql-guard',
+    prompt: 'Use search_files to find any raw "INSERT INTO agent_memory" SQL outside of src/discord/memory.ts and src/discord/repoMemoryIndexer.ts. If you find any, they should be migrated to use the upsertMemory/appendMemoryRow helpers. Report what you find.',
+    expectAny: [/upsertMemory|appendMemoryRow|helper|no.*raw|already.*use|migrat|found|clean/i],
+    expectToolAudit: ['search_files'],
+    timeoutMs: 180_000,
+  },
+
+  // ══════════════════════════════════════════════════════════════════════
   // ── SELF-IMPROVEMENT & AUTONOMOUS CAPABILITY ──────────────────────────
   // ══════════════════════════════════════════════════════════════════════
   {

@@ -14,10 +14,11 @@ Quick-reference for navigating the codebase. One `read_file` to find anything.
 
 src/
   index.ts              Express server entrypoint
+  utils/errors.ts       `errMsg(err)` — universal error message extractor. Use instead of `err instanceof Error ? err.message : 'Unknown'`.
   db/                   Database layer (pool, migrations, seeds)
   discord/              Discord bot core (see below)
   middleware/            Express middleware (auth)
-  routes/               REST API routes (auth, jobs, fuel, shop, etc.)
+  routes/               REST API routes (auth, jobs, fuel, shop, etc.). `jobs.ts` has `addTimelineEntry()` helper for job_timeline INSERTs.
   services/             Shared services (billing, email, GitHub, GCP, etc.)
   __tests__/            Jest unit tests
 
@@ -39,7 +40,7 @@ smoke-reports/          Generated smoke test reports (gitignored)
 | `setup.ts` | — | Channel/role/webhook provisioning on startup. |
 | `usage.ts` | — | Token counting, cost estimation, daily budget gates. |
 | `guardrails.ts` | — | Input/output safety classification (regex-based). |
-| `memory.ts` | — | Persistent memory read/write/search via database. |
+| `memory.ts` | — | Persistent memory read/write/search via database. Exports `upsertMemory()`, `appendMemoryRow()`, `readMemoryRow()` CRUD helpers — use these instead of raw SQL. |
 | `modelHealth.ts` | — | Model availability tracking, fallback logic. |
 | `contextCache.ts` | — | Conversation context caching. |
 | `handoff.ts` | — | Agent handoff/continuation logic. |
