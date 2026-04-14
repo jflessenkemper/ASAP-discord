@@ -439,13 +439,26 @@ export const REPO_TOOLS = [
   {
     name: 'smoke_test_agents',
     description:
-      'Run the Discord smoke-test suite through ASAPTester. Use this after important routing or orchestration changes to verify agents still respond correctly end-to-end.',
+      'Run the Discord smoke-test suite through ASAPTester. Supports filtering by agent, capability, profile, or rerunning only previous failures. Use this after important routing or orchestration changes to verify agents still respond correctly end-to-end.',
     input_schema: {
       type: 'object' as const,
       properties: {
         agent: {
           type: 'string',
           description: 'Optional agent filter, e.g. "developer", "qa", or "executive-assistant". Leave empty to run the whole suite.',
+        },
+        tests: {
+          type: 'string',
+          description: 'Optional comma-separated capability filter, e.g. "read-and-summarize,memory-write". Only runs tests matching these capability names.',
+        },
+        profile: {
+          type: 'string',
+          description: 'Optional test profile: "readiness" (18 critical gate tests), "matrix" (full 155-test matrix). Default runs all tests.',
+          enum: ['readiness', 'matrix'],
+        },
+        rerun_failed: {
+          type: 'boolean',
+          description: 'If true, only re-run tests that failed in the most recent smoke report.',
         },
         timeout_ms: {
           type: 'number',
@@ -597,6 +610,29 @@ export const REPO_TOOLS = [
         limit: {
           type: 'string',
           description: 'Optional max messages to delete (default 500, max 2000)',
+        },
+      },
+      required: ['channel_name'],
+    },
+  },
+  {
+    name: 'read_channel_messages',
+    description:
+      'Read recent messages from a Discord channel. Useful for checking agent errors, audit logs, smoke test results, model health, and other operational channels.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        channel_name: {
+          type: 'string',
+          description: 'Channel name to read from (e.g. "agent-errors", "agent-audit", "model-health", "smoke-tests")',
+        },
+        limit: {
+          type: 'number',
+          description: 'Number of recent messages to fetch (default 20, max 100)',
+        },
+        search: {
+          type: 'string',
+          description: 'Optional text filter — only return messages containing this string (case-insensitive)',
         },
       },
       required: ['channel_name'],
@@ -1479,7 +1515,7 @@ const RILEY_TOOL_NAMES = new Set([
   'memory_read', 'memory_write', 'memory_append', 'memory_list',
   'repo_memory_index', 'repo_memory_search', 'repo_memory_add_oss',
   'run_tests', 'typecheck', 'git_file_history', 'smoke_test_agents',
-  'list_threads', 'list_channels', 'send_channel_message', 'clear_channel_messages',
+  'list_threads', 'list_channels', 'send_channel_message', 'clear_channel_messages', 'read_channel_messages',
   'read_logs', 'github_search', 'capture_screenshots',
   'mobile_harness_start', 'mobile_harness_step', 'mobile_harness_snapshot', 'mobile_harness_stop',
   'gcp_preflight', 'gcp_get_env', 'gcp_list_revisions', 'gcp_secret_list', 'gcp_build_status',
@@ -1669,7 +1705,13 @@ async function executeToolInternal(
       case 'git_file_history':
         return gitFileHistory(input.path, parseInt(input.limit, 10) || 10, input.line_range);
       case 'smoke_test_agents':
-        return smokeTestAgents(input.agent, parseInt(input.timeout_ms, 10) || 90_000);
+        return smokeTestAgents({
+          agent: input.agent,
+          tests: input.tests,
+          profile: input.profile,
+          rerunFailed: String(input.rerun_failed) === 'true',
+          timeoutMs: parseInt(input.timeout_ms, 10) || 90_000,
+        });
       case 'list_channels':
         return await discordListChannels();
       case 'list_threads':
@@ -1686,6 +1728,8 @@ async function executeToolInternal(
         return await discordSendMessage(input.channel_name, input.message, undefined, context?.agentId);
       case 'clear_channel_messages':
         return await discordClearChannelMessages(input.channel_name, parseInt(input.limit, 10) || 500);
+      case 'read_channel_messages':
+        return await discordReadChannelMessages(input.channel_name, parseInt(input.limit, 10) || 20, input.search);
       case 'delete_category':
         return await discordDeleteCategory(input.category_name);
       case 'move_channel':
@@ -2533,16 +2577,39 @@ function gitFileHistory(relativePath: string, limit = 10, lineRange?: string): s
   }
 }
 
-function smokeTestAgents(agent?: string, timeoutMs = 90_000): string {
+interface SmokeTestOptions {
+  agent?: string;
+  tests?: string;
+  profile?: string;
+  rerunFailed?: boolean;
+  timeoutMs?: number;
+}
+
+function smokeTestAgents(opts: SmokeTestOptions = {}): string {
   if (!process.env.DISCORD_TEST_BOT_TOKEN || !process.env.DISCORD_GUILD_ID) {
     return 'Smoke-test bot is not configured here. Set DISCORD_TEST_BOT_TOKEN and DISCORD_GUILD_ID to enable end-to-end Discord smoke tests.';
   }
 
-  const safeAgent = String(agent || '').replace(/[^a-z0-9-]/gi, '').trim();
-  const safeTimeout = Math.max(15_000, Math.min(timeoutMs, 180_000));
-  const cmd = safeAgent
-    ? `npm run discord:test:dist -- --agent=${safeAgent}`
+  const safeTimeout = Math.max(15_000, Math.min(opts.timeoutMs || 90_000, 180_000));
+  const args: string[] = [];
+
+  // Agent filter
+  const safeAgent = String(opts.agent || '').replace(/[^a-z0-9-]/gi, '').trim();
+  if (safeAgent) args.push(`--agent=${safeAgent}`);
+
+  // Capability filter
+  const safeTests = String(opts.tests || '').replace(/[^a-z0-9-,]/gi, '').trim();
+  if (safeTests) args.push(`--tests=${safeTests}`);
+
+  // Rerun failed
+  if (opts.rerunFailed) args.push('--rerun-failed');
+
+  const cmd = args.length
+    ? `npm run discord:test:dist -- ${args.join(' ')}`
     : 'npm run discord:test:dist';
+
+  // Profile → set DISCORD_SMOKE_PROFILE env override
+  const profileEnv = opts.profile === 'readiness' ? 'readiness' : '';
 
   try {
     const output = execSync(cmd, {
@@ -2550,7 +2617,12 @@ function smokeTestAgents(agent?: string, timeoutMs = 90_000): string {
       timeout: Math.max(safeTimeout * 2, 120_000),
       maxBuffer: 1024 * 1024,
       encoding: 'utf-8',
-      env: { ...process.env, DISCORD_TEST_TIMEOUT_MS: String(safeTimeout), CI: 'true' },
+      env: {
+        ...process.env,
+        DISCORD_TEST_TIMEOUT_MS: String(safeTimeout),
+        CI: 'true',
+        ...(profileEnv ? { DISCORD_SMOKE_PROFILE: profileEnv } : {}),
+      },
       shell: '/bin/sh',
     }).trim();
 
@@ -2805,6 +2877,34 @@ async function discordSendMessage(channelName: string, message: string, agentNam
     }
   }
   return `Sent message to #${channelName} (${message.length} chars)`;
+}
+
+async function discordReadChannelMessages(channelName: string, limit = 20, search?: string): Promise<string> {
+  const guild = requireGuild();
+  const safeLimit = Math.min(Math.max(limit, 1), 100);
+  const key = channelName.replace(/^#/, '').replace(/[^\w-]/g, '').toLowerCase();
+  const channel = guild.channels.cache.find((c) => {
+    const name = c.name.replace(/[^\w-]/g, '').toLowerCase();
+    return name === key || name.endsWith(key);
+  });
+  if (!channel || !channel.isTextBased()) return `Channel #${channelName} not found or not text-based.`;
+  const textChannel = channel as import('discord.js').TextChannel;
+  const messages = await textChannel.messages.fetch({ limit: safeLimit });
+  let sorted = [...messages.values()].sort((a, b) => a.createdTimestamp - b.createdTimestamp);
+  if (search) {
+    const lowerSearch = search.toLowerCase();
+    sorted = sorted.filter((m) => m.content.toLowerCase().includes(lowerSearch));
+  }
+  if (sorted.length === 0) return `No messages found in #${channel.name}${search ? ` matching "${search}"` : ''}.`;
+  const lines = sorted.map((m) => {
+    const ts = m.createdAt.toISOString().slice(0, 19).replace('T', ' ');
+    const author = m.author.bot ? `[BOT] ${m.author.username}` : m.author.username;
+    const content = m.content.slice(0, 500) || (m.embeds.length ? `[embed: ${m.embeds[0].title || 'untitled'}]` : '[no content]');
+    return `[${ts}] ${author}: ${content}`;
+  });
+  const header = `#${channel.name} — ${sorted.length} message(s)${search ? ` matching "${search}"` : ''}`;
+  const body = lines.join('\n');
+  return body.length > 3800 ? `${header}\n...(trimmed)\n${body.slice(-3700)}` : `${header}\n${body}`;
 }
 
 async function discordClearChannelMessages(channelName: string, limit = 500): Promise<string> {
