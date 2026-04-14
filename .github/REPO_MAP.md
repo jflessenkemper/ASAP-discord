@@ -11,6 +11,7 @@ Quick-reference for navigating the codebase. One `read_file` to find anything.
   riley-memory.md       Riley's persistent knowledge (channels, preferences, conventions)
   PROJECT_CONTEXT.md    Product context injected into all agent prompts
   REPO_MAP.md           This file
+  HELPER_PATTERNS.md    Registry of extracted helpers (errMsg, upsertMemory, addTimelineEntry) — enforced by smoke tests
 
 src/
   index.ts              Express server entrypoint

@@ -1121,6 +1121,33 @@ export const AGENT_CAPABILITY_TESTS: AgentCapabilityTest[] = [
     expectToolAudit: ['search_files'],
     timeoutMs: 180_000,
   },
+  {
+    id: 'developer',
+    category: 'self-improvement',
+    capability: 'anti-pattern-drift',
+    prompt: 'Read .github/HELPER_PATTERNS.md to learn the registered helpers and their max allowed raw occurrences. Then use search_files to count how many raw "err instanceof Error" exist in src/. Compare against the documented limit (14). Report: count, whether it exceeds the limit, and list any new violations.',
+    expectAny: [/count|1[0-9]|exceed|within|limit|compliant|violation|drift|pattern/i],
+    expectToolAudit: ['read_file', 'search_files'],
+    timeoutMs: 180_000,
+  },
+  {
+    id: 'developer',
+    category: 'self-improvement',
+    capability: 'dead-export-detection',
+    prompt: 'Use search_files to find all "export function" declarations in src/utils/errors.ts and src/discord/memory.ts. For each exported function, search for its import across the codebase. Report any exported functions that have zero importers — those are dead exports that should be removed or wired up.',
+    expectAny: [/import|used|errMsg|upsertMemory|appendMemoryRow|readMemoryRow|no.*dead|all.*imported|zero/i],
+    expectToolAudit: ['search_files'],
+    timeoutMs: 180_000,
+  },
+  {
+    id: 'developer',
+    category: 'self-improvement',
+    capability: 'helper-registry-awareness',
+    prompt: 'Read .github/HELPER_PATTERNS.md. List all registered helpers and the general deduplication rule. When reviewing new code, how would you use this file to enforce code quality?',
+    expectAny: [/errMsg|upsertMemory|addTimelineEntry|3.*times|extract|helper|enforce|review/i],
+    expectToolAudit: ['read_file'],
+    timeoutMs: 120_000,
+  },
 
   // ══════════════════════════════════════════════════════════════════════
   // ── SELF-IMPROVEMENT & AUTONOMOUS CAPABILITY ──────────────────────────
@@ -1177,7 +1204,7 @@ export const AGENT_CAPABILITY_TESTS: AgentCapabilityTest[] = [
     id: 'developer',
     category: 'self-improvement',
     capability: 'add-missing-test',
-    prompt: 'Use search_files to find a function in src/discord/ that lacks test coverage. Propose a specific test case for it (describe the test, input, expected output). Do NOT write the test file — just describe what should be tested.',
+    prompt: 'Use search_files to find a function in src/discord/, src/utils/, or src/routes/ that lacks test coverage in src/__tests__/. Propose a specific test case for it (describe the test, input, expected output). Do NOT write the test file — just describe what should be tested.',
     expectAny: [/test|coverage|function|assert|expect|should|describe|input|output/i],
     expectToolAudit: ['search_files'],
     timeoutMs: 180_000,

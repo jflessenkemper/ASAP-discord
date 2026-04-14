@@ -1812,6 +1812,15 @@ async function executeToolInternal(
           const notifyMsg = `🚀 **Riley self-deployed** to Cloud Run: ${input.tag || 'latest'}. Tests + typecheck passed. @jordan`;
           await discordSendMessage('groupchat', notifyMsg, undefined, context.agentId).catch(() => {});
           await discordSendMessage('upgrades', `🚀 Riley self-deployed revision: ${input.tag || 'latest'}`, undefined, context.agentId).catch(() => {});
+          // Post-deploy: kick off readiness smoke tests automatically
+          smokeTestAgents({ profile: 'readiness', timeoutMs: 90_000 })
+            .then(async (smokeResult) => {
+              const passed = smokeResult.includes('100%') || (smokeResult.includes('pass') && !smokeResult.includes('FAIL'));
+              const emoji = passed ? '✅' : '⚠️';
+              const summary = smokeResult.length > 1500 ? smokeResult.slice(-1500) : smokeResult;
+              await discordSendMessage('operations', `${emoji} **Post-deploy readiness smoke** (${input.tag || 'latest'}):\n${summary}`, undefined, context.agentId).catch(() => {});
+            })
+            .catch(() => {}); // fire-and-forget, don't block deploy response
         }
         return deployResult;
       }
