@@ -2592,7 +2592,9 @@ async function smokeTestAgents(opts: SmokeTestOptions = {}): Promise<string> {
     return 'Smoke-test bot is not configured here. Set DISCORD_TEST_BOT_TOKEN and DISCORD_GUILD_ID to enable end-to-end Discord smoke tests.';
   }
 
-  const safeTimeout = Math.max(15_000, Math.min(opts.timeoutMs || 90_000, 180_000));
+  const perTestTimeout = Math.max(15_000, Math.min(opts.timeoutMs || 90_000, 180_000));
+  // Allow up to 15 minutes for the full suite to complete (18 tests with retries)
+  const execTimeout = Math.max(perTestTimeout * 10, 900_000);
   const args: string[] = [];
 
   // Agent filter
@@ -2618,11 +2620,11 @@ async function smokeTestAgents(opts: SmokeTestOptions = {}): Promise<string> {
   try {
     const { stdout, stderr } = await execAsync(cmd, {
       cwd: SERVER_ROOT,
-      timeout: Math.max(safeTimeout * 2, 120_000),
+      timeout: execTimeout,
       maxBuffer: 1024 * 1024,
       env: {
         ...process.env,
-        DISCORD_TEST_TIMEOUT_MS: String(safeTimeout),
+        DISCORD_TEST_TIMEOUT_MS: String(perTestTimeout),
         CI: 'true',
         ...(profileEnv ? { DISCORD_SMOKE_PROFILE: profileEnv } : {}),
       },
