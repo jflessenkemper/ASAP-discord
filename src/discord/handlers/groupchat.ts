@@ -170,6 +170,8 @@ const AUTO_DEPLOY_ON_THREAD_CLOSE = String(process.env.AUTO_DEPLOY_ON_THREAD_CLO
 const AUTO_REBUILD_ERROR_COOLDOWN_MS = parseInt(process.env.AUTO_REBUILD_ERROR_COOLDOWN_MS || '900000', 10);
 const URL_ACTION_COOLDOWN_MS = parseInt(process.env.URL_ACTION_COOLDOWN_MS || '1800000', 10);
 const GROUPCHAT_DUPLICATE_WINDOW_MS = parseInt(process.env.GROUPCHAT_DUPLICATE_WINDOW_MS || '10000', 10);
+/** Maximum continuation cycles for multi-step tasks before stopping. */
+const MAX_CONTINUATION_CYCLES = parseInt(process.env.RILEY_MAX_CONTINUATION_CYCLES || '5', 10);
 const APP_SERVER_ROOT = (fs.existsSync(path.join(process.cwd(), 'package.json')) && fs.existsSync(path.join(process.cwd(), 'src')))
   ? process.cwd()
   : path.resolve(__dirname, '../../..');
@@ -235,9 +237,36 @@ function markGoalProgress(status?: string): void {
 function inferRileyStatus(text: string, completionClaimed: boolean, completionVerified: boolean): 'fixed' | 'partially fixed' | 'blocked' {
   const normalized = String(text || '').toLowerCase();
   if (/\bblocked\b|\bverification pending\b|\bfailed\b|\berror\b/.test(normalized)) return 'blocked';
-  if (completionClaimed && completionVerified) return 'fixed';
+  // For multi-step goals, suppress premature "fixed" status.
+  // If the active goal looks like a multi-step task, require the response to address
+  // more than a single sub-item before accepting completion.
+  if (completionClaimed && completionVerified) {
+    if (isMultiStepGoal(goalState.goal || '') && !hasMultiStepEvidence(normalized)) {
+      return 'partially fixed';
+    }
+    return 'fixed';
+  }
   if (completionClaimed && !completionVerified) return 'blocked';
   return 'partially fixed';
+}
+
+/** Detect goals that contain numbered lists, "all agents", "each", or multiple items */
+function isMultiStepGoal(goal: string): boolean {
+  const normalized = goal.toLowerCase();
+  // Numbered list or bullet points with multiple items
+  if (/(?:^|\n)\s*(?:\d+[.)]\s|[-*]\s)/.test(goal) && (goal.match(/(?:^|\n)\s*(?:\d+[.)]\s|[-*]\s)/g) || []).length >= 2) return true;
+  // Multi-target keywords
+  if (/\b(all agents|each agent|all the|every|all\s+\d+|all upgrades|implement all)\b/i.test(normalized)) return true;
+  // "and" joining multiple tasks
+  if (/\b(?:and also|and then|and ask|, and)\b/i.test(normalized)) return true;
+  return false;
+}
+
+/** Check if the response references completing multiple items, not just one */
+function hasMultiStepEvidence(text: string): boolean {
+  // Count completion-like signals (e.g., "completed X", "done Y", "implemented Z", "fixed A")
+  const completionMatches = text.match(/\b(completed|done|implemented|fixed|finished|created|updated|deployed|merged)\b/gi) || [];
+  return completionMatches.length >= 3;
 }
 
 function enforceRileyResponseContract(
@@ -432,7 +461,10 @@ function inferImplicitActionTags(text: string): string {
   if (/(?:run|perform|execute)\s+(?:a\s+)?(?:release|prod(?:uction)?|deployment|app)?\s*health\s*check|\/ops\s+health\b/i.test(normalized)) {
     tags.add('[ACTION:HEALTH]');
   }
-  if (/(smoke test|sanity check|end to end check|e2e check)/i.test(normalized)) {
+  // Only synthesize SMOKE when the text is an imperative instruction, not a narrative mention
+  const smokeImperative = /(?:run|execute|perform|start|trigger|do)\s+(?:a\s+)?(?:smoke test|sanity check|end to end check|e2e check)/i.test(normalized);
+  const smokeNegated = /\b(?:will|plan to|later|after|going to|intend to|want to|should)\b[^.!?\n]{0,30}(?:smoke test|sanity check|e2e check)/i.test(normalized);
+  if (smokeImperative && !smokeNegated) {
     tags.add('[ACTION:SMOKE]');
   }
   if (/(who changed|look through commits|regression|git history|blame)/i.test(normalized)) {
@@ -1582,10 +1614,36 @@ async function handleSmokeTestPrompt(content: string, groupchat: TextChannel): P
   // Extract human-readable text from the JSON envelope so the tester can match
   // against expectAny/expectAll patterns (raw JSON confuses validation).
   const envelope = extractAgentResponseEnvelope(rawStr);
-  const response = (envelope?.human || rawStr).trim();
+  const rawHuman = (envelope?.human || rawStr).trim();
 
-  // Post directly to groupchat — this is where the tester monitor watches
-  await sendAgentMessage(groupchat, riley, response);
+  // Apply the same rendering pipeline as sendAgentMessage (strips ACTION tags,
+  // resolves @agent → Discord mentions, etc.) but skip progressive reveal.
+  // Progressive reveal edits can be missed by the tester's Discord client,
+  // causing pattern-matching failures when the initial truncated message
+  // doesn't contain expected keywords.
+  const { renderAgentMessage } = await import('./textChannel');
+  const response = renderAgentMessage(rawHuman);
+  if (!response.trim()) return;
+
+  const { sendWebhookMessage } = await import('../services/webhooks');
+  // Split into ≤1900-char chunks on newline boundaries
+  const chunks: string[] = [];
+  let remaining = response;
+  while (remaining.length > 1900) {
+    const breakAt = remaining.lastIndexOf('\n', 1900);
+    const splitAt = breakAt > 800 ? breakAt : 1900;
+    chunks.push(remaining.slice(0, splitAt));
+    remaining = remaining.slice(splitAt).trimStart();
+  }
+  if (remaining) chunks.push(remaining);
+
+  for (const chunk of chunks) {
+    await sendWebhookMessage(groupchat, {
+      content: chunk,
+      username: `${riley.emoji} ${riley.name}`,
+      avatarURL: riley.avatarUrl,
+    });
+  }
   console.log(`[smoke-guard] Posted response to groupchat (${response.length} chars)`);
 }
 
@@ -1925,9 +1983,83 @@ async function handleRileyMessage(
     }
 
     const chainResponse = ensureAceFirstDelegation(orchestrationResponse, userMessage);
-    await handleAgentChain(chainResponse, groupchat, workspaceChannel, signal);
+    let chainResult = await handleAgentChain(chainResponse, groupchat, workspaceChannel, signal);
 
-    markGoalProgress('✅ Riley cycle completed');
+    markGoalProgress('✅ Riley cycle 1 completed');
+
+    // Continuation loop: if this is a multi-step goal and we're not done yet,
+    // re-invoke Riley with a continuation prompt so she can plan the next sub-task.
+    const isMultiStep = isMultiStepGoal(goalState.goal || userMessage);
+    if (isMultiStep && !signal?.aborted) {
+      for (let cycle = 2; cycle <= MAX_CONTINUATION_CYCLES; cycle++) {
+        // Check whether last cycle's status suggests more work is needed
+        const lastStatus = inferRileyStatus(
+          displayResponse + ' ' + (chainResult.summary || ''),
+          isCompletionClaim(displayResponse),
+          true, // verification is separate from continuation logic
+        );
+        if (lastStatus === 'fixed' || lastStatus === 'blocked') {
+          console.log(`[continuation] Stopping at cycle ${cycle}: status=${lastStatus}`);
+          break;
+        }
+
+        const aceSummary = chainResult.summary
+          ? `Ace reported: ${chainResult.summary.slice(0, 500)}`
+          : 'Ace did not produce a completion summary.';
+
+        const continuationPrompt = `[System continuation — cycle ${cycle}/${MAX_CONTINUATION_CYCLES}] Previous cycle status: ${lastStatus}. ${aceSummary}\n\nContinue with the next sub-task from the original goal: "${(goalState.goal || userMessage).slice(0, 300)}". Do not repeat completed work. Focus on the next unfinished item.`;
+
+        await sendAutopilotAudit(
+          groupchat,
+          'continuation_cycle',
+          `Multi-step continuation cycle ${cycle}/${MAX_CONTINUATION_CYCLES} for: ${(goalState.goal || '').slice(0, 80)}`,
+          { attempt: cycle }
+        );
+
+        markGoalProgress(`🔄 Continuation cycle ${cycle}/${MAX_CONTINUATION_CYCLES}...`);
+
+        // Re-invoke Riley for the next sub-task
+        const rileyMemoryCtx = getMemoryContext('executive-assistant');
+        const continuationResponse = await agentRespond(riley, [...rileyMemoryCtx, ...groupHistory], continuationPrompt, async (toolName, summary) => {
+          sendToolNotification(rileyWorkChannel, riley, `[${toolName}] ${summary}`).catch(() => {});
+        }, {
+          signal,
+          outputMode: 'machine_json',
+          machineEnvelopeRaw: true,
+          threadKey: `groupchat:${workspaceChannel.id}`,
+        });
+
+        if (signal?.aborted) break;
+
+        const contEnvelope = extractAgentResponseEnvelope(continuationResponse);
+        const contVisible = sanitizeVisibleAgentReply(contEnvelope?.human || continuationResponse);
+        const contRendered = appendDefaultNextSteps(contVisible.replace(/\[\s*action:[^\]]+\]/gi, '').trim());
+
+        appendToMemory('executive-assistant', [
+          { role: 'user', content: continuationPrompt },
+          { role: 'assistant', content: `[Riley]: ${continuationResponse}` },
+        ]);
+        groupHistory.push({ role: 'user', content: continuationPrompt });
+        groupHistory.push({ role: 'assistant', content: `[Riley]: ${continuationResponse}` });
+        persistGroupHistory();
+
+        // Post Riley's continuation response
+        if (contRendered) {
+          await sendAgentMessage(workspaceChannel, riley, contRendered);
+        }
+
+        // Update display for next iteration's status check
+        displayResponse = contRendered;
+
+        // Run Ace on Riley's new instructions
+        const contChainText = ensureAceFirstDelegation(continuationResponse, continuationPrompt);
+        chainResult = await handleAgentChain(contChainText, groupchat, workspaceChannel, signal);
+
+        markGoalProgress(`✅ Riley cycle ${cycle} completed`);
+
+        if (signal?.aborted) break;
+      }
+    }
   } catch (err) {
     const abortLike = String((err as any)?.name || '').includes('Abort') || String((err as any)?.message || '').toLowerCase().includes('abort');
     if (abortLike || signal?.aborted) return;
@@ -2446,14 +2578,17 @@ function inferSpecialistsForContext(text: string): string[] {
   const normalized = String(text || '').toLowerCase();
   const picks = new Set<string>();
 
-  if (/(ui|ux|screen|layout|visual|map|flow|onboarding|mobile)/.test(normalized)) picks.add('ux-reviewer');
-  if (/(test|smoke|regression|verify|qa|validation)/.test(normalized)) picks.add('qa');
-  if (/(security|auth|token|permission|vuln|owasp)/.test(normalized)) picks.add('security-auditor');
-  if (/(api|endpoint|http|route|rest|contract)/.test(normalized)) picks.add('api-reviewer');
-  if (/(db|database|schema|migration|sql|query)/.test(normalized)) picks.add('dba');
-  if (/(deploy|build|cloud run|gcp|infra|ci|cd)/.test(normalized)) picks.add('devops');
-  if (/(perf|performance|latency|slow|optimi[sz]e)/.test(normalized)) picks.add('performance');
-  if (/(copy|wording|message|text|empty state)/.test(normalized)) picks.add('copywriter');
+  // Detect code-only tasks to suppress UX/copy routing for pure implementation work
+  const isCodeTask = /\b(edit_file|write_file|batch_edit|git_create_branch|create_pull_request|\.ts\b|\.js\b|function\s|const\s|import\s|export\s)/i.test(normalized);
+
+  if (!isCodeTask && /\b(ui|ux|screen|layout|visual|onboarding|mobile)\b/.test(normalized)) picks.add('ux-reviewer');
+  if (/\b(smoke\s*test|regression|qa|validation)\b/.test(normalized)) picks.add('qa');
+  if (/\b(security|auth|token|permission|vuln|owasp)\b/.test(normalized)) picks.add('security-auditor');
+  if (/\b(endpoint|http|route|rest)\b/.test(normalized)) picks.add('api-reviewer');
+  if (/\b(database|schema|migration|sql)\b/.test(normalized)) picks.add('dba');
+  if (/\b(deploy|cloud run|gcp|infra|ci\/cd)\b/.test(normalized)) picks.add('devops');
+  if (/\b(perf|performance|latency|slow|optimi[sz]e)\b/.test(normalized)) picks.add('performance');
+  if (!isCodeTask && /\b(copy|wording|empty state)\b/.test(normalized)) picks.add('copywriter');
 
   return [...picks].slice(0, 3);
 }
@@ -2853,20 +2988,22 @@ async function runSpecialistFallback(
 }
 
 /**
- * Handle the chain: Riley → Ace → sub-agents → report back
+ * Handle the chain: Riley → Ace → sub-agents → report back.
+ * Returns a summary of the chain outcome for use in continuation loops.
  */
 async function handleAgentChain(
   rileyResponse: string,
   groupchat: TextChannel,
   workspaceChannel: WebhookCapableChannel,
   signal?: AbortSignal
-): Promise<void> {
+): Promise<{ summary: string; hadErrors: boolean; hadFileChanges: boolean }> {
+  const result = { summary: '', hadErrors: false, hadFileChanges: false };
   const directedAgents = parseDirectives(rileyResponse);
   const wantsFullTeam = RILEY_USE_ALL_AGENTS && shouldFanOutAllAgents(rileyResponse);
   const effectiveAgents = wantsFullTeam
     ? [...DIRECTED_AGENT_IDS]
     : directedAgents;
-  if (effectiveAgents.length === 0) return;
+  if (effectiveAgents.length === 0) return result;
   markGoalProgress('🧩 Coordinating specialist agents...');
 
   const aceDirected = effectiveAgents.length > 0;
@@ -2881,7 +3018,7 @@ async function handleAgentChain(
     const ace = getAgent('developer' as AgentId);
     if (ace) {
       try {
-        if (signal?.aborted) return;
+        if (signal?.aborted) return result;
         const aceChannel = getAgentWorkChannel('developer', groupchat);
         aceChannel.sendTyping().catch(() => {});
 
@@ -2894,6 +3031,7 @@ async function handleAgentChain(
 
         // Post a compact diff preview if files were changed
         if (fileChanges.length > 0 && !signal?.aborted) {
+          result.hadFileChanges = true;
           const diffLines = fileChanges.slice(0, 15).map(s => `\`${s.slice(0, 100)}\``).join('\n');
           const diffEmbed = new EmbedBuilder()
             .setTitle(`📝 Files Changed (${fileChanges.length})`)
@@ -2905,9 +3043,10 @@ async function handleAgentChain(
 
         if (!signal?.aborted && hasAceCompletionContract(aceResponse)) {
           consolidatedFindings.push(`${getAgentMention('developer' as AgentId)}: ${summarizeAceCompletionForRiley(aceResponse)}`);
+          result.summary = summarizeAceCompletionForRiley(aceResponse);
         }
 
-        if (signal?.aborted) return;
+        if (signal?.aborted) return result;
         markGoalProgress('💻 Ace implementing...');
 
         const aceSubDirectives = parseDirectives(aceResponse);
@@ -2997,6 +3136,12 @@ async function handleAgentChain(
       }
     }
   }
+
+  result.hadErrors = consolidatedErrors.length > 0;
+  if (!result.summary && consolidatedFindings.length > 0) {
+    result.summary = consolidatedFindings.join('; ');
+  }
+  return result;
 }
 
 /**

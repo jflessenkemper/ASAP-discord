@@ -13,8 +13,8 @@ ASAP is a service marketplace app (Expo/React Native Web) with:
 - **PostgreSQL** database on Cloud SQL (GCP)
 - **Social auth** (Google, Apple, Facebook) — no passwords for clients
 - **Location-based** services — lat/lng stored for clients and employees
-- **Migrations** in `server/src/db/migrations/` (sequential numbered SQL files)
-- **Pool** via `pg` in `server/src/db/pool.ts`
+- **Migrations** in `src/db/migrations/` (sequential numbered SQL files)
+- **Pool** via `pg` in `src/db/pool.ts`
 
 ### Current Schema (cumulative from migrations 001–003)
 

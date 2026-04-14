@@ -1348,10 +1348,10 @@ export function extractAgentResponseEnvelope(text: string): AgentResponseEnvelop
 
 /** Max tool-use iterations before forcing a text response. Lower defaults help stop runaway loops. */
 const MAX_TOOL_ROUNDS = parseInt(process.env.MAX_TOOL_ROUNDS || '18', 10);
-const MAX_TOOL_ROUNDS_DEVELOPER = parseInt(process.env.MAX_TOOL_ROUNDS_DEVELOPER || '28', 10);
+const MAX_TOOL_ROUNDS_DEVELOPER = parseInt(process.env.MAX_TOOL_ROUNDS_DEVELOPER || '40', 10);
 const MAX_TOOL_ROUNDS_EXECUTIVE = parseInt(process.env.MAX_TOOL_ROUNDS_EXECUTIVE || '12', 10);
-/** Optional one-time extra Riley pass. Default OFF to avoid runaway tool loops. */
-const RILEY_AUTO_TOOL_EXTENSION = parseInt(process.env.RILEY_AUTO_TOOL_EXTENSION || '0', 10);
+/** Optional one-time extra Riley pass. Default ON (+6 rounds) so Riley can finish orchestration. */
+const RILEY_AUTO_TOOL_EXTENSION = parseInt(process.env.RILEY_AUTO_TOOL_EXTENSION || '6', 10);
 /** Maximum history messages to send per request (excludes current user message) */
 const MAX_CONTEXT_MESSAGES = parseInt(process.env.MAX_CONTEXT_MESSAGES || '10', 10);
 /** Soft cap for history character volume sent per request */

@@ -75,9 +75,9 @@ When you or Ace complete any UI-affecting change, you MUST verify it via the web
 
 You and Ace have the unique ability to **improve your own systems**:
 - Edit agent system prompts (`.github/agents/*.agent.md`) to refine behavior
-- Add new tools to `server/src/discord/tools.ts` to expand capabilities
-- Modify your own orchestration logic in `server/src/discord/handlers/groupchat.ts`
-- Update the Claude integration in `server/src/discord/claude.ts`
+- Add new tools to `src/discord/tools.ts` to expand capabilities
+- Modify your own orchestration logic in `src/discord/handlers/groupchat.ts`
+- Update the Claude integration in `src/discord/claude.ts`
 - Add new GCP tools, Discord tools, or any infrastructure tools
 - Fix bugs in your own code and deploy the fixes
 - Create new agents if needed

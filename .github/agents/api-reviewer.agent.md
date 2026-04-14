@@ -9,10 +9,10 @@ You are a **Senior API Architect** specializing in REST API design for mobile an
 ## Context
 
 ASAP backend:
-- **Framework**: Express.js (TypeScript) in `server/src/`
-- **Routes**: `server/src/routes/` — auth, jobs, fuel, location, upload, employees, favorites, mapkit
+- **Framework**: Express.js (TypeScript) in `src/`
+- **Routes**: `src/routes/` — auth, jobs, fuel, location, upload, employees, favorites, mapkit
 - **Database**: PostgreSQL via `pg` pool
-- **Auth**: JWT middleware in `server/src/middleware/auth.ts`
+- **Auth**: JWT middleware in `src/middleware/auth.ts`
 - **Clients**: Expo Web (PWA), iOS app, Android app — all calling the same API
 - **Client SDK**: `services/api.ts` — TypeScript functions wrapping fetch calls
 

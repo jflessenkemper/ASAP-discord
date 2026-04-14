@@ -41,6 +41,8 @@ export function buildAceStandardContext(rileyResponse: string): string {
   return `[Riley directed you]: ${rileyResponse}\n\n` +
     `Own execution yourself first. Only bring in extra specialists if they are truly needed. ` +
     `If you do delegate, use the exact Discord mentions from this guide: ${mentionGuide}.\n\n` +
+    `After making code changes: create a branch, commit, push, create a PR, then merge the PR using merge_pull_request. ` +
+    `Do NOT leave changes on an unmerged branch.\n\n` +
     `When you finish, do NOT reply with just "Done". Include these exact sections:\n` +
     `- Result: one sentence outcome.\n` +
     `- Evidence: files changed, commands/tests run, and key output.\n` +

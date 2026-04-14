@@ -2248,12 +2248,28 @@ async function runCapabilityTest(
   // If monitor is available, use event-driven approach (zero polling)
   if (monitor) {
     const sinceTs = sent.createdTimestamp || started;
+    let condEvalCount = 0;
 
     const result = await monitor.waitFor(
       (events) => {
+        condEvalCount++;
         const botEvents = events.filter((e) =>
           (e.isBot || e.isWebhook) && e.ts >= sinceTs && responseChannelIds.has(e.channelId)
         );
+
+        // Diagnostic: log first few condition evaluations to debug first-attempt failures
+        if (condEvalCount <= 3 || (condEvalCount <= 20 && botEvents.length > 0)) {
+          const responseChIds = [...responseChannelIds].join(',');
+          const allEvCount = events.length;
+          const sinceEvCount = events.filter(e => e.ts >= sinceTs).length;
+          console.log(`    [cond-debug] eval#${condEvalCount} test=${test.capability} sinceTs=${sinceTs} allEvents=${allEvCount} sinceTsEvents=${sinceEvCount} botEvents=${botEvents.length} responseChIds=${responseChIds}`);
+          if (botEvents.length > 0) {
+            for (const be of botEvents.slice(0, 3)) {
+              const shape = validateReplyShape(test, be.content, token);
+              console.log(`    [cond-debug]   botEvent ch=${be.channelId} author=${be.author} isBot=${be.isBot} isWH=${be.isWebhook} ts=${be.ts} content=${be.content.slice(0, 120)} shape=${JSON.stringify(shape)}`);
+            }
+          }
+        }
 
         // Check for capacity errors — return true to break out, we re-check below
         for (const e of botEvents) {
@@ -2307,9 +2323,10 @@ async function runCapabilityTest(
       console.log(`    🔍 [${elapsed}s] ${result.met ? '✅' : '❌'} conditions: ${conds}${result.idleTimedOut ? ' (idle timeout)' : ''}`);
     }
 
-    // Check for capacity errors
+    // Check for capacity errors (use specific phrases to avoid false positives
+    // when agents legitimately discuss rate-limiting as a security topic)
     for (const e of botEvents) {
-      if (/daily token limit reached|rate limit|quota exhausted|budget exceeded|request interrupted by user/i.test(e.content)) {
+      if (/daily token limit reached|rate limit(?:ed| exceeded| error)|quota exhausted|budget exceeded|request interrupted by user/i.test(e.content)) {
         return { passed: false, elapsed: Date.now() - started, snippet: e.content.slice(0, 300), reason: 'agent capacity or limit error' };
       }
     }
@@ -2387,7 +2404,7 @@ async function runCapabilityTest(
     let shapeOk = false;
     for (const msg of replies) {
       const text = extractReplyText(msg);
-      if (/daily token limit reached|rate limit|quota exhausted|budget exceeded|request interrupted by user/i.test(text)) {
+      if (/daily token limit reached|rate limit(?:ed| exceeded| error)|quota exhausted|budget exceeded|request interrupted by user/i.test(text)) {
         return { passed: false, elapsed: Date.now() - started, snippet: text.slice(0, 300), reason: 'agent capacity or limit error' };
       }
       const verdict = validateReplyShape(test, text, token);

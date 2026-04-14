@@ -595,12 +595,13 @@ function shouldProgressivelyReveal(rendered: string): boolean {
 
 /**
  * Compact very long text-only responses to avoid wall-of-text spam.
- * Responses under 8000 chars (≤4 Discord messages) pass through unchanged.
+ * Responses under 12000 chars pass through unchanged — the chunking logic
+ * handles splitting into multiple Discord messages.
  * Longer responses are truncated: keep key sections (Result, Evidence, Risk)
- * and the first ~3500 chars, then append a truncation note.
+ * and the first ~5500 chars, then append a truncation note.
  */
 function compactLongResponse(text: string): string {
-  if (text.length <= 8000) return text;
+  if (text.length <= 12000) return text;
   // Don't compact responses with code blocks — those use the file attachment path
   if (text.includes('```')) return text;
 
@@ -612,8 +613,8 @@ function compactLongResponse(text: string): string {
     sections.push(m[1].trim());
   }
 
-  // Keep first ~3500 chars of the original response
-  const head = text.slice(0, 3500).replace(/\s+\S*$/, ''); // break on word boundary
+  // Keep first ~5500 chars of the original response
+  const head = text.slice(0, 5500).replace(/\s+\S*$/, ''); // break on word boundary
 
   // Append extracted sections that aren't already in the head
   const extra = sections.filter(s => !head.includes(s)).slice(0, 8);
@@ -699,7 +700,7 @@ async function sendProgressiveWebhookMessage(
   }
 }
 
-function renderAgentMessage(raw: string): string {
+export function renderAgentMessage(raw: string): string {
   const withoutActionTags = raw.replace(/\[ACTION:[^\]]+\]/g, '').trim();
   if (!withoutActionTags) return '';
 

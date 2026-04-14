@@ -2621,7 +2621,7 @@ async function smokeTestAgents(opts: SmokeTestOptions = {}): Promise<string> {
     const { stdout, stderr } = await execAsync(cmd, {
       cwd: SERVER_ROOT,
       timeout: execTimeout,
-      maxBuffer: 1024 * 1024,
+      maxBuffer: 4 * 1024 * 1024,
       env: {
         ...process.env,
         DISCORD_TEST_TIMEOUT_MS: String(perTestTimeout),
@@ -2632,12 +2632,24 @@ async function smokeTestAgents(opts: SmokeTestOptions = {}): Promise<string> {
     });
 
     const output = (stdout || '').trim();
+    // Write full subprocess output to a log file for diagnostics
+    try {
+      const fs = await import('fs');
+      const logPath = `${SERVER_ROOT}/smoke-reports/tester-output-${new Date().toISOString().replace(/[:.]/g, '-')}.log`;
+      fs.writeFileSync(logPath, `STDOUT:\n${stdout}\n\nSTDERR:\n${stderr}\n`);
+    } catch { /* ignore log write errors */ }
     return output.length > 4000
       ? '... (output trimmed)\n' + output.slice(-4000)
       : output || 'Smoke test completed with no output.';
   } catch (err: unknown) {
     const execErr = err as { stdout?: string; stderr?: string; message?: string };
     const output = `${execErr.stdout || ''}\n${execErr.stderr || ''}`.trim();
+    // Write full subprocess output to a log file for diagnostics
+    try {
+      const fs = await import('fs');
+      const logPath = `${SERVER_ROOT}/smoke-reports/tester-output-${new Date().toISOString().replace(/[:.]/g, '-')}.log`;
+      fs.writeFileSync(logPath, `STDOUT:\n${execErr.stdout || ''}\n\nSTDERR:\n${execErr.stderr || ''}\n`);
+    } catch { /* ignore log write errors */ }
     return `Smoke test finished with failures:\n${(output || execErr.message || 'Unknown error').slice(-4000)}`;
   } finally {
     setActiveSmokeTestRunning(false);

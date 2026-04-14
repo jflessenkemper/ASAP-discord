@@ -1,5 +1,5 @@
 const GOAL_STALL_TIMEOUT_MS = parseInt(process.env.GOAL_STALL_TIMEOUT_MS || '420000', 10);
-const GOAL_STALL_MAX_RECOVERY_ATTEMPTS = parseInt(process.env.GOAL_STALL_MAX_RECOVERY_ATTEMPTS || '1', 10);
+const GOAL_STALL_MAX_RECOVERY_ATTEMPTS = parseInt(process.env.GOAL_STALL_MAX_RECOVERY_ATTEMPTS || '5', 10);
 export const GOAL_THREAD_COUNTER_RE = /\bgoal[-\s]?(\d{4})\b/i;
 
 function extractGoalSequence(name: string): number {
