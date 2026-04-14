@@ -1436,8 +1436,9 @@ export async function handleGroupchatMessage(
       console.log(`[smoke-guard] Skipping scaffolding message: "${content.slice(0, 60)}"`);
       return;
     }
-    // Fire-and-forget: process test prompts without blocking the main queue or aborting Riley
-    void processGroupchatMessage(message, content, groupchat).catch((err) => {
+    // Fire-and-forget: respond directly in groupchat (not workspace threads) so the
+    // tester subprocess monitor can observe the bot response in the correct channel.
+    void handleSmokeTestPrompt(content, groupchat).catch((err) => {
       console.error('[smoke-guard] Parallel smoke test message processing failed:', err instanceof Error ? err.message : String(err));
     });
     return;
@@ -1532,6 +1533,44 @@ async function withMessageTimeout<T>(promise: Promise<T>, timeoutMs: number, onT
   } finally {
     if (timer) clearTimeout(timer);
   }
+}
+
+/**
+ * Lightweight handler for smoke-test subprocess prompts.
+ * Responds directly in groupchat (not workspace threads) so the tester's
+ * LiveMonitor can observe the response in the correct channel.
+ */
+async function handleSmokeTestPrompt(content: string, groupchat: TextChannel): Promise<void> {
+  // Determine which agent is being addressed
+  const mentionedIds = parseMentionedAgentIds(content);
+  const targetAgentId: AgentId = mentionedIds.length > 0 ? mentionedIds[0] : 'executive-assistant' as AgentId;
+
+  // For specialist mentions, Riley routes through Ace — but for smoke tests
+  // we respond directly as Riley to keep things simple and fast.
+  const riley = getAgent('executive-assistant' as AgentId);
+  if (!riley) return;
+
+  const rileyMemory = getMemoryContext('executive-assistant');
+  const contextMessage = `[smoke-test]: ${content}`;
+
+  console.log(`[smoke-guard] Calling agentRespond for: "${content.slice(0, 60)}"`);
+
+  const rawResponse = await agentRespond(
+    riley,
+    [...rileyMemory],
+    contextMessage,
+    undefined,
+    {
+      threadKey: `smoke-test:${Date.now()}`,
+    },
+  );
+
+  const response = String(rawResponse || '').trim();
+  if (!response) return;
+
+  // Post directly to groupchat — this is where the tester monitor watches
+  await sendAgentMessage(groupchat, riley, response);
+  console.log(`[smoke-guard] Posted response to groupchat (${response.length} chars)`);
 }
 
 async function processGroupchatMessage(
