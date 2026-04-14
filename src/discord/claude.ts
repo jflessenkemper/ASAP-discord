@@ -768,12 +768,16 @@ function createDirectAnthropicModel(
       ? messages.map((msg) => ({ ...msg, content: withAnthropicCacheControl(msg.content || []) }))
       : messages;
 
+    const system = asAnthropicSystemInstruction(options.systemInstruction);
+    // Direct API limits cache_control to 4 blocks total
+    enforceCacheControlLimit(system, cachedMessages, 4);
+
     const raw = await callDirectAnthropicAPI(
       modelName,
       {
         model: modelName,
         max_tokens: maxTokens,
-        system: asAnthropicSystemInstruction(options.systemInstruction),
+        system,
         messages: cachedMessages,
         tools: anthropicTools.length > 0 ? anthropicTools : undefined,
       },
@@ -925,6 +929,44 @@ function withAnthropicCacheControl(blocks: any[]): any[] {
     if (text.length < 120) return block;
     return { ...block, cache_control: { type: 'ephemeral' } };
   });
+}
+
+/**
+ * Enforce the direct Anthropic API limit of max 4 cache_control blocks total
+ * across system + messages. Keep system instruction cached and the last few
+ * message blocks; strip cache_control from older ones.
+ */
+function enforceCacheControlLimit(
+  system: ReturnType<typeof asAnthropicSystemInstruction>,
+  messages: Array<{ role: 'user' | 'assistant'; content: any[] }>,
+  maxBlocks = 4,
+): void {
+  // Count system cache blocks (usually 1)
+  let systemCount = 0;
+  if (Array.isArray(system)) {
+    systemCount = system.filter((b: any) => b?.cache_control).length;
+  }
+  const budget = maxBlocks - systemCount;
+
+  // Collect all message blocks with cache_control, newest first
+  const tagged: Array<{ msg: any; block: any; idx: number; msgIdx: number }> = [];
+  for (let mi = 0; mi < messages.length; mi++) {
+    const blocks = messages[mi].content;
+    if (!Array.isArray(blocks)) continue;
+    for (let bi = 0; bi < blocks.length; bi++) {
+      if (blocks[bi]?.cache_control) {
+        tagged.push({ msg: messages[mi], block: blocks[bi], idx: bi, msgIdx: mi });
+      }
+    }
+  }
+
+  if (tagged.length <= budget) return;
+
+  // Keep the LAST `budget` tagged blocks (newest); strip the rest
+  const toStrip = tagged.slice(0, tagged.length - budget);
+  for (const entry of toStrip) {
+    delete entry.block.cache_control;
+  }
 }
 
 function asAnthropicSystemInstruction(systemInstruction?: string): string | Array<{ type: 'text'; text: string; cache_control?: { type: 'ephemeral' } }> | undefined {
