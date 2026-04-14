@@ -1561,12 +1561,19 @@ async function handleSmokeTestPrompt(content: string, groupchat: TextChannel): P
     contextMessage,
     undefined,
     {
+      outputMode: 'machine_json',
+      machineEnvelopeRaw: true,
       threadKey: `smoke-test:${Date.now()}`,
     },
   );
 
-  const response = String(rawResponse || '').trim();
-  if (!response) return;
+  const rawStr = String(rawResponse || '').trim();
+  if (!rawStr) return;
+
+  // Extract human-readable text from the JSON envelope so the tester can match
+  // against expectAny/expectAll patterns (raw JSON confuses validation).
+  const envelope = extractAgentResponseEnvelope(rawStr);
+  const response = (envelope?.human || rawStr).trim();
 
   // Post directly to groupchat — this is where the tester monitor watches
   await sendAgentMessage(groupchat, riley, response);
