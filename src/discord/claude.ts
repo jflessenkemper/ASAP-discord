@@ -582,8 +582,9 @@ async function callVertexGenerateContent(
   if (!candidates.includes('gemini-2.5-flash')) candidates.push('gemini-2.5-flash');
   if (!candidates.includes('gemini-2.5-pro')) candidates.push('gemini-2.5-pro');
 
-  const token = await getVertexAccessToken();
+  let token = await getVertexAccessToken();
   let lastErr: Error | null = null;
+  let retriedAuth = false;
 
   for (let i = 0; i < candidates.length; i += 1) {
     const model = candidates[i];
@@ -600,6 +601,15 @@ async function callVertexGenerateContent(
 
     if (res.ok) {
       return res.json();
+    }
+
+    // On 401, invalidate cached token and retry once with a fresh token
+    if (res.status === 401 && !retriedAuth) {
+      retriedAuth = true;
+      vertexTokenCache = null;
+      token = await getVertexAccessToken();
+      i -= 1; // retry the same model
+      continue;
     }
 
     const bodyText = await res.text();
@@ -625,9 +635,10 @@ async function callVertexAnthropicRawPredict(
     throw new Error('Vertex Anthropic is enabled but VERTEX_PROJECT_ID (or GOOGLE_CLOUD_PROJECT) is not set');
   }
 
-  const token = await getVertexAccessToken();
+  let token = await getVertexAccessToken();
   const locations = preferredAnthropicLocations(modelName);
   let lastErr: Error | null = null;
+  let retriedAuth = false;
 
   for (let index = 0; index < locations.length; index += 1) {
     const location = locations[index];
@@ -644,6 +655,15 @@ async function callVertexAnthropicRawPredict(
 
     if (res.ok) {
       return res.json();
+    }
+
+    // On 401, invalidate cached token and retry once with a fresh token
+    if (res.status === 401 && !retriedAuth) {
+      retriedAuth = true;
+      vertexTokenCache = null;
+      token = await getVertexAccessToken();
+      index -= 1; // retry the same location
+      continue;
     }
 
     const bodyText = await res.text();
