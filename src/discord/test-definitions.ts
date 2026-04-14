@@ -1074,6 +1074,68 @@ export const AGENT_CAPABILITY_TESTS: AgentCapabilityTest[] = [
   },
 
   // ══════════════════════════════════════════════════════════════════════
+  // ── RESILIENCE & RELIABILITY ──────────────────────────────────────────
+  // ══════════════════════════════════════════════════════════════════════
+  {
+    id: 'developer',
+    category: 'self-improvement',
+    capability: 'model-fallback-awareness',
+    prompt: 'Use search_files to find FALLBACK_CHAINS in src/discord/modelHealth.ts. Read the function resolveHealthyModel. Describe: what happens if the preferred model is down? What is the fallback chain for claude-opus-4-6? What happens if ALL models are down?',
+    expectAll: [/fallback|chain|down/i, /sonnet|flash|pro|gemini/i],
+    expectToolAudit: ['search_files'],
+    timeoutMs: 180_000,
+  },
+  {
+    id: 'developer',
+    category: 'self-improvement',
+    capability: 'tool-retry-awareness',
+    prompt: 'Use search_files to find RETRYABLE_TOOLS in src/discord/tools.ts. Read the surrounding code. Which tools get automatic retry on transient failures? What error patterns trigger a retry?',
+    expectAll: [/retry|RETRYABLE/i, /fetch_url|gcp_vm_ssh|timeout|ECONNREFUSED/i],
+    expectToolAudit: ['search_files'],
+    timeoutMs: 120_000,
+  },
+  {
+    id: 'executive-assistant',
+    category: 'self-improvement',
+    capability: 'post-deploy-smoke-awareness',
+    prompt: 'Use search_files to find "Post-deploy" in src/discord/tools.ts. Read the gcp_deploy case. After a successful deploy, what automatic checks run? Where are the results posted? What happens if the smoke test fails?',
+    expectAll: [/smoke|readiness|operations/i, /post.*deploy|after.*deploy/i],
+    expectToolAudit: ['search_files'],
+    timeoutMs: 120_000,
+  },
+
+  // ══════════════════════════════════════════════════════════════════════
+  // ── SAFETY & SECURITY AWARENESS ───────────────────────────────────────
+  // ══════════════════════════════════════════════════════════════════════
+  {
+    id: 'security-auditor',
+    category: 'self-improvement',
+    capability: 'ddl-blocker-awareness',
+    prompt: 'Use search_files to find DDL_PATTERN in src/discord/tools.ts. Read the db_query function. What SQL statements does the DDL blocker prevent? Why is this important for agents with db_query access?',
+    expectAll: [/DDL|DROP|TRUNCATE|ALTER|CREATE/i, /block|prevent|reject|denied/i],
+    expectToolAudit: ['search_files'],
+    timeoutMs: 180_000,
+  },
+  {
+    id: 'security-auditor',
+    category: 'self-improvement',
+    capability: 'secret-fallback-check',
+    prompt: 'Use search_files to look for hardcoded fallback secrets in src/index.ts — specifically search for "asap-debug". Are there any? If the AGENT_LOG_SECRET env var is unset, what happens to the /api/metrics and /api/agent-log endpoints?',
+    expectAll: [/no.*fallback|no.*hardcoded|disabled|unauthorized|401/i],
+    expectToolAudit: ['search_files'],
+    timeoutMs: 120_000,
+  },
+  {
+    id: 'developer',
+    category: 'self-improvement',
+    capability: 'lint-test-awareness',
+    prompt: 'Read src/__tests__/lint/codeHealth.test.ts. What code-health rules does it enforce? How many deterministic checks are there? Name at least 3 specific checks.',
+    expectAll: [/err instanceof Error|agent_memory|job_timeline|secret|tsc|DDL/i, /test|lint|check|enforce|assert/i],
+    expectToolAudit: ['read_file'],
+    timeoutMs: 120_000,
+  },
+
+  // ══════════════════════════════════════════════════════════════════════
   // ── CODE HEALTH & HELPER AWARENESS ────────────────────────────────────
   // ══════════════════════════════════════════════════════════════════════
   {
@@ -1125,7 +1187,7 @@ export const AGENT_CAPABILITY_TESTS: AgentCapabilityTest[] = [
     id: 'developer',
     category: 'self-improvement',
     capability: 'anti-pattern-drift',
-    prompt: 'Read .github/HELPER_PATTERNS.md to learn the registered helpers and their max allowed raw occurrences. Then use search_files to count how many raw "err instanceof Error" exist in src/. Compare against the documented limit (14). Report: count, whether it exceeds the limit, and list any new violations.',
+    prompt: 'Read .github/HELPER_PATTERNS.md to learn the registered helpers and their max allowed raw occurrences. Then use search_files to count how many raw "err instanceof Error" exist in src/. Compare against the documented limit (35). Report: count, whether it exceeds the limit, and list any new violations.',
     expectAny: [/count|1[0-9]|exceed|within|limit|compliant|violation|drift|pattern/i],
     expectToolAudit: ['read_file', 'search_files'],
     timeoutMs: 180_000,
@@ -1156,8 +1218,8 @@ export const AGENT_CAPABILITY_TESTS: AgentCapabilityTest[] = [
     id: 'executive-assistant',
     category: 'self-improvement',
     capability: 'identify-blocker',
-    prompt: 'Analyze the current codebase and identify one concrete blocker, bug, or limitation that is reducing team efficiency. Use read_file or search_files to gather evidence. Propose a specific fix. Do NOT delegate — do this yourself.',
-    expectAny: [/blocker|bug|limitation|issue|problem|fix|improvement|propose|found/i],
+    prompt: 'Analyze the current codebase and identify one concrete blocker, bug, or limitation that is reducing team efficiency. Use read_file or search_files to gather evidence. Propose a specific fix with the file path and what you would change. Do NOT delegate — do this yourself.',
+    expectAll: [/file|path|src\/|line/i, /fix|change|improv|resolv|patch/i],
     expectToolAudit: ['read_file'],
     timeoutMs: 180_000,
   },
@@ -1174,8 +1236,8 @@ export const AGENT_CAPABILITY_TESTS: AgentCapabilityTest[] = [
     id: 'executive-assistant',
     category: 'self-improvement',
     capability: 'implement-fix-autonomously',
-    prompt: 'Find one small, safe improvement to make in the codebase (a comment cleanup, a missing type annotation, or a TODO that can be resolved). Use edit_file to make the fix, then use typecheck to verify you did not break anything. Report what you changed and the typecheck result. Do NOT delegate.',
-    expectAny: [/edit|changed|fixed|typecheck|pass|clean|improved/i],
+    prompt: 'Find one small, safe improvement to make in the codebase (a comment cleanup, a missing type annotation, or a TODO that can be resolved). Use edit_file to make the fix, then use typecheck to verify you did not break anything. Report the exact file path, what you changed, and the typecheck result. Do NOT delegate.',
+    expectAll: [/edit|changed|fixed/i, /typecheck|type.*check/i],
     expectToolAudit: ['edit_file', 'typecheck'],
     timeoutMs: 240_000,
     heavyTool: true,

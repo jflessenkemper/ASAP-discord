@@ -204,8 +204,8 @@ app.get('/api/health', (_req, res) => {
 // Prometheus metrics endpoint — protected by the same AGENT_LOG_SECRET
 // so it is not publicly accessible without a key.
 app.get('/api/metrics', (req, res) => {
-  const secret = process.env.AGENT_LOG_SECRET || 'asap-debug';
-  if (req.query.key !== secret) {
+  const secret = process.env.AGENT_LOG_SECRET;
+  if (!secret || req.query.key !== secret) {
     res.status(401).type('text/plain').send('Unauthorized. Use ?key=YOUR_SECRET');
     return;
   }
@@ -217,8 +217,8 @@ app.get('/api/metrics', (req, res) => {
 // Agent activity log — read recent agent events for debugging
 // Protected by a simple secret token to prevent public access
 app.get('/api/agent-log', async (req, res) => {
-  const secret = process.env.AGENT_LOG_SECRET || 'asap-debug';
-  if (req.query.key !== secret) {
+  const secret = process.env.AGENT_LOG_SECRET;
+  if (!secret || req.query.key !== secret) {
     res.status(401).json({ error: 'Invalid key. Use ?key=YOUR_SECRET' });
     return;
   }
@@ -254,8 +254,8 @@ app.get('/api/agent-log', async (req, res) => {
 
 // Agent activity log — plain text view for quick terminal reading
 app.get('/api/agent-log/text', async (req, res) => {
-  const secret = process.env.AGENT_LOG_SECRET || 'asap-debug';
-  if (req.query.key !== secret) {
+  const secret = process.env.AGENT_LOG_SECRET;
+  if (!secret || req.query.key !== secret) {
     res.status(401).type('text/plain').send('Unauthorized');
     return;
   }

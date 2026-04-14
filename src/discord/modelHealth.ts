@@ -164,8 +164,8 @@ export function resolveHealthyModel(preferredModel: string): string {
     }
   }
 
-  // All models are down? Return preferred and let the caller handle the error
-  console.warn(`All models in fallback chain for ${preferredModel} are down — using preferred anyway`);
+  // All models are down — log a loud warning so ops can investigate
+  console.error(`[model-health] ALL MODELS DOWN in fallback chain for ${preferredModel}: [${chain.join(', ')}]. Trying preferred model as last resort.`);
   return preferredModel;
 }
 

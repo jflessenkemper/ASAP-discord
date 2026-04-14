@@ -30,11 +30,11 @@ const upload = multer({
 });
 
 async function addTimelineEntry(
-  jobId: string | number | string[],
+  jobId: string | number,
   eventType: string,
   description: string,
   createdByType: string,
-  createdById: string | number | string[],
+  createdById: string | number,
   evidenceUrl?: string | null
 ): Promise<any> {
   const result = await pool.query(
@@ -387,7 +387,7 @@ router.get('/:id/photos', requireAuth, async (req: AuthRequest, res: Response) =
 // ─── Accept a job (employee) ───
 router.post('/:id/accept', requireAuth, requireEmployee, async (req: AuthRequest, res: Response) => {
   try {
-    const { id } = req.params;
+    const { id } = req.params as { id: string };
     const employeeId = req.auth!.userId;
 
     const jobResult = await pool.query(
@@ -456,7 +456,7 @@ router.post('/:id/accept', requireAuth, requireEmployee, async (req: AuthRequest
 // ─── Get single job with timeline ───
 router.get('/:id', requireAuth, async (req: AuthRequest, res: Response) => {
   try {
-    const { id } = req.params;
+    const { id } = req.params as { id: string };
     const { userId, userType } = req.auth!;
 
     const jobResult = await pool.query(
@@ -505,7 +505,7 @@ router.get('/:id', requireAuth, async (req: AuthRequest, res: Response) => {
 // ─── Timer: Start ───
 router.post('/:id/timer/start', requireAuth, requireEmployee, async (req: AuthRequest, res: Response) => {
   try {
-    const { id } = req.params;
+    const { id } = req.params as { id: string };
     const employeeId = req.auth!.userId;
 
     const jobResult = await pool.query(
@@ -543,7 +543,7 @@ router.post('/:id/timer/start', requireAuth, requireEmployee, async (req: AuthRe
 // ─── Timer: Pause ───
 router.post('/:id/timer/pause', requireAuth, requireEmployee, async (req: AuthRequest, res: Response) => {
   try {
-    const { id } = req.params;
+    const { id } = req.params as { id: string };
     const employeeId = req.auth!.userId;
     const { elapsed_seconds } = req.body;
 
@@ -579,7 +579,7 @@ router.post('/:id/timer/pause', requireAuth, requireEmployee, async (req: AuthRe
 // ─── Timer: Stop (Complete job) ───
 router.post('/:id/timer/stop', requireAuth, requireEmployee, async (req: AuthRequest, res: Response) => {
   try {
-    const { id } = req.params;
+    const { id } = req.params as { id: string };
     const employeeId = req.auth!.userId;
     const { elapsed_seconds } = req.body;
 
@@ -641,7 +641,7 @@ router.post('/:id/timer/stop', requireAuth, requireEmployee, async (req: AuthReq
 // ─── Add timeline entry (note) ───
 router.post('/:id/timeline', requireAuth, async (req: AuthRequest, res: Response) => {
   try {
-    const { id } = req.params;
+    const { id } = req.params as { id: string };
     const { userId, userType } = req.auth!;
     const { event_type, description, evidence_url } = req.body;
 

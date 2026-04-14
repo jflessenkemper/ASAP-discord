@@ -7,7 +7,7 @@ Riley: read this file during `identify-blocker` and `dedup-discipline` checks to
 
 | Helper | File | Replaces | Max allowed raw occurrences |
 |--------|------|----------|-----------------------------|
-| `errMsg(err)` | `src/utils/errors.ts` | `err instanceof Error ? err.message : 'Unknown'` and variants | 14 (intentional custom fallbacks like `'permission denied'`, `'startup failure'`) |
+| `errMsg(err)` | `src/utils/errors.ts` | `err instanceof Error ? err.message : 'Unknown'` and variants | 35 (intentional: stack-trace variants using `.stack \|\| .message`, custom fallbacks like `'permission denied'`, `'startup failure'`, and `new Error(String(err))` wrappers) |
 
 **Rule:** Every new `catch` block should use `errMsg(err)` unless a custom fallback string is required.
 

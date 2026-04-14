@@ -1631,6 +1631,13 @@ export async function executeTool(
     if (inFlight) return inFlight;
   }
 
+  // Transient-error tool retry set (network-dependent tools worth retrying once)
+  const RETRYABLE_TOOLS = new Set([
+    'fetch_url', 'capture_screenshots', 'job_scan',
+    'gcp_vm_ssh', 'gcp_logs_query', 'gcp_run_describe', 'gcp_build_status',
+    'gcp_list_revisions', 'gcp_artifact_list', 'gcp_sql_describe',
+  ]);
+
   const runPromise = executeToolInternal(toolName, input, context);
   if (cacheable) toolInFlight.set(key, runPromise);
 
@@ -1640,7 +1647,12 @@ export async function executeTool(
   }
 
   try {
-    const result = await runPromise;
+    let result = await runPromise;
+    // One automatic retry for transient tool failures (network errors, timeouts)
+    if (RETRYABLE_TOOLS.has(toolName) && /^Error:.*(?:ECONNREFUSED|ETIMEDOUT|ENOTFOUND|timeout|socket hang up|503|502|500)/i.test(String(result || ''))) {
+      console.warn(`[tool-retry] ${toolName} transient failure, retrying once...`);
+      result = await executeToolInternal(toolName, input, context);
+    }
     if (cacheable && !/^Error:/i.test(String(result || '').trim())) {
       setCachedToolResult(key, result);
     }
@@ -1810,17 +1822,17 @@ async function executeToolInternal(
           if (auditCb) auditCb(context.agentId, 'gcp_deploy', `Riley self-deployed: ${input.tag || 'latest'}`);
           // Notify groupchat via send_channel_message
           const notifyMsg = `🚀 **Riley self-deployed** to Cloud Run: ${input.tag || 'latest'}. Tests + typecheck passed. @jordan`;
-          await discordSendMessage('groupchat', notifyMsg, undefined, context.agentId).catch(() => {});
-          await discordSendMessage('upgrades', `🚀 Riley self-deployed revision: ${input.tag || 'latest'}`, undefined, context.agentId).catch(() => {});
+          await discordSendMessage('groupchat', notifyMsg, undefined, context.agentId).catch(e => console.error('[deploy] groupchat notify failed:', errMsg(e)));
+          await discordSendMessage('upgrades', `🚀 Riley self-deployed revision: ${input.tag || 'latest'}`, undefined, context.agentId).catch(e => console.error('[deploy] upgrades notify failed:', errMsg(e)));
           // Post-deploy: kick off readiness smoke tests automatically
           smokeTestAgents({ profile: 'readiness', timeoutMs: 90_000 })
             .then(async (smokeResult) => {
               const passed = smokeResult.includes('100%') || (smokeResult.includes('pass') && !smokeResult.includes('FAIL'));
               const emoji = passed ? '✅' : '⚠️';
               const summary = smokeResult.length > 1500 ? smokeResult.slice(-1500) : smokeResult;
-              await discordSendMessage('operations', `${emoji} **Post-deploy readiness smoke** (${input.tag || 'latest'}):\n${summary}`, undefined, context.agentId).catch(() => {});
+              await discordSendMessage('operations', `${emoji} **Post-deploy readiness smoke** (${input.tag || 'latest'}):\n${summary}`, undefined, context.agentId).catch(e => console.error('[deploy] ops smoke-post failed:', errMsg(e)));
             })
-            .catch(() => {}); // fire-and-forget, don't block deploy response
+            .catch(e => console.error('[deploy] post-deploy smoke failed:', errMsg(e)));
         }
         return deployResult;
       }
@@ -3081,7 +3093,7 @@ function runTypecheck(target: 'client' | 'server' | 'both'): string {
 
   if (target === 'client' || target === 'both') {
     try {
-      execSync('npx tsc --noEmit', {
+      execSync('node_modules/.bin/tsc --noEmit', {
         cwd: REPO_ROOT,
         timeout: 60_000,
         maxBuffer: 512 * 1024,
@@ -3097,7 +3109,7 @@ function runTypecheck(target: 'client' | 'server' | 'both'): string {
 
   if (target === 'server' || target === 'both') {
     try {
-      execSync('npx tsc --noEmit', {
+      execSync('node_modules/.bin/tsc --noEmit', {
         cwd: SERVER_ROOT,
         timeout: 60_000,
         maxBuffer: 512 * 1024,
@@ -4253,8 +4265,14 @@ async function repoMemoryAddOss(title: string, content: string, tagsRaw?: string
 }
 
 
+const DDL_PATTERN = /\b(drop|truncate|alter|create|grant|revoke|vacuum|reindex)\b/i;
+
 async function dbQuery(query: string, paramsStr?: string): Promise<string> {
   try {
+    const cleaned = sanitizeSql(query);
+    if (DDL_PATTERN.test(cleaned)) {
+      return 'Blocked: db_query does not allow DDL/admin statements (DROP, TRUNCATE, ALTER, CREATE, GRANT, REVOKE, VACUUM, REINDEX). Use SELECT, INSERT, UPDATE, or DELETE only.';
+    }
     const pool = (await import('../db/pool')).default;
     let params: any[] = [];
     if (paramsStr) {
