@@ -7,7 +7,7 @@ import { GoogleAuth } from 'google-auth-library';
 import { ensureGoogleCredentials, getAccessTokenViaGcloud } from '../services/googleCredentials';
 
 import { logAgentEvent } from './activityLog';
-import { AgentConfig } from './agents';
+import { AgentConfig, getRileyPersonality, getRileyMemory } from './agents';
 import { getOrCreateContentCache } from './contextCache';
 import { classifyInput, classifyOutput, sanitizeOutputForSecrets } from './guardrails';
 import { isLowSignalCompletion } from './handlers/responseNormalization';
@@ -2558,8 +2558,19 @@ UPGRADES CHANNEL:
 - Flag token waste or Discord UX friction when noticed.
 `;
 
-  const systemPrompt = `${agent.systemPrompt}
+  const rileyContext = agent.id === 'executive-assistant'
+    ? (() => {
+        const parts: string[] = [];
+        const personality = getRileyPersonality();
+        if (personality) parts.push(`<personality>\n${personality}\n</personality>`);
+        const memory = getRileyMemory();
+        if (memory) parts.push(`<persistent_memory>\n${memory}\n</persistent_memory>`);
+        return parts.length ? '\n' + parts.join('\n') + '\n' : '';
+      })()
+    : '';
 
+  const systemPrompt = `${agent.systemPrompt}
+${rileyContext}
 <project_context>
 ${getProjectContextForAgent(agent.id)}
 </project_context>
