@@ -1423,10 +1423,21 @@ export async function handleGroupchatMessage(
   if (!content) return;
 
   // During an active smoke_test_agents run, tester bot messages are subprocess
-  // probes (budget approval, [smoke test:...] prompts). They must not abort
-  // the parent Riley call or spawn new goal processing.
+  // probes (test prompts, budget approval, status checks). They must NOT abort
+  // the parent Riley call. Process them on a parallel path so the serialized
+  // messageQueue doesn't deadlock (Riley blocks the queue while smoke_test_agents
+  // waits for these very messages to be processed).
   if (activeSmokeTestRunning && message.author.bot && isTesterBotId(message.author.id)) {
-    console.log(`[smoke-guard] Ignoring tester bot message during active smoke test: "${content.slice(0, 80)}"`);
+    console.log(`[smoke-guard] Processing tester bot message in parallel during active smoke test: "${content.slice(0, 80)}"`);
+    // Skip budget/status/voice messages that are smoke test scaffolding, not actual test prompts
+    if (/^approve budget|^tester\s+say:|status$/i.test(content.replace(/<@[!&]?\d+>\s*/g, '').trim())) {
+      console.log(`[smoke-guard] Skipping scaffolding message: "${content.slice(0, 60)}"`);
+      return;
+    }
+    // Fire-and-forget: process test prompts without blocking the main queue or aborting Riley
+    void processGroupchatMessage(message, content, groupchat).catch((err) => {
+      console.error('[smoke-guard] Parallel smoke test message processing failed:', err instanceof Error ? err.message : String(err));
+    });
     return;
   }
 
