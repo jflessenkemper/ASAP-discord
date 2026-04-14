@@ -2461,7 +2461,9 @@ export async function agentRespond(
   let sawToolFailure = false;
   let autoBudgetPassesUsed = 0;
 
-  if (isCreditsExhaustedNow()) {
+  // Only block on Gemini quota fuse if this agent would actually use a Gemini model
+  const agentModel = options?.modelOverride || modelForAgent(agent.id, userMessage);
+  if (isCreditsExhaustedNow() && !isAnthropicModel(agentModel)) {
     const recoveryTime = formatRecoveryTime(creditsExhaustedUntil);
     return agent.id === 'executive-assistant'
       ? `⚠️ Gemini quota is exhausted right now. Automatic retries resume at ${recoveryTime}. Pause the team and ask Jordan to check Google Cloud billing before more work continues.`
@@ -2617,7 +2619,7 @@ RUNTIME EFFICIENCY:
 - Each tool call costs tokens. Prefer targeted reads, concise summaries, and the narrowest agent/tool path that can finish the job.
 - Prefer check_file_exists before broad search/read when you only need to validate presence.${outputModePrompt}`;
 
-  let currentModelName = options?.modelOverride || options?.chatSession?.modelName || (isVoiceLane ? VOICE_FAST_MODEL : modelForAgent(agent.id, userMessage));
+  let currentModelName = options?.modelOverride || options?.chatSession?.modelName || (isVoiceLane ? VOICE_FAST_MODEL : agentModel);
   let escalatedToPro = currentModelName === GEMINI_PRO;
   let opusFallbackUsed = false;
 
