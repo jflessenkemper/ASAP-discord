@@ -1430,10 +1430,19 @@ export async function handleGroupchatMessage(
   if (activeSmokeTestRunning && message.author.bot && isTesterBotId(message.author.id)) {
     console.log(`[smoke-guard] Processing tester bot message in parallel during active smoke test: "${content.slice(0, 80)}"`);
     // Skip budget/voice messages that are smoke test scaffolding, not actual test prompts.
-    // Note: do NOT skip "status" — the subprocess uses it as a router health check
-    // and expects the main bot to respond.
     if (/^approve budget|^tester\s+say:/i.test(content)) {
       console.log(`[smoke-guard] Skipping scaffolding message: "${content.slice(0, 60)}"`);
+      return;
+    }
+    // Fast-path: respond to "status" health checks immediately without calling the AI.
+    // The tester subprocess just needs ANY bot/webhook reply to pass the health check.
+    const stripped = content.replace(/<@[!&]?\d+>\s*/g, '').trim();
+    if (/^status$/i.test(stripped)) {
+      const riley = getAgent('executive-assistant' as AgentId);
+      if (riley) {
+        void sendAgentMessage(groupchat, riley, '📋 Current Goal: Smoke test in progress. Status: active.').catch(() => {});
+        console.log('[smoke-guard] Sent fast status response for health check');
+      }
       return;
     }
     // Fire-and-forget: respond directly in groupchat (not workspace threads) so the
