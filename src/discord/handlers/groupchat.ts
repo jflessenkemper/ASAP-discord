@@ -1756,10 +1756,15 @@ async function handleRileyMessage(
     if (signal?.aborted) return;
 
     const implicitTags = inferImplicitActionTags(displayResponse);
+    // When Riley was asked to execute smoke_test_agents directly, suppress the implicit
+    // [ACTION:SMOKE] tag to avoid running a redundant second smoke test via runSmokeSummary.
+    const filteredImplicitTags = shouldExecuteDirectly
+      ? implicitTags.replace(/\[ACTION:SMOKE\]/gi, '').trim()
+      : implicitTags;
     const machineTagsBlock = machineActionTags.join('\n');
     const actionPayloadBase = orchestrationResponse;
-    const actionPayload = [actionPayloadBase, machineTagsBlock, implicitTags].filter(Boolean).join('\n');
-    if (implicitTags) {
+    const actionPayload = [actionPayloadBase, machineTagsBlock, filteredImplicitTags].filter(Boolean).join('\n');
+    if (filteredImplicitTags) {
       await sendAutopilotAudit(
         groupchat,
         'implied_actions',

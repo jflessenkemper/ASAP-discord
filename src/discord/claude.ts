@@ -2446,11 +2446,14 @@ export async function agentRespond(
     : agent.id === 'executive-assistant'
       ? MAX_TOOL_ROUNDS_EXECUTIVE
       : MAX_TOOL_ROUNDS;
-  const verificationRoundCap = (agent.id === 'executive-assistant' && isVerificationTaskPrompt(userMessage))
+  // Direct tool requests (e.g. "run smoke tests") should NOT be capped as verification tasks.
+  // The verification cap is for lightweight checks, not tool-heavy execution requests.
+  const isDirectToolExecution = /smoke_test_agents|run\s+(all\s+)?(smoke|test)|test\s+engine/i.test(userMessage);
+  const verificationRoundCap = (agent.id === 'executive-assistant' && isVerificationTaskPrompt(userMessage) && !isDirectToolExecution)
     ? Math.min(baseToolRounds, 2)
     : baseToolRounds;
   const maxToolRounds = verificationRoundCap + Math.max(0, options?.toolRoundBoost || 0);
-  const smokePrompt = isSmokePrompt(userMessage);
+  const smokePrompt = isSmokePrompt(userMessage) || isDirectToolExecution;
   const toolThreadKey = resolveToolThreadKey(agent.id, conversationHistory, userMessage, options?.threadKey);
   let activeToolBudget = smokePrompt ? Math.max(maxToolRounds * 4, 40) : resolveInitialToolBudget(agent.id, maxToolRounds);
   let toolBudgetEscalated = false;
