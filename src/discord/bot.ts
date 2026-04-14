@@ -488,6 +488,11 @@ export async function startBot(): Promise<void> {
   });
 
   client.on(Events.MessageCreate, async (message) => {
+    // Debug: trace message reception for groupchat channel
+    if (botChannels && message.channel.id === botChannels.groupchat.id) {
+      console.log(`[msg-trace] author=${message.author.id} bot=${message.author.bot} tester=${isTesterBotId(message.author.id)} content="${String(message.content || '').slice(0, 60)}"`);
+    }
+
     if (botChannels && message.channel.id === botChannels.groupchat.id) {
       const linkSpam = message.author.bot
         && /🔗\s*\*\*ASAP Links\*\*|Cloud Build\*\*:\s*https?:\/\//i.test(String(message.content || ''));

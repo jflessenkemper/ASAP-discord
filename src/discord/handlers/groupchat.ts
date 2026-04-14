@@ -140,6 +140,13 @@ let messageQueue: Promise<void> = Promise.resolve();
 // bot follows the newest user intent instead of finishing stale tasks.
 let activeAbortController: AbortController | null = null;
 let activeThinkingMessage: Message | null = null;
+
+// When true, a smoke_test_agents tool call is in progress. Tester bot messages
+// arriving during this window are subprocess probes and must NOT abort or
+// re-enter the main message queue.
+let activeSmokeTestRunning = false;
+export function setActiveSmokeTestRunning(val: boolean): void { activeSmokeTestRunning = val; }
+export function isActiveSmokeTestRunning(): boolean { return activeSmokeTestRunning; }
 let claudeNotificationsBoundChannelId: string | null = null;
 const MAX_PARALLEL_SUBAGENTS = parseInt(process.env.MAX_PARALLEL_SUBAGENTS || '3', 10);
 const SUBAGENT_MAX_TOKENS = parseInt(process.env.SUBAGENT_MAX_TOKENS || '900', 10);
@@ -1414,6 +1421,15 @@ export async function handleGroupchatMessage(
 ): Promise<void> {
   const content = message.content.trim();
   if (!content) return;
+
+  // During an active smoke_test_agents run, tester bot messages are subprocess
+  // probes (budget approval, [smoke test:...] prompts). They must not abort
+  // the parent Riley call or spawn new goal processing.
+  if (activeSmokeTestRunning && message.author.bot && isTesterBotId(message.author.id)) {
+    console.log(`[smoke-guard] Ignoring tester bot message during active smoke test: "${content.slice(0, 80)}"`);
+    return;
+  }
+
   if (isDuplicateGroupchatMessage(message, content)) {
     await sendQuickRileyMessage(groupchat, '⏳ I already received that request and I am still processing it.');
     return;

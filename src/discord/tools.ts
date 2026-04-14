@@ -28,6 +28,7 @@ import {
 
 import { getAgent, AgentId } from './agents';
 import { getRequiredReviewers } from './handlers/review';
+import { setActiveSmokeTestRunning } from './handlers/groupchat';
 import { mobileHarnessStart, mobileHarnessStep, mobileHarnessSnapshot, mobileHarnessStop } from './services/mobileHarness';
 import { captureAndPostScreenshots } from './services/screenshots';
 import { getWebhook } from './services/webhooks';
@@ -2613,6 +2614,7 @@ async function smokeTestAgents(opts: SmokeTestOptions = {}): Promise<string> {
   const profileEnv = opts.profile === 'readiness' ? 'readiness' : '';
 
   const execAsync = promisify(exec);
+  setActiveSmokeTestRunning(true);
   try {
     const { stdout, stderr } = await execAsync(cmd, {
       cwd: SERVER_ROOT,
@@ -2635,6 +2637,8 @@ async function smokeTestAgents(opts: SmokeTestOptions = {}): Promise<string> {
     const execErr = err as { stdout?: string; stderr?: string; message?: string };
     const output = `${execErr.stdout || ''}\n${execErr.stderr || ''}`.trim();
     return `Smoke test finished with failures:\n${(output || execErr.message || 'Unknown error').slice(-4000)}`;
+  } finally {
+    setActiveSmokeTestRunning(false);
   }
 }
 
