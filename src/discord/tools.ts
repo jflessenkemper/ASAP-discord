@@ -218,7 +218,7 @@ export const REPO_TOOLS = [
   {
     name: 'edit_file',
     description:
-      'Replace an exact string in a file with a new string. The old_string must appear exactly once. IMPORTANT: Always use read_file first to see the exact current content, then copy the old_string verbatim from the read_file output. Do not guess or reconstruct the old_string from memory. Include 2-3 surrounding context lines to be unambiguous.',
+      'Replace an exact string in a file. old_string must appear exactly once. Always read_file first, copy old_string verbatim, include 2-3 context lines.',
     input_schema: {
       type: 'object' as const,
       properties: {
@@ -290,7 +290,7 @@ export const REPO_TOOLS = [
   {
     name: 'run_command',
     description:
-      'Run a shell command in the repository root. Use for: npm scripts, TypeScript type-checking, git operations, etc. Commands run in a sandboxed context with a 2-minute timeout.',
+      'Run a shell command in the repo root. 2-minute timeout, sandboxed.',
     input_schema: {
       type: 'object' as const,
       properties: {
@@ -441,7 +441,7 @@ export const REPO_TOOLS = [
   {
     name: 'smoke_test_agents',
     description:
-      'Run the Discord smoke-test suite through ASAPTester. Supports filtering by agent, capability, profile, or rerunning only previous failures. Use this after important routing or orchestration changes to verify agents still respond correctly end-to-end.',
+      'Run the Discord smoke-test suite. Supports agent/capability/profile filters and rerun-failed mode.',
     input_schema: {
       type: 'object' as const,
       properties: {
@@ -502,7 +502,7 @@ export const REPO_TOOLS = [
   {
     name: 'delete_channel',
     description:
-      'Permanently delete a Discord channel by name. Cannot delete protected core/operations channels (groupchat, voice, thread-status, decisions, github, upgrades, tools, call-log, limits, cost, screenshots, url, terminal, voice-errors, agent-errors). NEVER use this for "reset/clear" requests — use RESET_CHANNELS workflow instead.',
+      'Delete a Discord channel by name. Protected core channels cannot be deleted. Use clear_channel_messages for reset/clear.',
     input_schema: {
       type: 'object' as const,
       properties: {
@@ -620,7 +620,7 @@ export const REPO_TOOLS = [
   {
     name: 'read_channel_messages',
     description:
-      'Read recent messages from a Discord channel. Useful for checking agent errors, audit logs, smoke test results, model health, and other operational channels.',
+      'Read recent messages from a Discord channel. Supports text search filtering.',
     input_schema: {
       type: 'object' as const,
       properties: {
@@ -700,7 +700,7 @@ export const REPO_TOOLS = [
   {
     name: 'github_search',
     description:
-      'Search the ASAP GitHub repository for code, issues/PRs, or commits. Use this to find things across the repo history, open issues, or specific code patterns on GitHub.',
+      'Search the GitHub repo for code, issues/PRs, or commits.',
     input_schema: {
       type: 'object' as const,
       properties: {
@@ -719,7 +719,7 @@ export const REPO_TOOLS = [
   {
     name: 'typecheck',
     description:
-      'Run TypeScript type-checking (tsc --noEmit) on the client app, server, or both. Returns any type errors found. Use this after making code changes to verify correctness.',
+      'Run TypeScript type-checking (tsc --noEmit). Returns any type errors found.',
     input_schema: {
       type: 'object' as const,
       properties: {
@@ -734,7 +734,7 @@ export const REPO_TOOLS = [
   {
     name: 'batch_edit',
     description:
-      'Apply multiple file edits in a single tool call. More efficient than calling edit_file multiple times. Each edit replaces an exact string in a file (old_string must appear exactly once). IMPORTANT: Always read_file first to see exact current content before constructing old_string values. Edits are applied sequentially — later edits see the results of earlier ones.',
+      'Apply multiple file edits in one call. Each edit replaces an exact string (must appear once). Always read_file first. Edits apply sequentially.',
     input_schema: {
       type: 'object' as const,
       properties: {
@@ -758,7 +758,7 @@ export const REPO_TOOLS = [
   {
     name: 'capture_screenshots',
     description:
-      'Capture screenshots of the live app and post them to Discord. Defaults to the invoking agent channel, or #screenshots if no agent channel is available. Uses headless Chromium sized to iPhone 17 Pro Max.',
+      'Capture screenshots of the live app and post to Discord. Uses headless mobile Chromium.',
     input_schema: {
       type: 'object' as const,
       properties: {
@@ -1030,7 +1030,7 @@ export const REPO_TOOLS = [
   {
     name: 'gcp_logs_query',
     description:
-      'Query Cloud Logging across any GCP service using a full filter expression. More powerful than read_logs — supports any resource type (cloud_run_revision, gce_instance, cloudsql_database, etc.), severity filters, and time ranges.',
+      'Query Cloud Logging with a full filter expression. Supports any resource type, severity, and time ranges.',
     input_schema: {
       type: 'object' as const,
       properties: {
@@ -1103,7 +1103,7 @@ export const REPO_TOOLS = [
   {
     name: 'gcp_vm_ssh',
     description:
-      'Run a validated command on the GCE VM (asap-bot-vm) via gcloud SSH. Use to restart the Discord bot, pull code, check PM2 status, or inspect VM health. Commands must match the safe allowlist.',
+      'Run a validated command on the bot VM via SSH. Commands must match the safe allowlist.',
     input_schema: {
       type: 'object' as const,
       properties: {
@@ -1128,7 +1128,7 @@ export const REPO_TOOLS = [
   {
     name: 'set_daily_budget',
     description:
-      'Set the daily Gemini/AI spend cap (in USD) for ALL agents. Call this when agents are being blocked by the budget gate or when Jordan has authorised a higher limit. The new limit takes effect immediately (no restart needed) and is persisted to the .env file so it survives restarts. Riley is the primary user of this tool — use it proactively rather than letting agents stall.',
+      'Set the daily AI spend cap in USD. Takes effect immediately and persists across restarts.',
     input_schema: {
       type: 'object' as const,
       properties: {
@@ -1147,7 +1147,7 @@ export const REPO_TOOLS = [
   {
     name: 'fetch_url',
     description:
-      'Fetch the content of any URL (web pages, APIs, npm registry, documentation, JSON endpoints). Returns the response body as text. Use this to research libraries, read docs, check APIs, or fetch any web resource. Supports GET and POST.',
+      'Fetch any URL content (web pages, APIs, docs). Returns response body as text. Supports GET and POST.',
     input_schema: {
       type: 'object' as const,
       properties: {
@@ -1237,7 +1237,7 @@ export const REPO_TOOLS = [
   {
     name: 'repo_memory_index',
     description:
-      'Build or refresh a persistent searchable index of repository files in PostgreSQL. Use this before deep implementation work to reduce repeated file reads across agents.',
+      'Build or refresh the persistent searchable repo index in PostgreSQL.',
     input_schema: {
       type: 'object' as const,
       properties: {
@@ -1256,7 +1256,7 @@ export const REPO_TOOLS = [
   {
     name: 'repo_memory_search',
     description:
-      'Search the persistent repo/OSS knowledge index using full-text retrieval. Returns the most relevant chunks with source paths so agents can target reads.',
+      'Search the persistent repo/OSS knowledge index. Returns relevant chunks with source paths.',
     input_schema: {
       type: 'object' as const,
       properties: {
@@ -1302,7 +1302,7 @@ export const REPO_TOOLS = [
   {
     name: 'db_query_readonly',
     description:
-      'Execute a read-only SQL query (SELECT/CTE/EXPLAIN/SHOW) against the ASAP PostgreSQL database. Any write/mutation SQL is blocked.',
+      'Execute a read-only SQL query against the PostgreSQL database. Writes are blocked.',
     input_schema: {
       type: 'object' as const,
       properties: {
@@ -1321,7 +1321,7 @@ export const REPO_TOOLS = [
   {
     name: 'db_query',
     description:
-      'Execute a SQL query against the ASAP PostgreSQL database (Cloud SQL). Returns results as formatted text. Use for SELECT queries to inspect data, debug issues, or analyze the database. Write queries (INSERT, UPDATE, DELETE, CREATE, ALTER, DROP) are also allowed but use with care.',
+      'Execute a SQL query against the PostgreSQL database. Read and write queries supported.',
     input_schema: {
       type: 'object' as const,
       properties: {

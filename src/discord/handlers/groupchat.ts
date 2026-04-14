@@ -171,7 +171,7 @@ const AUTO_REBUILD_ERROR_COOLDOWN_MS = parseInt(process.env.AUTO_REBUILD_ERROR_C
 const URL_ACTION_COOLDOWN_MS = parseInt(process.env.URL_ACTION_COOLDOWN_MS || '1800000', 10);
 const GROUPCHAT_DUPLICATE_WINDOW_MS = parseInt(process.env.GROUPCHAT_DUPLICATE_WINDOW_MS || '10000', 10);
 /** Maximum continuation cycles for multi-step tasks before stopping. */
-const MAX_CONTINUATION_CYCLES = parseInt(process.env.RILEY_MAX_CONTINUATION_CYCLES || '5', 10);
+const MAX_CONTINUATION_CYCLES = parseInt(process.env.RILEY_MAX_CONTINUATION_CYCLES || '3', 10);
 const APP_SERVER_ROOT = (fs.existsSync(path.join(process.cwd(), 'package.json')) && fs.existsSync(path.join(process.cwd(), 'src')))
   ? process.cwd()
   : path.resolve(__dirname, '../../..');
@@ -2929,28 +2929,12 @@ async function dispatchAceWithQualityGate(
     if (!signal?.aborted && needsQualityRetry()) {
       aceResponse = await dispatchToAgent(
         'developer',
-        '[System quality check] Your last update did not satisfy execution standards. Do not delegate back to Ace, do not ask others to investigate, and do not use placeholders. Execute directly and provide a concrete completion summary with these exact sections: Result, Evidence, Risk/Follow-up. Include at least one real file path and one validation command or check.',
-        aceChannel,
-        {
-          signal,
-          maxTokens: Math.max(SUBAGENT_MAX_TOKENS, 700),
-          persistUserContent: '[System quality check for Ace response detail]',
-          documentLine: '✅ {response}',
-          workspaceChannel,
-          suppressVisibleOutput: shouldSuppressAceVisibleOutput,
-        }
-      );
-    }
-
-    if (!signal?.aborted && needsQualityRetry()) {
-      aceResponse = await dispatchToAgent(
-        'developer',
-        '[System quality check final] Return only this format and fill it concretely:\nResult: <one sentence>\nEvidence: files=<path1,path2>; checks=<command and outcome>\nRisk/Follow-up: <one sentence>.\nNo delegation text. No placeholders.',
+        '[System quality check] Execute directly and provide a concrete completion summary: Result (one sentence), Evidence (file paths + validation), Risk/Follow-up (one sentence). No delegation, no placeholders.',
         aceChannel,
         {
           signal,
           maxTokens: Math.max(SUBAGENT_MAX_TOKENS, 500),
-          persistUserContent: '[System final quality check for Ace response detail]',
+          persistUserContent: '[System quality check for Ace response detail]',
           documentLine: '✅ {response}',
           workspaceChannel,
           suppressVisibleOutput: shouldSuppressAceVisibleOutput,

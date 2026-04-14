@@ -54,11 +54,11 @@ const DEFAULT_CODING_MODEL = process.env.CODING_AGENT_MODEL || ANTHROPIC_OPUS;
 const DEFAULT_FAST_MODEL = process.env.FAST_AGENT_MODEL || ANTHROPIC_SONNET;
 const VOICE_FAST_MODEL = process.env.VOICE_FAST_MODEL || DEFAULT_FAST_MODEL;
 const VERTEX_OPUS_ONLY_MODE = process.env.VERTEX_OPUS_ONLY_MODE === 'true';
-const FORCE_OPUS_FOR_CODE_WORK = process.env.FORCE_OPUS_FOR_CODE_WORK !== 'false';
-const DEVELOPER_ALWAYS_OPUS = process.env.DEVELOPER_ALWAYS_OPUS !== 'false';
+const FORCE_OPUS_FOR_CODE_WORK = process.env.FORCE_OPUS_FOR_CODE_WORK === 'true';
+const DEVELOPER_ALWAYS_OPUS = process.env.DEVELOPER_ALWAYS_OPUS === 'true';
 const COMPACT_RUNTIME_TOOL_PROMPTS = process.env.COMPACT_RUNTIME_TOOL_PROMPTS !== 'false';
 const CODE_HEAVY_AGENT_IDS = new Set(['developer', 'devops', 'ios-engineer', 'android-engineer']);
-const CODE_WORK_RE = /\b(?:code|coding|implement|implementation|fix|bug|debug|refactor|build|compile|lint|typecheck|test(?:s|ing)?|deploy|migration|schema|sql|query|api|endpoint|component|screen|tsx|jsx|react|expo|node|frontend|backend|repo|commit|branch|diff|patch|pull request|pr)\b/i;
+const CODE_WORK_RE = /\b(?:code|coding|implement(?:ation)?|fix(?:ing)?\s+(?:bug|error|crash|issue)|bug(?:fix)?|debug(?:ging)?|refactor(?:ing)?|build(?:ing)?\s+(?:the|a|this)|compile|lint(?:ing)?|typecheck(?:ing)?|deploy(?:ing|ment)?|migration|schema\s+(?:change|update|migration)|pull\s*request|merge\s+(?:pr|branch)|tsx|jsx|react\s+(?:native|component)|expo\s+(?:build|update))\b/i;
 const TOOL_ACTION_RE = /\b(?:run|read|search|grep|inspect|check|verify|edit|change|update|deploy|build|test|commit|push|rollback|migrate|open)\b/i;
 const SIMPLE_FAST_PATH_RE = /^(?:ok(?:ay)?|yes|no|thanks?|thank you|status|summary|summari[sz]e|what happened|why|how|help|ping|continue|proceed|looks good|sounds good)\b/i;
 const DIRECT_ANSWER_ONLY_RE = /^(?:ok(?:ay)?|yes|no|thanks?|thank you|understood|sounds good|what does|what is|why is|how does|explain|summari[sz]e|clarify)\b/i;
@@ -197,8 +197,9 @@ function isAgentModelLocked(agentId: string): string | null {
   const overrideKey = `AGENT_MODEL_OVERRIDE_${agentId.replace(/-/g, '_')}`;
   const override = process.env[overrideKey];
   if (override) return override;
-  // Riley and Ace are always locked to Opus
+  // Riley is always locked to Opus for orchestration quality
   if (agentId === 'executive-assistant') return DEFAULT_CODING_MODEL;
+  // Ace can be locked to Opus via env var (default: off, uses Sonnet)
   if (agentId === 'developer' && DEVELOPER_ALWAYS_OPUS) return DEFAULT_CODING_MODEL;
   return null;
 }
@@ -226,7 +227,7 @@ function modelForAgent(agentId: string, userMessage: string): string {
   if (isSimpleFastPathPrompt(userMessage)) {
     return resolveHealthyModel(DEFAULT_FAST_MODEL);
   }
-  if (CODE_HEAVY_AGENT_IDS.has(agentId) && isCodeWorkPrompt(userMessage)) {
+  if (CODE_HEAVY_AGENT_IDS.has(agentId) && isHighStakesPrompt(userMessage)) {
     return resolveHealthyModel(DEFAULT_CODING_MODEL);
   }
   if (FORCE_OPUS_FOR_CODE_WORK && isCodeWorkPrompt(userMessage)) {
@@ -1348,8 +1349,8 @@ export function extractAgentResponseEnvelope(text: string): AgentResponseEnvelop
 }
 
 /** Max tool-use iterations before forcing a text response. Lower defaults help stop runaway loops. */
-const MAX_TOOL_ROUNDS = parseInt(process.env.MAX_TOOL_ROUNDS || '18', 10);
-const MAX_TOOL_ROUNDS_DEVELOPER = parseInt(process.env.MAX_TOOL_ROUNDS_DEVELOPER || '40', 10);
+const MAX_TOOL_ROUNDS = parseInt(process.env.MAX_TOOL_ROUNDS || '12', 10);
+const MAX_TOOL_ROUNDS_DEVELOPER = parseInt(process.env.MAX_TOOL_ROUNDS_DEVELOPER || '25', 10);
 const MAX_TOOL_ROUNDS_EXECUTIVE = parseInt(process.env.MAX_TOOL_ROUNDS_EXECUTIVE || '12', 10);
 /** Optional one-time extra Riley pass. Default ON (+6 rounds) so Riley can finish orchestration. */
 const RILEY_AUTO_TOOL_EXTENSION = parseInt(process.env.RILEY_AUTO_TOOL_EXTENSION || '6', 10);
@@ -2490,7 +2491,6 @@ export async function agentRespond(
       : `⚠️ Daily budget of $${limit.toFixed(2)} has been reached ($${spent.toFixed(2)} spent) and runtime auto-approval could not clear it. Ask Riley to escalate only if she confirms the budget gate is still blocking.`;
   }
 
-  const hasFullRepoTools = hasFullRepoToolAccess(agent.id);
   const { remaining, spent, limit } = getRemainingBudget();
   const { used: tokenUsed, remaining: tokenRemaining, limit: tokenLimit } = getClaudeTokenStatus();
 
@@ -2502,60 +2502,36 @@ CRITICAL: Do NOT use send_channel_message — use Discord mentions for agent coo
 ` : '';
 
   const budgetGovernance = RILEY_AUTO_APPROVE_BUDGET
-    ? `
-- Budget autopilot is enabled. If the runtime budget gate trips, it may auto-approve additional budget in $${RILEY_AUTO_APPROVE_BUDGET_INCREMENT.toFixed(2)} increments for you.
-- Do NOT ask Jordan for budget approval merely because budget is low or because you see a warning. Keep working unless you receive an explicit hard budget block after auto-approval has already been attempted.
-`
-    : `
-- When the team hits a limit, pause the work, explain what increase is needed, and ask Jordan for explicit approval before anyone resumes.
-`;
+    ? `\n- Budget autopilot enabled ($${RILEY_AUTO_APPROVE_BUDGET_INCREMENT.toFixed(2)} increments). Keep working unless hard budget block after auto-approval.\n`
+    : `\n- On budget limit: pause, explain needed increase, wait for Jordan approval.\n`;
 
   const workerBudgetGovernance = RILEY_AUTO_APPROVE_BUDGET
-    ? `
-- Budget autopilot is enabled through Riley/runtime. Do not suggest stopping for budget unless Riley explicitly confirms a hard budget block remains after auto-approval.
-`
-    : `
-- Riley is the token master. Never ask Jordan directly for more tokens, budget, or credits. Ask Riley so she can seek approval.
-`;
+    ? `\n- Budget autopilot active. Only stop for budget if Riley confirms hard block.\n`
+    : `\n- Riley is token master. Ask Riley (not Jordan) for budget/credits.\n`;
 
   const governanceSection = agent.id === 'executive-assistant' ? `
 GOVERNANCE:
-- You are Jordan's token master. Any request to increase Gemini tokens, Google Cloud credits, ElevenLabs credit, or daily budget must come through you.
-- Only escalate budget to Jordan if a hard budget block remains after runtime auto-approval has already been attempted.
-- Ace is the Tool Master. If tooling is missing, stale, or unreliable, direct @ace to prepare it before the rest of the team proceeds.
-- If a run hits the safety cap, restart with a tighter prompt or hand it to the best specialist instead of letting one loop sprawl.
-- If you state that a deployment/screenshots/URL/cleanup action is happening, you MUST include explicit action tags in the same message: [ACTION:DEPLOY], [ACTION:SCREENSHOTS], [ACTION:URLS], [ACTION:CLEANUP:<count>].
-- If groupchat gets noisy/disjointed, run [ACTION:CLEANUP:<count>] to delete recent bot/webhook clutter before posting the consolidated update.
+- Token master. Budget increases go through you. Escalate to Jordan only after auto-approval fails.
+- Ace is Tool Master. Direct @ace for missing/stale tools.
+- Safety cap hit → tighter prompt or delegate to best specialist.
+- Include action tags: [ACTION:DEPLOY], [ACTION:SCREENSHOTS], [ACTION:URLS], [ACTION:CLEANUP:<count>].
 ${budgetGovernance}
-SELF-IMPROVEMENT & AUTONOMY:
-- You have full code mutation tools: write_file, edit_file, batch_edit, run_command.
-- You have the complete PR workflow: git_create_branch, create_pull_request, merge_pull_request, add_pr_comment, list_pull_requests.
-- You have deploy tools: gcp_deploy, gcp_rollback.
-- You may write code, create branches, commit, create PRs, and merge them yourself. Tests + typecheck are enforced automatically before merge/deploy.
-- You may review and merge Ace's PRs after verifying quality.
-- You may implement improvements from the #upgrades backlog directly, or delegate to @ace and then review/merge his PR.
-- Self-modification flow: create branch → make changes → run tests/typecheck → create PR → merge → deploy.
-- After any self-deploy, notify @jordan in #groupchat with a summary of what changed.
-- Post all self-improvement actions to #upgrades with a summary.
-- You do NOT have access to: gcp_secret_set (secrets are human-managed), db_query (write DB), or Discord channel create/delete/rename.
+SELF-IMPROVEMENT:
+- Full code/PR/deploy tools available. Tests+typecheck enforced before merge.
+- Self-modify: branch → changes → test → PR → merge → deploy → notify @jordan.
+- No access to: gcp_secret_set, db_query (write), Discord channel create/delete.
 ` : agent.id === 'developer' ? `
 GOVERNANCE:
-- You are the Tool Master. Own tool readiness for the whole team.
-- Keep .github/AGENT_TOOLING_STATUS.md accurate, make missing tools available where possible, and confirm readiness before other agents depend on them.
-- Riley is the token master. If more budget, credits, or token headroom is needed, report that to Riley instead of asking Jordan directly.
-- If a run stops at the safety cap, report the current state clearly and wait for a tighter follow-up prompt.
+- Tool Master. Own tool readiness, keep AGENT_TOOLING_STATUS.md current.
+- Riley is token master for budget needs.
 ${workerBudgetGovernance}
 ` : `
 GOVERNANCE:
-- Riley is the token master. Never ask Jordan directly for more tokens, budget, or credits. Ask Riley so she can seek approval.
-- Ace is the Tool Master. Before tool-heavy work, or anytime tool readiness is uncertain, check with @ace first and wait for the green light.
-- If a run stops at the safety cap, report the current state clearly and wait for a tighter follow-up prompt.
+- Riley=token master, Ace=tool master.
 ${workerBudgetGovernance}
 `;
 
-  const toolsSection = hasFullRepoTools
-    ? `\nYou can use the full repo, infra, and Discord tool surface when needed. Stay focused and avoid broad or repetitive scans.`
-    : `\nYou can use the full repo, infra, and Discord tool surface when needed. Stay focused and avoid broad or repetitive scans.`;
+  const toolsSection = `\nFull tool surface available. Stay focused, avoid broad/repetitive scans.`;
 
   const outputModePrompt = requestedOutputMode === 'machine_json'
     ? `
@@ -2578,12 +2554,8 @@ OUTPUT MODE:
 
   const upgradesChannelRule = `
 UPGRADES CHANNEL:
-- When you notice a better way to work, a blocker that should be removed, or a worthwhile enhancement to your job/functionality, post a concise note to #🆙-upgrades using send_channel_message.
-- Keep upgrades posts short and actionable: problem, proposed upgrade, expected benefit, and what implementation support is needed.
-- Post at most one upgrades message per task unless someone explicitly asks for more.
-  - Always include token optimization thinking in your work. If you detect token waste (repeated broad scans, redundant tool calls, oversized outputs) or low token headroom, post at least one token-optimization recommendation to #🆙-upgrades before finishing.
-  - During smoke/readiness checks, each agent should contribute at least one concrete token-saving suggestion to #🆙-upgrades if one has not been posted in that thread yet.
-  - Watch for Discord UX friction during every task: confusing message formatting (walls of text, missing structure), missing embeds or buttons where they would help, noisy/cluttered threads, poor thread naming, invisible tool results (e.g. commits landing with no summary), unnecessary specialist output that clutters the workspace, and any user-flow pain in Discord interactions. Post concrete UX upgrade ideas to #🆙-upgrades.
+- Post improvement ideas to #🆙-upgrades: problem, proposed fix, expected benefit. Max one per task.
+- Flag token waste or Discord UX friction when noticed.
 `;
 
   const systemPrompt = `${agent.systemPrompt}
@@ -2593,31 +2565,19 @@ ${getProjectContextForAgent(agent.id)}
 </project_context>
 
 You are "${agent.name}" responding in Discord.${rileyCoordination}
-RULES: Max 220 words (code exempt). Speak like a real teammate, not a ticket template. Lead with the useful part.${toolsSection}
-Default brevity target: 60-120 words for normal updates; 1-3 short sentences for simple asks.
-AUTHORITY: Any human team member in Discord can request work and should get help. Do not ignore requests because they are not Jordan. Jordan approval is only required for budget/credit increases.
-When doing work, explain a bit more than before: what you're doing, why you're doing it, and what happened.
-Default format (lightweight, not rigid): 1) action taken, 2) key result, 3) immediate next step or blocker (if any).
-If the ask is simple (status check, direct answer, yes/no, one-step clarification), answer in 1-3 short sentences and skip the default status structure.
-Never paste raw JSON or machine envelope text into user-visible chat.
-Do not include internal smoke-test tokens (SMOKE_...) in normal user-visible updates unless a test harness explicitly requires it.
-If you are asking for a decision, stop after presenting the decision and options. Do not continue with an assumption unless the user explicitly told you to proceed by default.
-Use short paragraphs or bullets when helpful. Do not pad with fluff.
-Formatting for Discord readability:
-- Do not use Markdown headings (#, ##, etc.).
-- Avoid excessive bolding. Only bold critical labels or exact decisions.
-- Keep one visual style per message (plain text + simple bullets is preferred).
-Never dump long tool output. Summarize the important result only.
-Never start your visible reply with your own name, a role label, or bracketed speaker text such as "[Liv]:" or "Riley:".
-Describe your role and capabilities plainly. Never call yourself "supreme", say you have "absolute authority", or claim unrestricted control. Do not exaggerate authority, status, or trust relationships.
-Tooling: Ace owns tool readiness. Check .github/AGENT_TOOLING_STATUS.md first. If tooling looks stale or a required tool may not be ready, coordinate with @ace before relying on it.
-Knowledge recall: for any non-trivial task, start with repo_memory_search before broad read/search sweeps. If results are stale or missing, run repo_memory_index first, then continue.
+RULES: Max 220 words (code exempt). Lead with the useful part. 60-120 words normal; 1-3 sentences for simple asks.${toolsSection}
+Any human in Discord can request work. Jordan approval only for budget increases.
+Format: 1) action taken, 2) key result, 3) next step/blocker. Skip structure for simple asks.
+No raw JSON, no SMOKE_ tokens, no headings (#/##), no excessive bold, no name/role prefixes.
+Stop after presenting decisions — don't assume.
+Summarize tool output; never dump raw results.
+Do not exaggerate authority or capabilities.
+Start non-trivial tasks with repo_memory_search before broad scans.
 ${governanceSection}
 ${upgradesChannelRule}
 RUNTIME EFFICIENCY:
-- Runtime budget and token status will be supplied separately in the task context.
-- Each tool call costs tokens. Prefer targeted reads, concise summaries, and the narrowest agent/tool path that can finish the job.
-- Prefer check_file_exists before broad search/read when you only need to validate presence.${outputModePrompt}`;
+- Each tool call costs tokens. Prefer targeted reads and the narrowest path to finish.
+- Prefer check_file_exists before broad search when validating presence.${outputModePrompt}`;
 
   let currentModelName = options?.modelOverride || options?.chatSession?.modelName || (isVoiceLane ? VOICE_FAST_MODEL : agentModel);
   let escalatedToPro = currentModelName === GEMINI_PRO;

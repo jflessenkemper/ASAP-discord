@@ -493,6 +493,7 @@ export function getClaudeTokenStatus(): { used: number; remaining: number; limit
 
 const CLAUDE_INPUT_COST_PER_M = parseFloat(process.env.CLAUDE_INPUT_COST_PER_M || process.env.LLM_INPUT_COST_PER_M || '15');
 const CLAUDE_OUTPUT_COST_PER_M = parseFloat(process.env.CLAUDE_OUTPUT_COST_PER_M || process.env.LLM_OUTPUT_COST_PER_M || '75');
+const CLAUDE_CACHE_READ_COST_PER_M = parseFloat(process.env.CLAUDE_CACHE_READ_COST_PER_M || '1.5');
 const GEMINI_TEXT_INPUT_COST_PER_M = parseFloat(process.env.GEMINI_TEXT_INPUT_COST_PER_M || '0.20');
 const GEMINI_TEXT_OUTPUT_COST_PER_M = parseFloat(process.env.GEMINI_TEXT_OUTPUT_COST_PER_M || '1.27');
 const GEMINI_COST_PER_CALL = parseFloat(process.env.GEMINI_COST_PER_CALL || '0.0001');
@@ -508,8 +509,12 @@ function estimateRequestCostUsd(modelName: string | undefined, inputTokens: numb
 }
 
 function estimateDailyCost(): { claude: number; gemini: number; elevenLabs: number; total: number } {
+  // Discount cache-read tokens: charge at cache rate instead of full input rate
+  const cacheReadTokens = usage.llmCacheReadInputTokens;
+  const nonCacheInputTokens = Math.max(0, usage.anthropicInputTokens - cacheReadTokens);
   const claude =
-    (usage.anthropicInputTokens / 1_000_000) * CLAUDE_INPUT_COST_PER_M +
+    (nonCacheInputTokens / 1_000_000) * CLAUDE_INPUT_COST_PER_M +
+    (cacheReadTokens / 1_000_000) * CLAUDE_CACHE_READ_COST_PER_M +
     (usage.anthropicOutputTokens / 1_000_000) * CLAUDE_OUTPUT_COST_PER_M;
   const geminiText =
     (usage.geminiTextInputTokens / 1_000_000) * GEMINI_TEXT_INPUT_COST_PER_M +

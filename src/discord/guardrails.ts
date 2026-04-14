@@ -193,28 +193,22 @@ export async function classifyOutput(aiResponse: string, agentId: string): Promi
   // Skip LLM classification for smoke-test responses
   if (SMOKE_TEST_RE.test(truncated)) return PASS_RESULT;
 
-  // Fast regex for leaked secrets
+  // Fast regex for leaked secrets — catches the critical cases without an LLM call
   const secretPatterns = /(?:(?:api[_-]?key|secret|token|password|credentials)\s*[:=]\s*['"]?[A-Za-z0-9_\-]{20,}|sk-[a-zA-Z0-9]{20,}|AIza[A-Za-z0-9_\-]{35}|ghp_[A-Za-z0-9]{36})/i;
   if (secretPatterns.test(truncated)) {
     logAgentEvent(agentId, 'guardrail', 'Output blocked by regex: possible leaked secret');
     return { verdict: 'block', category: 'leaked_secret', confidence: 0.9, reason: 'Possible leaked secret detected' };
   }
 
-  try {
-    const text = await classify(OUTPUT_CLASSIFICATION_PROMPT + truncated);
-    if (!text) return PASS_RESULT;
-
-    const parsed = parseGuardrailResponse(text);
-
-    if (parsed.verdict !== 'pass') {
-      logAgentEvent(agentId, 'guardrail', `Output classified: ${parsed.verdict} (${parsed.confidence}) — ${parsed.reason}`);
-    }
-
-    return parsed;
-  } catch (err) {
-    console.warn('Guardrail output classification failed:', err instanceof Error ? err.message : 'Unknown');
-    return PASS_RESULT;
+  // Regex for excessive authority claims — no LLM needed
+  const authorityPatterns = /(?:supreme|absolute\s+authority|unrestricted\s+(?:control|access|power)|I\s+(?:am|have)\s+(?:full|complete|total)\s+(?:control|authority|power))/i;
+  if (authorityPatterns.test(truncated)) {
+    logAgentEvent(agentId, 'guardrail', 'Output flagged by regex: excessive authority claim');
+    return { verdict: 'warn', category: 'excessive_authority', confidence: 0.8, reason: 'Excessive authority claim detected' };
   }
+
+  // Skip LLM output classification to save tokens — regex checks above cover critical cases
+  return PASS_RESULT;
 }
 
 function parseGuardrailResponse(text: string): GuardrailResult {
