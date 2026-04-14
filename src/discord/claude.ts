@@ -186,10 +186,29 @@ function resolveToolThreadKey(
  * - Code-heavy prompts escalate to the coding model when warranted.
  * - Riley still escalates to Pro for non-code high-stakes ops prompts.
  */
+/**
+ * Returns the hard-locked model for an agent, or null if the agent is not locked.
+ * Locked agents NEVER fall back to another model — they retry with backoff instead.
+ * Riley and Ace are always locked to Opus for delegation quality.
+ */
+function isAgentModelLocked(agentId: string): string | null {
+  // Per-agent override is a hard lock (bypass health routing)
+  const overrideKey = `AGENT_MODEL_OVERRIDE_${agentId.replace(/-/g, '_')}`;
+  const override = process.env[overrideKey];
+  if (override) return override;
+  // Riley and Ace are always locked to Opus
+  if (agentId === 'executive-assistant') return DEFAULT_CODING_MODEL;
+  if (agentId === 'developer' && DEVELOPER_ALWAYS_OPUS) return DEFAULT_CODING_MODEL;
+  return null;
+}
+
 function modelForAgent(agentId: string, userMessage: string): string {
   if (VERTEX_OPUS_ONLY_MODE) {
     return DEFAULT_CODING_MODEL;
   }
+  // Hard-locked agents bypass health routing entirely — no fallback ever
+  const locked = isAgentModelLocked(agentId);
+  if (locked) return locked;
   // Per-agent model override via env var (e.g. AGENT_MODEL_OVERRIDE_security_auditor=gemini-2.5-pro)
   const overrideKey = `AGENT_MODEL_OVERRIDE_${agentId.replace(/-/g, '_')}`;
   const override = process.env[overrideKey];
@@ -201,8 +220,7 @@ function modelForAgent(agentId: string, userMessage: string): string {
   }
   // Riley (EA) gets Opus for best orchestration quality
   if (agentId === 'executive-assistant') {
-    if (isSimpleFastPathPrompt(userMessage)) return resolveHealthyModel(DEFAULT_FAST_MODEL);
-    return resolveHealthyModel(DEFAULT_CODING_MODEL);
+    return DEFAULT_CODING_MODEL;
   }
   if (isSimpleFastPathPrompt(userMessage)) {
     return resolveHealthyModel(DEFAULT_FAST_MODEL);
@@ -2677,27 +2695,41 @@ RUNTIME EFFICIENCY:
       logAgentEvent(agent.id, 'error', 'Request interrupted by user', { durationMs: Date.now() - loopStart });
       return '';
     }
-    if (isAnthropicModel(currentModelName) && isAnthropicAuthError(err)) {
-      if (VERTEX_OPUS_ONLY_MODE) {
-        logAgentEvent(agent.id, 'error', 'Anthropic auth failed in Vertex Opus-only mode');
-        return '⚠️ Vertex Anthropic auth/config failed and fallback is disabled (VERTEX_OPUS_ONLY_MODE=true). Check Vertex IAM/model access and retry.';
+    if (isAnthropicModel(currentModelName) && (isAnthropicAuthError(err) || isAnthropicRateLimitError(err))) {
+      const lockedModel = isAgentModelLocked(agent.id);
+      const errKind = isAnthropicAuthError(err) ? 'auth' : 'rate-limit';
+      if (lockedModel || VERTEX_OPUS_ONLY_MODE) {
+        // Hard-locked agents: retry with exponential backoff on the SAME model, never fall back
+        const delays = [5_000, 15_000, 30_000];
+        let retried = false;
+        for (let i = 0; i < delays.length; i++) {
+          logAgentEvent(agent.id, 'error', `Anthropic ${errKind} — locked to ${currentModelName}, retry ${i + 1}/${delays.length} in ${delays[i] / 1000}s`);
+          await new Promise((r) => setTimeout(r, delays[i]));
+          try {
+            response = await withConcurrencyLimit(currentModelName, () =>
+              withRetry(() => sendMessageWithOptionalStream(chat, runtimeUserMessage, options?.signal, options?.onPartialText))
+            , lane);
+            retried = true;
+            break;
+          } catch (retryErr: any) {
+            if (i === delays.length - 1) {
+              logAgentEvent(agent.id, 'error', `Anthropic ${errKind} — all ${delays.length} retries exhausted for locked agent`);
+              return `⏳ ${currentModelName} is ${errKind === 'auth' ? 'unavailable' : 'rate-limited'}. Retried ${delays.length} times over ${delays.reduce((a, b) => a + b, 0) / 1000}s. Try again shortly.`;
+            }
+          }
+        }
+        if (retried) { /* response is set, continue */ }
+      } else {
+        // Non-locked agents: fall back as before
+        const fallbackModel = isAnthropicAuthError(err)
+          ? getNonAnthropicFallbackModel(GEMINI_PRO)
+          : DEFAULT_FAST_MODEL;
+        logAgentEvent(agent.id, 'error', `Anthropic ${errKind} — falling back to ${fallbackModel}`);
+        await swapToModel(fallbackModel, history);
+        response = await withConcurrencyLimit(currentModelName, () =>
+          withRetry(() => sendMessageWithOptionalStream(chat, runtimeUserMessage, options?.signal, options?.onPartialText))
+        , lane);
       }
-      const fallbackModel = getNonAnthropicFallbackModel(GEMINI_PRO);
-      logAgentEvent(agent.id, 'error', `Anthropic auth failed — falling back to ${fallbackModel}`);
-      await swapToModel(fallbackModel, history);
-      response = await withConcurrencyLimit(currentModelName, () =>
-        withRetry(() => sendMessageWithOptionalStream(chat, runtimeUserMessage, options?.signal, options?.onPartialText))
-      , lane);
-    } else if (isAnthropicModel(currentModelName) && isAnthropicRateLimitError(err)) {
-      if (VERTEX_OPUS_ONLY_MODE) {
-        logAgentEvent(agent.id, 'error', 'Anthropic rate limited in Vertex Opus-only mode');
-        return '⏳ Vertex Anthropic is rate-limited and fallback is disabled (VERTEX_OPUS_ONLY_MODE=true). Retry shortly.';
-      }
-      logAgentEvent(agent.id, 'error', 'Anthropic rate limited — falling back to Gemini Flash');
-      await swapToModel(DEFAULT_FAST_MODEL, history);
-      response = await withConcurrencyLimit(currentModelName, () =>
-        withRetry(() => sendMessageWithOptionalStream(chat, runtimeUserMessage, options?.signal, options?.onPartialText))
-      , lane);
     } else if (isGeminiRateLimitError(err) && !opusFallbackUsed && shouldFallbackToOpus(currentModelName)) {
       opusFallbackUsed = true;
       logAgentEvent(agent.id, 'error', `Gemini rate limited — falling back to ${DEFAULT_CODING_MODEL}`);
@@ -3016,32 +3048,43 @@ RUNTIME EFFICIENCY:
         logAgentEvent(agent.id, 'error', 'Request interrupted by user', { durationMs: Date.now() - loopStart });
         return '';
       }
-      if (isAnthropicModel(currentModelName) && isAnthropicAuthError(err)) {
-        if (VERTEX_OPUS_ONLY_MODE) {
-          logAgentEvent(agent.id, 'error', 'Anthropic auth failed mid-loop in Vertex Opus-only mode');
-          return '⚠️ Vertex Anthropic auth/config failed and fallback is disabled (VERTEX_OPUS_ONLY_MODE=true). Check Vertex IAM/model access and retry.';
+      if (isAnthropicModel(currentModelName) && (isAnthropicAuthError(err) || isAnthropicRateLimitError(err))) {
+        const lockedModel = isAgentModelLocked(agent.id);
+        const errKind = isAnthropicAuthError(err) ? 'auth' : 'rate-limit';
+        if (lockedModel || VERTEX_OPUS_ONLY_MODE) {
+          // Hard-locked agents: retry with exponential backoff on the SAME model mid-loop
+          const delays = [5_000, 15_000, 30_000];
+          let retried = false;
+          for (let i = 0; i < delays.length; i++) {
+            logAgentEvent(agent.id, 'error', `Anthropic ${errKind} mid-loop — locked to ${currentModelName}, retry ${i + 1}/${delays.length} in ${delays[i] / 1000}s`);
+            await new Promise((r) => setTimeout(r, delays[i]));
+            try {
+              response = await withConcurrencyLimit(currentModelName, () =>
+                withRetry(() => sendMessageWithOptionalStream(chat, functionResponses, options?.signal, options?.onPartialText))
+              , lane);
+              retried = true;
+              break;
+            } catch (retryErr: any) {
+              if (i === delays.length - 1) {
+                logAgentEvent(agent.id, 'error', `Anthropic ${errKind} mid-loop — all ${delays.length} retries exhausted for locked agent`);
+                return `⏳ ${currentModelName} is ${errKind === 'auth' ? 'unavailable' : 'rate-limited'} mid-loop. Retried ${delays.length} times. Try again shortly.`;
+              }
+            }
+          }
+          if (retried) continue;
+        } else {
+          // Non-locked agents: fall back as before
+          const fallbackModel = isAnthropicAuthError(err)
+            ? getNonAnthropicFallbackModel(GEMINI_PRO)
+            : DEFAULT_FAST_MODEL;
+          logAgentEvent(agent.id, 'error', `Anthropic ${errKind} mid-loop — falling back to ${fallbackModel}`);
+          const accumulatedHistory = await chat.getHistory();
+          await swapToModel(fallbackModel, accumulatedHistory);
+          response = await withConcurrencyLimit(currentModelName, () =>
+            withRetry(() => sendMessageWithOptionalStream(chat, functionResponses, options?.signal, options?.onPartialText))
+          , lane);
+          continue;
         }
-        const fallbackModel = getNonAnthropicFallbackModel(GEMINI_PRO);
-        logAgentEvent(agent.id, 'error', `Anthropic auth failed mid-loop — falling back to ${fallbackModel}`);
-        const accumulatedHistory = await chat.getHistory();
-        await swapToModel(fallbackModel, accumulatedHistory);
-        response = await withConcurrencyLimit(currentModelName, () =>
-          withRetry(() => sendMessageWithOptionalStream(chat, functionResponses, options?.signal, options?.onPartialText))
-        , lane);
-        continue;
-      }
-      if (isAnthropicModel(currentModelName) && isAnthropicRateLimitError(err)) {
-        if (VERTEX_OPUS_ONLY_MODE) {
-          logAgentEvent(agent.id, 'error', 'Anthropic rate limited mid-loop in Vertex Opus-only mode');
-          return '⏳ Vertex Anthropic is rate-limited and fallback is disabled (VERTEX_OPUS_ONLY_MODE=true). Retry shortly.';
-        }
-        logAgentEvent(agent.id, 'error', 'Anthropic rate limited mid-loop — falling back to Gemini Flash');
-        const accumulatedHistory = await chat.getHistory();
-        await swapToModel(DEFAULT_FAST_MODEL, accumulatedHistory);
-        response = await withConcurrencyLimit(currentModelName, () =>
-          withRetry(() => sendMessageWithOptionalStream(chat, functionResponses, options?.signal, options?.onPartialText))
-        , lane);
-        continue;
       }
       if (isGeminiRateLimitError(err) && !opusFallbackUsed && shouldFallbackToOpus(currentModelName)) {
         opusFallbackUsed = true;
