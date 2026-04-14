@@ -1,4 +1,5 @@
-import { execFileSync } from 'child_process';
+import { execFileSync, execFile } from 'child_process';
+import { promisify } from 'util';
 import fs from 'fs';
 import path from 'path';
 
@@ -854,6 +855,24 @@ function runRepoInspection(command: string, cwd = APP_REPO_ROOT): string {
   }
 }
 
+const execFileAsync = promisify(execFile);
+
+/** Async version of runRepoInspection — avoids blocking the event loop for long-running commands like smoke tests. */
+async function runRepoInspectionAsync(command: string, cwd = APP_REPO_ROOT): Promise<string> {
+  try {
+    const { stdout } = await execFileAsync('bash', ['-lc', command], {
+      cwd,
+      timeout: ACTION_COMMAND_TIMEOUT_MS,
+      maxBuffer: 1024 * 1024,
+      env: { ...process.env, CI: 'true' },
+    });
+    return stdout || '';
+  } catch (err) {
+    const execErr = err as { stdout?: string; stderr?: string; message?: string };
+    return execErr.stderr || execErr.stdout || execErr.message || 'Unknown command error';
+  }
+}
+
 async function buildThreadStatusReport(groupchat: TextChannel): Promise<string> {
   const active = await groupchat.threads.fetchActive().catch(() => null);
   const threads = [...(active?.threads.values() || [])]
@@ -964,7 +983,7 @@ async function runSmokeSummary(param?: string): Promise<string> {
     return `${await buildDeploymentHealthReport()}\n\nℹ️ Full Discord smoke runner is not configured on this environment, so I ran the deployment health check instead.`;
   }
 
-  const output = runRepoInspection(
+  const output = await runRepoInspectionAsync(
     `npm run discord:test:dist -- --agent=${JSON.stringify(defaultAgent)}`,
     APP_SERVER_ROOT,
   );
