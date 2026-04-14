@@ -33,6 +33,7 @@ import { mobileHarnessStart, mobileHarnessStep, mobileHarnessSnapshot, mobileHar
 import { captureAndPostScreenshots } from './services/screenshots';
 import { getWebhook } from './services/webhooks';
 import { setDailyBudgetLimit } from './usage';
+import { upsertMemory, appendMemoryRow, readMemoryRow } from './memory';
 import {
   scanAdzuna,
   scanPortals,
@@ -50,6 +51,7 @@ import {
   getPortalByCompany,
 } from '../services/jobSearch';
 import { jobScoreColor, SYSTEM_COLORS, BUTTON_IDS } from './ui/constants';
+import { errMsg } from '../utils/errors';
 
 
 let discordGuild: Guild | null = null;
@@ -1892,7 +1894,7 @@ async function executeToolInternal(
         return `Unknown tool: ${toolName}`;
     }
   } catch (err) {
-    return `Error: ${err instanceof Error ? err.message : 'Unknown error'}`;
+    return `Error: ${errMsg(err)}`;
   }
 }
 
@@ -2437,7 +2439,7 @@ async function gitCreateBranch(branchName: string, baseBranch?: string): Promise
   try {
     return await createBranch(branchName, baseBranch || 'main');
   } catch (err) {
-    return `Error creating branch: ${err instanceof Error ? err.message : 'Unknown'}`;
+    return `Error creating branch: ${errMsg(err)}`;
   }
 }
 
@@ -2463,7 +2465,7 @@ async function ghCreatePR(title: string, body: string, head: string, base?: stri
 
     return `✅ PR #${pr.number} created: ${pr.url}`;
   } catch (err) {
-    return `Error creating PR: ${err instanceof Error ? err.message : 'Unknown'}`;
+    return `Error creating PR: ${errMsg(err)}`;
   }
 }
 
@@ -2489,7 +2491,7 @@ async function ghMergePR(prNumber: number, commitTitle?: string, agentId?: strin
     }
     return `✅ ${result}`;
   } catch (err) {
-    return `Error merging PR: ${err instanceof Error ? err.message : 'Unknown'}`;
+    return `Error merging PR: ${errMsg(err)}`;
   }
 }
 
@@ -2498,7 +2500,7 @@ async function ghAddComment(prNumber: number, body: string): Promise<string> {
     await addPRComment(prNumber, body);
     return `Comment added to PR #${prNumber}`;
   } catch (err) {
-    return `Error adding comment: ${err instanceof Error ? err.message : 'Unknown'}`;
+    return `Error adding comment: ${errMsg(err)}`;
   }
 }
 
@@ -2508,7 +2510,7 @@ async function ghListPRs(): Promise<string> {
     if (prs.length === 0) return 'No open pull requests.';
     return prs.map((pr) => `#${pr.number} [${pr.head}] ${pr.title}`).join('\n');
   } catch (err) {
-    return `Error listing PRs: ${err instanceof Error ? err.message : 'Unknown'}`;
+    return `Error listing PRs: ${errMsg(err)}`;
   }
 }
 
@@ -3012,7 +3014,7 @@ async function readRuntimeLogs(severity?: string, limit = 30, query?: string): P
     const auth = new GoogleAuth({ scopes: 'https://www.googleapis.com/auth/logging.read' });
     client = await auth.getClient();
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err || 'Unknown');
+    const msg = errMsg(err);
     if (msg.toLowerCase().includes('could not load the default credentials')) {
       return 'Cloud Logging access is unavailable on this host because Google ADC is not configured. Run `gcloud auth application-default login`, set GOOGLE_APPLICATION_CREDENTIALS, or use gcp_logs_query if gcloud CLI auth is already active.';
     }
@@ -3060,7 +3062,7 @@ async function ghSearch(query: string, type: 'code' | 'issues' | 'commits'): Pro
   try {
     return await searchGitHub(query, type);
   } catch (err) {
-    return `GitHub search error: ${err instanceof Error ? err.message : 'Unknown'}`;
+    return `GitHub search error: ${errMsg(err)}`;
   }
 }
 
@@ -3145,7 +3147,7 @@ async function gcpDeploy(tag?: string): Promise<string> {
     );
     return `✅ Deployed ${imageRef} to Cloud Run service ${GCP_SERVICE}.\n\n${status}`;
   } catch (err) {
-    return `❌ Deploy failed after image build (${imageRef}): ${err instanceof Error ? err.message : 'Unknown'}`;
+    return `❌ Deploy failed after image build (${imageRef}): ${errMsg(err)}`;
   }
 }
 
@@ -3160,7 +3162,7 @@ async function gcpBuildImage(tag?: string): Promise<string> {
     );
     return `✅ Built and pushed image.\nImage: ${imageRef}\n\n${result.slice(-1000)}`;
   } catch (err) {
-    return `❌ Image build failed: ${err instanceof Error ? err.message : 'Unknown'}`;
+    return `❌ Image build failed: ${errMsg(err)}`;
   }
 }
 
@@ -3215,7 +3217,7 @@ async function gcpSetEnv(variables: string): Promise<string> {
     }).trim();
     return `✅ Environment variables updated: ${safeVars.replace(/=.*/g, '=***').split(',').join(', ')}`;
   } catch (err) {
-    return `❌ Failed to update env vars: ${err instanceof Error ? err.message : 'Unknown'}`;
+    return `❌ Failed to update env vars: ${errMsg(err)}`;
   }
 }
 
@@ -3226,7 +3228,7 @@ async function gcpGetEnv(): Promise<string> {
     );
     return result || 'No environment variables set.';
   } catch (err) {
-    return `❌ Failed to get env vars: ${err instanceof Error ? err.message : 'Unknown'}`;
+    return `❌ Failed to get env vars: ${errMsg(err)}`;
   }
 }
 
@@ -3238,7 +3240,7 @@ async function gcpListRevisions(limit: number): Promise<string> {
     );
     return result || 'No revisions found.';
   } catch (err) {
-    return `❌ Failed to list revisions: ${err instanceof Error ? err.message : 'Unknown'}`;
+    return `❌ Failed to list revisions: ${errMsg(err)}`;
   }
 }
 
@@ -3252,7 +3254,7 @@ async function gcpRollback(revision: string): Promise<string> {
     );
     return `✅ Rolled back to revision: ${safeRevision}`;
   } catch (err) {
-    return `❌ Rollback failed: ${err instanceof Error ? err.message : 'Unknown'}`;
+    return `❌ Rollback failed: ${errMsg(err)}`;
   }
 }
 
@@ -3280,7 +3282,7 @@ async function gcpSecretSet(name: string, value: string): Promise<string> {
 
     return `✅ Secret "${safeName}" set successfully in Secret Manager. Bind it to Cloud Run with gcp_secret_bind if the app should consume it.`;
   } catch (err) {
-    return `❌ Failed to set secret: ${err instanceof Error ? err.message : 'Unknown'}`;
+    return `❌ Failed to set secret: ${errMsg(err)}`;
   }
 }
 
@@ -3310,7 +3312,7 @@ async function gcpSecretBind(bindings: string): Promise<string> {
     );
     return `✅ Bound ${parsed.length} secret mapping${parsed.length === 1 ? '' : 's'} to Cloud Run service ${GCP_SERVICE}: ${parsed.join(', ')}`;
   } catch (err) {
-    return `❌ Failed to bind secrets: ${err instanceof Error ? err.message : 'Unknown'}`;
+    return `❌ Failed to bind secrets: ${errMsg(err)}`;
   }
 }
 
@@ -3321,7 +3323,7 @@ async function gcpSecretList(): Promise<string> {
     );
     return result || 'No secrets found.';
   } catch (err) {
-    return `❌ Failed to list secrets: ${err instanceof Error ? err.message : 'Unknown'}`;
+    return `❌ Failed to list secrets: ${errMsg(err)}`;
   }
 }
 
@@ -3333,7 +3335,7 @@ async function gcpBuildStatus(limit: number): Promise<string> {
     );
     return result || 'No builds found.';
   } catch (err) {
-    return `❌ Failed to get build status: ${err instanceof Error ? err.message : 'Unknown'}`;
+    return `❌ Failed to get build status: ${errMsg(err)}`;
   }
 }
 
@@ -3359,7 +3361,7 @@ async function gcpLogsQuery(filter: string, limit: number): Promise<string> {
     );
     return result || 'No log entries matched.';
   } catch (err) {
-    return `❌ Failed to query logs: ${err instanceof Error ? err.message : 'Unknown'}`;
+    return `❌ Failed to query logs: ${errMsg(err)}`;
   }
 }
 
@@ -3370,7 +3372,7 @@ async function gcpRunDescribe(): Promise<string> {
     );
     return result || 'No service info returned.';
   } catch (err) {
-    return `❌ Failed to describe Cloud Run service: ${err instanceof Error ? err.message : 'Unknown'}`;
+    return `❌ Failed to describe Cloud Run service: ${errMsg(err)}`;
   }
 }
 
@@ -3382,7 +3384,7 @@ async function gcpStorageLs(bucket: string, prefix?: string): Promise<string> {
     const result = gcpExec(`gcloud storage ls "${path}"`);
     return result || 'Empty bucket or prefix.';
   } catch (err) {
-    return `❌ Failed to list bucket: ${err instanceof Error ? err.message : 'Unknown'}`;
+    return `❌ Failed to list bucket: ${errMsg(err)}`;
   }
 }
 
@@ -3394,7 +3396,7 @@ async function gcpArtifactList(limit: number): Promise<string> {
     );
     return result || 'No images found.';
   } catch (err) {
-    return `❌ Failed to list artifacts: ${err instanceof Error ? err.message : 'Unknown'}`;
+    return `❌ Failed to list artifacts: ${errMsg(err)}`;
   }
 }
 
@@ -3405,7 +3407,7 @@ async function gcpSqlDescribe(): Promise<string> {
     );
     return result || 'No SQL instance info returned.';
   } catch (err) {
-    return `❌ Failed to describe Cloud SQL: ${err instanceof Error ? err.message : 'Unknown'}`;
+    return `❌ Failed to describe Cloud SQL: ${errMsg(err)}`;
   }
 }
 
@@ -3425,7 +3427,7 @@ async function gcpVmSsh(command: string): Promise<string> {
     );
     return result || '(no output)';
   } catch (err) {
-    return `❌ SSH command failed: ${err instanceof Error ? err.message : 'Unknown'}`;
+    return `❌ SSH command failed: ${errMsg(err)}`;
   }
 }
 
@@ -3439,7 +3441,7 @@ async function gcpProjectInfo(): Promise<string> {
     );
     return `## Project\n${info}\n\n## Enabled APIs\n${apis}`;
   } catch (err) {
-    return `❌ Failed to get project info: ${err instanceof Error ? err.message : 'Unknown'}`;
+    return `❌ Failed to get project info: ${errMsg(err)}`;
   }
 }
 
@@ -3562,46 +3564,33 @@ function safeMemoryName(file: string): string {
 async function memoryRead(file: string): Promise<string> {
   try {
     const name = safeMemoryName(file);
-    const pool = (await import('../db/pool')).default;
-    const { rows } = await pool.query('SELECT content FROM agent_memory WHERE file_name = $1', [name]);
-    if (rows.length === 0) {
+    const content = await readMemoryRow(name);
+    if (content === null) {
       return `Memory file "${file}" does not exist. Use memory_list to see available files, or memory_write to create one.`;
     }
-    return rows[0].content;
+    return content;
   } catch (err) {
-    return `Error reading memory: ${err instanceof Error ? err.message : 'Unknown'}`;
+    return `Error reading memory: ${errMsg(err)}`;
   }
 }
 
 async function memoryWrite(file: string, content: string): Promise<string> {
   try {
     const name = safeMemoryName(file);
-    const pool = (await import('../db/pool')).default;
-    await pool.query(
-      `INSERT INTO agent_memory (file_name, content, updated_at) VALUES ($1, $2, NOW())
-       ON CONFLICT (file_name) DO UPDATE SET content = $2, updated_at = NOW()`,
-      [name, content]
-    );
+    await upsertMemory(name, content);
     return `Memory saved to "${file}" (${content.length} bytes)`;
   } catch (err) {
-    return `Error writing memory: ${err instanceof Error ? err.message : 'Unknown'}`;
+    return `Error writing memory: ${errMsg(err)}`;
   }
 }
 
 async function memoryAppend(file: string, content: string): Promise<string> {
   try {
     const name = safeMemoryName(file);
-    const pool = (await import('../db/pool')).default;
-    const { rows } = await pool.query(
-      `INSERT INTO agent_memory (file_name, content, updated_at) VALUES ($1, $2, NOW())
-       ON CONFLICT (file_name) DO UPDATE SET content = agent_memory.content || E'\\n' || $2, updated_at = NOW()
-       RETURNING length(content) AS total_len`,
-      [name, content]
-    );
-    const totalLen = rows[0]?.total_len || content.length;
+    const totalLen = await appendMemoryRow(name, content);
     return `Appended to "${file}" (now ${totalLen} bytes)`;
   } catch (err) {
-    return `Error appending to memory: ${err instanceof Error ? err.message : 'Unknown'}`;
+    return `Error appending to memory: ${errMsg(err)}`;
   }
 }
 
@@ -3618,7 +3607,7 @@ async function memoryList(): Promise<string> {
       return `📄 ${r.file_name} (${kb} KB, modified ${modified})`;
     }).join('\n');
   } catch (err) {
-    return `Error listing memory: ${err instanceof Error ? err.message : 'Unknown'}`;
+    return `Error listing memory: ${errMsg(err)}`;
   }
 }
 
@@ -4288,7 +4277,7 @@ async function dbQuery(query: string, paramsStr?: string): Promise<string> {
 
     return `Query executed: ${result.command} — ${result.rowCount ?? 0} row(s) affected.`;
   } catch (err) {
-    return `SQL Error: ${err instanceof Error ? err.message : 'Unknown'}`;
+    return `SQL Error: ${errMsg(err)}`;
   }
 }
 
@@ -4373,7 +4362,7 @@ async function dbSchema(table?: string): Promise<string> {
     dbSchemaCache.set(cacheKey, { result, expiresAt: Date.now() + DB_SCHEMA_CACHE_TTL_MS });
     return result;
   } catch (err) {
-    return `Schema error: ${err instanceof Error ? err.message : 'Unknown'}`;
+    return `Schema error: ${errMsg(err)}`;
   }
 }
 

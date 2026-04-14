@@ -36,6 +36,7 @@ import publicRoutes from './routes/public';
 import searchRoutes from './routes/search';
 import shopRoutes from './routes/shop';
 import { loadRuntimeSecrets } from './services/runtimeSecrets';
+import { errMsg } from './utils/errors';
 
 const app = express();
 
@@ -247,7 +248,7 @@ app.get('/api/agent-log', async (req, res) => {
     const { rows } = await pool.query(query, params);
     res.json({ count: rows.length, events: rows });
   } catch (err) {
-    res.status(500).json({ error: err instanceof Error ? err.message : 'Unknown' });
+    res.status(500).json({ error: errMsg(err) });
   }
 });
 
@@ -271,7 +272,7 @@ app.get('/api/agent-log/text', async (req, res) => {
     });
     res.type('text/plain').send(lines.join('\n'));
   } catch (err) {
-    res.status(500).type('text/plain').send(err instanceof Error ? err.message : 'Unknown error');
+    res.status(500).type('text/plain').send(errMsg(err));
   }
 });
 
@@ -304,7 +305,7 @@ app.post('/api/webhooks/github', express.json({ limit: '1mb' }), (req, res) => {
 
   handleGitHubEvent(event, req.body).catch((err) => {
     const msg = err instanceof Error ? err.stack || err.message : 'Unknown';
-    console.error('GitHub webhook error:', err instanceof Error ? err.message : 'Unknown');
+    console.error('GitHub webhook error:', errMsg(err));
     void postAgentErrorLog('github:webhook', 'GitHub webhook error', { detail: msg });
   });
 
@@ -340,7 +341,7 @@ app.post('/api/webhooks/build-complete', express.json({ limit: '10kb' }), (req, 
 
   void tryCapture().catch((err) => {
     const msg = err instanceof Error ? err.stack || err.message : 'Unknown';
-    console.error('Screenshot capture error:', err instanceof Error ? err.message : 'Unknown');
+    console.error('Screenshot capture error:', errMsg(err));
     void postAgentErrorLog('build-complete:webhook', 'Screenshot capture error', { detail: msg });
   });
 
@@ -442,11 +443,11 @@ const server = app.listen(PORT, () => {
             console.log('Discord bot startup lock bypass enabled (DISCORD_BOT_SKIP_LOCK=true)');
           }
           startBot().catch((err) => {
-            console.error('Discord bot startup error:', err instanceof Error ? err.message : 'Unknown');
+            console.error('Discord bot startup error:', errMsg(err));
           });
         }
       } catch (err) {
-        console.error('Discord bot lock acquisition failed:', err instanceof Error ? err.message : 'Unknown');
+        console.error('Discord bot lock acquisition failed:', errMsg(err));
       }
     } else {
       const reason = IS_CLOUD_RUN
@@ -469,7 +470,7 @@ const server = app.listen(PORT, () => {
         console.log(`Cleanup: removed ${sessions.rowCount} sessions, ${codes.rowCount} 2FA codes, ${fuelSearches.rowCount} fuel searches, ${priceSearches.rowCount} price searches, ${authEvents.rowCount} auth events`);
       }
     } catch (err) {
-      console.error('Session cleanup error:', err instanceof Error ? err.message : 'Unknown');
+      console.error('Session cleanup error:', errMsg(err));
     }
   }, 60 * 60 * 1000);
 });

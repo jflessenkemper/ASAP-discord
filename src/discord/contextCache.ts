@@ -2,6 +2,7 @@ import { GoogleGenerativeAI } from '@google/generative-ai';
 import { GoogleAuth } from 'google-auth-library';
 
 import { logAgentEvent } from './activityLog';
+import { errMsg } from '../utils/errors';
 
 // ─── Gemini Explicit Context Caching ───
 // Caches system prompts + tool schemas at the API level.
@@ -92,7 +93,7 @@ async function createVertexCache(
     const data = (await res.json()) as { name?: string };
     return data.name || null;
   } catch (err) {
-    console.warn('Vertex cache creation error:', err instanceof Error ? err.message : 'Unknown');
+    console.warn('Vertex cache creation error:', errMsg(err));
     return null;
   }
 }
@@ -140,7 +141,7 @@ async function createApiKeyCache(
     const data = (await res.json()) as { name?: string };
     return data.name || null;
   } catch (err) {
-    console.warn('API key cache creation error:', err instanceof Error ? err.message : 'Unknown');
+    console.warn('API key cache creation error:', errMsg(err));
     return null;
   }
 }

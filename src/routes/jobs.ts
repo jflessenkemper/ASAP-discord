@@ -7,6 +7,7 @@ import { AuthRequest, requireAuth, requireClient, requireEmployee } from '../mid
 import { calculateFuelCost, haversineKm } from '../services/fuel';
 import { assessJobDifficulty, transcribeAudio, categorizeJob } from '../services/gemini';
 import { uploadEvidence } from '../services/storage';
+import { errMsg } from '../utils/errors';
 
 const router = Router();
 
@@ -27,6 +28,22 @@ const upload = multer({
     else cb(new Error('File type not allowed'));
   },
 });
+
+async function addTimelineEntry(
+  jobId: string | number | string[],
+  eventType: string,
+  description: string,
+  createdByType: string,
+  createdById: string | number | string[],
+  evidenceUrl?: string | null
+): Promise<any> {
+  const result = await pool.query(
+    `INSERT INTO job_timeline (job_id, event_type, description, evidence_url, created_by_type, created_by_id)
+     VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
+    [jobId, eventType, description, evidenceUrl || null, createdByType, createdById]
+  );
+  return result.rows[0];
+}
 
 // ─── Create a job (client) ───
 router.post('/', requireAuth, requireClient, createJobLimiter, async (req: AuthRequest, res: Response) => {
@@ -76,19 +93,11 @@ router.post('/', requireAuth, requireClient, createJobLimiter, async (req: AuthR
     const job = jobResult.rows[0];
 
     // Add timeline entry: created
-    await pool.query(
-      `INSERT INTO job_timeline (job_id, event_type, description, created_by_type, created_by_id)
-       VALUES ($1, 'created', $2, 'client', $3)`,
-      [job.id, 'Job created', clientId]
-    );
+    await addTimelineEntry(job.id, 'created', 'Job created', 'client', clientId);
 
     // If auto-assigned, add timeline entry
     if (assignedEmployeeId) {
-      await pool.query(
-        `INSERT INTO job_timeline (job_id, event_type, description, created_by_type, created_by_id)
-         VALUES ($1, 'assigned', 'Job auto-assigned to technician', 'system', $2)`,
-        [job.id, assignedEmployeeId]
-      );
+      await addTimelineEntry(job.id, 'assigned', 'Job auto-assigned to technician', 'system', assignedEmployeeId);
     }
 
     // Assess difficulty via Gemini (async — don't block response)
@@ -99,13 +108,13 @@ router.post('/', requireAuth, requireClient, createJobLimiter, async (req: AuthR
           [assessment.difficulty, assessment.estimatedMinutes, job.id]
         );
       } catch (err) {
-        console.error('Failed to update job difficulty:', err instanceof Error ? err.message : 'Unknown error');
+        console.error('Failed to update job difficulty:', errMsg(err));
       }
-    }).catch(err => console.error('Gemini assessment failed:', err instanceof Error ? err.message : 'Unknown'));
+    }).catch(err => console.error('Gemini assessment failed:', errMsg(err)));
 
     res.status(201).json(job);
   } catch (err) {
-    console.error('Create job error:', err instanceof Error ? err.message : 'Unknown error');
+    console.error('Create job error:', errMsg(err));
     res.status(500).json({ error: 'Couldn\u2019t create the job. Please try again.' });
   }
 });
@@ -127,7 +136,7 @@ router.post('/transcribe', requireAuth, requireClient, transcribeLimiter, upload
     const text = await transcribeAudio(req.file.buffer, req.file.mimetype);
     res.json({ text });
   } catch (err) {
-    console.error('Transcribe error:', err instanceof Error ? err.message : 'Unknown');
+    console.error('Transcribe error:', errMsg(err));
     res.status(500).json({ error: 'Couldn\u2019t transcribe the audio. Please try again.' });
   }
 });
@@ -195,7 +204,7 @@ router.post('/find-businesses', requireAuth, requireClient, businessSearchLimite
 
     res.json({ businesses, query: searchQuery });
   } catch (err) {
-    console.error('Find businesses error:', err instanceof Error ? err.message : 'Unknown');
+    console.error('Find businesses error:', errMsg(err));
     res.status(500).json({ error: 'Couldn\u2019t find businesses. Please try again.' });
   }
 });
@@ -218,7 +227,7 @@ router.get('/client', requireAuth, requireClient, async (req: AuthRequest, res: 
     );
     res.json({ jobs: result.rows });
   } catch (err) {
-    console.error('Get client jobs error:', err instanceof Error ? err.message : 'Unknown error');
+    console.error('Get client jobs error:', errMsg(err));
     res.status(500).json({ error: 'Couldn\u2019t load your jobs. Please try again.' });
   }
 });
@@ -283,7 +292,7 @@ router.get('/employee', requireAuth, requireEmployee, async (req: AuthRequest, r
 
     res.json({ jobs });
   } catch (err) {
-    console.error('Get employee jobs error:', err instanceof Error ? err.message : 'Unknown error');
+    console.error('Get employee jobs error:', errMsg(err));
     res.status(500).json({ error: 'Couldn\u2019t load jobs. Please try again.' });
   }
 });
@@ -333,15 +342,11 @@ router.post('/:id/photos', requireAuth, upload.single('file'), async (req: AuthR
       [jobId, url, caption, userId, userType]
     );
 
-    await pool.query(
-      `INSERT INTO job_timeline (job_id, event_type, description, evidence_url, created_by_type, created_by_id)
-       VALUES ($1, 'photo', $2, $3, $4, $5)`,
-      [jobId, caption || 'Photo added', url, userType, userId]
-    );
+    await addTimelineEntry(jobId, 'photo', caption || 'Photo added', userType, userId, url);
 
     res.status(201).json(photoResult.rows[0]);
   } catch (err) {
-    console.error('Upload photo error:', err instanceof Error ? err.message : 'Unknown error');
+    console.error('Upload photo error:', errMsg(err));
     res.status(500).json({ error: 'Failed to upload photo' });
   }
 });
@@ -374,7 +379,7 @@ router.get('/:id/photos', requireAuth, async (req: AuthRequest, res: Response) =
     );
     res.json({ photos: result.rows });
   } catch (err) {
-    console.error('Get photos error:', err instanceof Error ? err.message : 'Unknown error');
+    console.error('Get photos error:', errMsg(err));
     res.status(500).json({ error: 'Failed to fetch photos' });
   }
 });
@@ -435,11 +440,7 @@ router.post('/:id/accept', requireAuth, requireEmployee, async (req: AuthRequest
       return;
     }
 
-    await pool.query(
-      `INSERT INTO job_timeline (job_id, event_type, description, created_by_type, created_by_id)
-       VALUES ($1, 'assigned', 'Job accepted by technician', 'employee', $2)`,
-      [id, employeeId]
-    );
+    await addTimelineEntry(id, 'assigned', 'Job accepted by technician', 'employee', employeeId);
 
     res.json({
       message: 'Job accepted',
@@ -447,7 +448,7 @@ router.post('/:id/accept', requireAuth, requireEmployee, async (req: AuthRequest
       fuel_distance_km: fuelDistanceKm,
     });
   } catch (err) {
-    console.error('Accept job error:', err instanceof Error ? err.message : 'Unknown error');
+    console.error('Accept job error:', errMsg(err));
     res.status(500).json({ error: 'Failed to accept job' });
   }
 });
@@ -496,7 +497,7 @@ router.get('/:id', requireAuth, async (req: AuthRequest, res: Response) => {
 
     res.json({ ...job, timeline: timelineResult.rows, photos: photosResult.rows });
   } catch (err) {
-    console.error('Get job error:', err instanceof Error ? err.message : 'Unknown error');
+    console.error('Get job error:', errMsg(err));
     res.status(500).json({ error: 'Failed to fetch job' });
   }
 });
@@ -530,15 +531,11 @@ router.post('/:id/timer/start', requireAuth, requireEmployee, async (req: AuthRe
       [id]
     );
 
-    await pool.query(
-      `INSERT INTO job_timeline (job_id, event_type, description, created_by_type, created_by_id)
-       VALUES ($1, $2, $3, 'employee', $4)`,
-      [id, eventType, eventType === 'resumed' ? 'Timer resumed' : 'Timer started', employeeId]
-    );
+    await addTimelineEntry(id, eventType, eventType === 'resumed' ? 'Timer resumed' : 'Timer started', 'employee', employeeId);
 
     res.json({ message: `Timer ${eventType}` });
   } catch (err) {
-    console.error('Timer start error:', err instanceof Error ? err.message : 'Unknown error');
+    console.error('Timer start error:', errMsg(err));
     res.status(500).json({ error: 'Failed to start timer' });
   }
 });
@@ -570,15 +567,11 @@ router.post('/:id/timer/pause', requireAuth, requireEmployee, async (req: AuthRe
       [elapsed_seconds, id]
     );
 
-    await pool.query(
-      `INSERT INTO job_timeline (job_id, event_type, description, created_by_type, created_by_id)
-       VALUES ($1, 'paused', 'Timer paused', 'employee', $2)`,
-      [id, employeeId]
-    );
+    await addTimelineEntry(id, 'paused', 'Timer paused', 'employee', employeeId);
 
     res.json({ message: 'Timer paused' });
   } catch (err) {
-    console.error('Timer pause error:', err instanceof Error ? err.message : 'Unknown error');
+    console.error('Timer pause error:', errMsg(err));
     res.status(500).json({ error: 'Failed to pause timer' });
   }
 });
@@ -636,15 +629,11 @@ router.post('/:id/timer/stop', requireAuth, requireEmployee, async (req: AuthReq
       [elapsedMinutes, employeeId]
     );
 
-    await pool.query(
-      `INSERT INTO job_timeline (job_id, event_type, description, created_by_type, created_by_id)
-       VALUES ($1, 'completed', $2, 'employee', $3)`,
-      [id, `Job completed. Duration: ${Math.floor(elapsed_seconds / 60)}m ${elapsed_seconds % 60}s. Cost: $${totalCost.toFixed(2)}`, employeeId]
-    );
+    await addTimelineEntry(id, 'completed', `Job completed. Duration: ${Math.floor(elapsed_seconds / 60)}m ${elapsed_seconds % 60}s. Cost: $${totalCost.toFixed(2)}`, 'employee', employeeId);
 
     res.json({ message: 'Job completed', total_seconds: elapsed_seconds, total_cost: totalCost, xp_earned: elapsedMinutes });
   } catch (err) {
-    console.error('Timer stop error:', err instanceof Error ? err.message : 'Unknown error');
+    console.error('Timer stop error:', errMsg(err));
     res.status(500).json({ error: 'Failed to stop timer' });
   }
 });
@@ -692,15 +681,11 @@ router.post('/:id/timeline', requireAuth, async (req: AuthRequest, res: Response
       return;
     }
 
-    const result = await pool.query(
-      `INSERT INTO job_timeline (job_id, event_type, description, evidence_url, created_by_type, created_by_id)
-       VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
-      [id, safeEventType, description.trim(), evidence_url || null, userType, userId]
-    );
+    const entry = await addTimelineEntry(id, safeEventType, description.trim(), userType, userId, evidence_url);
 
-    res.status(201).json(result.rows[0]);
+    res.status(201).json(entry);
   } catch (err) {
-    console.error('Add timeline entry error:', err instanceof Error ? err.message : 'Unknown error');
+    console.error('Add timeline entry error:', errMsg(err));
     res.status(500).json({ error: 'Failed to add timeline entry' });
   }
 });
@@ -733,7 +718,7 @@ router.get('/:id/timeline', requireAuth, async (req: AuthRequest, res: Response)
     );
     res.json({ timeline: result.rows });
   } catch (err) {
-    console.error('Get timeline error:', err instanceof Error ? err.message : 'Unknown error');
+    console.error('Get timeline error:', errMsg(err));
     res.status(500).json({ error: 'Failed to fetch timeline' });
   }
 });

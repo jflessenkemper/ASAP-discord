@@ -1,5 +1,6 @@
 import { postOpsLine } from '../services/opsFeed';
 import { BotChannels } from '../setup';
+import { errMsg } from '../../utils/errors';
 
 /**
  * Agent self-documentation system.
@@ -37,6 +38,6 @@ export async function documentToChannel(agentId: string, summary: string): Promi
       severity: 'info',
     });
   } catch (err) {
-    console.error(`Documentation error for ${agentId}:`, err instanceof Error ? err.message : 'Unknown');
+    console.error(`Documentation error for ${agentId}:`, errMsg(err));
   }
 }

@@ -6,6 +6,7 @@ import multer from 'multer';
 import pool from '../db/pool';
 import { AuthRequest, requireAuth, requireEmployee } from '../middleware/auth';
 import { uploadEvidence } from '../services/storage';
+import { errMsg } from '../utils/errors';
 
 const router = Router();
 
@@ -42,7 +43,7 @@ router.get('/profile', requireAuth, requireEmployee, async (req: AuthRequest, re
     const levelInfo = computeLevel(emp.total_minutes || 0);
     res.json({ ...emp, ...levelInfo });
   } catch (err) {
-    console.error('Get profile error:', err instanceof Error ? err.message : 'Unknown error');
+    console.error('Get profile error:', errMsg(err));
     res.status(500).json({ error: 'Couldn\u2019t load your profile. Please try again.' });
   }
 });
@@ -97,7 +98,7 @@ router.patch('/profile', requireAuth, requireEmployee, upload.fields([
 
     res.json({ message: 'Profile updated', ...result.rows[0] });
   } catch (err) {
-    console.error('Update profile error:', err instanceof Error ? err.message : 'Unknown error');
+    console.error('Update profile error:', errMsg(err));
     res.status(500).json({ error: 'Couldn\u2019t update your profile. Please try again.' });
   }
 });
@@ -118,7 +119,7 @@ router.patch('/rate', requireAuth, requireEmployee, async (req: AuthRequest, res
 
     res.json({ message: 'Rate updated', rate_per_minute });
   } catch (err) {
-    console.error('Update rate error:', err instanceof Error ? err.message : 'Unknown error');
+    console.error('Update rate error:', errMsg(err));
     res.status(500).json({ error: 'Couldn\u2019t update the rate. Please try again.' });
   }
 });
@@ -165,7 +166,7 @@ router.post('/change-password', requireAuth, requireEmployee, changePasswordLimi
 
     res.json({ message: 'Password changed' });
   } catch (err) {
-    console.error('Change password error:', err instanceof Error ? err.message : 'Unknown error');
+    console.error('Change password error:', errMsg(err));
     res.status(500).json({ error: 'Couldn\u2019t change your password. Please try again.' });
   }
 });
@@ -235,7 +236,7 @@ router.get('/earnings', requireAuth, requireEmployee, async (req: AuthRequest, r
       recent_jobs: recentJobs,
     });
   } catch (err) {
-    console.error('Get earnings error:', err instanceof Error ? err.message : 'Unknown error');
+    console.error('Get earnings error:', errMsg(err));
     res.status(500).json({ error: 'Failed to fetch earnings' });
   }
 });

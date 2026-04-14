@@ -34,6 +34,7 @@ import { documentToChannel } from './documentation';
 import { goalState, GOAL_THREAD_COUNTER_RE } from './goalState';
 import { LOW_SIGNAL_COMPLETION_RE } from './responseNormalization';
 import { sendAgentMessage, clearHistory } from './textChannel';
+import { errMsg } from '../../utils/errors';
 
 
 type ToolNotificationBatch = {
@@ -119,7 +120,7 @@ async function flushToolNotificationBatch(key: string): Promise<void> {
     });
     toolNotificationLastPostedAt.set(targetChannel.id, Date.now());
   } catch (err) {
-    console.warn(`Webhook tool notification failed for ${batch.agent.name}:`, err instanceof Error ? err.message : 'Unknown');
+    console.warn(`Webhook tool notification failed for ${batch.agent.name}:`, errMsg(err));
   } finally {
     if (batch.items.length === 0) {
       toolNotificationBatches.delete(key);
@@ -544,7 +545,7 @@ function ensureGoalWatchdog(groupchat: TextChannel): void {
     if (!goalState.goal) return;
 
     maybeReviewThreadForClosure(groupchat).catch((err) => {
-      console.error('Thread close review error:', err instanceof Error ? err.message : 'Unknown');
+      console.error('Thread close review error:', errMsg(err));
     });
 
     if (activeAbortController) return;
@@ -565,7 +566,7 @@ function ensureGoalWatchdog(groupchat: TextChannel): void {
       undefined,
       groupchat
     ).catch((err) => {
-      console.error('Goal watchdog recovery error:', err instanceof Error ? err.message : 'Unknown');
+      console.error('Goal watchdog recovery error:', errMsg(err));
     });
   }, GOAL_STALL_CHECK_INTERVAL_MS);
 }
@@ -668,7 +669,7 @@ export function setThreadStatusChannel(channel: TextChannel | null, groupchat?: 
 
   threadStatusReporter = setInterval(() => {
     postThreadStatusSnapshotNow('hourly').catch((err) => {
-      console.error('Thread status reporter error:', err instanceof Error ? err.message : 'Unknown');
+      console.error('Thread status reporter error:', errMsg(err));
     });
   }, THREAD_STATUS_POST_INTERVAL_MS);
 }
@@ -727,7 +728,7 @@ async function syncGoalSequence(groupchat: TextChannel): Promise<void> {
       archived ? [...archived.threads.values()] : [],
     ]);
   } catch (err) {
-    console.warn('Could not sync goal thread counter:', err instanceof Error ? err.message : 'Unknown');
+    console.warn('Could not sync goal thread counter:', errMsg(err));
   }
 }
 
@@ -808,7 +809,7 @@ async function closeGoalWorkspace(
         buildId,
       }).catch(() => {});
     } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Unknown';
+      const msg = errMsg(err);
       const normalized = msg.toLowerCase();
       const isCredentialError = normalized.includes('could not load the default credentials');
       const userMsg = isCredentialError
@@ -960,7 +961,7 @@ async function fetchStatusSummary(url: string): Promise<string> {
     const snippet = body.replace(/\s+/g, ' ').trim().slice(0, 120);
     return `${res.status} ${res.statusText}${snippet ? ` — ${snippet}` : ''}`;
   } catch (err) {
-    return `unreachable — ${err instanceof Error ? err.message : 'Unknown'}`;
+    return `unreachable — ${errMsg(err)}`;
   } finally {
     clearTimeout(timer);
   }
@@ -1480,7 +1481,7 @@ export async function handleGroupchatMessage(
     // Fire-and-forget: respond directly in groupchat (not workspace threads) so the
     // tester subprocess monitor can observe the bot response in the correct channel.
     void handleSmokeTestPrompt(content, groupchat).catch((err) => {
-      console.error('[smoke-guard] Parallel smoke test message processing failed:', err instanceof Error ? err.message : String(err));
+      console.error('[smoke-guard] Parallel smoke test message processing failed:', errMsg(err));
     });
     return;
   }
@@ -1553,7 +1554,7 @@ export async function handleGroupchatMessage(
       if (activeAbortController === controller) activeAbortController = null;
     }
   }).catch((err) => {
-    console.error('Groupchat queue error:', err instanceof Error ? err.message : 'Unknown');
+    console.error('Groupchat queue error:', errMsg(err));
   });
 }
 
@@ -1934,7 +1935,7 @@ async function handleRileyMessage(
           // Re-check — screenshots were just posted
           completionVerified = await hasRecentRuntimeVerificationEvidence(groupchat, workspaceChannel, evidenceSince);
         } catch (err) {
-          console.warn('Auto-harness capture failed:', err instanceof Error ? err.message : 'Unknown');
+          console.warn('Auto-harness capture failed:', errMsg(err));
         }
       }
       if (!completionVerified) {
@@ -2150,7 +2151,7 @@ async function executeActions(
         await sendWebhookMessage(workspaceChannel, { content: safeMsg, username: `${riley.emoji} ${riley.name}`, avatarURL: riley.avatarUrl });
         return;
       } catch (err) {
-        console.warn('Webhook send failed for Riley action response:', err instanceof Error ? err.message : 'Unknown');
+        console.warn('Webhook send failed for Riley action response:', errMsg(err));
       }
     }
 
@@ -2208,14 +2209,14 @@ async function executeActions(
               );
             }
           } catch (err) {
-            await sendAsRiley(`❌ Deploy failed: ${err instanceof Error ? err.message : 'Unknown'}`);
+            await sendAsRiley(`❌ Deploy failed: ${errMsg(err)}`);
           }
           break;
         }
         case 'SCREENSHOTS': {
           const appUrl = process.env.FRONTEND_URL || 'https://asap-489910.australia-southeast1.run.app';
           captureAndPostScreenshots(appUrl, param || 'manual').catch((err) => {
-            sendAsRiley(`❌ Screenshot capture failed: ${err instanceof Error ? err.message : 'Unknown'}`).catch(() => {});
+            sendAsRiley(`❌ Screenshot capture failed: ${errMsg(err)}`).catch(() => {});
           });
           markGoalProgress('📸 Screenshot capture started');
           await sendAutopilotAudit(groupchat, 'action_executed', 'Screenshot capture workflow started.', {
@@ -2320,7 +2321,7 @@ async function executeActions(
               : '';
             await sendAsRiley(`🧽 Cleaned up ${removed} noisy messages in groupchat from ${options.descriptor}.${clipped}`);
           } catch (err) {
-            await sendAsRiley(`❌ Groupchat cleanup failed: ${err instanceof Error ? err.message : 'Unknown'}`);
+            await sendAsRiley(`❌ Groupchat cleanup failed: ${errMsg(err)}`);
           }
           break;
         }
@@ -2339,7 +2340,7 @@ async function executeActions(
               markGoalProgress('↩️ Rollback complete');
               await sendAsRiley(result);
             } catch (err) {
-              await sendAsRiley(`❌ Rollback failed: ${err instanceof Error ? err.message : 'Unknown'}`);
+              await sendAsRiley(`❌ Rollback failed: ${errMsg(err)}`);
             }
           } else {
             try {
@@ -2353,7 +2354,7 @@ async function executeActions(
               }).join('\n');
               await sendAsRiley(`📦 **Cloud Run Revisions**\n\n${list}`);
             } catch (err) {
-              await sendAsRiley(`❌ Failed to list revisions: ${err instanceof Error ? err.message : 'Unknown'}`);
+              await sendAsRiley(`❌ Failed to list revisions: ${errMsg(err)}`);
             }
           }
           break;
@@ -2382,7 +2383,7 @@ async function executeActions(
                 });
                 hasEvidence = await hasRecentRuntimeVerificationEvidence(groupchat, workspaceChannel, evidenceSince);
               } catch (err) {
-                console.warn('Auto-harness on close failed:', err instanceof Error ? err.message : 'Unknown');
+                console.warn('Auto-harness on close failed:', errMsg(err));
               }
             }
             if (!hasEvidence) {
@@ -2416,7 +2417,7 @@ async function executeActions(
             await makeOutboundCall(phoneNumber, "Hey Jordan, it's Riley! You asked me to give you a call.");
             await sendAsRiley(`📞 Calling ${phoneNumber}...`);
           } catch (err) {
-            await sendAsRiley(`❌ Call failed: ${err instanceof Error ? err.message : 'Unknown'}`);
+            await sendAsRiley(`❌ Call failed: ${errMsg(err)}`);
           }
           break;
         }
@@ -2442,7 +2443,7 @@ async function executeActions(
             await makeAsapTesterCall(phoneNumber);
             await sendAsRiley(`🧪📞 ASAPTester voice check calling ${phoneNumber}...`);
           } catch (err) {
-            await sendAsRiley(`❌ ASAPTester test call failed: ${err instanceof Error ? err.message : 'Unknown'}`);
+            await sendAsRiley(`❌ ASAPTester test call failed: ${errMsg(err)}`);
           }
           break;
         }
@@ -2474,13 +2475,13 @@ async function executeActions(
             const confName = await startConferenceCall(numbers);
             await sendAsRiley(`📞 **Conference call started** — ${confName}\nCalling: ${numbers.join(', ')} + Riley`);
           } catch (err) {
-            await sendAsRiley(`❌ Conference failed: ${err instanceof Error ? err.message : 'Unknown'}`);
+            await sendAsRiley(`❌ Conference failed: ${errMsg(err)}`);
           }
           break;
         }
       }
     } catch (err) {
-      console.error(`Action ${action} error:`, err instanceof Error ? err.message : 'Unknown');
+      console.error(`Action ${action} error:`, errMsg(err));
     }
   }
 }
@@ -2723,7 +2724,7 @@ async function hasRecentRuntimeVerificationEvidence(
       }
     }
   } catch (err) {
-    console.warn('Could not verify runtime evidence:', err instanceof Error ? err.message : 'Unknown');
+    console.warn('Could not verify runtime evidence:', errMsg(err));
   }
 
   return false;
@@ -2857,7 +2858,7 @@ async function recoverFromAgentErrors(
     return { findings, errors: [] };
   } catch (err) {
     const msg = err instanceof Error ? err.stack || err.message : 'Unknown';
-    console.error('Ace recovery error:', err instanceof Error ? err.message : 'Unknown');
+    console.error('Ace recovery error:', errMsg(err));
     void postAgentErrorLog('ace:recovery', 'Ace recovery error', { agentId: 'developer', detail: msg });
     try {
       const wh = await getWebhook(workspaceChannel);
@@ -3045,7 +3046,7 @@ async function handleAgentChain(
         }
       } catch (err) {
         const msg = err instanceof Error ? err.stack || err.message : 'Unknown';
-        console.error('Ace error:', err instanceof Error ? err.message : 'Unknown');
+        console.error('Ace error:', errMsg(err));
         void postAgentErrorLog('ace:groupchat', 'Ace error', { agentId: 'developer', detail: msg });
         try {
           const wh = await getWebhook(workspaceChannel);
@@ -3092,7 +3093,7 @@ async function handleAgentChain(
         // Re-check after capture — screenshots were posted to workspaceChannel
         hasEvidence = await hasRecentRuntimeVerificationEvidence(groupchat, workspaceChannel, evidenceSince);
       } catch (err) {
-        console.warn('Auto-harness capture failed:', err instanceof Error ? err.message : 'Unknown');
+        console.warn('Auto-harness capture failed:', errMsg(err));
       }
     }
     if (!hasEvidence) {

@@ -1,6 +1,7 @@
 import pool from '../db/pool';
 
 import { postAgentErrorLog } from './services/agentErrors';
+import { errMsg } from '../utils/errors';
 
 /**
  * Lightweight agent activity logger.
@@ -91,7 +92,7 @@ export function logAgentEvent(
       extra?.tokensOut ?? null,
     ]
   ).catch((err) => {
-    const msg = err instanceof Error ? err.message : 'Unknown';
+    const msg = errMsg(err);
     if (isPermissionDeniedError(err)) {
       activityLogDbDisabled = true;
       console.warn('Activity log DB persistence disabled due to permission error.');

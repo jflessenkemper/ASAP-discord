@@ -2,6 +2,7 @@ import { Router, Response } from 'express';
 
 import pool from '../db/pool';
 import { AuthRequest, requireAuth } from '../middleware/auth';
+import { errMsg } from '../utils/errors';
 
 const router = Router();
 
@@ -34,7 +35,7 @@ router.get('/profile', requireAuth, async (req: AuthRequest, res: Response) => {
 
     res.json(profile);
   } catch (err) {
-    console.error('Get user profile error:', err instanceof Error ? err.message : 'Unknown error');
+    console.error('Get user profile error:', errMsg(err));
     res.status(500).json({ error: 'Failed to fetch user profile' });
   }
 });
@@ -122,7 +123,7 @@ router.put('/profile', requireAuth, async (req: AuthRequest, res: Response) => {
       return res.status(400).json({ error: 'Unsupported user type' });
     }
   } catch (err) {
-    console.error('Update user profile error:', err instanceof Error ? err.message : 'Unknown error');
+    console.error('Update user profile error:', errMsg(err));
     res.status(500).json({ error: 'Failed to update user profile' });
   }
 });

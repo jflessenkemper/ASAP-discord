@@ -54,6 +54,7 @@ import {
   READINESS_TEST_KEYS,
   testKey,
 } from './test-definitions';
+import { errMsg } from '../utils/errors';
 
 type FailureCategory = 'PATTERN_MISMATCH' | 'TOOL_AUDIT_MISSING' | 'TIMEOUT' | 'TOKEN_ECHO_MISSING' | 'BOT_UNAVAILABLE' | 'QUALITY_CHECK_FAILED' | 'SEND_FAILED';
 
@@ -735,7 +736,7 @@ async function runCapabilityTest(
     return {
       passed: false,
       elapsed: Date.now() - started,
-      snippet: `Send failed: ${err instanceof Error ? err.message : String(err)}`,
+      snippet: `Send failed: ${errMsg(err)}`,
       reason: 'send failed',
     };
   }
@@ -1006,7 +1007,7 @@ async function runElevenLabsApiCheck(): Promise<ExtraCheckResult> {
     }
     return { name: 'elevenlabs_api', passed: true, detail: 'API reachable', critical: true };
   } catch (err) {
-    return { name: 'elevenlabs_api', passed: false, detail: err instanceof Error ? err.message : 'request failed', critical: true };
+    return { name: 'elevenlabs_api', passed: false, detail: errMsg(err), critical: true };
   }
 }
 
@@ -1054,7 +1055,7 @@ async function runElevenLabsTtsCheck(): Promise<ExtraCheckResult> {
 
     return { name: 'elevenlabs_tts', passed: true, detail: `audio bytes=${buf.length}`, critical: false };
   } catch (err) {
-    return { name: 'elevenlabs_tts', passed: false, detail: err instanceof Error ? err.message : 'request failed', critical: false };
+    return { name: 'elevenlabs_tts', passed: false, detail: errMsg(err), critical: false };
   }
 }
 
@@ -1285,7 +1286,7 @@ async function runFreeformObservation(
     return {
       elapsed: Date.now() - started,
       responses: [],
-      observations: [`Failed to send prompt: ${err instanceof Error ? err.message : String(err)}`],
+      observations: [`Failed to send prompt: ${errMsg(err)}`],
     };
   }
 
@@ -1427,7 +1428,7 @@ function getFailedKeysFromLastReport(): Set<string> {
     console.log(`📄 Last report: ${files[0]} — ${(data.results || []).length} tests, ${failed.size} failed`);
     return failed;
   } catch (err) {
-    console.warn(`⚠ Failed to parse last smoke report: ${err instanceof Error ? err.message : String(err)}`);
+    console.warn(`⚠ Failed to parse last smoke report: ${errMsg(err)}`);
     return new Set();
   }
 }
@@ -1473,7 +1474,7 @@ async function capturePm2LogsFromVM(testStartedAt: string): Promise<string> {
     const output = execSync(cmd, { timeout: 30_000, encoding: 'utf-8', maxBuffer: 1024 * 1024 });
     return output;
   } catch (err) {
-    return `⚠ PM2 log capture failed: ${err instanceof Error ? err.message : String(err)}`;
+    return `⚠ PM2 log capture failed: ${errMsg(err)}`;
   }
 }
 
@@ -1583,7 +1584,7 @@ async function postSuccessResetAndAnnounce(token: string, guildId: string, group
     try {
       await setupChannels(guild);
     } catch (err) {
-      console.warn(`setupChannels failed: ${err instanceof Error ? err.message : String(err)}`);
+      console.warn(`setupChannels failed: ${errMsg(err)}`);
     }
   }
   await groupchat.send('✅ Full smoke suite complete — all tests passed. Channels reset and ready for development.').catch(() => {});
@@ -2175,6 +2176,6 @@ async function run(): Promise<void> {
 }
 
 void run().catch((err) => {
-  console.error('Fatal:', err instanceof Error ? err.message : String(err));
+  console.error('Fatal:', errMsg(err));
   process.exit(1);
 });

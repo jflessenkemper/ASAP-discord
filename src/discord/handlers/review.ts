@@ -6,6 +6,7 @@ import { agentRespond } from '../claude';
 import { getMemoryContext, appendToMemory } from '../memory';
 
 import { documentToChannel } from './documentation';
+import { errMsg } from '../../utils/errors';
 
 /**
  * Patterns of files that trigger automatic review by Harper (Lawyer) and/or Kane (Security).
@@ -122,7 +123,7 @@ Keep your review under 300 words.`;
         { role: 'assistant', content: response },
       ]);
     } catch (err) {
-      console.error(`Auto-review error (${agentId}):`, err instanceof Error ? err.message : 'Unknown');
+      console.error(`Auto-review error (${agentId}):`, errMsg(err));
       await groupchat.send(`⚠️ ${agent.emoji} ${agent.name.split(' ')[0]} could not review PR #${prNumber}`);
     }
       })

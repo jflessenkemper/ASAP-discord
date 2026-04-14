@@ -18,6 +18,7 @@ import prism from 'prism-media';
 import { isDeepgramAvailable, startLiveTranscription, DeepgramLiveSession } from './deepgram';
 import { startElevenLabsRealtimeTranscription, ElevenLabsRealtimeSession, isElevenLabsRealtimeAvailable } from './elevenlabsRealtime';
 import { transcribeVoiceDetailed } from './tts';
+import { errMsg } from '../../utils/errors';
 
 const DEFAULT_TESTER_BOT_ID = '1487426371209789450';
 
@@ -299,7 +300,7 @@ function createOpusDecoder(): Transform {
   try {
     return new prism.opus.Decoder({ rate: 48000, channels: 2, frameSize: 960 });
   } catch (err) {
-    throw new Error(`Failed to initialize Opus decoder: ${err instanceof Error ? err.message : 'Unknown error'}`);
+    throw new Error(`Failed to initialize Opus decoder: ${errMsg(err)}`);
   }
 }
 
@@ -352,7 +353,7 @@ export function listenToUser(
     try {
       decoder = createOpusDecoder();
     } catch (err) {
-      console.error(`Opus decoder error for ${member.displayName}:`, err instanceof Error ? err.message : 'Unknown');
+      console.error(`Opus decoder error for ${member.displayName}:`, errMsg(err));
       return;
     }
     currentDecoder = decoder;
@@ -405,7 +406,7 @@ export function listenToUser(
               });
             }
           } catch (err) {
-            console.error('Voice transcription error:', err instanceof Error ? err.message : 'Unknown');
+            console.error('Voice transcription error:', errMsg(err));
           }
         } else {
           updateAdaptiveSilenceDuration(member.id, audioBuffer.length);
@@ -623,7 +624,7 @@ export function listenToUserDeepgram(
         try {
           decoder = createOpusDecoder();
         } catch (err) {
-          console.error(`Opus decoder error for ${member.displayName}:`, err instanceof Error ? err.message : 'Unknown');
+          console.error(`Opus decoder error for ${member.displayName}:`, errMsg(err));
           return;
         }
         currentDecoder = decoder;
@@ -674,7 +675,7 @@ export function listenToUserDeepgram(
 
       subscribe();
     }).catch((err) => {
-      console.error(`Failed to start Deepgram for ${member.displayName}:`, err instanceof Error ? err.message : 'Unknown');
+      console.error(`Failed to start Deepgram for ${member.displayName}:`, errMsg(err));
       scheduleDeepgramRetry(err instanceof Error ? err.message : 'startup failure');
     });
   }
@@ -822,7 +823,7 @@ export function listenToUserElevenLabsRealtime(
         try {
           decoder = createOpusDecoder();
         } catch (err) {
-          console.error(`Opus decoder error for ${member.displayName}:`, err instanceof Error ? err.message : 'Unknown');
+          console.error(`Opus decoder error for ${member.displayName}:`, errMsg(err));
           return;
         }
         currentDecoder = decoder;
@@ -873,7 +874,7 @@ export function listenToUserElevenLabsRealtime(
 
       subscribe();
     }).catch((err) => {
-      console.error(`Failed to start ElevenLabs realtime for ${member.displayName}:`, err instanceof Error ? err.message : 'Unknown');
+      console.error(`Failed to start ElevenLabs realtime for ${member.displayName}:`, errMsg(err));
       scheduleRetry(err instanceof Error ? err.message : 'startup failure');
     });
   }

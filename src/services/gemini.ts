@@ -1,4 +1,5 @@
 import { GoogleGenerativeAI, DynamicRetrievalMode } from '@google/generative-ai';
+import { errMsg } from '../utils/errors';
 
 const genAI = process.env.GEMINI_API_KEY
   ? new GoogleGenerativeAI(process.env.GEMINI_API_KEY)
@@ -81,7 +82,7 @@ Respond ONLY with valid JSON, no markdown, no explanation. Example: {"difficulty
         };
       }
     } catch { /* fall through to default */ }
-    console.error('Gemini assessment error:', err instanceof Error ? err.message : 'Unknown error');
+    console.error('Gemini assessment error:', errMsg(err));
     return { difficulty: 5, estimatedMinutes: 60 };
   }
 }
@@ -154,7 +155,7 @@ Return ONLY the summary text, no markdown, no bullet points.`;
     const result = await model.generateContent(prompt);
     return result.response.text().trim().slice(0, 500);
   } catch (err) {
-    console.error('Gemini fuel summary error:', err instanceof Error ? err.message : 'Unknown');
+    console.error('Gemini fuel summary error:', errMsg(err));
     return '';
   }
 }
@@ -204,7 +205,7 @@ Return ONLY valid JSON array, no markdown, no explanation.`;
       sourceUrl: typeof p.sourceUrl === 'string' && /^https?:\/\//.test(p.sourceUrl) ? p.sourceUrl : '',
     }));
   } catch (err) {
-    console.error('Gemini search error:', err instanceof Error ? err.message : 'Unknown');
+    console.error('Gemini search error:', errMsg(err));
     return [];
   }
 }
@@ -277,7 +278,7 @@ Examples:
       directAnswer: parsed.directAnswer ? String(parsed.directAnswer).slice(0, 1000) : undefined,
     };
   } catch (err) {
-    console.error('Gemini intent classification error:', err instanceof Error ? err.message : 'Unknown');
+    console.error('Gemini intent classification error:', errMsg(err));
     // Fallback to keyword matching
     const lower = query.toLowerCase();
     if (/fuel|petrol|diesel|servo/i.test(lower)) return { intent: 'fuel', searchQuery: query };

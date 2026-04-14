@@ -3,6 +3,7 @@ import rateLimit from 'express-rate-limit';
 
 import pool from '../db/pool';
 import { AuthRequest, requireAuth } from '../middleware/auth';
+import { errMsg } from '../utils/errors';
 
 const router = Router();
 
@@ -53,7 +54,7 @@ router.post('/', requireAuth, locationLimiter, async (req: AuthRequest, res: Res
 
     res.json({ message: 'Location updated' });
   } catch (err) {
-    console.error('Location update error:', err instanceof Error ? err.message : 'Unknown error');
+    console.error('Location update error:', errMsg(err));
     res.status(500).json({ error: 'Couldn\u2019t update your location. Please try again.' });
   }
 });
@@ -98,7 +99,7 @@ router.get('/geocode', requireAuth, geocodeLimiter, async (req: AuthRequest, res
 
     res.json({ results });
   } catch (err) {
-    console.error('Geocode error:', err instanceof Error ? err.message : 'Unknown error');
+    console.error('Geocode error:', errMsg(err));
     res.status(500).json({ error: 'Location search failed. Please try again.' });
   }
 });

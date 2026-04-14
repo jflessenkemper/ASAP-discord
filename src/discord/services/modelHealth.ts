@@ -5,6 +5,7 @@ import pool from '../../db/pool';
 import { ensureGoogleCredentials, getAccessTokenViaGcloud } from '../../services/googleCredentials';
 
 import { postDiagnostic } from './diagnosticsWebhook';
+import { errMsg } from '../../utils/errors';
 
 interface CheckResult {
   name: string;
@@ -133,7 +134,7 @@ async function acquireRevisionHealthLock(): Promise<boolean> {
     client.release();
     return false;
   } catch (err) {
-    console.warn('Health lock unavailable, running anyway:', err instanceof Error ? err.message : 'Unknown');
+    console.warn('Health lock unavailable, running anyway:', errMsg(err));
     return true;
   }
 }
@@ -180,7 +181,7 @@ async function checkAnthropic(): Promise<CheckResult> {
       }
       return { name: 'Anthropic', ok: false, detail: lastFailure };
     } catch (err) {
-      return { name: 'Anthropic', ok: false, detail: err instanceof Error ? err.message : 'request failed' };
+      return { name: 'Anthropic', ok: false, detail: errMsg(err) };
     }
   }
 
@@ -210,7 +211,7 @@ async function checkAnthropic(): Promise<CheckResult> {
     }
     return { name: 'Anthropic', ok: true, detail: `models available: ${ANTHROPIC_MODELS.join(', ')}` };
   } catch (err) {
-    return { name: 'Anthropic', ok: false, detail: err instanceof Error ? err.message : 'request failed' };
+    return { name: 'Anthropic', ok: false, detail: errMsg(err) };
   }
 }
 
@@ -244,7 +245,7 @@ async function checkGeminiText(): Promise<CheckResult> {
     }
     return { name: 'Gemini text', ok: true, detail: `${GEMINI_TEXT_MODEL} reachable` };
   } catch (err) {
-    return { name: 'Gemini text', ok: false, detail: err instanceof Error ? err.message : 'request failed' };
+    return { name: 'Gemini text', ok: false, detail: errMsg(err) };
   }
 }
 
@@ -277,7 +278,7 @@ async function getGeminiModels(key: string): Promise<{ ok: true; names: Set<stri
       names: new Set((data.models || []).map((m) => m.name).filter(Boolean) as string[]),
     };
   } catch (err) {
-    return { ok: false, detail: err instanceof Error ? err.message : 'request failed' };
+    return { ok: false, detail: errMsg(err) };
   }
 }
 
@@ -297,7 +298,7 @@ async function checkDeepgram(): Promise<CheckResult> {
     }
     return { name: 'Deepgram', ok: true, detail: 'API reachable' };
   } catch (err) {
-    return { name: 'Deepgram', ok: false, detail: err instanceof Error ? err.message : 'request failed' };
+    return { name: 'Deepgram', ok: false, detail: errMsg(err) };
   }
 }
 
@@ -317,7 +318,7 @@ async function checkElevenLabs(): Promise<CheckResult> {
     }
     return { name: 'ElevenLabs', ok: true, detail: 'API reachable' };
   } catch (err) {
-    return { name: 'ElevenLabs', ok: false, detail: err instanceof Error ? err.message : 'request failed' };
+    return { name: 'ElevenLabs', ok: false, detail: errMsg(err) };
   }
 }
 

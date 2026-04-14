@@ -1,6 +1,7 @@
 import fs from 'fs';
 
 import { Pool } from 'pg';
+import { errMsg } from '../utils/errors';
 
 const IS_PRODUCTION = process.env.NODE_ENV === 'production';
 const IS_CLOUD_RUN = Boolean(process.env.K_SERVICE || process.env.K_REVISION);
@@ -77,7 +78,7 @@ function getCaCertFromEnv(): string | undefined {
     try {
       return Buffer.from(base64Cert, 'base64').toString('utf8').trim();
     } catch (err) {
-      console.warn('DATABASE_CA_CERT_BASE64 could not be decoded:', err instanceof Error ? err.message : 'Unknown');
+      console.warn('DATABASE_CA_CERT_BASE64 could not be decoded:', errMsg(err));
     }
   }
 
@@ -86,7 +87,7 @@ function getCaCertFromEnv(): string | undefined {
     try {
       return fs.readFileSync(caPath.trim(), 'utf8').trim();
     } catch (err) {
-      console.warn(`Could not read DB CA cert file at ${caPath.trim()}:`, err instanceof Error ? err.message : 'Unknown');
+      console.warn(`Could not read DB CA cert file at ${caPath.trim()}:`, errMsg(err));
     }
   }
 

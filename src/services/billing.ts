@@ -1,4 +1,5 @@
 import { GoogleAuth } from 'google-auth-library';
+import { errMsg } from '../utils/errors';
 
 const PROJECT_ID =
   process.env.GCP_BILLING_MONITORING_PROJECT_ID ||
@@ -34,7 +35,7 @@ const billingCache: LiveBillingCache = {
 let auth: GoogleAuth | null = null;
 
 function normalizeBillingError(err: unknown): string {
-  const raw = err instanceof Error ? err.message : String(err || 'Failed to query live billing');
+  const raw = errMsg(err);
   const lower = raw.toLowerCase();
   if (lower.includes('cannot find metric') || lower.includes('metric(s) that match type')) {
     return 'Cloud Monitoring billing metric is not available in this project yet.';

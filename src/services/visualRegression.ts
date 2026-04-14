@@ -3,6 +3,7 @@ import fs from 'fs';
 import path from 'path';
 
 import puppeteer, { Browser, Page } from 'puppeteer';
+import { errMsg } from '../utils/errors';
 // Use CommonJS loads to avoid adding extra type dependencies for these dev tools.
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const pixelmatch = require('pixelmatch');
@@ -190,7 +191,7 @@ export async function runVisualRegressionCheck(): Promise<string> {
         );
       }
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
+      const msg = errMsg(err);
       mismatches.push(`${filename}: ${msg}`);
     }
   }
@@ -220,6 +221,6 @@ async function main(): Promise<void> {
 }
 
 void main().catch((err) => {
-  console.error(err instanceof Error ? err.message : String(err));
+  console.error(errMsg(err));
   process.exit(1);
 });

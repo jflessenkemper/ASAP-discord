@@ -5,6 +5,7 @@ import pool from '../db/pool';
 import { AuthRequest, requireAuth } from '../middleware/auth';
 import { getBestPricesByType } from '../services/fuel';
 import { summarizeFuelPrices } from '../services/gemini';
+import { errMsg } from '../utils/errors';
 
 const router = Router();
 
@@ -48,11 +49,11 @@ router.get('/best-prices', requireAuth, fuelLimiter, async (req: AuthRequest, re
     pool.query(
       `INSERT INTO fuel_searches (client_id, latitude, longitude, radius_km, results) VALUES ($1, $2, $3, $4, $5)`,
       [req.auth!.userId, lat, lng, clampedRadius, JSON.stringify(prices)]
-    ).catch(err => console.error('Failed to log fuel search:', err instanceof Error ? err.message : 'Unknown'));
+    ).catch(err => console.error('Failed to log fuel search:', errMsg(err)));
 
     res.json({ prices, summary });
   } catch (err) {
-    console.error('Fuel prices error:', err instanceof Error ? err.message : 'Unknown');
+    console.error('Fuel prices error:', errMsg(err));
     res.status(500).json({ error: 'Couldn\u2019t load fuel prices. Please try again.' });
   }
 });

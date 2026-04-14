@@ -6,6 +6,7 @@ import pool from '../db/pool';
 import { ensureGoogleCredentials, getAccessTokenViaGcloud } from '../services/googleCredentials';
 
 import { logAgentEvent } from './activityLog';
+import { errMsg } from '../utils/errors';
 
 // ─── Vector Memory (Semantic Search via pgvector) ───
 // Stores key decisions, outcomes, and learnings as embeddings.
@@ -97,7 +98,7 @@ async function generateEmbeddingVertex(text: string): Promise<number[] | null> {
     if (Array.isArray(values) && values.length > 0) return values;
     return null;
   } catch (err) {
-    console.warn('Vertex embedding failed:', err instanceof Error ? err.message : 'Unknown');
+    console.warn('Vertex embedding failed:', errMsg(err));
     return null;
   }
 }
@@ -122,7 +123,7 @@ async function generateEmbedding(text: string): Promise<number[] | null> {
     if (Array.isArray(values) && values.length > 0) return values;
     return null;
   } catch (err) {
-    console.warn('Embedding generation failed:', err instanceof Error ? err.message : 'Unknown');
+    console.warn('Embedding generation failed:', errMsg(err));
     return null;
   }
 }
@@ -153,7 +154,7 @@ export async function storeMemoryEmbedding(
     );
     return true;
   } catch (err) {
-    console.warn('Vector memory store failed:', err instanceof Error ? err.message : 'Unknown');
+    console.warn('Vector memory store failed:', errMsg(err));
     return false;
   }
 }
@@ -209,7 +210,7 @@ export async function searchSimilarMemories(
       metadata: row.metadata || undefined,
     }));
   } catch (err) {
-    console.warn('Vector memory search failed:', err instanceof Error ? err.message : 'Unknown');
+    console.warn('Vector memory search failed:', errMsg(err));
     return [];
   }
 }

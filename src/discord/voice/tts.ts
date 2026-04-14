@@ -6,6 +6,7 @@ import { recordTtsError, recordTtsLatency, recordTranscriptionLatency } from '..
 import { recordGeminiUsage, isGeminiOverLimit } from '../usage';
 
 import { elevenLabsTTS, isElevenLabsAvailable } from './elevenlabs';
+import { errMsg } from '../../utils/errors';
 
 const USE_VERTEX_AI = process.env.GEMINI_USE_VERTEX_AI === 'true';
 const VERTEX_PROJECT_ID = process.env.VERTEX_PROJECT_ID || process.env.GOOGLE_CLOUD_PROJECT || process.env.GCLOUD_PROJECT || '';
@@ -259,7 +260,7 @@ export async function textToSpeech(
       recordTtsError('elevenlabs', 'runtime_error');
       console.warn(
         '[TTS] ElevenLabs failed, falling back to Gemini:',
-        err instanceof Error ? err.message : String(err)
+        errMsg(err)
       );
     }
   }

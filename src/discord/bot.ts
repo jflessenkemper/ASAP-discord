@@ -40,6 +40,7 @@ import { setLimitsChannel, setCostChannel, startDashboardUpdates, stopDashboardU
 import { updateListingByMsgId, draftApplication, getProfile, getPortalByCompany, submitToGreenhouse, getListingById, updateListingStatus, setListingDiscordMsg, guessCompanyEmail, type JobListing } from '../services/jobSearch';
 import { sendJobApplication } from '../services/email';
 import { SYSTEM_COLORS, BUTTON_IDS, jobScoreColor } from './ui/constants';
+import { errMsg } from '../utils/errors';
 
 
 /**
@@ -233,7 +234,7 @@ async function runUpgradesTriage(channels: BotChannels): Promise<void> {
   const actionable = top.find((e) => e.label === 'accepted' && e.count >= 2);
   if (actionable && channels.groupchat) {
     await dispatchUpgradeToRiley(actionable.sample, channels.groupchat).catch((err) => {
-      console.warn('Upgrades auto-dispatch failed:', err instanceof Error ? err.message : 'Unknown');
+      console.warn('Upgrades auto-dispatch failed:', errMsg(err));
     });
   }
 }
@@ -383,7 +384,7 @@ export async function startBot(): Promise<void> {
       }
       await startDashboardUpdates();
       runModelHealthChecks().catch((err) => {
-        const msg = err instanceof Error ? err.message : 'Unknown';
+        const msg = errMsg(err);
         console.error('Model health check failed:', msg);
         void postAgentErrorLog('discord:model-health', 'Model health check failed', { detail: msg, level: 'warn' });
       });
@@ -479,7 +480,7 @@ export async function startBot(): Promise<void> {
       startOpsMonitors(configuredChannels);
     } catch (err) {
       const msg = err instanceof Error ? err.stack || err.message : 'Unknown';
-      console.error('Channel setup error:', err instanceof Error ? err.message : 'Unknown');
+      console.error('Channel setup error:', errMsg(err));
       void postAgentErrorLog('discord:startup', 'Channel setup error', { detail: msg });
       console.error('Bot initialization failed — destroying client');
       readyClient.destroy();
@@ -523,7 +524,7 @@ export async function startBot(): Promise<void> {
     if (!botChannels) return;
 
     const claimed = await claimDiscordMessage(message.id).catch((err) => {
-      console.warn('Discord message dedupe check failed:', err instanceof Error ? err.message : 'Unknown');
+      console.warn('Discord message dedupe check failed:', errMsg(err));
       return true;
     });
     if (!claimed) return;
@@ -583,7 +584,7 @@ export async function startBot(): Promise<void> {
         (err instanceof Error && err.name === 'AbortError')
         || lowered.includes('aborterror')
         || lowered.includes('aborted');
-      console.error('Message handler error:', err instanceof Error ? err.message : 'Unknown');
+      console.error('Message handler error:', errMsg(err));
       void postAgentErrorLog('discord:message-handler', isAbortLike ? 'Message handler aborted' : 'Message handler error', {
         detail: msg,
         level: isAbortLike ? 'info' : 'error',
@@ -598,7 +599,7 @@ export async function startBot(): Promise<void> {
     try {
       await handleOpsInteraction(interaction);
     } catch (err) {
-      const detail = err instanceof Error ? err.message : 'Unknown';
+      const detail = errMsg(err);
       if (interaction.deferred || interaction.replied) {
         await interaction.followUp({ content: `Ops command failed: ${detail}`, ephemeral: true }).catch(() => {});
       } else {
@@ -635,7 +636,7 @@ export async function startBot(): Promise<void> {
       }
     } catch (err) {
       const msg = err instanceof Error ? err.stack || err.message : 'Unknown';
-      console.error('Voice auto join/leave handler error:', err instanceof Error ? err.message : 'Unknown');
+      console.error('Voice auto join/leave handler error:', errMsg(err));
       void postAgentErrorLog('discord:voice-auto', 'Voice auto join/leave error', { detail: msg, level: 'warn' });
     }
   });
@@ -666,7 +667,7 @@ export async function startBot(): Promise<void> {
           if (newStatus === 'approved') {
             const ch = interaction.channel as TextChannel;
             handleApprovalDraft(listing, ch).catch((err) =>
-              console.error('Auto-draft error:', err instanceof Error ? err.message : 'Unknown')
+              console.error('Auto-draft error:', errMsg(err))
             );
           }
         } else {
@@ -746,7 +747,7 @@ export async function startBot(): Promise<void> {
         return;
       }
     } catch (err) {
-      console.error('Button interaction error:', err instanceof Error ? err.message : 'Unknown');
+      console.error('Button interaction error:', errMsg(err));
       if (!interaction.replied && !interaction.deferred) {
         await interaction.reply({ content: 'Something went wrong processing that button.', ephemeral: true }).catch(() => {});
       }
@@ -819,7 +820,7 @@ export async function startBot(): Promise<void> {
     await client.login(token);
   } catch (err) {
     const msg = err instanceof Error ? err.stack || err.message : 'Unknown';
-    console.error('Discord bot login failed:', err instanceof Error ? err.message : 'Unknown');
+    console.error('Discord bot login failed:', errMsg(err));
     void postAgentErrorLog('discord:login', 'Discord bot login failed', { detail: msg });
   }
 }

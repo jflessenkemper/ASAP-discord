@@ -4,6 +4,7 @@ import rateLimit from 'express-rate-limit';
 import { getBestPricesByType } from '../services/fuel';
 import { haversineKm } from '../services/fuel';
 import { summarizeFuelPrices, searchBestPrices, categorizeJob } from '../services/gemini';
+import { errMsg } from '../utils/errors';
 
 const router = Router();
 
@@ -44,7 +45,7 @@ router.get('/fuel', publicLimiter, async (req: Request, res: Response) => {
 
     res.json({ prices, summary });
   } catch (err) {
-    console.error('Public fuel error:', err instanceof Error ? err.message : 'Unknown');
+    console.error('Public fuel error:', errMsg(err));
     res.status(500).json({ error: 'Couldn\'t load fuel prices. Please try again.' });
   }
 });
@@ -65,7 +66,7 @@ router.post('/shop', publicLimiter, async (req: Request, res: Response) => {
     const results = await searchBestPrices(query.trim());
     res.json({ results });
   } catch (err) {
-    console.error('Public shop error:', err instanceof Error ? err.message : 'Unknown');
+    console.error('Public shop error:', errMsg(err));
     res.status(500).json({ error: 'Couldn\'t search products. Please try again.' });
   }
 });
@@ -123,7 +124,7 @@ router.post('/businesses', publicLimiter, async (req: Request, res: Response) =>
     businesses.sort((a: any, b: any) => b.rating - a.rating);
     res.json({ businesses, query: searchQuery });
   } catch (err) {
-    console.error('Public businesses error:', err instanceof Error ? err.message : 'Unknown');
+    console.error('Public businesses error:', errMsg(err));
     res.status(500).json({ error: 'Couldn\'t find businesses. Please try again.' });
   }
 });
@@ -160,7 +161,7 @@ router.get('/geocode', publicLimiter, async (req: Request, res: Response) => {
 
     res.json({ results });
   } catch (err) {
-    console.error('Public geocode error:', err instanceof Error ? err.message : 'Unknown');
+    console.error('Public geocode error:', errMsg(err));
     res.status(500).json({ error: 'Location search failed. Please try again.' });
   }
 });

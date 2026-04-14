@@ -14,6 +14,7 @@ import {
 import { Client, GatewayIntentBits, Guild, VoiceBasedChannel } from 'discord.js';
 
 import { textToSpeech } from './tts';
+import { errMsg } from '../../utils/errors';
 
 let testerClient: Client | null = null;
 let testerReady = false;
@@ -285,7 +286,7 @@ export async function setTesterNickname(
   try {
     await member.setNickname(nickname, reason || 'ASAP voice call');
   } catch (err) {
-    console.warn(`Failed to set tester nickname to "${nickname}": ${err instanceof Error ? err.message : 'Unknown'}`);
+    console.warn(`Failed to set tester nickname to "${nickname}": ${errMsg(err)}`);
   }
   return previous;
 }
@@ -305,7 +306,7 @@ export async function restoreTesterNickname(
   try {
     await member.setNickname(desired, 'ASAP voice call ended');
   } catch (err) {
-    console.warn(`Failed to restore tester nickname to "${desired}": ${err instanceof Error ? err.message : 'Unknown'}`);
+    console.warn(`Failed to restore tester nickname to "${desired}": ${errMsg(err)}`);
   }
 }
 
@@ -321,7 +322,7 @@ export async function setTesterAvatar(avatarUrl: string): Promise<void> {
     const buf = Buffer.from(await resp.arrayBuffer());
     await client.user!.setAvatar(buf);
   } catch (err) {
-    console.warn(`Failed to set tester avatar: ${err instanceof Error ? err.message : 'Unknown'}`);
+    console.warn(`Failed to set tester avatar: ${errMsg(err)}`);
   }
 }
 
@@ -339,6 +340,6 @@ export async function restoreTesterAvatar(): Promise<void> {
     const buf = Buffer.from(await resp.arrayBuffer());
     await client.user!.setAvatar(buf);
   } catch (err) {
-    console.warn(`Failed to restore tester avatar: ${err instanceof Error ? err.message : 'Unknown'}`);
+    console.warn(`Failed to restore tester avatar: ${errMsg(err)}`);
   }
 }

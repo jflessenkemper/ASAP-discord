@@ -2,6 +2,7 @@ import pool from '../db/pool';
 
 import { logAgentEvent } from './activityLog';
 import { ConversationMessage } from './claude';
+import { errMsg } from '../utils/errors';
 
 /**
  * Persistent memory system for Discord agents.
@@ -48,6 +49,35 @@ function disableMemoryDb(reason: string): void {
   if (memoryDbDisabled) return;
   memoryDbDisabled = true;
   console.warn(`Memory DB persistence disabled: ${reason}. Using in-memory cache only.`);
+}
+
+/** Upsert a row in agent_memory (create or replace). */
+export async function upsertMemory(fileName: string, content: string): Promise<void> {
+  await pool.query(
+    `INSERT INTO agent_memory (file_name, content, updated_at) VALUES ($1, $2, NOW())
+     ON CONFLICT (file_name) DO UPDATE SET content = $2, updated_at = NOW()`,
+    [fileName, content]
+  );
+}
+
+/** Append text to an agent_memory row (creates if missing). Returns total byte length. */
+export async function appendMemoryRow(fileName: string, content: string): Promise<number> {
+  const { rows } = await pool.query(
+    `INSERT INTO agent_memory (file_name, content, updated_at) VALUES ($1, $2, NOW())
+     ON CONFLICT (file_name) DO UPDATE SET content = agent_memory.content || E'\\n' || $2, updated_at = NOW()
+     RETURNING length(content) AS total_len`,
+    [fileName, content]
+  );
+  return rows[0]?.total_len || content.length;
+}
+
+/** Read content from an agent_memory row. Returns null if not found. */
+export async function readMemoryRow(fileName: string): Promise<string | null> {
+  const { rows } = await pool.query(
+    'SELECT content FROM agent_memory WHERE file_name = $1',
+    [fileName]
+  );
+  return rows.length > 0 ? rows[0].content : null;
 }
 
 function safeAgentId(agentId: string): string {
@@ -154,7 +184,7 @@ export async function initMemory(): Promise<void> {
     if (isPermissionDeniedError(err)) {
       disableMemoryDb(err instanceof Error ? err.message : 'permission denied');
     }
-    console.error('Failed to initialize memory from DB:', err instanceof Error ? err.message : 'Unknown');
+    console.error('Failed to initialize memory from DB:', errMsg(err));
     initialized = true; // Continue with empty cache rather than blocking
   }
 }
@@ -193,17 +223,13 @@ export function saveMemory(agentId: string, history: ConversationMessage[]): voi
         return;
       }
       const key = convKey(agentId);
-      pool.query(
-        `INSERT INTO agent_memory (file_name, content, updated_at) VALUES ($1, $2, NOW())
-         ON CONFLICT (file_name) DO UPDATE SET content = $2, updated_at = NOW()`,
-        [key, JSON.stringify(history)]
-      ).catch((err) => {
+      upsertMemory(key, JSON.stringify(history)).catch((err) => {
         if (isPermissionDeniedError(err)) {
           disableMemoryDb(err instanceof Error ? err.message : 'permission denied');
           pendingWrites.delete(agentId);
           return;
         }
-        console.error(`DB write failed for ${agentId}:`, err instanceof Error ? err.message : 'Unknown');
+        console.error(`DB write failed for ${agentId}:`, errMsg(err));
       });
       pendingWrites.delete(agentId);
     }, 2000)
@@ -233,7 +259,7 @@ export function clearMemory(agentId: string): void {
       disableMemoryDb(err instanceof Error ? err.message : 'permission denied');
       return;
     }
-    console.error(`Failed to clear memory for ${agentId}:`, err instanceof Error ? err.message : 'Unknown');
+    console.error(`Failed to clear memory for ${agentId}:`, errMsg(err));
   });
 }
 
@@ -250,16 +276,12 @@ function saveSummary(agentId: string, summary: string): void {
   summaryCache.set(agentId, summary);
   if (memoryDbDisabled) return;
   const key = summaryKey(agentId);
-  pool.query(
-    `INSERT INTO agent_memory (file_name, content, updated_at) VALUES ($1, $2, NOW())
-     ON CONFLICT (file_name) DO UPDATE SET content = $2, updated_at = NOW()`,
-    [key, summary]
-  ).catch((err) => {
+  upsertMemory(key, summary).catch((err) => {
     if (isPermissionDeniedError(err)) {
       disableMemoryDb(err instanceof Error ? err.message : 'permission denied');
       return;
     }
-    console.error(`Failed to save summary for ${agentId}:`, err instanceof Error ? err.message : 'Unknown');
+    console.error(`Failed to save summary for ${agentId}:`, errMsg(err));
   });
 }
 
@@ -345,8 +367,8 @@ export async function compressMemory(agentId: string): Promise<void> {
     logAgentEvent(agentId, 'response', `Compressed ${snapshotLen} messages down to ${preserved.length} raw messages plus summary`);
     console.log(`Compressed memory for ${agentId}: ${snapshotLen} → ${preserved.length} messages + summary`);
   } catch (err) {
-    logAgentEvent(agentId, 'error', `Memory compression failed: ${err instanceof Error ? err.message : 'Unknown'}`);
-    console.error(`Memory compression failed for ${agentId}:`, err instanceof Error ? err.message : 'Unknown');
+    logAgentEvent(agentId, 'error', `Memory compression failed: ${errMsg(err)}`);
+    console.error(`Memory compression failed for ${agentId}:`, errMsg(err));
   } finally {
     compressionInProgress.delete(agentId);
   }
@@ -397,16 +419,12 @@ export async function flushPendingWrites(): Promise<void> {
     if (cached) {
       const key = convKey(agentId);
       promises.push(
-        pool.query(
-          `INSERT INTO agent_memory (file_name, content, updated_at) VALUES ($1, $2, NOW())
-           ON CONFLICT (file_name) DO UPDATE SET content = $2, updated_at = NOW()`,
-          [key, JSON.stringify(cached)]
-        ).then(() => {}).catch((err) => {
+        upsertMemory(key, JSON.stringify(cached)).then(() => {}).catch((err) => {
           if (isPermissionDeniedError(err)) {
             disableMemoryDb(err instanceof Error ? err.message : 'permission denied');
             return;
           }
-          console.error(`Flush write failed for ${agentId}:`, err instanceof Error ? err.message : 'Unknown');
+          console.error(`Flush write failed for ${agentId}:`, errMsg(err));
         })
       );
     }

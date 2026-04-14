@@ -1,4 +1,5 @@
 // Fuel pricing service — uses NSW FuelCheck API or fallback
+import { errMsg } from '../utils/errors';
 // NSW FuelCheck: https://api.onegov.nsw.gov.au/FuelCheckApp/v2/fuel/prices
 
 const FUEL_API_BASE = 'https://api.onegov.nsw.gov.au/FuelCheckApp/v2';
@@ -99,7 +100,7 @@ export async function getNearestSupreme98Price(
       stationAddress: '',
     };
   } catch (err) {
-    console.error('Fuel API error:', err instanceof Error ? err.message : 'Unknown error');
+    console.error('Fuel API error:', errMsg(err));
     return {
       pricePerLitre: FALLBACK_PRICE_PER_LITRE,
       stationName: 'API unavailable',
@@ -131,7 +132,7 @@ async function getDrivingDistanceKm(
       return (data as any).rows[0].elements[0].distance.value / 1000; // meters → km
     }
   } catch (err) {
-    console.error('Distance Matrix error:', err instanceof Error ? err.message : 'Unknown error');
+    console.error('Distance Matrix error:', errMsg(err));
   }
 
   return haversineKm(fromLat, fromLng, toLat, toLng);
@@ -201,7 +202,7 @@ export async function getBestPricesByType(
         distanceKm: parseFloat(haversineKm(lat, lng, sLat, sLng).toFixed(1)),
       } as FuelPriceCard;
     } catch (err) {
-      console.error(`Fuel price error for ${fuelType}:`, err instanceof Error ? err.message : 'Unknown');
+      console.error(`Fuel price error for ${fuelType}:`, errMsg(err));
       return null;
     }
   });

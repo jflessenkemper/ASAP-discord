@@ -1,4 +1,5 @@
 import { Client, REST, Routes, SlashCommandBuilder } from 'discord.js';
+import { errMsg } from '../utils/errors';
 
 export async function registerCommands(client: Client, guildId: string): Promise<void> {
   const rest = new REST({ version: '10' }).setToken(client.token!);
@@ -43,6 +44,6 @@ export async function registerCommands(client: Client, guildId: string): Promise
     });
     console.log('Registered guild slash commands: /ops now|costs|threads|deploy-checklist');
   } catch (err) {
-    console.error('Slash command registration error:', err instanceof Error ? err.message : 'Unknown');
+    console.error('Slash command registration error:', errMsg(err));
   }
 }

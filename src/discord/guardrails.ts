@@ -3,6 +3,7 @@ import { GoogleAuth } from 'google-auth-library';
 import { ensureGoogleCredentials, getAccessTokenViaGcloud } from '../services/googleCredentials';
 
 import { logAgentEvent } from './activityLog';
+import { errMsg } from '../utils/errors';
 
 // ─── Model-Based Guardrails ───
 // Uses Gemini Flash (cheapest model) to classify inputs and outputs.
@@ -179,7 +180,7 @@ export async function classifyInput(userMessage: string, agentId: string): Promi
     return parsed;
   } catch (err) {
     // Guardrails should never block normal operation
-    console.warn('Guardrail input classification failed:', err instanceof Error ? err.message : 'Unknown');
+    console.warn('Guardrail input classification failed:', errMsg(err));
     return PASS_RESULT;
   }
 }

@@ -4,6 +4,7 @@ import { TextChannel } from 'discord.js';
 
 import { formatOpsLine } from '../services/opsFeed';
 import { captureAndPostScreenshots } from '../services/screenshots';
+import { errMsg } from '../../utils/errors';
 
 let githubChannel: TextChannel | null = null;
 
@@ -43,7 +44,7 @@ export async function handleGitHubEvent(
   try {
     await githubChannel.send(message.slice(0, 2000));
   } catch (err) {
-    console.error('GitHub webhook post error:', err instanceof Error ? err.message : 'Unknown');
+    console.error('GitHub webhook post error:', errMsg(err));
   }
 
   const shouldScreenshot =
@@ -56,7 +57,7 @@ export async function handleGitHubEvent(
       ? payload.workflow_run?.head_sha?.slice(0, 7) || 'latest'
       : 'deploy';
     captureAndPostScreenshots(appUrl, label).catch((err) => {
-      console.error('Post-build screenshot error:', err instanceof Error ? err.message : 'Unknown');
+      console.error('Post-build screenshot error:', errMsg(err));
     });
   }
 }

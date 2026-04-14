@@ -10,6 +10,7 @@ import {
 import { getAgents, setAgentRoleId } from './agents';
 import { getWebhook } from './services/webhooks';
 import { REPO_TOOLS } from './tools';
+import { errMsg } from '../utils/errors';
 
 const TOOLS_POST_MARKER = '[ASAP_TOOLS_POST_V3]';
 const DEFAULT_PUBLIC_APP_URL = 'https://asap-489910.australia-southeast1.run.app';
@@ -614,7 +615,7 @@ export async function setupChannels(guild: Guild): Promise<BotChannels> {
           ReadMessageHistory: true,
         });
       } catch (err) {
-        console.warn(`Failed to apply bot posting restriction in #${ch.name}:`, err instanceof Error ? err.message : 'Unknown');
+        console.warn(`Failed to apply bot posting restriction in #${ch.name}:`, errMsg(err));
       }
     }
     for (const ch of opsChannels) {
@@ -629,7 +630,7 @@ export async function setupChannels(guild: Guild): Promise<BotChannels> {
           ReadMessageHistory: true,
         });
       } catch (err) {
-        console.warn(`Failed to apply bot Operations permissions in #${ch.name}:`, err instanceof Error ? err.message : 'Unknown');
+        console.warn(`Failed to apply bot Operations permissions in #${ch.name}:`, errMsg(err));
       }
     }
     console.log(`🔒 Restricted raw bot posting in ${restricted.length} non-Operations channel(s)`);
@@ -665,7 +666,7 @@ export async function setupChannels(guild: Guild): Promise<BotChannels> {
             });
           }
         } catch (err) {
-          console.warn(`Failed to harden permissions in #${channel.name}:`, err instanceof Error ? err.message : 'Unknown');
+          console.warn(`Failed to harden permissions in #${channel.name}:`, errMsg(err));
         }
       }
       console.log(`🔐 Applied sensitive channel ACL hardening to ${sensitiveChannels.length} channel(s)`);

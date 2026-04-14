@@ -3,6 +3,7 @@ import { execFileSync } from 'child_process';
 import { GoogleAuth } from 'google-auth-library';
 
 import { ensureGoogleCredentials, getGoogleCredentialBootstrapState } from './googleCredentials';
+import { errMsg } from '../utils/errors';
 
 const PROJECT_ID = process.env.GOOGLE_CLOUD_PROJECT || process.env.GCLOUD_PROJECT || process.env.GCS_PROJECT_ID || '';
 const SECRET_SCOPE = ['https://www.googleapis.com/auth/cloud-platform'];
@@ -15,7 +16,7 @@ function isSecretManagerEnabled(): boolean {
 }
 
 function isMissingAdcError(err: unknown): boolean {
-  const msg = err instanceof Error ? err.message : String(err || '');
+  const msg = errMsg(err);
   return msg.toLowerCase().includes('could not load the default credentials');
 }
 
@@ -100,7 +101,7 @@ async function ensureEnvFromSecret(envVar: 'DEEPGRAM_API_KEY' | 'ELEVENLABS_API_
       }
       return;
     }
-    const msg = err instanceof Error ? err.message : 'Unknown';
+    const msg = errMsg(err);
     console.warn(`Could not load ${envVar} from Secret Manager: ${msg}`);
   }
 }

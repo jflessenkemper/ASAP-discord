@@ -4,6 +4,7 @@ import rateLimit from 'express-rate-limit';
 import pool from '../db/pool';
 import { AuthRequest, requireAuth, requireClient } from '../middleware/auth';
 import { searchBestPrices } from '../services/gemini';
+import { errMsg } from '../utils/errors';
 
 const router = Router();
 
@@ -38,7 +39,7 @@ router.post('/search', requireAuth, requireClient, shopLimiter, async (req: Auth
 
     res.json({ results });
   } catch (err) {
-    console.error('Shop search error:', err instanceof Error ? err.message : 'Unknown');
+    console.error('Shop search error:', errMsg(err));
     res.status(500).json({ error: 'Couldn\u2019t search products. Please try again.' });
   }
 });
@@ -54,7 +55,7 @@ router.get('/history', requireAuth, requireClient, async (req: AuthRequest, res:
     );
     res.json({ history: result.rows });
   } catch (err) {
-    console.error('Shop history error:', err instanceof Error ? err.message : 'Unknown');
+    console.error('Shop history error:', errMsg(err));
     res.status(500).json({ error: 'Couldn\u2019t load search history. Please try again.' });
   }
 });

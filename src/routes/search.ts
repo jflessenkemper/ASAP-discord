@@ -7,6 +7,7 @@ import { textToSpeech } from '../services/elevenlabs';
 import { sendQuoteNotification, sendOwnerNotification } from '../services/email';
 import { getBestPricesByType, haversineKm } from '../services/fuel';
 import { intelligentSearch, transcribeAudio, summarizeFuelPrices, searchBestPrices } from '../services/gemini';
+import { errMsg } from '../utils/errors';
 
 const router = Router();
 
@@ -141,7 +142,7 @@ router.post('/', searchLimiter, async (req: Request, res: Response) => {
 
     res.json(response);
   } catch (err) {
-    console.error('Unified search error:', err instanceof Error ? err.message : 'Unknown');
+    console.error('Unified search error:', errMsg(err));
     res.status(500).json({ error: 'Search failed. Please try again.' });
   }
 });
@@ -223,7 +224,7 @@ router.post('/voice', voiceLimiter, upload.single('audio'), async (req: Request,
       directAnswer,
     });
   } catch (err) {
-    console.error('Voice search error:', err instanceof Error ? err.message : 'Unknown');
+    console.error('Voice search error:', errMsg(err));
     res.status(500).json({ error: 'Voice search failed. Please try again.' });
   }
 });
@@ -243,7 +244,7 @@ router.post('/voice-response', voiceLimiter, async (req: Request, res: Response)
     res.setHeader('Content-Length', audioBuffer.length);
     res.send(audioBuffer);
   } catch (err) {
-    console.error('Voice response error:', err instanceof Error ? err.message : 'Unknown');
+    console.error('Voice response error:', errMsg(err));
     res.status(500).json({ error: 'Voice synthesis failed.' });
   }
 });
@@ -276,7 +277,7 @@ router.post('/notify-owner', searchLimiter, async (req: Request, res: Response) 
 
     res.json({ sent: true, message: 'Jordan has been notified and will call you shortly!' });
   } catch (err) {
-    console.error('Notify owner error:', err instanceof Error ? err.message : 'Unknown');
+    console.error('Notify owner error:', errMsg(err));
     res.status(500).json({ error: 'Couldn\'t send notification. Please try again.' });
   }
 });
@@ -342,7 +343,7 @@ router.post('/request-quote', searchLimiter, async (req: Request, res: Response)
 
     res.json({ sent: true, requestId: qrResult.rows[0].id, message: 'Quote request sent!' });
   } catch (err) {
-    console.error('Request quote error:', err instanceof Error ? err.message : 'Unknown');
+    console.error('Request quote error:', errMsg(err));
     res.status(500).json({ error: 'Couldn\'t send quote request. Please try again.' });
   }
 });

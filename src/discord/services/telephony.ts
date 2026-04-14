@@ -16,9 +16,10 @@ import { WebSocket, WebSocketServer } from 'ws';
 import pool from '../../db/pool';
 import { getAgent, AgentId } from '../agents';
 import { agentRespond, ConversationMessage, summarizeCall } from '../claude';
-import { getMemoryContext, appendToMemory } from '../memory';
+import { getMemoryContext, appendToMemory, upsertMemory } from '../memory';
 import { startLiveTranscription, DeepgramLiveSession, isDeepgramAvailable } from '../voice/deepgram';
 import { elevenLabsTTS } from '../voice/elevenlabs';
+import { errMsg } from '../../utils/errors';
 
 const TWILIO_ACCOUNT_SID = process.env.TWILIO_ACCOUNT_SID;
 const TWILIO_AUTH_TOKEN = process.env.TWILIO_AUTH_TOKEN;
@@ -69,17 +70,13 @@ export async function initContacts(): Promise<void> {
     }
     console.log(`Phone contacts loaded: ${Object.keys(knownContacts).length} contact(s)`);
   } catch (err) {
-    console.error('Failed to load contacts from DB:', err instanceof Error ? err.message : 'Unknown');
+    console.error('Failed to load contacts from DB:', errMsg(err));
   }
 }
 
 function saveContacts(contacts: Record<string, string>): void {
-  pool.query(
-    `INSERT INTO agent_memory (file_name, content, updated_at) VALUES ($1, $2, NOW())
-     ON CONFLICT (file_name) DO UPDATE SET content = $2, updated_at = NOW()`,
-    [CONTACTS_DB_KEY, JSON.stringify(contacts)]
-  ).catch((err) => {
-    console.error('Failed to save contacts:', err instanceof Error ? err.message : 'Unknown');
+  upsertMemory(CONTACTS_DB_KEY, JSON.stringify(contacts)).catch((err) => {
+    console.error('Failed to save contacts:', errMsg(err));
   });
 }
 
@@ -250,7 +247,7 @@ export function attachTelephonyWebSocket(server: HttpServer): void {
           }
         }
       } catch (err) {
-        console.error('Twilio WS error:', err instanceof Error ? err.message : 'Unknown');
+        console.error('Twilio WS error:', errMsg(err));
       }
     });
 
@@ -374,7 +371,7 @@ Do NOT use markdown formatting — this is spoken audio.${langHint}`;
 
     await speakToPhone(session, response);
   } catch (err) {
-    console.error('Phone input error:', err instanceof Error ? err.message : 'Unknown');
+    console.error('Phone input error:', errMsg(err));
   } finally {
     session.processing = false;
   }
@@ -407,7 +404,7 @@ async function speakToPhone(session: PhoneSession, text: string): Promise<void> 
       mark: { name: `tts-${Date.now()}` },
     }));
   } catch (err) {
-    console.error('Phone TTS error:', err instanceof Error ? err.message : 'Unknown');
+    console.error('Phone TTS error:', errMsg(err));
   }
 }
 
@@ -499,7 +496,7 @@ export async function hangUp(callSid: string): Promise<void> {
     const client = getTwilioClient();
     await client.calls(callSid).update({ status: 'completed' });
   } catch (err) {
-    console.error('Hang up error:', err instanceof Error ? err.message : 'Unknown');
+    console.error('Hang up error:', errMsg(err));
   }
 }
 

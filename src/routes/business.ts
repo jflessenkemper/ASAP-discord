@@ -8,6 +8,7 @@ import rateLimit from 'express-rate-limit';
 import pool from '../db/pool';
 import { AuthRequest, requireAuth, requireBusiness, createSession, setAuthCookie } from '../middleware/auth';
 import { sendBusinessWelcome } from '../services/email';
+import { errMsg } from '../utils/errors';
 
 const router = Router();
 
@@ -79,12 +80,12 @@ router.post('/register', authLimiter, async (req: AuthRequest, res: Response) =>
 
     // Send welcome email (async, don't block response)
     sendBusinessWelcome(business.email, business.name, business.access_code).catch(err => {
-      console.error('Failed to send business welcome email:', err instanceof Error ? err.message : 'Unknown');
+      console.error('Failed to send business welcome email:', errMsg(err));
     });
 
     res.status(201).json({ token, business });
   } catch (err) {
-    console.error('Business register error:', err instanceof Error ? err.message : 'Unknown');
+    console.error('Business register error:', errMsg(err));
     res.status(500).json({ error: 'Registration failed. Please try again.' });
   }
 });
@@ -123,7 +124,7 @@ router.post('/login', authLimiter, async (req: AuthRequest, res: Response) => {
     delete safeBusiness.password_hash;
     res.json({ token, business: safeBusiness });
   } catch (err) {
-    console.error('Business login error:', err instanceof Error ? err.message : 'Unknown');
+    console.error('Business login error:', errMsg(err));
     res.status(500).json({ error: "We couldn't verify your login details. Please double-check them and try again." });
   }
 });
@@ -143,7 +144,7 @@ router.get('/profile', requireAuth, requireBusiness, async (req: AuthRequest, re
 
     res.json(result.rows[0]);
   } catch (err) {
-    console.error('Get business profile error:', err instanceof Error ? err.message : 'Unknown');
+    console.error('Get business profile error:', errMsg(err));
     res.status(500).json({ error: 'Couldn\'t load profile.' });
   }
 });
@@ -184,7 +185,7 @@ router.patch('/profile', requireAuth, requireBusiness, async (req: AuthRequest, 
 
     res.json(result.rows[0]);
   } catch (err) {
-    console.error('Update business profile error:', err instanceof Error ? err.message : 'Unknown');
+    console.error('Update business profile error:', errMsg(err));
     res.status(500).json({ error: 'Couldn\'t update profile.' });
   }
 });
@@ -209,7 +210,7 @@ router.get('/quotes', requireAuth, requireBusiness, async (req: AuthRequest, res
 
     res.json({ quoteRequests: result.rows });
   } catch (err) {
-    console.error('Get business quotes error:', err instanceof Error ? err.message : 'Unknown');
+    console.error('Get business quotes error:', errMsg(err));
     res.status(500).json({ error: 'Couldn\'t load quote requests.' });
   }
 });
@@ -263,7 +264,7 @@ router.post('/quotes/:id/respond', requireAuth, requireBusiness, async (req: Aut
 
     res.status(201).json(quoteResult.rows[0]);
   } catch (err) {
-    console.error('Respond to quote error:', err instanceof Error ? err.message : 'Unknown');
+    console.error('Respond to quote error:', errMsg(err));
     res.status(500).json({ error: 'Couldn\'t submit quote.' });
   }
 });
@@ -289,7 +290,7 @@ router.post('/code-lookup', async (req: AuthRequest, res: Response) => {
 
     res.json({ business: result.rows[0] });
   } catch (err) {
-    console.error('Code lookup error:', err instanceof Error ? err.message : 'Unknown');
+    console.error('Code lookup error:', errMsg(err));
     res.status(500).json({ error: 'Lookup failed.' });
   }
 });

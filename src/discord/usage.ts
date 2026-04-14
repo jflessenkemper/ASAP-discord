@@ -4,7 +4,9 @@ import pool from '../db/pool';
 import { getLiveBillingSnapshot, refreshLiveBillingSnapshot } from '../services/billing';
 
 import { formatOpsLine, postOpsLine } from './services/opsFeed';
+import { upsertMemory } from './memory';
 import { statusColor } from './ui/constants';
+import { errMsg } from '../utils/errors';
 
 const DAILY_LIMITS = {
   /** Max LLM input+output tokens per day (Gemini) */
@@ -137,7 +139,7 @@ function markUsageDirty(): void {
   if (usageWriteTimer) clearTimeout(usageWriteTimer);
   usageWriteTimer = setTimeout(() => {
     flushUsageCounters().catch((err) => {
-      console.error('Usage counter flush failed:', err instanceof Error ? err.message : 'Unknown');
+      console.error('Usage counter flush failed:', errMsg(err));
     });
   }, 2000);
 }
@@ -198,7 +200,7 @@ export async function initUsageCounters(): Promise<void> {
     if (isPermissionDeniedError(err)) {
       disableUsageDb(err instanceof Error ? err.message : 'permission denied');
     }
-    console.error('Failed to initialize usage counters:', err instanceof Error ? err.message : 'Unknown');
+    console.error('Failed to initialize usage counters:', errMsg(err));
   } finally {
     usageLoaded = true;
     resetIfNewDay();
@@ -217,11 +219,7 @@ export async function flushUsageCounters(): Promise<void> {
   }
   const payload = JSON.stringify(usage);
   try {
-    await pool.query(
-      `INSERT INTO agent_memory (file_name, content, updated_at) VALUES ($1, $2, NOW())
-       ON CONFLICT (file_name) DO UPDATE SET content = $2, updated_at = NOW()`,
-      [USAGE_DB_KEY, payload]
-    );
+    await upsertMemory(USAGE_DB_KEY, payload);
   } catch (err) {
     if (isPermissionDeniedError(err)) {
       disableUsageDb(err instanceof Error ? err.message : 'permission denied');
@@ -766,7 +764,7 @@ export async function startDashboardUpdates(): Promise<void> {
 
   updateInterval = setInterval(() => {
     updateDashboard().catch((err) =>
-      console.error('Dashboard update error:', err instanceof Error ? err.message : 'Unknown')
+      console.error('Dashboard update error:', errMsg(err))
     );
   }, DASHBOARD_UPDATE_INTERVAL_MS);
 }
@@ -790,7 +788,7 @@ async function updateDashboard(): Promise<void> {
   if (!limitsChannel) return;
 
   await refreshLiveBillingSnapshot().catch((err) => {
-    console.warn('Live billing refresh failed:', err instanceof Error ? err.message : 'Unknown');
+    console.warn('Live billing refresh failed:', errMsg(err));
   });
 
   const embed = getUsageEmbed();

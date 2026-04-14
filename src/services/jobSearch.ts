@@ -4,6 +4,7 @@
  */
 import https from 'https';
 import pool from '../db/pool';
+import { errMsg } from '../utils/errors';
 
 // ── Types ──────────────────────────────────────────────────────────
 
@@ -280,7 +281,7 @@ export async function scanPortals(): Promise<{ listings: JobListing[]; errors: s
         allListings.push(listing);
       }
     } catch (err) {
-      errors.push(`${portal.company_name}: ${err instanceof Error ? err.message : 'Unknown'}`);
+      errors.push(`${portal.company_name}: ${errMsg(err)}`);
     }
   }
 

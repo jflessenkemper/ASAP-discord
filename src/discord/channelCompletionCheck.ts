@@ -5,6 +5,7 @@ import path from 'node:path';
 import { Client, GatewayIntentBits, Message, TextChannel } from 'discord.js';
 
 import { getAgents } from './agents';
+import { errMsg } from '../utils/errors';
 
 type AttemptResult = {
   ok: boolean;
@@ -312,6 +313,6 @@ async function main(): Promise<void> {
 }
 
 void main().catch((err) => {
-  console.error('Fatal:', err instanceof Error ? err.message : String(err));
+  console.error('Fatal:', errMsg(err));
   process.exit(1);
 });

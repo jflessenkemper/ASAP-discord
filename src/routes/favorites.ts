@@ -2,6 +2,7 @@ import { Router, Response } from 'express';
 
 import pool from '../db/pool';
 import { AuthRequest, requireAuth, requireClient } from '../middleware/auth';
+import { errMsg } from '../utils/errors';
 
 const router = Router();
 
@@ -14,7 +15,7 @@ router.get('/', requireAuth, requireClient, async (req: AuthRequest, res: Respon
     );
     res.json({ items: result.rows });
   } catch (err) {
-    console.error('Get favorites error:', err instanceof Error ? err.message : 'Unknown');
+    console.error('Get favorites error:', errMsg(err));
     res.status(500).json({ error: 'Couldn\u2019t load your saved items. Please try again.' });
   }
 });
@@ -46,7 +47,7 @@ router.post('/', requireAuth, requireClient, async (req: AuthRequest, res: Respo
     );
     res.status(201).json(result.rows[0]);
   } catch (err) {
-    console.error('Save favorite error:', err instanceof Error ? err.message : 'Unknown');
+    console.error('Save favorite error:', errMsg(err));
     res.status(500).json({ error: 'Couldn\u2019t save this item. Please try again.' });
   }
 });
@@ -65,7 +66,7 @@ router.delete('/:id', requireAuth, requireClient, async (req: AuthRequest, res: 
     }
     res.json({ success: true });
   } catch (err) {
-    console.error('Remove favorite error:', err instanceof Error ? err.message : 'Unknown');
+    console.error('Remove favorite error:', errMsg(err));
     res.status(500).json({ error: 'Couldn\u2019t remove this item. Please try again.' });
   }
 });

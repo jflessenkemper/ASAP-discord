@@ -8,6 +8,7 @@ import { mirrorAgentResponse } from '../services/diagnosticsWebhook';
 import { clearWebhookCache, sendWebhookMessage, WebhookCapableChannel } from '../services/webhooks';
 
 import { isLowSignalCompletion } from './responseNormalization';
+import { errMsg } from '../../utils/errors';
 
 const conversationHistories = new Map<string, ConversationMessage[]>();
 const channelQueues = new Map<string, Promise<void>>();
@@ -187,7 +188,7 @@ export async function handleAgentMessage(
       channelAbortControllers.delete(channelId);
     }
   }).catch((err) => {
-    console.error(`Agent queue error for ${agent.name}:`, err instanceof Error ? err.message : 'Unknown');
+    console.error(`Agent queue error for ${agent.name}:`, errMsg(err));
   }).finally(() => {
     const nextDepth = Math.max(0, (channelQueueDepth.get(channelId) || 1) - 1);
     channelQueueDepth.set(channelId, nextDepth);
@@ -337,7 +338,7 @@ async function handleAgentMessageInner(
             avatarURL: agent.avatarUrl,
           });
         } catch (err) {
-          console.warn(`Webhook tool notification failed for ${agent.name}:`, err instanceof Error ? err.message : 'Unknown');
+          console.warn(`Webhook tool notification failed for ${agent.name}:`, errMsg(err));
         }
       }, {
         signal,
@@ -432,11 +433,11 @@ async function handleAgentMessageInner(
       }
       return;
     }
-    const errMsg = err instanceof Error ? err.message : String(err);
+    const errorMessage = errMsg(err);
     const timedOut = isTextTimeoutError(err);
     if (timedOut) recordTextChannelTimeout(agent.id);
     const userFacing = classifyAgentError(err);
-    console.error(`Agent ${agent.name} error:`, errMsg);
+    console.error(`Agent ${agent.name} error:`, errorMessage);
     try {
       if (pendingThinking && timedOut) {
         // Edit the Thinking message in-place to show timeout — avoids dead placeholder
@@ -578,7 +579,7 @@ export async function sendAgentMessage(
     }
     await mirrorAgentResponse(agent.name, channel.name, compacted);
   } catch (err) {
-    console.warn(`Webhook send failed for ${agent.name}, falling back to a single plain send path:`, err instanceof Error ? err.message : 'Unknown');
+    console.warn(`Webhook send failed for ${agent.name}, falling back to a single plain send path:`, errMsg(err));
     clearWebhookCache();
     if (channel instanceof TextChannel) {
       await sendAgentFallbackMessage(channel, agent, compacted).catch(() => {});

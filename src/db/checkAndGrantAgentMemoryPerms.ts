@@ -4,6 +4,7 @@ import { execFileSync } from 'node:child_process';
 import { Pool } from 'pg';
 
 import pool from './pool';
+import { errMsg } from '../utils/errors';
 
 const DEFAULT_TARGET_TABLES = ['agent_memory', 'discord_message_dedupe', 'agent_activity_log'];
 
@@ -98,7 +99,7 @@ function stripSslParams(url: string): string {
 }
 
 function isTlsCertError(err: unknown): boolean {
-  const msg = err instanceof Error ? err.message : String(err);
+  const msg = errMsg(err);
   return /certificate|unable to verify the first certificate|self signed certificate|tls/i.test(msg);
 }
 
@@ -158,7 +159,7 @@ async function main(): Promise<void> {
   } catch (err) {
     const adminUrl = getAdminDatabaseUrl();
     if (!adminUrl) {
-      const msg = err instanceof Error ? err.message : String(err);
+      const msg = errMsg(err);
       console.error(`Automatic grant failed (${msg}).`);
       console.error('No privileged DB connection configured for fallback.');
       console.error('Set one of these and rerun:');
@@ -237,7 +238,7 @@ async function main(): Promise<void> {
 
 void main()
   .catch((err) => {
-    console.error(err instanceof Error ? err.message : String(err));
+    console.error(errMsg(err));
     process.exit(1);
   })
   .finally(async () => {

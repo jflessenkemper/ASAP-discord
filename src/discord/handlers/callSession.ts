@@ -20,6 +20,7 @@ import {
   setTesterNickname, restoreTesterNickname, setTesterAvatar, restoreTesterAvatar,
 } from '../voice/testerClient';
 import { textToSpeech } from '../voice/tts';
+import { errMsg } from '../../utils/errors';
 
 /** Heartbeat interval to detect stale connections (every 2 minutes) */
 const HEARTBEAT_INTERVAL = 20 * 1000;
@@ -557,7 +558,7 @@ export async function startCall(
       if (!conn || conn.state.status === VoiceConnectionStatus.Destroyed) {
         console.warn('Voice connection destroyed — ending call');
         void postVoiceStageLog('connection_destroyed', `channel=${voiceChannel.name}`, 'error');
-        endCall().catch((err) => console.error('Heartbeat endCall error:', err instanceof Error ? err.message : 'Unknown'));
+        endCall().catch((err) => console.error('Heartbeat endCall error:', errMsg(err)));
         return;
       }
 
@@ -577,7 +578,7 @@ export async function startCall(
 
         console.warn(`Voice disconnected for ${Math.round(disconnectedForMs / 1000)}s — ending call`);
         void postVoiceStageLog('connection_timeout', `disconnected_ms=${disconnectedForMs}`, 'error');
-        endCall().catch((err) => console.error('Heartbeat endCall error:', err instanceof Error ? err.message : 'Unknown'));
+        endCall().catch((err) => console.error('Heartbeat endCall error:', errMsg(err)));
         return;
       }
 
@@ -587,7 +588,7 @@ export async function startCall(
       }
       activeSession.disconnectedSince = null;
     } catch (err) {
-      console.error('Heartbeat error:', err instanceof Error ? err.message : 'Unknown');
+      console.error('Heartbeat error:', errMsg(err));
     }
   }, HEARTBEAT_INTERVAL);
 
@@ -598,7 +599,7 @@ export async function startCall(
       if (!activeSession?.active) return;
       void handleVoiceInput(transcription).catch((err) => {
         if (!isAbortLikeError(err)) {
-          console.error('Voice processing error:', err instanceof Error ? err.message : 'Unknown');
+          console.error('Voice processing error:', errMsg(err));
         }
       });
     },
@@ -662,7 +663,7 @@ export async function startCall(
         });
         await postVoiceStageLog('preflight_ok', `tts_playback_ms=${Date.now() - preflightStartMs}`);
       } catch (err) {
-        const msg = err instanceof Error ? err.message : 'Unknown error';
+        const msg = errMsg(err);
         console.error('Voice output self-test failed:', msg);
         await postVoiceStageLog('preflight_failed', `ms=${Date.now() - preflightStartMs} error=${msg}`, 'warn');
         await postDiagnostic('Voice self-test failed.', {
@@ -740,7 +741,7 @@ export async function endCall(): Promise<void> {
         `📞 **Call ended** (${duration} min)\nSummary posted in <#${session.callLog.id}>`
       );
     } catch (err) {
-      console.error('Call summary error:', err instanceof Error ? err.message : 'Unknown');
+      console.error('Call summary error:', errMsg(err));
       await sendAsAgent(session.groupchat, `📞 **Call ended** (${duration} min)`);
     }
   } else {
@@ -1030,8 +1031,8 @@ IMPORTANT: End on a complete sentence, never a fragment.${langHint}`;
       } catch (err) {
         if (!isCurrentTurn()) return;
         if (isAbortLikeError(err)) return;
-        console.error('Riley voice error:', err instanceof Error ? err.message : 'Unknown');
-        await postVoiceStageLog('riley_turn_failed', `turn=${turnId} error=${err instanceof Error ? err.message : 'Unknown'}`, 'error');
+        console.error('Riley voice error:', errMsg(err));
+        await postVoiceStageLog('riley_turn_failed', `turn=${turnId} error=${errMsg(err)}`, 'error');
         await sendAsAgent(session.groupchat, '⚠️ Riley had an error processing voice input.');
       }
     } else {

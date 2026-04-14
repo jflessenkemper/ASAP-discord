@@ -7,6 +7,7 @@ import { OAuth2Client } from 'google-auth-library';
 import pool from '../db/pool';
 import { createSession, invalidateSession, AuthRequest, requireAuth, setAuthCookie, clearAuthCookie } from '../middleware/auth';
 import { generateCode, sendTwoFactorCode } from '../services/email';
+import { errMsg } from '../utils/errors';
 
 const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 
@@ -19,7 +20,7 @@ function logAuthEvent(req: Request, event: string, userId?: string, userType?: s
   pool.query(
     `INSERT INTO auth_events (user_id, user_type, event, provider, ip_address, user_agent) VALUES ($1, $2, $3, $4, $5, $6)`,
     [userId || null, userType || null, event, provider || null, ip, ua]
-  ).catch(err => console.error('Failed to log auth event:', err instanceof Error ? err.message : 'Unknown'));
+  ).catch(err => console.error('Failed to log auth event:', errMsg(err)));
 }
 
 // Rate limit login attempts
@@ -191,7 +192,7 @@ router.post('/social', loginLimiter, async (req: Request, res: Response) => {
     res.status(201).json({ token, user: client });
   } catch (err: any) {
     logAuthEvent(req, 'login_failed', undefined, 'client', req.body?.provider);
-    console.error('Social auth error:', err instanceof Error ? err.message : 'Unknown error');
+    console.error('Social auth error:', errMsg(err));
     if (err.message?.includes('Token used too late') || err.message?.includes('Invalid')) {
       res.status(401).json({ error: "We couldn't verify your login details. Please double-check them and try again." });
       return;
@@ -247,7 +248,7 @@ router.post('/email-signup', loginLimiter, async (req: Request, res: Response) =
     setAuthCookie(res, token);
     res.status(201).json({ token, user: client });
   } catch (err: any) {
-    console.error('Email signup error:', err instanceof Error ? err.message : 'Unknown error');
+    console.error('Email signup error:', errMsg(err));
     res.status(500).json({ error: 'Sign-up failed. Please try again.' });
   }
 });
@@ -314,7 +315,7 @@ router.post('/employee/login', loginLimiter, async (req: Request, res: Response)
       employee_id: employee.id,
     });
   } catch (err) {
-    console.error('Employee login error:', err instanceof Error ? err.message : 'Unknown error');
+    console.error('Employee login error:', errMsg(err));
     res.status(500).json({ error: "We couldn't verify your login details. Please double-check them and try again." });
   }
 });
@@ -444,7 +445,7 @@ router.get('/me', requireAuth, async (req: AuthRequest, res: Response) => {
 
     res.json({ userType, user: result.rows[0] });
   } catch (err) {
-    console.error('Get user error:', err instanceof Error ? err.message : 'Unknown error');
+    console.error('Get user error:', errMsg(err));
     res.status(500).json({ error: 'Failed to fetch user' });
   }
 });
@@ -485,7 +486,7 @@ router.post('/test-login', loginLimiter, async (req: Request, res: Response) => 
     logAuthEvent(req, 'login', client.id, 'client', 'test');
     res.json({ token, user: client });
   } catch (err) {
-    console.error('Test login error:', err instanceof Error ? err.message : 'Unknown');
+    console.error('Test login error:', errMsg(err));
     res.status(500).json({ error: 'Test login failed' });
   }
 });
@@ -559,7 +560,7 @@ router.patch('/profile', requireAuth, profileLimiter, async (req: AuthRequest, r
     logAuthEvent(req, 'profile_update', req.auth!.userId, 'client');
     res.json({ user: result.rows[0] });
   } catch (err) {
-    console.error('Profile update error:', err instanceof Error ? err.message : 'Unknown');
+    console.error('Profile update error:', errMsg(err));
     res.status(500).json({ error: 'Couldn\u2019t update profile. Please try again.' });
   }
 });
@@ -596,7 +597,7 @@ router.delete('/account', requireAuth, profileLimiter, async (req: AuthRequest, 
     logAuthEvent(req, 'account_deleted', clientId, 'client');
     res.json({ message: 'Account deleted' });
   } catch (err) {
-    console.error('Account deletion error:', err instanceof Error ? err.message : 'Unknown');
+    console.error('Account deletion error:', errMsg(err));
     res.status(500).json({ error: 'Couldn\u2019t delete account. Please try again.' });
   }
 });

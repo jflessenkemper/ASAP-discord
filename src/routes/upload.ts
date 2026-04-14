@@ -4,6 +4,7 @@ import multer from 'multer';
 import pool from '../db/pool';
 import { AuthRequest, requireAuth } from '../middleware/auth';
 import { uploadEvidence } from '../services/storage';
+import { errMsg } from '../utils/errors';
 
 const router = Router();
 const upload = multer({
@@ -64,7 +65,7 @@ router.post(
 
       res.status(201).json({ url });
     } catch (err) {
-      console.error('Upload error:', err instanceof Error ? err.message : 'Unknown error');
+      console.error('Upload error:', errMsg(err));
       res.status(500).json({ error: 'Upload failed. Please try again.' });
     }
   }

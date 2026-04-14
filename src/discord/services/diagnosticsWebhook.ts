@@ -1,3 +1,5 @@
+import { errMsg } from '../../utils/errors';
+
 interface DiagnosticExtra {
   source?: string;
   detail?: string;
@@ -49,7 +51,7 @@ export async function postDiagnostic(message: string, extra?: DiagnosticExtra): 
       }
     }
   } catch (err) {
-    console.warn('Diagnostic webhook error:', err instanceof Error ? err.message : 'Unknown');
+    console.warn('Diagnostic webhook error:', errMsg(err));
   }
 }
 
