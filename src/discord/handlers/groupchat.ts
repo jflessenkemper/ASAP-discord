@@ -1429,8 +1429,10 @@ export async function handleGroupchatMessage(
   // waits for these very messages to be processed).
   if (activeSmokeTestRunning && message.author.bot && isTesterBotId(message.author.id)) {
     console.log(`[smoke-guard] Processing tester bot message in parallel during active smoke test: "${content.slice(0, 80)}"`);
-    // Skip budget/status/voice messages that are smoke test scaffolding, not actual test prompts
-    if (/^approve budget|^tester\s+say:|status$/i.test(content.replace(/<@[!&]?\d+>\s*/g, '').trim())) {
+    // Skip budget/voice messages that are smoke test scaffolding, not actual test prompts.
+    // Note: do NOT skip "status" — the subprocess uses it as a router health check
+    // and expects the main bot to respond.
+    if (/^approve budget|^tester\s+say:/i.test(content)) {
       console.log(`[smoke-guard] Skipping scaffolding message: "${content.slice(0, 60)}"`);
       return;
     }
