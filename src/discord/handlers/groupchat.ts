@@ -1686,9 +1686,11 @@ async function handleRileyMessage(
       ? '\n\n[Language detected: Mandarin Chinese. Please reply in Mandarin Chinese (简体中文).]'
       : '';
     const isSmokeTest = /\[smoke\s*test:/i.test(userMessage);
-    const mentionGuide = isSmokeTest
-      ? '\n\n[This is a smoke test. Execute tools yourself directly. Do NOT delegate to Ace or any specialist unless the prompt explicitly asks you to delegate.]'
-      : `\n\n[Delegation contract: route execution only via ${aceGuide}. Do not directly delegate to specialists; Ace may involve them if needed.]`;
+    const isDirectToolRequest = /smoke_test_agents|run\s+(all\s+)?(smoke|test)|test\s+engine/i.test(userMessage);
+    const shouldExecuteDirectly = isSmokeTest || isDirectToolRequest;
+    const mentionGuide = shouldExecuteDirectly
+      ? '\n\n[This is a direct tool request. Execute tools yourself directly — especially smoke_test_agents. Do NOT delegate to Ace or any specialist. Do NOT mention or tag any agent roles. Call the smoke_test_agents tool immediately.]'
+      : `\n\n[Delegation contract: route execution only via ${aceGuide}. Do not directly delegate to specialists; Ace may invoke them if needed.]`;
     const threadCloseGuide = `\n\n[Keep the workspace thread updated briefly. Include [ACTION:CLOSE_THREAD] only when the task is fully complete.]`;
     const decisionGuide = '\n\n[Decision policy: only ask the user for MAJOR decisions (prod risk, security/privacy, rollback/no-rollback, schema/data-loss risk, spend increase, legal/compliance impact). For routine implementation choices, decide and proceed.]';
     const contextMessageWithLang = `${textLangHint ? `${contextMessage}${textLangHint}` : contextMessage}${mentionGuide}${threadCloseGuide}${decisionGuide}`;
