@@ -365,6 +365,7 @@ const USE_VERTEX_AI = process.env.GEMINI_USE_VERTEX_AI === 'true';
 const USE_VERTEX_ANTHROPIC = process.env.ANTHROPIC_USE_VERTEX_AI !== 'false';
 const VERTEX_PROJECT_ID = process.env.VERTEX_PROJECT_ID || process.env.GOOGLE_CLOUD_PROJECT || process.env.GCLOUD_PROJECT || '';
 const VERTEX_LOCATION = process.env.VERTEX_LOCATION || 'us-central1';
+const VERTEX_GEMINI_USE_GLOBAL = process.env.VERTEX_GEMINI_USE_GLOBAL !== 'false'; // default: global endpoint for Gemini
 const VERTEX_ANTHROPIC_LOCATION = process.env.VERTEX_ANTHROPIC_LOCATION || process.env.VERTEX_PARTNER_LOCATION || VERTEX_LOCATION;
 const VERTEX_ANTHROPIC_FALLBACK_LOCATIONS = (process.env.VERTEX_ANTHROPIC_FALLBACK_LOCATIONS || 'us-east5')
   .split(',')
@@ -606,7 +607,11 @@ async function callVertexGenerateContent(
 
   for (let i = 0; i < candidates.length; i += 1) {
     const model = candidates[i];
-    const endpoint = `https://${VERTEX_LOCATION}-aiplatform.googleapis.com/v1/projects/${VERTEX_PROJECT_ID}/locations/${VERTEX_LOCATION}/publishers/google/models/${encodeURIComponent(model)}:generateContent`;
+    const geminiHost = VERTEX_GEMINI_USE_GLOBAL
+      ? 'aiplatform.googleapis.com'
+      : `${VERTEX_LOCATION}-aiplatform.googleapis.com`;
+    const geminiLocation = VERTEX_GEMINI_USE_GLOBAL ? 'global' : VERTEX_LOCATION;
+    const endpoint = `https://${geminiHost}/v1/projects/${VERTEX_PROJECT_ID}/locations/${geminiLocation}/publishers/google/models/${encodeURIComponent(model)}:generateContent`;
     const res = await fetch(endpoint, {
       method: 'POST',
       headers: {
