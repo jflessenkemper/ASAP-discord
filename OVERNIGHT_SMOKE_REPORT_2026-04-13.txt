@@ -1,0 +1,667 @@
+================================================================================
+  ASAP DISCORD BOT — OVERNIGHT SMOKE TEST REPORT
+  Run: 2026-04-13  (12:46 AEST → 15:34 UTC, ~2.5 hours)
+  Commit: ecc286c
+================================================================================
+
+TABLE OF CONTENTS
+─────────────────
+  1. Executive Summary
+  2. Test Phases & Scores
+  3. Per-Agent Breakdown
+  4. Root Cause Analysis
+  5. Critical Failures Requiring Immediate Fix
+  6. Bot Code Changes Required
+  7. Test Framework Changes Required
+  8. Discord UX Improvements
+  9. Prioritised Action Plan
+
+
+================================================================================
+1. EXECUTIVE SUMMARY
+================================================================================
+
+  Total tests:        155
+  Passed:              94  (61%)
+  Failed:              61  (39%)
+  Readiness score:   61.7
+  Critical gates:    FAILED
+
+  Critical gate detail:
+    core_fail        = 3   (rate-limit-awareness, memory-read, memory-append)
+    orchestration_fail = 0
+    upgrades_fail    = 3   (Ace, Sophie, Jude failed upgrades-post)
+    critical_extra   = 1   (channel_hygiene — 0 messages in #upgrades)
+
+  The test ran three phases:
+    Phase 1 — Groupchat serial:       52 / 62  passed  (84%)
+    Phase 2 — Agent channels parallel: 35 / 82  passed  (43%)   ← worst
+    Phase 3 — Heavy tool serial:        7 / 11  passed  (64%)
+
+  Failure breakdown by category:
+    PATTERN_MISMATCH     51  (84% of failures)
+    TOOL_AUDIT_MISSING    9  (15%)
+    QUALITY_CHECK_FAILED  1  (1%)
+
+  Known flaky (excluded from critical gate): 5
+
+  The rerun-failed phase did not execute — the overnight script exited
+  after PM2 log capture without running the third stage.
+
+
+================================================================================
+2. TEST PHASES & SCORES
+================================================================================
+
+  PHASE 1 — Groupchat (serial, 62 tests, 2804s)
+  ───────────────────────────────────────────────
+  Riley was the primary responder for all groupchat tests. 52 passed
+  (many via retry-pass on second attempt). This is the healthiest phase
+  and shows core Riley orchestration works well.
+
+  Failures (10):
+    • core/rate-limit-awareness            QUALITY_CHECK_FAILED
+    • tool-proof/self-edit-file            TOOL_AUDIT_MISSING (flaky)
+    • tool-proof/create-branch-pr          TOOL_AUDIT_MISSING (flaky)
+    • memory/memory-read                   TOOL_AUDIT_MISSING
+    • memory/memory-append                 TOOL_AUDIT_MISSING
+    • discord-management/send-channel-msg  TOOL_AUDIT_MISSING
+    • discord-management/create-rename-del PATTERN_MISMATCH (idle timeout)
+    • self-improvement/propose-upgrade     PATTERN_MISMATCH (idle timeout)
+    • self-improvement/implement-fix       PATTERN_MISMATCH (idle timeout, flaky)
+    • self-improvement/deploy-self-gated   PATTERN_MISMATCH (idle timeout)
+
+
+  PHASE 2 — Agent Channels (parallel, 82 tests, 5249s)
+  ─────────────────────────────────────────────────────
+  Each specialist agent was tested on its own Discord channel.
+  This was the weakest phase (43% pass rate). The dominant failure
+  mode was "hard ceiling reached" or "idle timeout" — agents never
+  produced a qualifying response within the timeout window.
+
+  Key pattern: All Ace channel tests failed (18/19), all Jude GCP
+  infra tests failed (13/15), Harper/Mia/Elena partially failed.
+  Raj, Kai, Liv passed 100%.
+
+  Failures (47): See per-agent breakdown below.
+
+
+  PHASE 3 — Heavy Tools (serial, 11 tests, 1158s)
+  ────────────────────────────────────────────────
+  Tests requiring heavyweight operations (GCP build, mobile harness,
+  batch-edit, edit-file roundtrip).
+
+  Failures (4):
+    • Leo/android-build-review             TOOL_AUDIT_MISSING
+    • Max/mobile-harness-interactive       TOOL_AUDIT_MISSING
+    • Ace/edit-file-roundtrip              PATTERN_MISMATCH (flaky)
+    • Jude/gcp-build-image                 PATTERN_MISMATCH (flaky)
+    • Max/mobile-harness-step              PATTERN_MISMATCH
+
+
+================================================================================
+3. PER-AGENT BREAKDOWN
+================================================================================
+
+  Agent                    Pass  Fail  Pass%   Notes
+  ─────────────────────── ───── ───── ──────  ──────────────────────────────
+  Riley (Exec Assistant)   41    10    80%    Core routing solid; tool audit
+                                               gaps + self-improvement timeouts
+  Ace (Developer)           3    18    14%    Nearly total failure on own
+                                               channel — idle timeout dominant
+  Jude (DevOps)             6    15    29%    All GCP infra tests failed
+                                               (timeout + Vertex 401 errors)
+  Sophie (UX Reviewer)      1     3    25%    color-contrast, app-ux-audit,
+                                               upgrades-post
+  Elena (DBA)               2     3    40%    postgres-safety, db-query-readonly,
+                                               db-query-insert-safety
+  Harper (Lawyer)           1     2    33%    au-contractor, terms-review
+  Mia (iOS Engineer)        2     2    50%    ios-stack, ios-permissions
+  Max (QA)                  3     2    60%    mobile harness failures
+  Leo (Android Engineer)    3     1    75%    android-build-review
+  Kane (Security Auditor)   3     1    75%    dependency-scan tool audit
+  Kai (Performance)         5     0   100%    ✓ Perfect
+  Raj (API Reviewer)        4     0   100%    ✓ Perfect
+  Liv (Copywriter)          3     0   100%    ✓ Perfect
+
+  LiveMonitor event distribution (1361 events in 9239s):
+    ASAP (system):   429 events
+    Riley:           291 events
+    Ace:             168 events
+    Jude:            142 events
+    Elena:            46 events
+    Sophie:           45 events
+    Mia:              43 events
+    Leo:              38 events
+    Max:              37 events
+    Kai:              28 events
+    Raj:              27 events
+    Kane:             26 events
+    Harper:           26 events
+    Liv:              15 events
+
+  Observation: Ace and Jude were highly active (168 + 142 events) but
+  still failed most tests — they were producing responses but the content
+  didn't match expected patterns or timed out before completing.
+
+
+================================================================================
+4. ROOT CAUSE ANALYSIS
+================================================================================
+
+  RC-1: ANTHROPIC API KEY BROKEN — ALL AGENTS ON GEMINI FALLBACK
+  ──────────────────────────────────────────────────────────────
+  PM2 logs show repeated:
+    "All models in fallback chain for claude-opus-4-1 are down — using preferred anyway"
+
+  The Anthropic API key was quoted in .env (fixed during setup), but the
+  bot still couldn't authenticate. Every agent fell back to Gemini Flash
+  or Vertex Gemini. Vertex Gemini then returned HTTP 401 (OAuth2 credential
+  failure), leaving agents with the worst-quality fallback.
+
+  Impact: Agents on Gemini Flash produce shorter, less structured responses
+  that miss the pattern matchers. Opus-tier agents (Ace, Jude, Mia, Leo)
+  are most affected because their tests assume Opus-quality output.
+
+  Fix: Verify ANTHROPIC_API_KEY is actually valid (not just unquoted).
+  Regenerate at console.anthropic.com if needed. Also fix Vertex Gemini
+  OAuth — the service account may need `roles/aiplatform.user` on the
+  GCP project, or the ADC token may have expired on the VM.
+
+
+  RC-2: AGENT CHANNEL TIMEOUTS (PHASE 2 DEVASTATION)
+  ──────────────────────────────────────────────────
+  In Phase 2, tests are sent directly to agent channels (e.g., 💻-developer).
+  The text channel handler has a 120-second timeout (TEXT_AGENT_RESPONSE_TIMEOUT_MS).
+  With Gemini fallback, many agents:
+    1. Start with "Thinking…"
+    2. Hit the 120s agent timeout before producing a response
+    3. Tester then waits for the test-level timeout (180–300s)
+    4. No further messages appear → "idle timeout" or "hard ceiling reached"
+
+  This explains why Phase 2 had 43% pass rate while Phase 1 (groupchat
+  with Riley) had 84%. Riley routes + responds quickly; specialist agents
+  on their own channels with degraded models are too slow.
+
+  Fix: Increase TEXT_AGENT_RESPONSE_TIMEOUT_MS to 300s for Opus agents.
+  Implement per-agent timeout scaling based on model quality. If agent
+  detects it's on fallback model, auto-increase timeout.
+
+
+  RC-3: TOOL AUDIT CALLBACK NOT FIRING FOR SOME TOOLS
+  ───────────────────────────────────────────────────
+  9 tests failed with TOOL_AUDIT_MISSING. The tool audit callback posts
+  [TOOL:toolname] to #terminal, but some tools never triggered it:
+    - memory_read, memory_append (Riley)
+    - send_channel_message (Riley)
+    - edit_file, read_file (Riley self-edit test)
+    - git_create_branch (Riley create-branch-pr test)
+    - search_files (Leo android-build-review)
+    - run_command (Kane dependency-scan)
+    - fetch_url (Sophie app-ux-audit)
+    - mobile_harness_* (Max mobile tests)
+
+  Two possible causes:
+    a) Agent decided not to use the tool (prompt wasn't specific enough)
+    b) Tool call errored before the audit callback fired
+
+  Fix: Review test prompts to be more directive ("Use the memory_read
+  tool to…"). Add audit logging at tool entry, not just on success.
+
+
+  RC-4: UPGRADES-POST TOKEN ECHO FAILURE
+  ──────────────────────────────────────
+  Three agents (Ace, Sophie, Jude) failed upgrades-post. The test sends
+  a prompt containing a smoke token (e.g., SMOKE_DEVELO_UPGRA_123456) and
+  expects the agent to include that token in its #upgrades post.
+
+  With Gemini fallback, agents either:
+    a) Don't post to #upgrades at all (confused about the task)
+    b) Post but reformulate the message, dropping the smoke token
+
+  Fix: Make the test prompt more explicit: "Post the following exact text
+  to #upgrades including this token: SMOKE_XXX". Alternatively, match on
+  semantic content rather than exact token echo.
+
+
+  RC-5: PATTERN MATCHERS TOO STRICT FOR FALLBACK MODEL OUTPUT
+  ───────────────────────────────────────────────────────────
+  51 PATTERN_MISMATCH failures. Many tests use expectAll/expectAny with
+  regex patterns that assume Opus-quality structured output. When agents
+  use Gemini Flash, they produce:
+    - Shorter responses
+    - Less structured format (no "Result:" / "Evidence:" headers)
+    - Tool results embedded differently
+    - More conversational tone
+
+  These valid (if lower-quality) responses don't match the regex.
+
+  Fix: Broaden regex patterns to accept both Opus and Flash formatting.
+  For critical tests, add fallback patterns. Consider a "model-aware"
+  matcher that relaxes expectations when agents are on fallback models.
+
+
+  RC-6: GOAL MODE — ONLY 2/13 AGENTS PARTICIPATED
+  ───────────────────────────────────────────────
+  The freeform goal phase (build Design System page) ran for 12 minutes.
+  Only Riley and Ace responded (21 messages total). The other 11 agents
+  never engaged because:
+    1. Riley delegated exclusively to Ace (developer task)
+    2. No explicit fan-out to specialists like Sophie (UX), Max (QA),
+       Kane (security), Kai (performance)
+    3. The goal prompt said "coordinate all 13 agents" but Riley
+       optimised by sending work to the most relevant agent only
+
+  This is actually good delegation behaviour. But if the intent is to
+  test all agents, the goal prompt needs explicit per-agent tasks.
+
+
+================================================================================
+5. CRITICAL FAILURES REQUIRING IMMEDIATE FIX
+================================================================================
+
+  PRIORITY 1 — Fix Anthropic API authentication
+  ─────────────────────────────────────────────
+  Action: SSH to VM, verify ANTHROPIC_API_KEY with a curl test:
+    curl https://api.anthropic.com/v1/messages \
+      -H "x-api-key: $ANTHROPIC_API_KEY" \
+      -H "anthropic-version: 2023-06-01" \
+      -H "content-type: application/json" \
+      -d '{"model":"claude-sonnet-4-20250514","max_tokens":10,"messages":[{"role":"user","content":"hi"}]}'
+  If it fails, regenerate the key at console.anthropic.com.
+  After fixing, restart PM2: pm2 restart all --update-env
+
+  PRIORITY 2 — Fix Vertex Gemini 401 authentication
+  ──────────────────────────────────────────────────
+  Action: On the VM, check if ADC is configured:
+    gcloud auth application-default print-access-token
+  If expired, re-authenticate:
+    gcloud auth application-default login
+  Verify the service account has roles/aiplatform.user:
+    gcloud projects get-iam-policy asap-489910 --format=json | \
+      jq '.bindings[] | select(.role | contains("aiplatform"))'
+
+  PRIORITY 3 — Fix channel_hygiene failure (0 messages in #upgrades)
+  ────────────────────────────────────────────────────────────────
+  No messages reached #upgrades during the entire test run. This means
+  either send_channel_message tool is broken or agents can't resolve
+  the upgrades channel. Verify:
+    - DISCORD_UPGRADES_CHANNEL_ID is set in .env
+    - The bot has SEND_MESSAGES permission in #upgrades
+    - configuredChannels.upgrades is non-null at startup
+
+
+================================================================================
+6. BOT CODE CHANGES REQUIRED
+================================================================================
+
+  6.1  Model fallback — Increase text channel timeout for Opus agents
+  ────────────────────────────────────────────────────────────────────
+  File: src/discord/handlers/textChannel.ts
+
+  When an agent's preferred model is unavailable and it falls back to a
+  slower model, the 120-second timeout is too aggressive. Add:
+
+    const timeoutMs = isOnFallbackModel(agentId)
+      ? TEXT_AGENT_RESPONSE_TIMEOUT_MS * 2
+      : TEXT_AGENT_RESPONSE_TIMEOUT_MS;
+
+  Or make TEXT_AGENT_RESPONSE_TIMEOUT_MS per-agent configurable:
+    Opus agents: 300s
+    Flash agents: 120s
+
+
+  6.2  Tool audit — Log at tool entry, not only on success
+  ────────────────────────────────────────────────────────
+  File: src/discord/bot.ts (setToolAuditCallback)
+
+  Currently the audit callback may not fire if the tool throws before
+  completion. Move the [TOOL:toolname] post to the beginning of tool
+  execution rather than the end. Add a second post on completion with
+  the result status.
+
+
+  6.3  Memory tools — Riley's tool invocation
+  ──────────────────────────────────────────
+  File: src/discord/tools.ts
+
+  Riley has memory_read and memory_append in her toolset, but she's not
+  using them when asked. Her system prompt may not emphasise these tools.
+  Add to Riley's agent prompt: "When asked to read or write memory, use
+  the memory_read and memory_append tools directly rather than delegating."
+
+
+  6.4  send_channel_message — Verify channel resolution
+  ─────────────────────────────────────────────────────
+  File: src/discord/tools.ts
+
+  The send_channel_message tool resolves channels by name. If channel
+  names have emojis (e.g., "📈-upgrades"), the lookup may fail silently.
+  Add error logging when channel resolution fails:
+    if (!resolvedChannel) {
+      console.error(`send_channel_message: channel "${name}" not found`);
+      return `Error: channel "${name}" not found`;
+    }
+
+
+  6.5  Graceful degradation messaging
+  ──────────────────────────────────
+  File: src/discord/claude.ts
+
+  When all models in the fallback chain are exhausted, instead of a
+  silent fallback, post a visible warning to the agent's channel:
+    "⚠️ Running on degraded model — response quality may be reduced"
+
+  This helps users (and the smoke tester) understand when output quality
+  will be lower.
+
+
+  6.6  Fix "Thinking…" never resolving
+  ────────────────────────────────────
+  File: src/discord/handlers/textChannel.ts
+
+  Multiple test failures show the agent posted "Thinking…" but never
+  followed up. When the TEXT_AGENT_RESPONSE_TIMEOUT_MS fires:
+    - Edit the "Thinking…" message to "⏱️ Response timed out — please retry"
+    - This avoids dead "Thinking…" messages cluttering channels
+    - Post a brief error embed explaining the timeout
+
+
+  6.7  Specialist agent prompts — Response structure
+  ──────────────────────────────────────────────────
+  File: src/discord/agents.ts
+
+  Specialist agents (Sophie, Elena, Harper, Mia) produce unstructured
+  prose that doesn't match test patterns. Add to each agent's system
+  prompt a response format guide:
+
+    "Structure your response with clear sections:
+     - Summary: (brief conclusion)
+     - Details/Evidence: (supporting analysis)
+     - Recommendations: (action items if applicable)"
+
+
+================================================================================
+7. TEST FRAMEWORK CHANGES REQUIRED
+================================================================================
+
+  7.1  Broaden PATTERN_MISMATCH regex patterns
+  ────────────────────────────────────────────
+  51 tests failed due to strict regex. Recommendations:
+
+  a) evidence-format-contract: Change /\bresults?\s*:/i to also accept
+     "## Result", "**Result**", "Outcome:", "Finding:" etc.
+
+  b) Specialist tests (postgres-safety, ios-stack, etc.): Instead of
+     requiring specific keywords, check for semantic markers:
+       Old: /\bWAL\b.*\breplication\b/i
+       New: /\b(WAL|write.ahead|replication|standby|backup)\b/i
+
+  c) GCP tool tests: Many fail because the agent discusses the tool
+     result conversationally instead of showing raw output. Accept both.
+
+
+  7.2  Add model-awareness to test expectations
+  ─────────────────────────────────────────────
+  Add a field to test definitions:
+    modelFloor?: 'opus' | 'flash' | 'any'
+
+  If the agent is known to be on a fallback model, skip tests that
+  require Opus-level output or use relaxed patterns:
+    if (currentModel === 'gemini-2.0-flash' && test.modelFloor === 'opus') {
+      return { ok: true, reason: 'skipped (model below floor)' };
+    }
+
+
+  7.3  Fix idle timeout vs hard ceiling classification
+  ───────────────────────────────────────────────────
+  The current system classifies both timeout types as PATTERN_MISMATCH
+  (since the response existed but lacked patterns). These should be
+  classified as TIMEOUT so suggestFix() gives timeout-specific advice.
+
+  Check: if snippet contains "idle timeout" or "hard ceiling reached",
+  categorize as TIMEOUT, not PATTERN_MISMATCH.
+
+
+  7.4  Extend Phase 2 timeouts for specialist agents
+  ──────────────────────────────────────────────────
+  Phase 2 tests use 180s default timeout. Specialist agents on Flash
+  models may need 300s. Set per-agent-role timeout overrides:
+    if (agentRole === 'review') timeoutMs = 240_000;
+    if (agentRole === 'full')   timeoutMs = 360_000;
+
+
+  7.5  Fix the rerun-failed stage not executing
+  ────────────────────────────────────────────
+  File: scripts/overnight-smoke.sh
+
+  The overnight script exits after PM2 log capture without running
+  rerun-failed. Likely the --pm2-logs flag causes the node process to
+  exit before the rerun stage starts. Fix: separate PM2 capture from
+  the rerun stage:
+
+    # Stage 2: Matrix
+    node dist/discord/tester.js --profile=full-matrix
+    # Stage 2b: Capture PM2 logs (separate invocation)
+    node dist/discord/tester.js --pm2-logs
+    # Stage 3: Rerun failed
+    node dist/discord/tester.js --rerun-failed
+
+
+  7.6  Upgrades-post test — Use semantic matching, not token echo
+  ──────────────────────────────────────────────────────────────
+  Instead of requiring agents to echo an exact smoke token, check that
+  the agent called send_channel_message with target='upgrades'. This
+  is already available via tool audit. Change:
+    Old: expectUpgradesPost with token
+    New: expectToolAudit: ['send_channel_message'] + check tool args
+         contain 'upgrades'
+
+
+  7.7  TOOL_AUDIT_MISSING — Make prompts more directive
+  ────────────────────────────────────────────────────
+  For tool audit tests, the prompt must explicitly require tool use:
+    Bad:  "Read the repository memory"
+    Good: "Use the memory_read tool to read the repo memory index"
+
+  Update prompts for all 9 failing TOOL_AUDIT_MISSING tests to name
+  the specific tool expected.
+
+
+================================================================================
+8. DISCORD UX IMPROVEMENTS
+================================================================================
+
+  8.1  RESPONSE FORMATTING — Structured embeds instead of plain text
+  ─────────────────────────────────────────────────────────────────
+  Current state: Agents send plain text via webhooks (up to 2000 chars).
+  Long responses get clipped with "…". No visual hierarchy.
+
+  Recommendation:
+    • Use Discord embeds for structured responses (title, description,
+      fields, footer, colour coding by agent)
+    • Code blocks → use ```lang syntax highlighting
+    • Tool results → collapsible details in embed fields
+    • Error states → red-coloured embed with error title
+    • Success states → green embed with checkmark
+
+  Implementation:
+    In textChannel.ts, convert agent responses to EmbedBuilder format:
+      const embed = new EmbedBuilder()
+        .setColor(agent.color)
+        .setAuthor({ name: agent.name, iconURL: agent.avatarUrl })
+        .setDescription(response.slice(0, 4096))
+        .setFooter({ text: `Model: ${modelUsed} | ${tokenCount} tokens` });
+
+
+  8.2  PROGRESS INDICATORS — Replace "Thinking…" with rich status
+  ───────────────────────────────────────────────────────────────
+  Current state: Agent posts "Thinking…" → then edits to "⏳ still
+  working…" after 15s → then final response. Looks static and uncertain.
+
+  Recommendation:
+    • Phase 1: "🔍 Reading codebase…" (when tool calls are executing)
+    • Phase 2: "💭 Analysing results…" (when LLM is generating)
+    • Phase 3: "✍️ Composing response…" (when formatting output)
+    • Timeout: "⏱️ This is taking longer than expected — still working"
+    • Final timeout: "❌ Response timed out — please try again"
+
+  Expose tool execution state in the progress message so users know
+  the agent is doing real work, not stalled.
+
+
+  8.3  ERROR HANDLING — Clear failure states
+  ─────────────────────────────────────────
+  Current state: When an agent errors, the "Thinking…" message may stay
+  forever, or the error is logged to console but hidden from the user.
+
+  Recommendation:
+    • On timeout: Edit "Thinking…" to a red embed explaining the timeout
+    • On model error: Show which model failed and which fallback is active
+    • On tool error: Show which tool failed and the error category
+    • Never leave a "Thinking…" message unresolved — always clean up
+
+
+  8.4  THREAD MANAGEMENT — Better thread naming and lifecycle
+  ──────────────────────────────────────────────────────────
+  The thread-name-quality and thread-auto-close tests passed, which is
+  good. To improve further:
+    • Include agent name in thread title: "Ace: Fix login bug"
+    • Auto-archive threads after 24h of inactivity
+    • Pin summary message at thread start
+    • Add a "📌 Thread Summary" embed when thread closes
+
+
+  8.5  BUTTON INTERACTIONS — Decision trees and confirmations
+  ──────────────────────────────────────────────────────────
+  The decision-buttons-render test passed. Improvements:
+    • Add "Are you sure?" confirmation before destructive actions
+    • Disable buttons after they've been clicked (prevent double-click)
+    • Show button click feedback immediately (edit message to show
+      "Processing…" with the selected option highlighted)
+    • Add timeout on button interactions (disable after 5 minutes)
+
+
+  8.6  CHANNEL HYGIENE — Keep channels clean and informative
+  ────────────────────────────────────────────────────────
+  The channel_hygiene check failed because #upgrades had 0 messages.
+
+  Recommendations:
+    • Post a daily summary to each agent channel: "📊 Today's activity:
+      X tasks completed, Y in progress, Z blocked"
+    • #upgrades should have a pinned message explaining its purpose
+    • Auto-archive inactive channels with a "This channel has been
+      quiet — resuming when new work arrives" message
+    • #terminal should have message grouping/batching to avoid noise
+      (currently 429 ASAP system events flood the channel)
+
+
+  8.7  MULTI-AGENT VISIBILITY — Show delegation chain
+  ──────────────────────────────────────────────────
+  When Riley delegates to Ace, users in #groupchat see Riley's message
+  but may not know Ace is working in another channel. Suggest:
+    • Post a delegation notice: "🔄 Delegating to Ace in 💻-developer"
+    • When Ace finishes, post result back to #groupchat with attribution
+    • Show a "task pipeline" embed: Riley → Ace → Max → Done
+    • Add reaction-based status: 🔄 in progress, ✅ complete, ❌ failed
+
+
+  8.8  MESSAGE LENGTH — Smart truncation and pagination
+  ───────────────────────────────────────────────────
+  Discord has a 2000-char message limit and 4096-char embed limit.
+  Current behaviour clips at 1900 chars with "…".
+
+  Recommendation:
+    • Split long responses into multiple messages with "1/3", "2/3" labels
+    • Use a "📄 Full response" button that sends a DM with the complete text
+    • For code output, use a Gist/pastebin link for >50 lines
+    • For tool results (e.g., ls output), use collapsible embed fields
+
+
+  8.9  AGENT IDENTITY — Visual consistency and personality
+  ──────────────────────────────────────────────────────
+  The webhook format (emoji + name + avatar) works well. Enhancements:
+    • Consistent colour per agent (already in agent.color — use in embeds)
+    • Agent status indicator: 🟢 online, 🟡 busy, 🔴 error
+    • Brief personality tag in responses: "[Security perspective]" for Kane,
+      "[Performance angle]" for Kai — helps users know which lens is applied
+
+
+  8.10 UPGRADES CHANNEL — Better discovery and triage UX
+  ─────────────────────────────────────────────────────
+  The 6-hour auto-triage is good. Improvements:
+    • Each upgrade post should be an embed with:
+        Title: upgrade name
+        Priority: 🔴 high / 🟡 medium / 🟢 low
+        Agent: who proposed it
+        Status: pending / accepted / deferred
+    • Add reaction voting: 👍 = support, 👎 = oppose
+    • Show progress when an upgrade is being implemented:
+        "🔧 Upgrade #47 is being implemented by Ace — ETA: next deploy"
+
+
+================================================================================
+9. PRIORITISED ACTION PLAN
+================================================================================
+
+  ┌──────────────────────────────────────────────────────────────────────┐
+  │ TIER 1 — Blocking Issues (fix before next test run)                │
+  ├──────────────────────────────────────────────────────────────────────┤
+  │ 1. Verify & fix ANTHROPIC_API_KEY on VM                            │
+  │ 2. Fix Vertex Gemini 401 — renew OAuth / fix IAM role              │
+  │ 3. PM2 restart with --update-env after key fixes                   │
+  │ 4. Fix overnight-smoke.sh to actually run rerun-failed stage       │
+  │ 5. Verify send_channel_message can resolve #upgrades channel       │
+  └──────────────────────────────────────────────────────────────────────┘
+
+  ┌──────────────────────────────────────────────────────────────────────┐
+  │ TIER 2 — Code Changes (30-50% of failures will be fixed)           │
+  ├──────────────────────────────────────────────────────────────────────┤
+  │ 6. Increase TEXT_AGENT_RESPONSE_TIMEOUT_MS for Opus agents (300s)  │
+  │ 7. Move tool audit [TOOL:name] to fire at tool entry, not exit     │
+  │ 8. Add model degradation warning to agent channel messages         │
+  │ 9. Fix "Thinking…" cleanup on timeout (edit to error state)        │
+  │10. Add response format guide to specialist agent system prompts    │
+  └──────────────────────────────────────────────────────────────────────┘
+
+  ┌──────────────────────────────────────────────────────────────────────┐
+  │ TIER 3 — Test Framework Changes (remaining failures)               │
+  ├──────────────────────────────────────────────────────────────────────┤
+  │11. Broaden 51 PATTERN_MISMATCH regex patterns                      │
+  │12. Add model-awareness to test expectations (skip/relax on Flash)  │
+  │13. Fix timeout classification (TIMEOUT not PATTERN_MISMATCH)       │
+  │14. Make TOOL_AUDIT test prompts more directive                     │
+  │15. Change upgrades-post to use tool-audit instead of token echo    │
+  │16. Extend Phase 2 timeouts per agent role                          │
+  └──────────────────────────────────────────────────────────────────────┘
+
+  ┌──────────────────────────────────────────────────────────────────────┐
+  │ TIER 4 — Discord UX Enhancements (quality of life)                 │
+  ├──────────────────────────────────────────────────────────────────────┤
+  │17. Convert agent responses to Discord embeds with colour coding    │
+  │18. Rich progress indicators (tool names, phase labels)             │
+  │19. Delegation chain visibility in #groupchat                       │
+  │20. Smart message truncation with pagination                        │
+  │21. Agent status indicators (online/busy/error)                     │
+  │22. Upgrades channel embed format with voting                       │
+  │23. Daily channel activity summaries                                │
+  │24. Thread naming with agent attribution                            │
+  └──────────────────────────────────────────────────────────────────────┘
+
+
+  EXPECTED IMPACT
+  ──────────────
+  After Tier 1 fixes: ~75-80% pass rate (model quality restored)
+  After Tier 2 fixes: ~85-90% pass rate (timeouts + audit gaps closed)
+  After Tier 3 fixes: ~95%+ pass rate (test expectations aligned)
+  After Tier 4 work:  Production-quality Discord UX
+
+
+================================================================================
+  END OF REPORT
+  Generated: 2026-04-13
+  Test data: smoke-2026-04-13T15-34-03-273Z.{json,md}
+  Goal data: freeform-2026-04-13T12-59-00-300Z.md
+  PM2 logs:  606 lines captured
+  Overnight log: overnight-20260413T124634.log (2547 lines)
+================================================================================

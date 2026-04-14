@@ -363,6 +363,8 @@ let vertexAuthUnavailable = false;
 
 const USE_VERTEX_AI = process.env.GEMINI_USE_VERTEX_AI === 'true';
 const USE_VERTEX_ANTHROPIC = process.env.ANTHROPIC_USE_VERTEX_AI !== 'false';
+const ANTHROPIC_DIRECT_API_KEY = process.env.ANTHROPIC_API_KEY || '';
+const ANTHROPIC_PREFER_DIRECT = process.env.ANTHROPIC_PREFER_DIRECT !== 'false'; // default: prefer direct API over Vertex when key available
 const VERTEX_PROJECT_ID = process.env.VERTEX_PROJECT_ID || process.env.GOOGLE_CLOUD_PROJECT || process.env.GCLOUD_PROJECT || '';
 const VERTEX_LOCATION = process.env.VERTEX_LOCATION || 'us-central1';
 const VERTEX_GEMINI_USE_GLOBAL = process.env.VERTEX_GEMINI_USE_GLOBAL !== 'false'; // default: global endpoint for Gemini
@@ -707,6 +709,104 @@ async function callVertexAnthropicRawPredict(
   throw new Error('Vertex Anthropic request failed before any location attempt');
 }
 
+/* ── Direct Anthropic API (api.anthropic.com) ─────────────────────────── */
+
+async function callDirectAnthropicAPI(
+  modelName: string,
+  body: Record<string, any>,
+  signal?: AbortSignal,
+): Promise<any> {
+  if (!ANTHROPIC_DIRECT_API_KEY) {
+    throw new Error('Direct Anthropic API called but ANTHROPIC_API_KEY is not set');
+  }
+
+  const { anthropic_version: _drop, ...rest } = body;
+  const requestBody = { ...rest, model: modelName };
+
+  const res = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'x-api-key': ANTHROPIC_DIRECT_API_KEY,
+      'anthropic-version': VERTEX_ANTHROPIC_VERSION,
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify(requestBody),
+    signal,
+  });
+
+  if (res.ok) {
+    return res.json();
+  }
+
+  const bodyText = await res.text();
+  const retryAfterMs = parseRetryAfterMs(res.headers.get('retry-after'));
+  const err = new Error(`Anthropic API error: HTTP ${res.status} ${bodyText.slice(0, 400)}`) as Error & {
+    status: number;
+    statusCode: number;
+    retryAfterMs?: number;
+  };
+  err.status = res.status;
+  err.statusCode = res.status;
+  if (retryAfterMs && retryAfterMs > 0) {
+    err.retryAfterMs = retryAfterMs;
+  }
+  throw err;
+}
+
+function createDirectAnthropicModel(
+  modelName: string,
+  options: { systemInstruction?: string; rawTools?: AnyTool[]; generationConfig?: Record<string, any> }
+): ModelLike {
+  const anthropicTools = toAnthropicTools(options.rawTools || []);
+  const maxTokens = Math.max(64, Number(options.generationConfig?.maxOutputTokens || 1024));
+
+  const invoke = async (
+    messages: Array<{ role: 'user' | 'assistant'; content: any[] }>,
+    signal?: AbortSignal,
+  ): Promise<ModelResultLike> => {
+    const cachedMessages = PARTNER_MODEL_CACHE_ENABLED
+      ? messages.map((msg) => ({ ...msg, content: withAnthropicCacheControl(msg.content || []) }))
+      : messages;
+
+    const raw = await callDirectAnthropicAPI(
+      modelName,
+      {
+        model: modelName,
+        max_tokens: maxTokens,
+        system: asAnthropicSystemInstruction(options.systemInstruction),
+        messages: cachedMessages,
+        tools: anthropicTools.length > 0 ? anthropicTools : undefined,
+      },
+      signal,
+    );
+
+    return { response: makeResponseLikeFromAnthropic(raw) };
+  };
+
+  return {
+    startChat: ({ history }) => {
+      let workingHistory = geminiHistoryToAnthropicMessages(history || []);
+      return {
+        sendMessage: async (payload, requestOptions) => {
+          const nextMessage = typeof payload === 'string'
+            ? { role: 'user' as const, content: [{ type: 'text', text: payload }] }
+            : { role: 'user' as const, content: toAnthropicBlocks(payload as any[]) };
+
+          const requestMessages = [...workingHistory, nextMessage];
+          const result = await invoke(requestMessages, requestOptions?.signal);
+          const assistantContent = ((result.response as any)?.__raw?.content || []) as any[];
+          workingHistory = [...requestMessages, { role: 'assistant' as const, content: assistantContent }];
+          return result;
+        },
+        getHistory: async () => anthropicHistoryToGemini(workingHistory),
+      };
+    },
+    generateContent: async (payload: string, requestOptions?: { signal?: AbortSignal }) => {
+      return invoke([{ role: 'user', content: [{ type: 'text', text: payload }] }], requestOptions?.signal);
+    },
+  };
+}
+
 function makeResponseLikeFromVertex(raw: any): ModelResponseLike {
   const firstCandidate = raw?.candidates?.[0] || {};
   const parts: any[] = firstCandidate?.content?.parts || [];
@@ -937,6 +1037,17 @@ function createModel(modelName: string, options: { systemInstruction?: string; t
   const nonAnthropicFallbackModel = getNonAnthropicFallbackModel(GEMINI_PRO);
 
   if (isAnthropicModel(modelName)) {
+    // Prefer direct Anthropic API when key is available (avoids Vertex quota issues)
+    if (ANTHROPIC_DIRECT_API_KEY && ANTHROPIC_PREFER_DIRECT) {
+      return createDirectAnthropicModel(modelName, options);
+    }
+    if (canUseVertexAnthropic) {
+      return createVertexAnthropicModel(modelName, options);
+    }
+    // Fallback: direct API even if not preferred, when Vertex is unavailable
+    if (ANTHROPIC_DIRECT_API_KEY) {
+      return createDirectAnthropicModel(modelName, options);
+    }
     if (!canUseVertexAnthropic) {
       if (USE_VERTEX_ANTHROPIC && !VERTEX_PROJECT_ID && !warnedVertexAnthropicMissingProject) {
         warnedVertexAnthropicMissingProject = true;
