@@ -2918,10 +2918,10 @@ RUNTIME EFFICIENCY:
       response = await withConcurrencyLimit(currentModelName, () =>
         withRetry(() => sendMessageWithOptionalStream(chat, runtimeUserMessage, options?.signal, options?.onPartialText))
       , lane);
-    } else if (isGeminiRateLimitError(err)) {
+    } else if (!isAnthropicModel(currentModelName) && isGeminiRateLimitError(err)) {
       const recoverAt = Math.max(rateLimitedUntil, Date.now() + GEMINI_429_PAUSE_MS);
       return `⏳ Gemini is currently rate-limited (throughput), not out of credit. Please retry after ${formatRecoveryTime(recoverAt)} or reduce parallel requests.`;
-    } else if (isGeminiQuotaError(err)) {
+    } else if (!isAnthropicModel(currentModelName) && isGeminiQuotaError(err)) {
       triggerGeminiQuotaFuse();
       logAgentEvent(agent.id, 'error', 'Gemini quota exhausted');
       return agent.id === 'executive-assistant'
@@ -2931,7 +2931,7 @@ RUNTIME EFFICIENCY:
         : (DISABLE_GEMINI_QUOTA_FUSE
             ? '⚠️ Gemini rejected that request, but the local quota pause is disabled. Retry or continue with other work.'
             : `⚠️ Gemini quota is exhausted right now. Automatic retries resume at ${formatRecoveryTime(creditsExhaustedUntil)}. Ask Riley to request Jordan approval for more credits before continuing.`);
-    } else if (isGeminiAuthError(err)) {
+    } else if (!isAnthropicModel(currentModelName) && isGeminiAuthError(err)) {
       logAgentEvent(agent.id, 'error', 'Gemini auth/config issue');
       return '⚠️ Gemini auth/config issue detected (not quota). Check runtime API key/service account and provider mode flags, then retry.';
     } else {
@@ -3283,11 +3283,11 @@ RUNTIME EFFICIENCY:
         , lane);
         continue;
       }
-      if (isGeminiRateLimitError(err)) {
+      if (!isAnthropicModel(currentModelName) && isGeminiRateLimitError(err)) {
         const recoverAt = Math.max(rateLimitedUntil, Date.now() + GEMINI_429_PAUSE_MS);
         return `⏳ Gemini is currently rate-limited (throughput), not out of credit. Please retry after ${formatRecoveryTime(recoverAt)} or reduce parallel requests.`;
       }
-      if (isGeminiQuotaError(err)) {
+      if (!isAnthropicModel(currentModelName) && isGeminiQuotaError(err)) {
         triggerGeminiQuotaFuse();
         logAgentEvent(agent.id, 'error', 'Gemini quota exhausted mid-loop');
         return agent.id === 'executive-assistant'
@@ -3298,7 +3298,7 @@ RUNTIME EFFICIENCY:
               ? '⚠️ Gemini rejected that request mid-run, but the local quota pause is disabled. Retry or continue with other work.'
               : '⚠️ Gemini quota is exhausted right now. Ask Riley to request Jordan approval for more credits before continuing.');
       }
-      if (isGeminiAuthError(err)) {
+      if (!isAnthropicModel(currentModelName) && isGeminiAuthError(err)) {
         logAgentEvent(agent.id, 'error', 'Gemini auth/config issue mid-loop');
         return '⚠️ Gemini auth/config issue detected (not quota). Check runtime API key/service account and provider mode flags, then retry.';
       }
