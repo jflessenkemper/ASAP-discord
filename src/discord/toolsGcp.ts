@@ -1,7 +1,8 @@
-import { execSync, execFileSync } from 'child_process';
+import { execFileSync } from 'child_process';
 import { errMsg } from '../utils/errors';
 import fs from 'fs';
 import path from 'path';
+import { buildGcpSafeEnv } from './envSandbox';
 
 const DEFAULT_REPO_ROOT = fs.existsSync('/app/package.json')
   ? '/app'
@@ -32,15 +33,18 @@ export const VM_ALLOWED_PREFIXES = [
   'df -h', 'free -h', 'uptime', 'cat /proc/loadavg',
 ];
 
-export function gcpExec(cmd: string): string {
+/**
+ * Execute a gcloud command with argument array (no shell interpolation).
+ * Uses execFileSync to prevent shell injection.
+ */
+export function gcpExecArgs(args: string[]): string {
   try {
-    return execSync(cmd, {
+    return execFileSync('gcloud', args, {
       cwd: REPO_ROOT,
       timeout: GCP_TIMEOUT,
       maxBuffer: 1024 * 1024,
       encoding: 'utf-8',
-      env: { ...process.env },
-      shell: '/bin/sh',
+      env: buildGcpSafeEnv(),
     }).trim();
   } catch (err: unknown) {
     const e = err as { stdout?: string; stderr?: string; message?: string };
@@ -56,12 +60,16 @@ export async function gcpDeploy(tag?: string): Promise<string> {
   if (!imageRef) return `❌ Deploy failed: built image reference was not returned.`;
 
   try {
-    gcpExec(
-      `gcloud run deploy ${GCP_SERVICE} --image=${imageRef} --project=${GCP_PROJECT} --region=${GCP_REGION} --platform=managed --quiet`
-    );
-    const status = gcpExec(
-      `gcloud run services describe ${GCP_SERVICE} --region=${GCP_REGION} --project=${GCP_PROJECT} --format="yaml(status.url,status.latestReadyRevisionName,status.traffic)"`
-    );
+    gcpExecArgs([
+      'run', 'deploy', GCP_SERVICE,
+      `--image=${imageRef}`, `--project=${GCP_PROJECT}`, `--region=${GCP_REGION}`,
+      '--platform=managed', '--quiet',
+    ]);
+    const status = gcpExecArgs([
+      'run', 'services', 'describe', GCP_SERVICE,
+      `--region=${GCP_REGION}`, `--project=${GCP_PROJECT}`,
+      '--format=yaml(status.url,status.latestReadyRevisionName,status.traffic)',
+    ]);
     return `✅ Deployed ${imageRef} to Cloud Run service ${GCP_SERVICE}.\n\n${status}`;
   } catch (err) {
     return `❌ Deploy failed after image build (${imageRef}): ${errMsg(err)}`;
@@ -74,9 +82,11 @@ export async function gcpBuildImage(tag?: string): Promise<string> {
   const imageRef = `gcr.io/${GCP_PROJECT}/${GCP_SERVICE}:${safeTag}`;
 
   try {
-    const result = gcpExec(
-      `gcloud builds submit --project=${GCP_PROJECT} --region=${GCP_REGION} --tag=${imageRef} --timeout=600`
-    );
+    const result = gcpExecArgs([
+      'builds', 'submit',
+      `--project=${GCP_PROJECT}`, `--region=${GCP_REGION}`,
+      `--tag=${imageRef}`, '--timeout=600',
+    ]);
     return `✅ Built and pushed image.\nImage: ${imageRef}\n\n${result.slice(-1000)}`;
   } catch (err) {
     return `❌ Image build failed: ${errMsg(err)}`;
@@ -86,9 +96,9 @@ export async function gcpBuildImage(tag?: string): Promise<string> {
 export async function gcpPreflight(): Promise<string> {
   const checks: Array<{ name: string; ok: boolean; detail: string }> = [];
 
-  const runCheck = (name: string, cmd: string, required = true) => {
+  const runCheck = (name: string, args: string[], required = true) => {
     try {
-      const out = gcpExec(cmd);
+      const out = gcpExecArgs(args);
       checks.push({ name, ok: true, detail: out.split('\n')[0] || 'ok' });
     } catch (err) {
       const detail = err instanceof Error ? err.message.split('\n')[0] : 'Unknown error';
@@ -96,13 +106,13 @@ export async function gcpPreflight(): Promise<string> {
     }
   };
 
-  runCheck('gcloud available', 'gcloud --version');
-  runCheck('active project', 'gcloud config get-value project');
-  runCheck('authenticated account', 'gcloud auth list --filter=status:ACTIVE --format="value(account)"');
-  runCheck('Cloud Run API', `gcloud services list --enabled --project=${GCP_PROJECT} --filter="name:run.googleapis.com" --format="value(name)"`);
-  runCheck('Cloud Build API', `gcloud services list --enabled --project=${GCP_PROJECT} --filter="name:cloudbuild.googleapis.com" --format="value(name)"`);
-  runCheck('Secret Manager API', `gcloud services list --enabled --project=${GCP_PROJECT} --filter="name:secretmanager.googleapis.com" --format="value(name)"`);
-  runCheck('Cloud Run service', `gcloud run services describe ${GCP_SERVICE} --project=${GCP_PROJECT} --region=${GCP_REGION} --format="value(status.url)"`);
+  runCheck('gcloud available', ['--version']);
+  runCheck('active project', ['config', 'get-value', 'project']);
+  runCheck('authenticated account', ['auth', 'list', '--filter=status:ACTIVE', '--format=value(account)']);
+  runCheck('Cloud Run API', ['services', 'list', '--enabled', `--project=${GCP_PROJECT}`, '--filter=name:run.googleapis.com', '--format=value(name)']);
+  runCheck('Cloud Build API', ['services', 'list', '--enabled', `--project=${GCP_PROJECT}`, '--filter=name:cloudbuild.googleapis.com', '--format=value(name)']);
+  runCheck('Secret Manager API', ['services', 'list', '--enabled', `--project=${GCP_PROJECT}`, '--filter=name:secretmanager.googleapis.com', '--format=value(name)']);
+  runCheck('Cloud Run service', ['run', 'services', 'describe', GCP_SERVICE, `--project=${GCP_PROJECT}`, `--region=${GCP_REGION}`, '--format=value(status.url)']);
 
   const failed = checks.filter((c) => !c.ok);
   const lines = checks.map((c) => `${c.ok ? '✅' : '❌'} ${c.name}: ${c.detail || 'ok'}`);
@@ -130,7 +140,7 @@ export async function gcpSetEnv(variables: string): Promise<string> {
       timeout: GCP_TIMEOUT,
       maxBuffer: 1024 * 1024,
       encoding: 'utf-8',
-      env: { ...process.env },
+      env: buildGcpSafeEnv(),
     }).trim();
     return `✅ Environment variables updated: ${safeVars.replace(/=.*/g, '=***').split(',').join(', ')}`;
   } catch (err) {
@@ -140,9 +150,11 @@ export async function gcpSetEnv(variables: string): Promise<string> {
 
 export async function gcpGetEnv(): Promise<string> {
   try {
-    const result = gcpExec(
-      `gcloud run services describe ${GCP_SERVICE} --project=${GCP_PROJECT} --region=${GCP_REGION} --format="yaml(spec.template.spec.containers[0].env)"`
-    );
+    const result = gcpExecArgs([
+      'run', 'services', 'describe', GCP_SERVICE,
+      `--project=${GCP_PROJECT}`, `--region=${GCP_REGION}`,
+      '--format=yaml(spec.template.spec.containers[0].env)',
+    ]);
     return result || 'No environment variables set.';
   } catch (err) {
     return `❌ Failed to get env vars: ${errMsg(err)}`;
@@ -152,9 +164,12 @@ export async function gcpGetEnv(): Promise<string> {
 export async function gcpListRevisions(limit: number): Promise<string> {
   const safeLimit = Math.min(Math.max(limit, 1), 50);
   try {
-    const result = gcpExec(
-      `gcloud run revisions list --service=${GCP_SERVICE} --project=${GCP_PROJECT} --region=${GCP_REGION} --limit=${safeLimit} --format="table(name,active,creationTimestamp.date(),status.conditions[0].type)"`
-    );
+    const result = gcpExecArgs([
+      'run', 'revisions', 'list',
+      `--service=${GCP_SERVICE}`, `--project=${GCP_PROJECT}`, `--region=${GCP_REGION}`,
+      `--limit=${safeLimit}`,
+      '--format=table(name,active,creationTimestamp.date(),status.conditions[0].type)',
+    ]);
     return result || 'No revisions found.';
   } catch (err) {
     return `❌ Failed to list revisions: ${errMsg(err)}`;
@@ -166,9 +181,11 @@ export async function gcpRollback(revision: string): Promise<string> {
   if (!safeRevision) return 'Invalid revision name.';
 
   try {
-    gcpExec(
-      `gcloud run services update-traffic ${GCP_SERVICE} --project=${GCP_PROJECT} --region=${GCP_REGION} --to-revisions=${safeRevision}=100`
-    );
+    gcpExecArgs([
+      'run', 'services', 'update-traffic', GCP_SERVICE,
+      `--project=${GCP_PROJECT}`, `--region=${GCP_REGION}`,
+      `--to-revisions=${safeRevision}=100`,
+    ]);
     return `✅ Rolled back to revision: ${safeRevision}`;
   } catch (err) {
     return `❌ Rollback failed: ${errMsg(err)}`;
@@ -182,7 +199,7 @@ export async function gcpSecretSet(name: string, value: string): Promise<string>
   try {
     let exists = false;
     try {
-      gcpExec(`gcloud secrets describe ${safeName} --project=${GCP_PROJECT}`);
+      gcpExecArgs(['secrets', 'describe', safeName, `--project=${GCP_PROJECT}`]);
       exists = true;
     } catch { /* doesn't exist */ }
 
@@ -195,6 +212,7 @@ export async function gcpSecretSet(name: string, value: string): Promise<string>
       timeout: GCP_TIMEOUT,
       encoding: 'utf-8',
       input: value,
+      env: buildGcpSafeEnv(),
     });
 
     return `✅ Secret "${safeName}" set successfully in Secret Manager. Bind it to Cloud Run with gcp_secret_bind if the app should consume it.`;
@@ -224,9 +242,11 @@ export async function gcpSecretBind(bindings: string): Promise<string> {
   }
 
   try {
-    gcpExec(
-      `gcloud run services update ${GCP_SERVICE} --project=${GCP_PROJECT} --region=${GCP_REGION} --update-secrets=${parsed.join(',')}`
-    );
+    gcpExecArgs([
+      'run', 'services', 'update', GCP_SERVICE,
+      `--project=${GCP_PROJECT}`, `--region=${GCP_REGION}`,
+      `--update-secrets=${parsed.join(',')}`,
+    ]);
     return `✅ Bound ${parsed.length} secret mapping${parsed.length === 1 ? '' : 's'} to Cloud Run service ${GCP_SERVICE}: ${parsed.join(', ')}`;
   } catch (err) {
     return `❌ Failed to bind secrets: ${errMsg(err)}`;
@@ -235,9 +255,10 @@ export async function gcpSecretBind(bindings: string): Promise<string> {
 
 export async function gcpSecretList(): Promise<string> {
   try {
-    const result = gcpExec(
-      `gcloud secrets list --project=${GCP_PROJECT} --format="table(name,createTime.date(),replication.automatic)"`
-    );
+    const result = gcpExecArgs([
+      'secrets', 'list', `--project=${GCP_PROJECT}`,
+      '--format=table(name,createTime.date(),replication.automatic)',
+    ]);
     return result || 'No secrets found.';
   } catch (err) {
     return `❌ Failed to list secrets: ${errMsg(err)}`;
@@ -247,9 +268,12 @@ export async function gcpSecretList(): Promise<string> {
 export async function gcpBuildStatus(limit: number): Promise<string> {
   const safeLimit = Math.min(Math.max(limit, 1), 20);
   try {
-    const result = gcpExec(
-      `gcloud builds list --project=${GCP_PROJECT} --region=${GCP_REGION} --limit=${safeLimit} --format="table(id.slice(0:8),status,createTime.date(),duration,source.storageSource.bucket)"`
-    );
+    const result = gcpExecArgs([
+      'builds', 'list',
+      `--project=${GCP_PROJECT}`, `--region=${GCP_REGION}`,
+      `--limit=${safeLimit}`,
+      '--format=table(id.slice(0:8),status,createTime.date(),duration,source.storageSource.bucket)',
+    ]);
     return result || 'No builds found.';
   } catch (err) {
     return `❌ Failed to get build status: ${errMsg(err)}`;
@@ -258,11 +282,12 @@ export async function gcpBuildStatus(limit: number): Promise<string> {
 
 export async function gcpLogsQuery(filter: string, limit: number): Promise<string> {
   const safeLimit = Math.min(Math.max(limit || 50, 1), 200);
-  if (/[`$\\]/.test(filter)) return '❌ Invalid characters in filter expression.';
   try {
-    const result = gcpExec(
-      `gcloud logging read "${filter.replace(/"/g, '\\"')}" --project=${GCP_PROJECT} --limit=${safeLimit} --format="table(timestamp.date(),resource.type,severity,textPayload.slice(0:120))"`
-    );
+    const result = gcpExecArgs([
+      'logging', 'read', filter,
+      `--project=${GCP_PROJECT}`, `--limit=${safeLimit}`,
+      '--format=table(timestamp.date(),resource.type,severity,textPayload.slice(0:120))',
+    ]);
     return result || 'No log entries matched.';
   } catch (err) {
     return `❌ Failed to query logs: ${errMsg(err)}`;
@@ -271,9 +296,11 @@ export async function gcpLogsQuery(filter: string, limit: number): Promise<strin
 
 export async function gcpRunDescribe(): Promise<string> {
   try {
-    const result = gcpExec(
-      `gcloud run services describe ${GCP_SERVICE} --region=${GCP_REGION} --project=${GCP_PROJECT} --format="yaml(status.url,status.conditions,status.traffic,spec.template.metadata.name,spec.template.spec.containers[0].resources)"`
-    );
+    const result = gcpExecArgs([
+      'run', 'services', 'describe', GCP_SERVICE,
+      `--region=${GCP_REGION}`, `--project=${GCP_PROJECT}`,
+      '--format=yaml(status.url,status.conditions,status.traffic,spec.template.metadata.name,spec.template.spec.containers[0].resources)',
+    ]);
     return result || 'No service info returned.';
   } catch (err) {
     return `❌ Failed to describe Cloud Run service: ${errMsg(err)}`;
@@ -285,7 +312,7 @@ export async function gcpStorageLs(bucket: string, prefix?: string): Promise<str
   if (prefix && !/^[a-zA-Z0-9_./-]+$/.test(prefix)) return '❌ Invalid prefix.';
   const p = prefix ? `gs://${bucket}/${prefix}` : `gs://${bucket}/`;
   try {
-    const result = gcpExec(`gcloud storage ls "${p}"`);
+    const result = gcpExecArgs(['storage', 'ls', p]);
     return result || 'Empty bucket or prefix.';
   } catch (err) {
     return `❌ Failed to list bucket: ${errMsg(err)}`;
@@ -295,9 +322,13 @@ export async function gcpStorageLs(bucket: string, prefix?: string): Promise<str
 export async function gcpArtifactList(limit: number): Promise<string> {
   const safeLimit = Math.min(Math.max(limit || 20, 1), 100);
   try {
-    const result = gcpExec(
-      `gcloud artifacts docker images list ${GCP_REGION}-docker.pkg.dev/${GCP_PROJECT}/asap --include-tags --limit=${safeLimit} --sort-by="~create_time" --format="table(package.basename(),tags,create_time.date())"`
-    );
+    const result = gcpExecArgs([
+      'artifacts', 'docker', 'images', 'list',
+      `${GCP_REGION}-docker.pkg.dev/${GCP_PROJECT}/asap`,
+      '--include-tags', `--limit=${safeLimit}`,
+      '--sort-by=~create_time',
+      '--format=table(package.basename(),tags,create_time.date())',
+    ]);
     return result || 'No images found.';
   } catch (err) {
     return `❌ Failed to list artifacts: ${errMsg(err)}`;
@@ -306,9 +337,11 @@ export async function gcpArtifactList(limit: number): Promise<string> {
 
 export async function gcpSqlDescribe(): Promise<string> {
   try {
-    const result = gcpExec(
-      `gcloud sql instances describe ${GCP_SQL_INSTANCE} --project=${GCP_PROJECT} --format="table(name,state,databaseVersion,settings.tier,ipAddresses[0].ipAddress,connectionName)"`
-    );
+    const result = gcpExecArgs([
+      'sql', 'instances', 'describe', GCP_SQL_INSTANCE,
+      `--project=${GCP_PROJECT}`,
+      '--format=table(name,state,databaseVersion,settings.tier,ipAddresses[0].ipAddress,connectionName)',
+    ]);
     return result || 'No SQL instance info returned.';
   } catch (err) {
     return `❌ Failed to describe Cloud SQL: ${errMsg(err)}`;
@@ -325,10 +358,11 @@ export async function gcpVmSsh(command: string): Promise<string> {
     return '❌ Command contains disallowed characters.';
   }
   try {
-    const escaped = trimmed.replace(/"/g, '\\"');
-    const result = gcpExec(
-      `gcloud compute ssh ${GCP_BOT_VM} --zone=${GCP_BOT_ZONE} --project=${GCP_PROJECT} --quiet --command="${escaped}"`
-    );
+    const result = gcpExecArgs([
+      'compute', 'ssh', GCP_BOT_VM,
+      `--zone=${GCP_BOT_ZONE}`, `--project=${GCP_PROJECT}`,
+      '--quiet', `--command=${trimmed}`,
+    ]);
     return result || '(no output)';
   } catch (err) {
     return `❌ SSH command failed: ${errMsg(err)}`;
@@ -337,12 +371,14 @@ export async function gcpVmSsh(command: string): Promise<string> {
 
 export async function gcpProjectInfo(): Promise<string> {
   try {
-    const info = gcpExec(
-      `gcloud projects describe ${GCP_PROJECT} --format="yaml(name,projectId,projectNumber,lifecycleState)"`
-    );
-    const apis = gcpExec(
-      `gcloud services list --enabled --project=${GCP_PROJECT} --format="table(name,title)" --limit=60`
-    );
+    const info = gcpExecArgs([
+      'projects', 'describe', GCP_PROJECT,
+      '--format=yaml(name,projectId,projectNumber,lifecycleState)',
+    ]);
+    const apis = gcpExecArgs([
+      'services', 'list', '--enabled', `--project=${GCP_PROJECT}`,
+      '--format=table(name,title)', '--limit=60',
+    ]);
     return `## Project\n${info}\n\n## Enabled APIs\n${apis}`;
   } catch (err) {
     return `❌ Failed to get project info: ${errMsg(err)}`;

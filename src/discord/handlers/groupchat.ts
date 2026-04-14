@@ -1,4 +1,5 @@
 import { execFileSync, execFile } from 'child_process';
+import { buildSafeCommandEnv } from '../envSandbox';
 import { promisify } from 'util';
 import fs from 'fs';
 import path from 'path';
@@ -887,7 +888,7 @@ function runRepoInspection(command: string, cwd = APP_REPO_ROOT): string {
       timeout: ACTION_COMMAND_TIMEOUT_MS,
       maxBuffer: 1024 * 1024,
       encoding: 'utf-8',
-      env: { ...process.env, CI: 'true' },
+      env: { ...buildSafeCommandEnv(), CI: 'true' },
     });
   } catch (err) {
     const execErr = err as { stdout?: string; stderr?: string; message?: string };
@@ -904,7 +905,7 @@ async function runRepoInspectionAsync(command: string, cwd = APP_REPO_ROOT): Pro
       cwd,
       timeout: ACTION_COMMAND_TIMEOUT_MS,
       maxBuffer: 1024 * 1024,
-      env: { ...process.env, CI: 'true' },
+      env: { ...buildSafeCommandEnv(), CI: 'true' },
     });
     return stdout || '';
   } catch (err) {

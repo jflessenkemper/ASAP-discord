@@ -1,8 +1,10 @@
 import { execSync, execFileSync, exec } from 'child_process';
 import { createHash } from 'crypto';
+import dns from 'dns';
 import fs from 'fs';
 import http from 'http';
 import https from 'https';
+import net from 'net';
 import path from 'path';
 import { promisify } from 'util';
 
@@ -52,7 +54,8 @@ import {
 } from '../services/jobSearch';
 import { jobScoreColor, SYSTEM_COLORS, BUTTON_IDS } from './ui/constants';
 import { errMsg } from '../utils/errors';
-import { gcpExec, gcpDeploy, gcpBuildImage, gcpPreflight, gcpSetEnv, gcpGetEnv, gcpListRevisions, gcpRollback, gcpSecretSet, gcpSecretBind, gcpSecretList, gcpBuildStatus, gcpLogsQuery, gcpRunDescribe, gcpStorageLs, gcpArtifactList, gcpSqlDescribe, gcpVmSsh, gcpProjectInfo } from './toolsGcp';
+import { gcpDeploy, gcpBuildImage, gcpPreflight, gcpSetEnv, gcpGetEnv, gcpListRevisions, gcpRollback, gcpSecretSet, gcpSecretBind, gcpSecretList, gcpBuildStatus, gcpLogsQuery, gcpRunDescribe, gcpStorageLs, gcpArtifactList, gcpSqlDescribe, gcpVmSsh, gcpProjectInfo } from './toolsGcp';
+import { buildSafeCommandEnv } from './envSandbox';
 import { DDL_PATTERN, sanitizeSql, isReadOnlySql, dbQuery, dbQueryReadonly, dbSchema } from './toolsDb';
 import { getCircuitBreakerForTool } from './circuitBreaker';
 
@@ -2338,15 +2341,7 @@ const ALLOWED_COMMANDS: Array<{ prefix: string; description: string }> = [
   { prefix: 'echo ',   description: 'Echo text' },
   { prefix: 'pwd',     description: 'Print working directory' },
   { prefix: 'which ',  description: 'Locate commands' },
-  { prefix: 'node ',          description: 'Run node scripts' },
-  { prefix: 'curl ',          description: 'HTTP requests' },
-  { prefix: 'wget ',          description: 'Download files' },
   { prefix: 'jq ',            description: 'JSON processing' },
-  { prefix: 'sed ',           description: 'Stream editing' },
-  { prefix: 'awk ',           description: 'Text processing' },
-  { prefix: 'xargs ',         description: 'Build and execute commands' },
-  { prefix: 'env ',           description: 'Environment variables' },
-  { prefix: 'printenv',       description: 'Print environment' },
   { prefix: 'date',           description: 'Date/time' },
   { prefix: 'mkdir ',         description: 'Create directories' },
   { prefix: 'cp ',            description: 'Copy files' },
@@ -2376,19 +2371,25 @@ const ALLOWED_COMMANDS: Array<{ prefix: string; description: string }> = [
   { prefix: 'gcloud artifacts', description: 'Artifact Registry' },
   { prefix: 'gcloud config',  description: 'GCP config' },
   { prefix: 'gcloud compute', description: 'Compute Engine' },
-  { prefix: 'docker ',        description: 'Docker operations' },
 ];
 
-/** Patterns that are NEVER allowed — only truly catastrophic operations. */
+/** Patterns that are NEVER allowed — catastrophic or escape-to-shell operations. */
 const HARD_BLOCKED = [
-  /rm\s+(-rf?|--recursive)\s+\//,  // rm -rf / (root filesystem)
-  /git\s+reset\s+--hard\b/,        // destructive reset
-  /git\s+clean\s+-[^\n]*f[^\n]*/, // force clean (-f / -fd / -ffdx)
-  /git\s+checkout\s+--\b/,         // discard file changes
-  /mkfs/,                           // format disk
-  /dd\s+if=/,                       // raw disk operations
-  /:\(\)\s*\{/,                     // fork bomb
-  />\s*\/dev\/sd/,                  // write to block devices
+  /rm\s+(-rf?|--recursive)\s+\//,    // rm -rf / (root filesystem)
+  /git\s+reset\s+--hard\b/,          // destructive reset
+  /git\s+clean\s+-[^\n]*f[^\n]*/,   // force clean (-f / -fd / -ffdx)
+  /git\s+checkout\s+--(?:\s|$)/,           // discard file changes
+  /mkfs/,                             // format disk
+  /dd\s+if=/,                         // raw disk operations
+  /:\(\)\s*\{/,                       // fork bomb
+  />\s*\/dev\/sd/,                    // write to block devices
+  /\bsudo\b/,                         // privilege escalation
+  /\|\s*(sh|bash|zsh)\b/,            // pipe-to-shell
+  /\b(sh|bash|zsh)\s+-[ce]\b/,       // direct shell invocation
+  /\beval\s/,                         // shell eval
+  /\bnohup\b/,                        // background escape
+  /\bchmod\s+[+0-9]*[sx]/,           // setuid / execute bits
+  /\bcrontab\b/,                      // scheduled tasks
 ];
 
 const DEFAULT_READ_PAGE_MAX_BYTES = parseInt(process.env.DEFAULT_READ_PAGE_MAX_BYTES || '50000', 10);
@@ -2461,7 +2462,7 @@ function runCommand(command: string, cwd?: string): string {
       timeout: CMD_TIMEOUT,
       maxBuffer: 512 * 1024,
       encoding: 'utf-8',
-      env: { ...process.env, NODE_ENV: 'development' },
+      env: buildSafeCommandEnv(),
       shell: '/bin/sh',
     });
     const output = result.trim();
@@ -3153,44 +3154,73 @@ function runTypecheck(target: 'client' | 'server' | 'both'): string {
 
 function fetchUrl(url: string, method?: string, headersStr?: string, body?: string): Promise<string> {
   const MAX_REDIRECTS = 5;
+  const dnsLookup = promisify(dns.lookup);
 
-  /** Block SSRF — reject private, loopback, link-local, and metadata IPs */
-  function isBlockedHostname(hostname: string): boolean {
-    if (hostname === '169.254.169.254' || hostname === 'metadata.google.internal') return true;
-    if (hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1' || hostname === '[::1]') return true;
-    const ipMatch = hostname.match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/);
-    if (ipMatch) {
-      const [, a, b] = ipMatch.map(Number);
-      if (a === 10) return true;
-      if (a === 172 && b >= 16 && b <= 31) return true;
-      if (a === 192 && b === 168) return true;
-      if (a === 0) return true;
-      if (a === 169 && b === 254) return true; // link-local
+  /** Block SSRF — reject private, loopback, link-local, metadata, and IPv6 private IPs */
+  function isBlockedIP(ip: string): boolean {
+    // IPv4 checks
+    const ipv4Match = ip.match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/);
+    if (ipv4Match) {
+      const [, a, b] = ipv4Match.map(Number);
+      if (a === 10) return true;                          // 10.0.0.0/8
+      if (a === 172 && b >= 16 && b <= 31) return true;   // 172.16.0.0/12
+      if (a === 192 && b === 168) return true;             // 192.168.0.0/16
+      if (a === 127) return true;                          // 127.0.0.0/8
+      if (a === 0) return true;                            // 0.0.0.0/8
+      if (a === 169 && b === 254) return true;             // link-local
+      return false;
+    }
+    // IPv6 checks
+    if (net.isIPv6(ip)) {
+      const normalized = ip.toLowerCase();
+      if (normalized === '::1') return true;                              // loopback
+      if (normalized.startsWith('fe80')) return true;                     // link-local
+      if (normalized.startsWith('fc') || normalized.startsWith('fd')) return true; // unique local
+      if (normalized === '::') return true;                               // unspecified
+      // IPv4-mapped IPv6 (::ffff:x.x.x.x)
+      const v4mapped = normalized.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
+      if (v4mapped) return isBlockedIP(v4mapped[1]);
+      return false;
     }
     return false;
   }
 
-  function doFetch(targetUrl: string, redirectCount: number): Promise<string> {
+  function isBlockedHostname(hostname: string): boolean {
+    if (hostname === '169.254.169.254' || hostname === 'metadata.google.internal') return true;
+    if (hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1' || hostname === '[::1]') return true;
+    return isBlockedIP(hostname);
+  }
+
+  async function doFetch(targetUrl: string, redirectCount: number): Promise<string> {
+    if (!targetUrl || (!targetUrl.startsWith('https://') && !targetUrl.startsWith('http://'))) {
+      return 'Error: URL must start with https:// or http://';
+    }
+
+    const httpMethod = (method || 'GET').toUpperCase();
+    let parsedHeaders: Record<string, string> = {};
+    if (headersStr) {
+      try { parsedHeaders = JSON.parse(headersStr); } catch { /* ignore */ }
+    }
+
+    const parsedUrl = new URL(targetUrl);
+
+    if (isBlockedHostname(parsedUrl.hostname)) {
+      return 'Error: Access to internal/private addresses is not allowed.';
+    }
+
+    // DNS rebinding protection: resolve hostname and check resolved IP
+    try {
+      const { address } = await dnsLookup(parsedUrl.hostname);
+      if (isBlockedIP(address)) {
+        return 'Error: Access to internal/private addresses is not allowed.';
+      }
+    } catch {
+      return 'Error: DNS resolution failed for the given hostname.';
+    }
+
+    const lib = parsedUrl.protocol === 'https:' ? https : http;
+
     return new Promise((resolve) => {
-      if (!targetUrl || (!targetUrl.startsWith('https://') && !targetUrl.startsWith('http://'))) {
-        resolve('Error: URL must start with https:// or http://');
-        return;
-      }
-
-      const httpMethod = (method || 'GET').toUpperCase();
-      let parsedHeaders: Record<string, string> = {};
-      if (headersStr) {
-        try { parsedHeaders = JSON.parse(headersStr); } catch { /* ignore */ }
-      }
-
-      const parsedUrl = new URL(targetUrl);
-
-      if (isBlockedHostname(parsedUrl.hostname)) {
-        resolve('Error: Access to internal/private addresses is not allowed.');
-        return;
-      }
-      const lib = parsedUrl.protocol === 'https:' ? https : http;
-
       const options = {
         hostname: parsedUrl.hostname,
         port: parsedUrl.port,
@@ -3214,7 +3244,7 @@ function fetchUrl(url: string, method?: string, headersStr?: string, body?: stri
           const location = res.headers.location.startsWith('http')
             ? res.headers.location
             : new URL(res.headers.location, targetUrl).toString();
-          res.resume(); // drain the response
+          res.resume();
           resolve(doFetch(location, redirectCount + 1));
           return;
         }
@@ -3953,7 +3983,7 @@ async function repoMemoryAddOss(title: string, content: string, tagsRaw?: string
 
 // Re-export security functions for testing + path safety for testing
 export { DDL_PATTERN, sanitizeSql, isReadOnlySql } from './toolsDb';
-export { safePath, BLOCKED_PATHS };
+export { safePath, BLOCKED_PATHS, HARD_BLOCKED, ALLOWED_COMMANDS };
 
 // ── Job search tool handlers ───────────────────────────────────────
 
