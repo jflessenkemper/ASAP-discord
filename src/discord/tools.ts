@@ -1,9 +1,10 @@
-import { execSync, execFileSync } from 'child_process';
+import { execSync, execFileSync, exec } from 'child_process';
 import { createHash } from 'crypto';
 import fs from 'fs';
 import http from 'http';
 import https from 'https';
 import path from 'path';
+import { promisify } from 'util';
 
 import {
   Guild,
@@ -1705,7 +1706,7 @@ async function executeToolInternal(
       case 'git_file_history':
         return gitFileHistory(input.path, parseInt(input.limit, 10) || 10, input.line_range);
       case 'smoke_test_agents':
-        return smokeTestAgents({
+        return await smokeTestAgents({
           agent: input.agent,
           tests: input.tests,
           profile: input.profile,
@@ -2585,7 +2586,7 @@ interface SmokeTestOptions {
   timeoutMs?: number;
 }
 
-function smokeTestAgents(opts: SmokeTestOptions = {}): string {
+async function smokeTestAgents(opts: SmokeTestOptions = {}): Promise<string> {
   if (!process.env.DISCORD_TEST_BOT_TOKEN || !process.env.DISCORD_GUILD_ID) {
     return 'Smoke-test bot is not configured here. Set DISCORD_TEST_BOT_TOKEN and DISCORD_GUILD_ID to enable end-to-end Discord smoke tests.';
   }
@@ -2611,12 +2612,12 @@ function smokeTestAgents(opts: SmokeTestOptions = {}): string {
   // Profile → set DISCORD_SMOKE_PROFILE env override
   const profileEnv = opts.profile === 'readiness' ? 'readiness' : '';
 
+  const execAsync = promisify(exec);
   try {
-    const output = execSync(cmd, {
+    const { stdout, stderr } = await execAsync(cmd, {
       cwd: SERVER_ROOT,
       timeout: Math.max(safeTimeout * 2, 120_000),
       maxBuffer: 1024 * 1024,
-      encoding: 'utf-8',
       env: {
         ...process.env,
         DISCORD_TEST_TIMEOUT_MS: String(safeTimeout),
@@ -2624,8 +2625,9 @@ function smokeTestAgents(opts: SmokeTestOptions = {}): string {
         ...(profileEnv ? { DISCORD_SMOKE_PROFILE: profileEnv } : {}),
       },
       shell: '/bin/sh',
-    }).trim();
+    });
 
+    const output = (stdout || '').trim();
     return output.length > 4000
       ? '... (output trimmed)\n' + output.slice(-4000)
       : output || 'Smoke test completed with no output.';
