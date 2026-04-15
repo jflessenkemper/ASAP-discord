@@ -116,7 +116,7 @@ function disableUsageDb(reason: string): void {
   console.warn(`Usage counter DB persistence disabled: ${reason}. Using in-memory counters only.`);
 }
 
-function toAgentTag(agentLabel: string): string {
+export function toAgentTag(agentLabel: string): string {
   const normalized = String(agentLabel || '').toLowerCase();
   if (normalized.includes('riley')) return 'executive-assistant';
   if (normalized.includes('ace')) return 'developer';

@@ -1318,6 +1318,73 @@ export const AGENT_CAPABILITY_TESTS: AgentCapabilityTest[] = [
   },
 
   // ══════════════════════════════════════════════════════════════════════
+  // ── ENGINEERING HARDENING AWARENESS ──────────────────────────────────
+  // ══════════════════════════════════════════════════════════════════════
+  {
+    id: 'developer',
+    category: 'self-improvement',
+    capability: 'env-sandbox-awareness',
+    prompt: 'Use read_file to read src/discord/envSandbox.ts. Describe: what is SAFE_ENV_KEYS? What does buildSafeCommandEnv() do? Why is this important for security when running child processes?',
+    expectAll: [/safe|allowlist|strip|secret/i, /env|environment|child.*process/i],
+    expectToolAudit: ['read_file'],
+    timeoutMs: 120_000,
+  },
+  {
+    id: 'developer',
+    category: 'self-improvement',
+    capability: 'ssrf-protection-awareness',
+    prompt: 'Use read_file to read the fetchUrl function in src/discord/tools.ts. Describe: what SSRF protections exist? How does it handle IPv6? How does it prevent DNS rebinding attacks?',
+    expectAll: [/SSRF|private|block/i, /DNS|rebind|resolve|lookup/i],
+    expectToolAudit: ['read_file'],
+    timeoutMs: 120_000,
+  },
+  {
+    id: 'developer',
+    category: 'self-improvement',
+    capability: 'command-allowlist-awareness',
+    prompt: 'Use read_file to read the ALLOWED_COMMANDS and HARD_BLOCKED arrays in src/discord/tools.ts. What dangerous commands were removed from the allowlist? What new HARD_BLOCKED patterns were added? Why were node, env, printenv, awk, docker removed?',
+    expectAll: [/remov|block|dangerous|shell|inject/i, /node|env|docker|awk/i],
+    expectToolAudit: ['read_file'],
+    timeoutMs: 120_000,
+  },
+  {
+    id: 'developer',
+    category: 'self-improvement',
+    capability: 'gcp-execfile-awareness',
+    prompt: 'Use read_file to read src/discord/toolsGcp.ts and find the gcpExecArgs function. Describe: how does gcpExecArgs differ from the old gcpExec? Why is execFileSync with argument arrays more secure than execSync with shell string interpolation?',
+    expectAll: [/execFileSync|argument|array/i, /shell|inject|interpolat/i],
+    expectToolAudit: ['read_file'],
+    timeoutMs: 120_000,
+  },
+  {
+    id: 'developer',
+    category: 'self-improvement',
+    capability: 'startup-retry-awareness',
+    prompt: 'Use search_files to find "startup-retry" in src/discord/bot.ts. Read the surrounding code. Describe: what retry strategy does the bot use on startup failure? How many attempts? What is the backoff strategy?',
+    expectAll: [/retry|attempt|backoff/i, /exponential|delay|3|max/i],
+    expectToolAudit: ['search_files'],
+    timeoutMs: 120_000,
+  },
+  {
+    id: 'developer',
+    category: 'self-improvement',
+    capability: 'dockerfile-awareness',
+    prompt: 'Use read_file to read the Dockerfile. Describe: is there a multi-stage build? Does it run as non-root? What security practices are followed?',
+    expectAll: [/stage|build|FROM/i, /non-root|asap|USER/i],
+    expectToolAudit: ['read_file'],
+    timeoutMs: 120_000,
+  },
+  {
+    id: 'developer',
+    category: 'self-improvement',
+    capability: 'shared-utility-awareness',
+    prompt: 'Use read_file to read src/utils/time.ts. Then use search_files to find all imports of formatAge across the codebase. Describe: where is the canonical formatAge function? Which files import it and why was it deduplicated?',
+    expectAll: [/formatAge|time|duration/i, /import|shared|deduplic|single.*source/i],
+    expectToolAudit: ['read_file'],
+    timeoutMs: 120_000,
+  },
+
+  // ══════════════════════════════════════════════════════════════════════
   // ── SPECIALIST DEEP-DIVE (under-tested agents) ────────────────────────
   // ══════════════════════════════════════════════════════════════════════
   {

@@ -54,6 +54,7 @@ import {
 } from '../services/jobSearch';
 import { jobScoreColor, SYSTEM_COLORS, BUTTON_IDS } from './ui/constants';
 import { errMsg } from '../utils/errors';
+import { formatAge } from '../utils/time';
 import { gcpDeploy, gcpBuildImage, gcpPreflight, gcpSetEnv, gcpGetEnv, gcpListRevisions, gcpRollback, gcpSecretSet, gcpSecretBind, gcpSecretList, gcpBuildStatus, gcpLogsQuery, gcpRunDescribe, gcpStorageLs, gcpArtifactList, gcpSqlDescribe, gcpVmSsh, gcpProjectInfo } from './toolsGcp';
 import { buildSafeCommandEnv } from './envSandbox';
 import { DDL_PATTERN, sanitizeSql, isReadOnlySql, dbQuery, dbQueryReadonly, dbSchema } from './toolsDb';
@@ -2700,14 +2701,6 @@ async function smokeTestAgents(opts: SmokeTestOptions = {}): Promise<string> {
   } finally {
     setActiveSmokeTestRunning(false);
   }
-}
-
-function formatAge(ms: number): string {
-  if (!Number.isFinite(ms) || ms < 0) return 'unknown';
-  if (ms < 60_000) return `${Math.max(1, Math.round(ms / 1000))}s`;
-  if (ms < 3_600_000) return `${Math.round(ms / 60_000)}m`;
-  if (ms < 86_400_000) return `${Math.round(ms / 3_600_000)}h`;
-  return `${Math.round(ms / 86_400_000)}d`;
 }
 
 

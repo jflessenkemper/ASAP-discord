@@ -36,7 +36,8 @@ import { setScreenshotsChannel } from './services/screenshots';
 import { setTelephonyChannels, isTelephonyAvailable, initContacts } from './services/telephony';
 import { setupChannels, BotChannels } from './setup';
 import { setCommandAuditCallback, setPRReviewCallback, setDiscordGuild, setToolAuditCallback, setAgentChannelResolver } from './tools';
-import { setLimitsChannel, setCostChannel, startDashboardUpdates, stopDashboardUpdates, initUsageCounters, flushUsageCounters, getUsageReport, getCostOpsSummaryLine, refreshUsageDashboard } from './usage';
+import { setLimitsChannel, setCostChannel, startDashboardUpdates, stopDashboardUpdates, initUsageCounters, flushUsageCounters, getUsageReport, getCostOpsSummaryLine, refreshUsageDashboard, toAgentTag } from './usage';
+import { formatAge } from '../utils/time';
 import { updateListingByMsgId, draftApplication, getProfile, getPortalByCompany, submitToGreenhouse, getListingById, updateListingStatus, setListingDiscordMsg, guessCompanyEmail, type JobListing } from '../services/jobSearch';
 import { sendJobApplication } from '../services/email';
 import { SYSTEM_COLORS, BUTTON_IDS, jobScoreColor } from './ui/constants';
@@ -77,14 +78,6 @@ type ChannelFeedContract = {
   cadence: string;
   staleMs: number;
 };
-
-function formatAge(ms: number): string {
-  if (!Number.isFinite(ms) || ms <= 0) return '0m';
-  if (ms < 60_000) return `${Math.max(1, Math.round(ms / 1000))}s`;
-  if (ms < 3_600_000) return `${Math.round(ms / 60_000)}m`;
-  if (ms < 86_400_000) return `${Math.round(ms / 3_600_000)}h`;
-  return `${Math.round(ms / 86_400_000)}d`;
-}
 
 function getFeedContracts(channels: BotChannels): ChannelFeedContract[] {
   return [
@@ -435,23 +428,6 @@ export async function startBot(): Promise<void> {
       let lastDbAuditPost = 0;
       let suppressedDbAudits = 0;
       const DB_AUDIT_POST_INTERVAL_MS = 30_000;
-      const toAgentTag = (name: string): string => {
-        const normalized = String(name || '').toLowerCase();
-        if (normalized.includes('riley')) return 'executive-assistant';
-        if (normalized.includes('ace')) return 'developer';
-        if (normalized.includes('max')) return 'qa';
-        if (normalized.includes('sophie')) return 'ux-reviewer';
-        if (normalized.includes('kane')) return 'security-auditor';
-        if (normalized.includes('raj')) return 'api-reviewer';
-        if (normalized.includes('elena')) return 'dba';
-        if (normalized.includes('kai')) return 'performance';
-        if (normalized.includes('jude')) return 'devops';
-        if (normalized.includes('liv')) return 'copywriter';
-        if (normalized.includes('harper')) return 'lawyer';
-        if (normalized.includes('mia')) return 'ios-engineer';
-        if (normalized.includes('leo')) return 'android-engineer';
-        return normalized.replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'unknown';
-      };
       setToolAuditCallback((agentName, toolName, summary) => {
         const terminalChannel = configuredChannels.terminal;
         if (!terminalChannel) return;
@@ -511,9 +487,40 @@ export async function startBot(): Promise<void> {
       const msg = err instanceof Error ? err.stack || err.message : 'Unknown';
       console.error('Channel setup error:', errMsg(err));
       void postAgentErrorLog('discord:startup', 'Channel setup error', { detail: msg });
-      console.error('Bot initialization failed — destroying client');
-      readyClient.destroy();
-      client = null;
+
+      // Retry with exponential backoff (max 3 attempts)
+      const MAX_STARTUP_RETRIES = 3;
+      for (let attempt = 1; attempt <= MAX_STARTUP_RETRIES; attempt++) {
+        const delayMs = Math.min(5_000 * Math.pow(2, attempt - 1), 30_000);
+        console.warn(`[startup-retry] Attempt ${attempt}/${MAX_STARTUP_RETRIES} in ${delayMs / 1000}s...`);
+        await new Promise(resolve => setTimeout(resolve, delayMs));
+        try {
+          await initMemory();
+          await initUsageCounters();
+          botChannels = await setupChannels(guild);
+          console.log(`[startup-retry] Attempt ${attempt} succeeded.`);
+          break;
+        } catch (retryErr) {
+          console.error(`[startup-retry] Attempt ${attempt} failed:`, errMsg(retryErr));
+          if (attempt === MAX_STARTUP_RETRIES) {
+            console.error('Bot initialization failed after retries — destroying client');
+            readyClient.destroy();
+            client = null;
+            return;
+          }
+        }
+      }
+      if (!botChannels) return;
+      const configuredChannels = botChannels;
+      setBotChannels(configuredChannels);
+      setGitHubChannel(configuredChannels.github);
+      setLimitsChannel(configuredChannels.limits);
+      setCostChannel(configuredChannels.cost);
+      setScreenshotsChannel(configuredChannels.screenshots);
+      setVoiceErrorChannel(configuredChannels.voiceErrors);
+      setAgentErrorChannel(configuredChannels.agentErrors);
+      setDiscordGuild(guild);
+      setAgentChannelResolver((agentId: string) => configuredChannels.agentChannels.get(agentId) || null);
     }
   });
 

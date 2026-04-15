@@ -1,5 +1,6 @@
 import { execFileSync, execFile } from 'child_process';
 import { buildSafeCommandEnv } from '../envSandbox';
+import { formatAge } from '../../utils/time';
 import { promisify } from 'util';
 import fs from 'fs';
 import path from 'path';
@@ -865,14 +866,6 @@ async function maybeReviewThreadForClosure(groupchat: TextChannel): Promise<void
   );
 }
 
-function formatRelativeTime(ms: number): string {
-  if (!Number.isFinite(ms) || ms <= 0) return 'just now';
-  if (ms < 60_000) return `${Math.max(1, Math.round(ms / 1000))}s`;
-  if (ms < 3_600_000) return `${Math.round(ms / 60_000)}m`;
-  if (ms < 86_400_000) return `${Math.round(ms / 3_600_000)}h`;
-  return `${Math.round(ms / 86_400_000)}d`;
-}
-
 function trimCommandOutput(text: string, maxLen = 1500): string {
   const normalized = String(text || '').trim();
   if (!normalized) return '(no output)';
@@ -933,7 +926,7 @@ async function buildThreadStatusReport(groupchat: TextChannel): Promise<string> 
     const idleMs = Math.max(0, now - lastTs);
     const ready = idleMs >= THREAD_CLOSE_REVIEW_IDLE_MS;
     const threadName = thread.name.replace(/\s+/g, ' ').slice(0, 60);
-    const idleLabel = formatRelativeTime(idleMs);
+    const idleLabel = formatAge(idleMs);
     const icon = ready ? '✅' : '⏳';
     return {
       ready,
