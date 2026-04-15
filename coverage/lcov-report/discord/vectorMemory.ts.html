@@ -1,0 +1,922 @@
+
+<!doctype html>
+<html lang="en">
+
+<head>
+    <title>Code coverage report for discord/vectorMemory.ts</title>
+    <meta charset="utf-8" />
+    <link rel="stylesheet" href="../prettify.css" />
+    <link rel="stylesheet" href="../base.css" />
+    <link rel="shortcut icon" type="image/x-icon" href="../favicon.png" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <style type='text/css'>
+        .coverage-summary .sorter {
+            background-image: url(../sort-arrow-sprite.png);
+        }
+    </style>
+</head>
+    
+<body>
+<div class='wrapper'>
+    <div class='pad1'>
+        <h1><a href="../index.html">All files</a> / <a href="index.html">discord</a> vectorMemory.ts</h1>
+        <div class='clearfix'>
+            
+            <div class='fl pad1y space-right2'>
+                <span class="strong">30.55% </span>
+                <span class="quiet">Statements</span>
+                <span class='fraction'>55/180</span>
+            </div>
+        
+            
+            <div class='fl pad1y space-right2'>
+                <span class="strong">31.81% </span>
+                <span class="quiet">Branches</span>
+                <span class='fraction'>42/132</span>
+            </div>
+        
+            
+            <div class='fl pad1y space-right2'>
+                <span class="strong">34.61% </span>
+                <span class="quiet">Functions</span>
+                <span class='fraction'>9/26</span>
+            </div>
+        
+            
+            <div class='fl pad1y space-right2'>
+                <span class="strong">33.33% </span>
+                <span class="quiet">Lines</span>
+                <span class='fraction'>55/165</span>
+            </div>
+        
+            
+        </div>
+        <p class="quiet">
+            Press <em>n</em> or <em>j</em> to go to the next uncovered block, <em>b</em>, <em>p</em> or <em>k</em> for the previous block.
+        </p>
+        <template id="filterTemplate">
+            <div class="quiet">
+                Filter:
+                <input type="search" id="fileSearch">
+            </div>
+        </template>
+    </div>
+    <div class='status-line low'></div>
+    <pre><table class="coverage">
+<tr><td class="line-count quiet"><a name='L1'></a><a href='#L1'>1</a>
+<a name='L2'></a><a href='#L2'>2</a>
+<a name='L3'></a><a href='#L3'>3</a>
+<a name='L4'></a><a href='#L4'>4</a>
+<a name='L5'></a><a href='#L5'>5</a>
+<a name='L6'></a><a href='#L6'>6</a>
+<a name='L7'></a><a href='#L7'>7</a>
+<a name='L8'></a><a href='#L8'>8</a>
+<a name='L9'></a><a href='#L9'>9</a>
+<a name='L10'></a><a href='#L10'>10</a>
+<a name='L11'></a><a href='#L11'>11</a>
+<a name='L12'></a><a href='#L12'>12</a>
+<a name='L13'></a><a href='#L13'>13</a>
+<a name='L14'></a><a href='#L14'>14</a>
+<a name='L15'></a><a href='#L15'>15</a>
+<a name='L16'></a><a href='#L16'>16</a>
+<a name='L17'></a><a href='#L17'>17</a>
+<a name='L18'></a><a href='#L18'>18</a>
+<a name='L19'></a><a href='#L19'>19</a>
+<a name='L20'></a><a href='#L20'>20</a>
+<a name='L21'></a><a href='#L21'>21</a>
+<a name='L22'></a><a href='#L22'>22</a>
+<a name='L23'></a><a href='#L23'>23</a>
+<a name='L24'></a><a href='#L24'>24</a>
+<a name='L25'></a><a href='#L25'>25</a>
+<a name='L26'></a><a href='#L26'>26</a>
+<a name='L27'></a><a href='#L27'>27</a>
+<a name='L28'></a><a href='#L28'>28</a>
+<a name='L29'></a><a href='#L29'>29</a>
+<a name='L30'></a><a href='#L30'>30</a>
+<a name='L31'></a><a href='#L31'>31</a>
+<a name='L32'></a><a href='#L32'>32</a>
+<a name='L33'></a><a href='#L33'>33</a>
+<a name='L34'></a><a href='#L34'>34</a>
+<a name='L35'></a><a href='#L35'>35</a>
+<a name='L36'></a><a href='#L36'>36</a>
+<a name='L37'></a><a href='#L37'>37</a>
+<a name='L38'></a><a href='#L38'>38</a>
+<a name='L39'></a><a href='#L39'>39</a>
+<a name='L40'></a><a href='#L40'>40</a>
+<a name='L41'></a><a href='#L41'>41</a>
+<a name='L42'></a><a href='#L42'>42</a>
+<a name='L43'></a><a href='#L43'>43</a>
+<a name='L44'></a><a href='#L44'>44</a>
+<a name='L45'></a><a href='#L45'>45</a>
+<a name='L46'></a><a href='#L46'>46</a>
+<a name='L47'></a><a href='#L47'>47</a>
+<a name='L48'></a><a href='#L48'>48</a>
+<a name='L49'></a><a href='#L49'>49</a>
+<a name='L50'></a><a href='#L50'>50</a>
+<a name='L51'></a><a href='#L51'>51</a>
+<a name='L52'></a><a href='#L52'>52</a>
+<a name='L53'></a><a href='#L53'>53</a>
+<a name='L54'></a><a href='#L54'>54</a>
+<a name='L55'></a><a href='#L55'>55</a>
+<a name='L56'></a><a href='#L56'>56</a>
+<a name='L57'></a><a href='#L57'>57</a>
+<a name='L58'></a><a href='#L58'>58</a>
+<a name='L59'></a><a href='#L59'>59</a>
+<a name='L60'></a><a href='#L60'>60</a>
+<a name='L61'></a><a href='#L61'>61</a>
+<a name='L62'></a><a href='#L62'>62</a>
+<a name='L63'></a><a href='#L63'>63</a>
+<a name='L64'></a><a href='#L64'>64</a>
+<a name='L65'></a><a href='#L65'>65</a>
+<a name='L66'></a><a href='#L66'>66</a>
+<a name='L67'></a><a href='#L67'>67</a>
+<a name='L68'></a><a href='#L68'>68</a>
+<a name='L69'></a><a href='#L69'>69</a>
+<a name='L70'></a><a href='#L70'>70</a>
+<a name='L71'></a><a href='#L71'>71</a>
+<a name='L72'></a><a href='#L72'>72</a>
+<a name='L73'></a><a href='#L73'>73</a>
+<a name='L74'></a><a href='#L74'>74</a>
+<a name='L75'></a><a href='#L75'>75</a>
+<a name='L76'></a><a href='#L76'>76</a>
+<a name='L77'></a><a href='#L77'>77</a>
+<a name='L78'></a><a href='#L78'>78</a>
+<a name='L79'></a><a href='#L79'>79</a>
+<a name='L80'></a><a href='#L80'>80</a>
+<a name='L81'></a><a href='#L81'>81</a>
+<a name='L82'></a><a href='#L82'>82</a>
+<a name='L83'></a><a href='#L83'>83</a>
+<a name='L84'></a><a href='#L84'>84</a>
+<a name='L85'></a><a href='#L85'>85</a>
+<a name='L86'></a><a href='#L86'>86</a>
+<a name='L87'></a><a href='#L87'>87</a>
+<a name='L88'></a><a href='#L88'>88</a>
+<a name='L89'></a><a href='#L89'>89</a>
+<a name='L90'></a><a href='#L90'>90</a>
+<a name='L91'></a><a href='#L91'>91</a>
+<a name='L92'></a><a href='#L92'>92</a>
+<a name='L93'></a><a href='#L93'>93</a>
+<a name='L94'></a><a href='#L94'>94</a>
+<a name='L95'></a><a href='#L95'>95</a>
+<a name='L96'></a><a href='#L96'>96</a>
+<a name='L97'></a><a href='#L97'>97</a>
+<a name='L98'></a><a href='#L98'>98</a>
+<a name='L99'></a><a href='#L99'>99</a>
+<a name='L100'></a><a href='#L100'>100</a>
+<a name='L101'></a><a href='#L101'>101</a>
+<a name='L102'></a><a href='#L102'>102</a>
+<a name='L103'></a><a href='#L103'>103</a>
+<a name='L104'></a><a href='#L104'>104</a>
+<a name='L105'></a><a href='#L105'>105</a>
+<a name='L106'></a><a href='#L106'>106</a>
+<a name='L107'></a><a href='#L107'>107</a>
+<a name='L108'></a><a href='#L108'>108</a>
+<a name='L109'></a><a href='#L109'>109</a>
+<a name='L110'></a><a href='#L110'>110</a>
+<a name='L111'></a><a href='#L111'>111</a>
+<a name='L112'></a><a href='#L112'>112</a>
+<a name='L113'></a><a href='#L113'>113</a>
+<a name='L114'></a><a href='#L114'>114</a>
+<a name='L115'></a><a href='#L115'>115</a>
+<a name='L116'></a><a href='#L116'>116</a>
+<a name='L117'></a><a href='#L117'>117</a>
+<a name='L118'></a><a href='#L118'>118</a>
+<a name='L119'></a><a href='#L119'>119</a>
+<a name='L120'></a><a href='#L120'>120</a>
+<a name='L121'></a><a href='#L121'>121</a>
+<a name='L122'></a><a href='#L122'>122</a>
+<a name='L123'></a><a href='#L123'>123</a>
+<a name='L124'></a><a href='#L124'>124</a>
+<a name='L125'></a><a href='#L125'>125</a>
+<a name='L126'></a><a href='#L126'>126</a>
+<a name='L127'></a><a href='#L127'>127</a>
+<a name='L128'></a><a href='#L128'>128</a>
+<a name='L129'></a><a href='#L129'>129</a>
+<a name='L130'></a><a href='#L130'>130</a>
+<a name='L131'></a><a href='#L131'>131</a>
+<a name='L132'></a><a href='#L132'>132</a>
+<a name='L133'></a><a href='#L133'>133</a>
+<a name='L134'></a><a href='#L134'>134</a>
+<a name='L135'></a><a href='#L135'>135</a>
+<a name='L136'></a><a href='#L136'>136</a>
+<a name='L137'></a><a href='#L137'>137</a>
+<a name='L138'></a><a href='#L138'>138</a>
+<a name='L139'></a><a href='#L139'>139</a>
+<a name='L140'></a><a href='#L140'>140</a>
+<a name='L141'></a><a href='#L141'>141</a>
+<a name='L142'></a><a href='#L142'>142</a>
+<a name='L143'></a><a href='#L143'>143</a>
+<a name='L144'></a><a href='#L144'>144</a>
+<a name='L145'></a><a href='#L145'>145</a>
+<a name='L146'></a><a href='#L146'>146</a>
+<a name='L147'></a><a href='#L147'>147</a>
+<a name='L148'></a><a href='#L148'>148</a>
+<a name='L149'></a><a href='#L149'>149</a>
+<a name='L150'></a><a href='#L150'>150</a>
+<a name='L151'></a><a href='#L151'>151</a>
+<a name='L152'></a><a href='#L152'>152</a>
+<a name='L153'></a><a href='#L153'>153</a>
+<a name='L154'></a><a href='#L154'>154</a>
+<a name='L155'></a><a href='#L155'>155</a>
+<a name='L156'></a><a href='#L156'>156</a>
+<a name='L157'></a><a href='#L157'>157</a>
+<a name='L158'></a><a href='#L158'>158</a>
+<a name='L159'></a><a href='#L159'>159</a>
+<a name='L160'></a><a href='#L160'>160</a>
+<a name='L161'></a><a href='#L161'>161</a>
+<a name='L162'></a><a href='#L162'>162</a>
+<a name='L163'></a><a href='#L163'>163</a>
+<a name='L164'></a><a href='#L164'>164</a>
+<a name='L165'></a><a href='#L165'>165</a>
+<a name='L166'></a><a href='#L166'>166</a>
+<a name='L167'></a><a href='#L167'>167</a>
+<a name='L168'></a><a href='#L168'>168</a>
+<a name='L169'></a><a href='#L169'>169</a>
+<a name='L170'></a><a href='#L170'>170</a>
+<a name='L171'></a><a href='#L171'>171</a>
+<a name='L172'></a><a href='#L172'>172</a>
+<a name='L173'></a><a href='#L173'>173</a>
+<a name='L174'></a><a href='#L174'>174</a>
+<a name='L175'></a><a href='#L175'>175</a>
+<a name='L176'></a><a href='#L176'>176</a>
+<a name='L177'></a><a href='#L177'>177</a>
+<a name='L178'></a><a href='#L178'>178</a>
+<a name='L179'></a><a href='#L179'>179</a>
+<a name='L180'></a><a href='#L180'>180</a>
+<a name='L181'></a><a href='#L181'>181</a>
+<a name='L182'></a><a href='#L182'>182</a>
+<a name='L183'></a><a href='#L183'>183</a>
+<a name='L184'></a><a href='#L184'>184</a>
+<a name='L185'></a><a href='#L185'>185</a>
+<a name='L186'></a><a href='#L186'>186</a>
+<a name='L187'></a><a href='#L187'>187</a>
+<a name='L188'></a><a href='#L188'>188</a>
+<a name='L189'></a><a href='#L189'>189</a>
+<a name='L190'></a><a href='#L190'>190</a>
+<a name='L191'></a><a href='#L191'>191</a>
+<a name='L192'></a><a href='#L192'>192</a>
+<a name='L193'></a><a href='#L193'>193</a>
+<a name='L194'></a><a href='#L194'>194</a>
+<a name='L195'></a><a href='#L195'>195</a>
+<a name='L196'></a><a href='#L196'>196</a>
+<a name='L197'></a><a href='#L197'>197</a>
+<a name='L198'></a><a href='#L198'>198</a>
+<a name='L199'></a><a href='#L199'>199</a>
+<a name='L200'></a><a href='#L200'>200</a>
+<a name='L201'></a><a href='#L201'>201</a>
+<a name='L202'></a><a href='#L202'>202</a>
+<a name='L203'></a><a href='#L203'>203</a>
+<a name='L204'></a><a href='#L204'>204</a>
+<a name='L205'></a><a href='#L205'>205</a>
+<a name='L206'></a><a href='#L206'>206</a>
+<a name='L207'></a><a href='#L207'>207</a>
+<a name='L208'></a><a href='#L208'>208</a>
+<a name='L209'></a><a href='#L209'>209</a>
+<a name='L210'></a><a href='#L210'>210</a>
+<a name='L211'></a><a href='#L211'>211</a>
+<a name='L212'></a><a href='#L212'>212</a>
+<a name='L213'></a><a href='#L213'>213</a>
+<a name='L214'></a><a href='#L214'>214</a>
+<a name='L215'></a><a href='#L215'>215</a>
+<a name='L216'></a><a href='#L216'>216</a>
+<a name='L217'></a><a href='#L217'>217</a>
+<a name='L218'></a><a href='#L218'>218</a>
+<a name='L219'></a><a href='#L219'>219</a>
+<a name='L220'></a><a href='#L220'>220</a>
+<a name='L221'></a><a href='#L221'>221</a>
+<a name='L222'></a><a href='#L222'>222</a>
+<a name='L223'></a><a href='#L223'>223</a>
+<a name='L224'></a><a href='#L224'>224</a>
+<a name='L225'></a><a href='#L225'>225</a>
+<a name='L226'></a><a href='#L226'>226</a>
+<a name='L227'></a><a href='#L227'>227</a>
+<a name='L228'></a><a href='#L228'>228</a>
+<a name='L229'></a><a href='#L229'>229</a>
+<a name='L230'></a><a href='#L230'>230</a>
+<a name='L231'></a><a href='#L231'>231</a>
+<a name='L232'></a><a href='#L232'>232</a>
+<a name='L233'></a><a href='#L233'>233</a>
+<a name='L234'></a><a href='#L234'>234</a>
+<a name='L235'></a><a href='#L235'>235</a>
+<a name='L236'></a><a href='#L236'>236</a>
+<a name='L237'></a><a href='#L237'>237</a>
+<a name='L238'></a><a href='#L238'>238</a>
+<a name='L239'></a><a href='#L239'>239</a>
+<a name='L240'></a><a href='#L240'>240</a>
+<a name='L241'></a><a href='#L241'>241</a>
+<a name='L242'></a><a href='#L242'>242</a>
+<a name='L243'></a><a href='#L243'>243</a>
+<a name='L244'></a><a href='#L244'>244</a>
+<a name='L245'></a><a href='#L245'>245</a>
+<a name='L246'></a><a href='#L246'>246</a>
+<a name='L247'></a><a href='#L247'>247</a>
+<a name='L248'></a><a href='#L248'>248</a>
+<a name='L249'></a><a href='#L249'>249</a>
+<a name='L250'></a><a href='#L250'>250</a>
+<a name='L251'></a><a href='#L251'>251</a>
+<a name='L252'></a><a href='#L252'>252</a>
+<a name='L253'></a><a href='#L253'>253</a>
+<a name='L254'></a><a href='#L254'>254</a>
+<a name='L255'></a><a href='#L255'>255</a>
+<a name='L256'></a><a href='#L256'>256</a>
+<a name='L257'></a><a href='#L257'>257</a>
+<a name='L258'></a><a href='#L258'>258</a>
+<a name='L259'></a><a href='#L259'>259</a>
+<a name='L260'></a><a href='#L260'>260</a>
+<a name='L261'></a><a href='#L261'>261</a>
+<a name='L262'></a><a href='#L262'>262</a>
+<a name='L263'></a><a href='#L263'>263</a>
+<a name='L264'></a><a href='#L264'>264</a>
+<a name='L265'></a><a href='#L265'>265</a>
+<a name='L266'></a><a href='#L266'>266</a>
+<a name='L267'></a><a href='#L267'>267</a>
+<a name='L268'></a><a href='#L268'>268</a>
+<a name='L269'></a><a href='#L269'>269</a>
+<a name='L270'></a><a href='#L270'>270</a>
+<a name='L271'></a><a href='#L271'>271</a>
+<a name='L272'></a><a href='#L272'>272</a>
+<a name='L273'></a><a href='#L273'>273</a>
+<a name='L274'></a><a href='#L274'>274</a>
+<a name='L275'></a><a href='#L275'>275</a>
+<a name='L276'></a><a href='#L276'>276</a>
+<a name='L277'></a><a href='#L277'>277</a>
+<a name='L278'></a><a href='#L278'>278</a>
+<a name='L279'></a><a href='#L279'>279</a>
+<a name='L280'></a><a href='#L280'>280</a></td><td class="line-coverage quiet"><span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-yes">6x</span>
+<span class="cline-any cline-yes">5x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-yes">2x</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-yes">2x</span>
+<span class="cline-any cline-yes">2x</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span></td><td class="text"><pre class="prettyprint lang-js">import { createHash } from 'crypto';
+<span class="fstat-no" title="function not covered" ></span>
+impo<span class="cstat-no" title="statement not covered" >rt { GoogleAuth } from<span class="cstat-no" title="statement not covered" > 'google</span></span>-auth-library';
+<span class="cstat-no" title="statement not covered" ></span>
+impo<span class="cstat-no" title="statement not covered" >rt pool from '../db/pool';</span>
+import<span class="cstat-no" title="statement not covered" > { ensureGoogleCredentials, getA<span class="fstat-no" title="function not covered" >cc</span>essTokenVia<span class="cstat-no" title="statement not covered" >Gcloud } from</span> '../</span>services/googleCredentials';
+&nbsp;
+impo<span class="cstat-no" title="statement not covered" >rt { logAgentEvent } from './activit</span>yLog';
+import<span class="fstat-no" title="function not covered" ><span class="branch-1 cbranch-no" title="branch not covered" > {</span> errMsg } from '../utils/errors';</span>
+<span class="cstat-no" title="statement not covered" ><span class="cstat-no" title="statement not covered" ></span></span>
+// ─<span class="cstat-no" title="statement not covered" >── Vector Memo</span>ry (Semantic Search via pgvector) ───
+// Stores key decisions, outcomes, and learnings as embeddings.
+// Agents can query past context semantically before broad searches.<span class="fstat-no" title="function not covered" ></span>
+<span class="cstat-no" title="statement not covered" ></span>
+const<span class="fstat-no" title="function not covered" ><span class="branch-1 cbranch-no" title="branch not covered" > V</span>ECTOR_MEMORY_ENABLED = process.env.VECTOR_MEMORY_ENABLED !== 'false';</span>
+cons<span class="cstat-no" title="statement not covered" >t EMBEDDING_MODEL </span>= process.env.EMBEDDING_MODEL || 'text-embedding-004';
+const EMBEDDING_DIMENSIONS = parseInt(process.env.EMBEDDING_DIMENSIONS || '768', 10);
+const VECTOR_SEARCH_LIMIT = parseInt(process.env.VECTOR_SEARCH_LIMIT || '5', 10);
+const VECTOR_SIMIL<span class="fstat-no" title="function not covered" >AR</span>ITY_THRESHOLD = parseFloat(process.env.VECTOR_SIMILARITY_THRESHOLD || '0.6');
+const US<span class="cstat-no" title="statement not covered" >E_VERTEX_AI = process.env.GEMINI_USE_VER<span class="fstat-no" title="function not covered" >TE</span>X_AI === 'true';</span>
+const VERTEX_PROJECT_<span class="cstat-no" title="statement not covered" >ID </span>= process.env.VERTEX_PROJECT_ID || process.env.GOOGLE_CLOUD_PROJECT || process.env.GCLOUD_PROJECT || '';
+const VERTEX<span class="cstat-no" title="statement not covered" >_LOCATION = proce<span class="cstat-no" title="statement not covered" >ss.env.VERTEX_LOCATION || 'us-central1';<span class="cstat-no" title="statement not covered" ></span></span></span>
+<span class="cstat-no" title="statement not covered" ></span>
+let vertexAuth: GoogleAuth | null = null;
+let dbAv<span class="cstat-no" title="statement not covered" >ailable: boolean | </span>null = null;
+&nbsp;
+async funct<span class="fstat-no" title="function not covered" >io</span>n getVertexAccessToken(): Promise&lt;string&gt; {
+  await <span class="cstat-no" title="statement not covered" >ensureGoogleCredentials(VER<span class="cstat-no" title="statement not covered" >TEX_PROJECT_</span></span>ID).catch(() =&gt; false);
+<span class="cstat-no" title="statement not covered" ></span>
+  if (!v<span class="cstat-no" title="statement not covered" >ertexAuth) {<span class="cstat-no" title="statement not covered" ><span class="cstat-no" title="statement not covered" ><span class="cstat-no" title="statement not covered" ><span class="cstat-no" title="statement not covered" ><span class="cstat-no" title="statement not covered" ></span></span></span></span></span></span>
+    vert<span class="cstat-no" title="statement not covered" >exAuth = new GoogleAuth({ scopes:</span> ['https://www.googleapis.com/auth/cloud-platform'] });
+  }<span class="cstat-no" title="statement not covered" ></span>
+&nbsp;
+  let authClient: any;
+  let accessToken: any;
+  try {<span class="branch-1 cbranch-no" title="branch not covered" ></span>
+    authClient = await vertexAuth.getClient();
+    accessToken = await authClient.getAccessToken();
+  } catch (err) {
+    const msg = String((err as any)?.message || err || '').toLowerCase();
+    if (msg.includes('default credentials') || msg.includes('application default credentials')) {
+      const recovered = await ensureGoogleCredentials(VERTEX_PROJECT_ID).catch(() =&gt; false);
+      if (recovered) {
+        vertexAuth = new GoogleAuth({ scopes: ['https://www.googleapis.com/auth/cloud-platform'] });
+        authClient = await vertexAuth.getClient();
+        accessToken = await authClient.getAccessToken();
+      } else {
+        const tokenViaCli = getAccessTokenViaGcloud();
+        if (tokenViaCli) return tokenViaCli;
+        throw new Error('Vertex auth unavailable: Application Default Credentials are not configured');
+      }
+    } else {
+      throw err;
+    }
+  }
+&nbsp;
+  const token = typeof accessToken === 'string' ? accessToken : accessToken?.token;
+  if (!token) throw new Error('Vertex auth failed: could not obtain access token');
+  return token;
+}
+&nbsp;
+async function checkVectorSupport(): Promise&lt;boolean&gt; {
+  if (dbAvailable !== null) return dbAvailable;
+  try {<span class="fstat-no" title="function not covered" ></span>
+<span class="cstat-no" title="statement not covered" >    await pool.query('SELECT 1 FROM agent_embeddings LIMIT 0');<span class="cstat-no" title="statement not covered" ><span class="fstat-no" title="function not covered" ></span></span></span>
+<span class="cstat-no" title="statement not covered" >    dbAvailable = true;</span>
+  } catc<span class="cstat-no" title="statement not covered" >h {</span>
+    dbAvailable = false;
+    console.warn('agent_embeddings table not available — vector memory disabled');
+  }
+  re<span class="cstat-no" title="statement not covered" >turn dbAvailable;</span>
+}<span class="cstat-no" title="statement not covered" ></span>
+<span class="cstat-no" title="statement not covered" ></span>
+function contentHash(content: string): string {
+  return createHash('sha256').update(content).digest('hex').slice(0, 32);
+}<span class="cstat-no" title="statement not covered" ></span>
+<span class="cstat-no" title="statement not covered" ></span>
+// ─── Embedding Generation ──<span class="cstat-no" title="statement not covered" >─<span class="cstat-no" title="statement not covered" ><span class="fstat-no" title="function not covered" ></span></span></span>
+<span class="cstat-no" title="statement not covered" ></span>
+async function g<span class="cstat-no" title="statement not covered" >enerateEmbeddingVertex(text: string): Promise&lt;number[] | null&gt; {</span>
+  if (!VERTEX_PR<span class="cstat-no" title="statement not covered" >OJECT_ID) return null;</span>
+<span class="cstat-no" title="statement not covered" ></span>
+  try {
+    const token = await getVertexAccessToken();
+    const endpoint = `https://${VERT<span class="cstat-no" title="statement not covered" >EX_LOCATION}-aiplatform.googleapis.com/v1/projects/</span>${VERTEX_PROJECT_ID}/locations/${VERTEX_LOCATION}/publishers/google/models/${encodeURIComponent(EMBEDDING_MODEL)}:predict`;
+    const res = <span class="cstat-no" title="statement not covered" >await fetch(endpoint, {</span>
+      method: 'POST'<span class="cstat-no" title="statement not covered" >,</span>
+      headers: {<span class="cstat-no" title="statement not covered" > Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },</span>
+      body: JSON.stringify({ instances: [{ content: text.slice(0, 2000) }] }),
+    });
+    if (!res.ok) {
+      const <span class="cstat-no" title="statement not covered" >body = awai</span>t res.text();
+      console.warn(`Vertex embedding ${res.status}: ${body.slice(0, 200)}`);
+      return null;
+    }<span class="cstat-no" title="statement not covered" ></span>
+<span class="cstat-no" title="statement not covered" >    const json: any = await res.json();</span>
+    cons<span class="cstat-no" title="statement not covered" >t values = json?.predictions?.[0]?.embeddings?.values;</span>
+<span class="cstat-no" title="statement not covered" >    if (Array.isAr</span>ray(values) &amp;&amp; values.length &gt; 0) return values;
+    return null;
+  } catch (err) {
+    console.warn('Vertex embedding failed:', errMsg(err));
+    return null;
+  }
+}
+<span class="cstat-no" title="statement not covered" ></span>
+async function generateEmbedding(text: string): Promise&lt;number[] | null&gt; {
+  if (!VECTOR_MEMORY_ENABLED) return null;
+&nbsp;
+  // Prefer Vertex AI (avoids Google AI Studio billing cap)
+  if (USE_VERTEX_AI) {
+    return generateEmbeddingVertex(text);
+  }
+<span class="fstat-no" title="function not covered" ></span>
+  //<span class="cstat-no" title="statement not covered" > Fallback: Google AI Studio (API key)</span>
+  if (!process.env.GEMINI_API_KEY) return null;
+&nbsp;
+  try {<span class="fstat-no" title="function not covered" ></span>
+<span class="cstat-no" title="statement not covered" >    const { GoogleGenerativeAI } = await import('@google/generative-ai');</span>
+    cons<span class="cstat-no" title="statement not covered" >t genAI = new</span> GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+<span class="cstat-no" title="statement not covered" >    const model = genAI.getGenerativeModel({ model: EMBEDDING_MODEL });</span>
+    const result = awa<span class="cstat-no" title="statement not covered" >it (model as any).embedConten</span>t(text.slice(0, 2000));
+    const values = result<span class="cstat-no" title="statement not covered" >?.embedding?.values;</span>
+    if (Array.isArra<span class="cstat-no" title="statement not covered" >y(values) &amp;&amp; values.length &gt; 0) return values;</span>
+    return null;
+  } catch (err) {
+    console.warn('Embedding generation failed:', errMsg(err));
+    return null;
+  }<span class="cstat-no" title="statement not covered" ></span>
+}<span class="cstat-no" title="statement not covered" ></span>
+<span class="cstat-no" title="statement not covered" ></span>
+// ─── Store<span class="cstat-no" title="statement not covered" > ───</span>
+&nbsp;
+export async function<span class="cstat-no" title="statement not covered" > storeMemoryEmbed</span>ding(
+  agentId: string,<span class="cstat-no" title="statement not covered" ></span>
+  conten<span class="cstat-no" title="statement not covered" >t: string,</span>
+  metadata?:<span class="cstat-no" title="statement not covered" > Record&lt;string,</span> unknown&gt;,
+): Promi<span class="cstat-no" title="statement not covered" >se&lt;boolean&gt; {</span>
+  if (!VECTOR_MEMORY_ENABLED) return false;
+  if (!(await checkVectorSupport())) return false;
+<span class="cstat-no" title="statement not covered" ></span>
+  const <span class="cstat-no" title="statement not covered" >hash = conten</span>tHash(content);
+  const embedding = await generateEmbedding(content);
+  if (!embedding) return false;
+<span class="fstat-no" title="function not covered" ></span>
+  tr<span class="cstat-no" title="statement not covered" >y {</span>
+    cons<span class="cstat-no" title="statement not covered" >t embeddingSt</span>r = `[${embedding.join(',')}]`;
+    await pool.query(
+<span class="cstat-no" title="statement not covered" >      `INSERT INTO agent_embeddings (agent_id, content, content_hash, embedding, metadata)</span>
+       V<span class="cstat-no" title="statement not covered" >ALUES ($1, $2, $3, $4::vector, $5)</span>
+       ON CONFLICT (agent_id, content_hash) DO UPDATE SET
+         embedding = EXCLUDED.embedding,
+<span class="cstat-no" title="statement not covered" >         metadata = EXCLUDED.metadata`,</span>
+      [a<span class="cstat-no" title="statement not covered" >gentId, conte</span>nt.slice(0, 5000), hash, embeddingStr, metadata ? JSON.stringify(metadata) : null],
+<span class="cstat-no" title="statement not covered" >    );</span>
+    return true;<span class="cstat-no" title="statement not covered" ><span class="cstat-no" title="statement not covered" ><span class="fstat-no" title="function not covered" ></span></span></span>
+  } catch (err) {<span class="cstat-no" title="statement not covered" ></span>
+    console.warn('Vect<span class="cstat-no" title="statement not covered" >or memory store failed:', errMsg(err));</span>
+    return false;<span class="cstat-no" title="statement not covered" ></span>
+  }<span class="cstat-no" title="statement not covered" ></span>
+}<span class="cstat-no" title="statement not covered" ></span>
+<span class="cstat-no" title="statement not covered" ></span>
+// ─── S<span class="cstat-no" title="statement not covered" >earch ───</span>
+&nbsp;
+export interface VectorSearchResult {
+  conten<span class="cstat-no" title="statement not covered" >t: string;</span>
+  simila<span class="cstat-no" title="statement not covered" >rity: number;</span>
+  agentId: string;
+  metadata?: Record&lt;string, unknown&gt;;
+}
+&nbsp;
+expo<span class="missing-if-branch" title="if path not taken" >I</span>rt async function searchSimilarMemories(
+  query:<span class="cstat-no" title="statement not covered" > string,</span>
+  ag<span class="missing-if-branch" title="else path not taken" >E</span>entId?: string,
+  limit?: number,
+): Promise&lt;Vector<span class="cstat-no" title="statement not covered" >SearchResult[]&gt; {</span>
+  if (!VECTOR_MEMORY_E<span class="cstat-no" title="statement not covered" >NABLED) return [];</span>
+  if<span class="cstat-no" title="statement not covered" > (!(await checkVectorSupport())) return [];</span>
+<span class="cstat-no" title="statement not covered" ></span>
+  co<span class="cstat-no" title="statement not covered" >nst embedding = await generateEmbedding(query);</span>
+  if (!embedding) return [];<span class="cstat-no" title="statement not covered" ></span>
+<span class="cstat-no" title="statement not covered" ></span>
+  try {
+    const embeddingStr = `[${embedding.join(',')}]`;
+    const maxResults = limit || VECTOR_SEARCH_LIMIT;
+&nbsp;
+    cons<span class="cstat-no" title="statement not covered" >t queryText =</span> agentId
+      ? `SELECT content, agent_id, metadata,
+           1 - (embedding &lt;=&gt; $1::vector) AS similarity
+<span class="cstat-no" title="statement not covered" >         FROM agent_embeddings</span>
+<span class="cstat-no" title="statement not covered" >         WHERE agent_i</span>d = $2
+           AND 1 - (embedding &lt;=&gt; $1::vector) &gt;= $3
+         ORDER BY embedding &lt;=&gt; $1::vector
+         LIMIT $4`
+    <span class="missing-if-branch" title="if path not taken" >I</span>  : `SELECT content, agent_id, metadata,
+<span class="cstat-no" title="statement not covered" >           1 - (emb</span>edding &lt;=&gt; $1::vector) AS similarity
+    <span class="missing-if-branch" title="else path not taken" >E</span>     FROM agent_embeddings
+         WHERE 1 - (embedding &lt;=&gt; $1::vector) &gt;= $2
+         ORDER BY embe<span class="cstat-no" title="statement not covered" >dding &lt;=&gt; $1::vector</span>
+<span class="cstat-no" title="statement not covered" >         LIMIT $3`;</span>
+<span class="cstat-no" title="statement not covered" ></span>
+<span class="cstat-no" title="statement not covered" >    const params = agentId</span>
+      ? [embeddingStr, agentI<span class="cstat-no" title="statement not covered" >d, VECTOR_SIMILARITY_THRESH</span>OLD, maxResults]
+      : [embeddingStr, VECT<span class="cstat-no" title="statement not covered" >OR_SIMILARITY_THRESHOLD, maxR</span>esults];
+<span class="cstat-no" title="statement not covered" ></span>
+    const res = await pool.query(queryText, params);
+    return res.rows.map((row: any) =&gt; ({
+      content: row.content,
+      similarity: parseFloat(row.similarity) || 0,
+      agentId: row.agent_id,
+      metadata: row.metadata || undefined,
+    }));
+  } catch (err) {
+    console.warn('Vector memory search failed:', errMsg(err));
+    return [];
+  }
+}
+&nbsp;
+// ─── Store a key deci<span class="cstat-no" title="statement not covered" >sion or learning ───</span>
+&nbsp;
+export async function recordAgentDecision(
+  agentId: string,<span class="cstat-no" title="statement not covered" ></span>
+  decisi<span class="cstat-no" title="statement not covered" >on: string,<span class="cstat-no" title="statement not covered" ><span class="fstat-no" title="function not covered" ></span></span></span>
+  context?: string,
+): Promise&lt;boolean&gt; {
+  const content = context ? `Decision: ${decision}\nContext: ${context}` : `Decision: ${decision}`;
+  const stored = await storeMemoryEmbedding(agentId, content, {
+    type: 'decision',
+    timestamp: new Date().toISOString(),
+  });
+  if (st<span class="cstat-no" title="statement not covered" >ored) {</span>
+    logA<span class="cstat-no" title="statement not covered" >gentEvent(a</span>gentId, 'memory', `Stored decision embedding: ${decision.slice(0, 100)}`);
+  }
+  return stored;
+}
+&nbsp;
+export async function recordAg<span class="branch-0 cbranch-no" title="branch not covered" >entLearning(</span>
+  agentId: string,
+  learning: string,
+): Promise&lt;boolean&gt; {
+  const stored = await storeMemoryEmbedding(agentId, `Learning: ${learning}`, {
+    <span class="missing-if-branch" title="if path not taken" >I</span>type: 'learning',
+    time<span class="cstat-no" title="statement not covered" >stamp: new Date().toISOString(),</span>
+  });
+  if (stored) {
+    logAgentEvent(agentId, 'memory', `Stored learning embedding: ${learning.slice(0, 100)}`);
+  }
+  return stored;
+}
+&nbsp;
+// ─── Recall relevant context for a task ───
+<span class="missing-if-branch" title="if path not taken" >I</span>
+export a<span class="cstat-no" title="statement not covered" >sync function recallRelevantContext(</span>
+  query: string,
+  agentId?: string,
+): Promise&lt;string&gt; {
+  const results = await searchSimilarMemories(query, agentId);
+  if (results.length === 0) return '';
+&nbsp;
+  co<span class="missing-if-branch" title="else path not taken" >E</span>nst formatted = results
+    .map((r, i) =&gt; `[${i + 1}] (${(r.similarity * 100).toFixed(0)}% match) ${r.content.slice(0, 300)}`)
+    .join('\n');<span class="cstat-no" title="statement not covered" ></span>
+<span class="cstat-no" title="statement not covered" ><span class="fstat-no" title="function not covered" ></span></span>
+  return `\n[Relevant past context]\n${formatted}\n`;
+}<span class="cstat-no" title="statement not covered" ></span>
+&nbsp;
+// ─── Cleanup ───
+<span class="branch-0 cbranch-no" title="branch not covered" ></span>
+expo<span class="missing-if-branch" title="else path not taken" >E</span>rt async function cleanupOldEmbeddings(retentionDays = 90): Promise&lt;number&gt; {
+  if (!(await checkVectorSupport())) return 0;
+  tr<span class="cstat-no" title="statement not covered" >y {</span>
+    const res = awai<span class="cstat-no" title="statement not covered" >t pool.query(</span>
+      `D<span class="cstat-no" title="statement not covered" >ELETE FROM agent_embedding</span>s WHERE created_at &lt; NOW() - INTERVAL '1 day' * $1`,
+      [retentionDays],
+    );
+    retu<span class="cstat-no" title="statement not covered" >rn res.row</span>Count || 0;
+  } catch {
+    return 0;
+  }
+}
+&nbsp;</pre></td></tr></table></pre>
+
+                <div class='push'></div><!-- for sticky footer -->
+            </div><!-- /wrapper -->
+            <div class='footer quiet pad2 space-top1 center small'>
+                Code coverage generated by
+                <a href="https://istanbul.js.org/" target="_blank" rel="noopener noreferrer">istanbul</a>
+                at 2026-04-15T06:11:49.684Z
+            </div>
+        <script src="../prettify.js"></script>
+        <script>
+            window.onload = function () {
+                prettyPrint();
+            };
+        </script>
+        <script src="../sorter.js"></script>
+        <script src="../block-navigation.js"></script>
+    </body>
+</html>
+    

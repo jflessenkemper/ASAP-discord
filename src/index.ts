@@ -1,8 +1,5 @@
 import 'dotenv/config';
-import { existsSync } from 'fs';
-import path from 'path';
 
-import cookieParser from 'cookie-parser';
 import cors from 'cors';
 import express from 'express';
 import helmet from 'helmet';
@@ -25,16 +22,6 @@ import {
   updateGeminiSpend,
   getRemainingBudget,
 } from './discord/bot.single';
-import authRoutes from './routes/auth';
-import favoritesRoutes from './routes/favorites';
-import fuelRoutes from './routes/fuel';
-import healthRoutes from './routes/health';
-import jobRoutes from './routes/jobs';
-import locationRoutes from './routes/location';
-import mapkitRoutes from './routes/mapkit';
-import publicRoutes from './routes/public';
-import searchRoutes from './routes/search';
-import shopRoutes from './routes/shop';
 import { loadRuntimeSecrets } from './services/runtimeSecrets';
 import { errMsg } from './utils/errors';
 
@@ -149,31 +136,8 @@ process.on('uncaughtException', (err) => {
   void postAgentErrorLog('process:uncaughtException', 'Uncaught exception', { detail });
 });
 
-// Validate required production env vars
-if (process.env.NODE_ENV === 'production' && !process.env.FRONTEND_URL) {
-  throw new Error('FRONTEND_URL environment variable is required in production');
-}
-
 // Security
-app.use(helmet({
-  contentSecurityPolicy: {
-    directives: {
-      defaultSrc: ["'self'"],
-      scriptSrc: ["'self'", "https://accounts.google.com", "https://apis.google.com", "https://maps.googleapis.com", "https://connect.facebook.net", "https://cdn.apple-mapkit.com"],
-      scriptSrcAttr: ["'none'"],
-      styleSrc: ["'self'", "'unsafe-inline'", "https://accounts.google.com", "https://fonts.googleapis.com"],
-      imgSrc: ["'self'", "blob:", "data:", "https://storage.googleapis.com", "https://maps.googleapis.com", "https://maps.gstatic.com"],
-      fontSrc: ["'self'", "https://fonts.gstatic.com"],
-      connectSrc: ["'self'", "https://accounts.google.com", "https://maps.googleapis.com", "https://www.googleapis.com", "https://graph.facebook.com", "https://ipapi.co", "https://cdn.apple-mapkit.com"],
-      frameSrc: ["'self'", "https://accounts.google.com"],
-      frameAncestors: ["'none'"],
-      objectSrc: ["'none'"],
-      baseUri: ["'self'"],
-      formAction: ["'self'"],
-      upgradeInsecureRequests: [],
-    },
-  },
-}));
+app.use(helmet());
 
 // Defense-in-depth legacy headers for older clients/proxies.
 app.use((_req, res, next) => {
@@ -182,19 +146,11 @@ app.use((_req, res, next) => {
   next();
 });
 
-const CORS_ORIGIN: cors.CorsOptions['origin'] = process.env.NODE_ENV === 'production'
-  ? process.env.FRONTEND_URL || false
-  : /^http:\/\/localhost:(8081|19000|19006|3000|3001)$/;
-
-app.use(cors({
-  origin: CORS_ORIGIN,
-  credentials: true,
-}));
+app.use(cors());
 
 // Body parsing with size limits
 app.use(express.json({ limit: '100kb' }));
 app.use(express.urlencoded({ extended: true, limit: '100kb' }));
-app.use(cookieParser());
 
 // Health check
 app.get('/api/health', (_req, res) => {
@@ -275,18 +231,6 @@ app.get('/api/agent-log/text', async (req, res) => {
     res.status(500).type('text/plain').send(errMsg(err));
   }
 });
-
-// Routes
-app.use('/api/auth', authRoutes);
-app.use('/api/jobs', jobRoutes);
-app.use('/api/location', locationRoutes);
-app.use('/api/mapkit', mapkitRoutes);
-app.use('/api/fuel', fuelRoutes);
-app.use('/api/shop', shopRoutes);
-app.use('/api/favorites', favoritesRoutes);
-app.use('/api/public', publicRoutes);
-app.use('/api/search', searchRoutes);
-app.use('/api/health', healthRoutes);
 
 // GitHub webhook endpoint
 app.post('/api/webhooks/github', express.json({ limit: '1mb' }), (req, res) => {
@@ -402,22 +346,6 @@ app.use((err: Error, _req: express.Request, res: express.Response, next: express
   res.status(500).json({ error: 'Internal server error' });
 });
 
-// Serve Expo web build in production
-const clientDir = path.join(__dirname, '..', 'dist');
-const clientIndexPath = path.join(clientDir, 'index.html');
-if (existsSync(clientIndexPath)) {
-  app.use(express.static(clientDir));
-  // SPA fallback: any non-API route serves index.html
-  app.get(/^\/(?!api\/).*/, (_req, res) => {
-    res.sendFile(clientIndexPath);
-  });
-} else {
-  console.warn(`Web client build missing at ${clientIndexPath}; serving API/bot only on this host.`);
-  app.get(/^\/(?!api\/).*/, (_req, res) => {
-    res.status(503).type('text/plain').send('Web client build is not available on this host.');
-  });
-}
-
 // Graceful shutdown
 let cleanupInterval: ReturnType<typeof setInterval>;
 const server = app.listen(PORT, () => {
@@ -457,17 +385,12 @@ const server = app.listen(PORT, () => {
     }
   })();
 
-  // Clean up expired sessions and 2FA codes every hour
+  // Clean up expired sessions every hour
   cleanupInterval = setInterval(async () => {
     try {
       const sessions = await pool.query('DELETE FROM sessions WHERE expires_at < NOW()');
-      const codes = await pool.query('DELETE FROM two_factor_codes WHERE expires_at < NOW()');
-      const fuelSearches = await pool.query('DELETE FROM fuel_searches WHERE created_at < NOW() - INTERVAL \'90 days\'');
-      const priceSearches = await pool.query('DELETE FROM price_searches WHERE created_at < NOW() - INTERVAL \'90 days\'');
-      const authEvents = await pool.query('DELETE FROM auth_events WHERE created_at < NOW() - INTERVAL \'90 days\'');
-      const removedCount = (sessions.rowCount ?? 0) + (codes.rowCount ?? 0) + (fuelSearches.rowCount ?? 0) + (priceSearches.rowCount ?? 0) + (authEvents.rowCount ?? 0);
-      if (removedCount > 0) {
-        console.log(`Cleanup: removed ${sessions.rowCount} sessions, ${codes.rowCount} 2FA codes, ${fuelSearches.rowCount} fuel searches, ${priceSearches.rowCount} price searches, ${authEvents.rowCount} auth events`);
+      if ((sessions.rowCount ?? 0) > 0) {
+        console.log(`Cleanup: removed ${sessions.rowCount} expired sessions`);
       }
     } catch (err) {
       console.error('Session cleanup error:', errMsg(err));
