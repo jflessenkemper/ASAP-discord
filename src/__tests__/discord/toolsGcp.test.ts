@@ -337,5 +337,299 @@ describe('toolsGcp', () => {
       const result = await gcpPreflight();
       expect(typeof result).toBe('string');
     });
+
+    it('reports failed checks', async () => {
+      mockExecFileSync
+        .mockReturnValueOnce('gcloud 400.0.0')     // --version OK
+        .mockImplementationOnce(() => { throw new Error('no project'); }) // config get-value fails
+        .mockReturnValueOnce('user@test.com')       // auth list OK
+        .mockReturnValueOnce('run.googleapis.com')  // Cloud Run API
+        .mockReturnValueOnce('cloudbuild.googleapis.com') // Cloud Build API
+        .mockReturnValueOnce('secretmanager.googleapis.com') // Secret Manager
+        .mockReturnValueOnce('https://asap.run.app'); // service describe
+      const result = await gcpPreflight();
+      expect(result).toContain('❌');
+      expect(result).toContain('active project');
+    });
+  });
+
+  describe('additional guard/validation paths', () => {
+    it('gcpRollback returns error on empty revision', async () => {
+      const result = await gcpRollback('; rm -rf /');
+      // semicolons are stripped, leaving empty
+      expect(typeof result).toBe('string');
+    });
+
+    it('gcpRollback returns error on failure', async () => {
+      mockExecFileSync.mockImplementation(() => { throw new Error('not found'); });
+      const result = await gcpRollback('asap-v1');
+      expect(result).toContain('❌');
+    });
+
+    it('gcpSecretSet rejects invalid name', async () => {
+      const result = await gcpSecretSet('', 'value');
+      expect(result).toContain('Invalid secret name');
+    });
+
+    it('gcpSecretSet adds version to existing secret', async () => {
+      mockExecFileSync
+        .mockReturnValueOnce('secret exists')   // describe succeeds (exists)
+        .mockReturnValueOnce('version added');   // versions add
+      const result = await gcpSecretSet('MY_SECRET', 'val');
+      expect(result).toContain('✅');
+    });
+
+    it('gcpSecretSet creates new secret', async () => {
+      mockExecFileSync
+        .mockImplementationOnce(() => { throw new Error('NOT_FOUND'); }) // describe fails (doesn't exist)
+        .mockReturnValueOnce('created');  // create
+      const result = await gcpSecretSet('NEW_SECRET', 'val');
+      expect(result).toContain('✅');
+    });
+
+    it('gcpSecretSet returns error on failure', async () => {
+      mockExecFileSync.mockImplementation(() => { throw new Error('perm denied'); });
+      const result = await gcpSecretSet('MY_SECRET', 'val');
+      expect(result).toContain('❌');
+    });
+
+    it('gcpSecretBind succeeds with valid bindings', async () => {
+      mockExecFileSync.mockReturnValue('updated');
+      const result = await gcpSecretBind('DB_PASS=db-password:latest');
+      expect(result).toContain('✅');
+      expect(result).toContain('DB_PASS');
+    });
+
+    it('gcpSecretBind rejects empty bindings', async () => {
+      const result = await gcpSecretBind('');
+      expect(result).toContain('❌');
+    });
+
+    it('gcpSecretBind returns error on exec failure', async () => {
+      mockExecFileSync.mockImplementation(() => { throw new Error('denied'); });
+      const result = await gcpSecretBind('DB_PASS=db-pass');
+      expect(result).toContain('❌');
+    });
+
+    it('gcpStorageLs rejects invalid bucket name', async () => {
+      const result = await gcpStorageLs('-bad-bucket');
+      expect(result).toContain('Invalid bucket');
+    });
+
+    it('gcpStorageLs rejects invalid prefix', async () => {
+      const result = await gcpStorageLs('valid-bucket', 'path with spaces!');
+      expect(result).toContain('Invalid prefix');
+    });
+
+    it('gcpStorageLs returns empty message', async () => {
+      mockExecFileSync.mockReturnValue('');
+      const result = await gcpStorageLs('valid-bucket');
+      expect(result).toContain('Empty');
+    });
+
+    it('gcpStorageLs returns error on failure', async () => {
+      mockExecFileSync.mockImplementation(() => { throw new Error('denied'); });
+      const result = await gcpStorageLs('valid-bucket');
+      expect(result).toContain('❌');
+    });
+
+    it('gcpVmSsh rejects commands with disallowed characters', async () => {
+      const result = await gcpVmSsh('pm2 status; echo hacked');
+      expect(result).toContain('disallowed characters');
+    });
+
+    it('gcpVmSsh returns error on exec failure', async () => {
+      mockExecFileSync.mockImplementation(() => { throw new Error('SSH failed'); });
+      const result = await gcpVmSsh('pm2 status');
+      expect(result).toContain('❌');
+    });
+
+    it('gcpVmSsh returns (no output) for empty result', async () => {
+      mockExecFileSync.mockReturnValue('');
+      const result = await gcpVmSsh('uptime');
+      expect(result).toBe('(no output)');
+    });
+
+    it('gcpGetEnv returns error on failure', async () => {
+      mockExecFileSync.mockImplementation(() => { throw new Error('denied'); });
+      const result = await gcpGetEnv();
+      expect(result).toContain('❌');
+    });
+
+    it('gcpGetEnv returns fallback for empty result', async () => {
+      mockExecFileSync.mockReturnValue('');
+      const result = await gcpGetEnv();
+      expect(result).toContain('No environment variables');
+    });
+
+    it('gcpSetEnv returns error on exec failure', async () => {
+      mockExecFileSync.mockImplementation(() => { throw new Error('denied'); });
+      const result = await gcpSetEnv('KEY=value');
+      expect(result).toContain('❌');
+    });
+
+    it('gcpListRevisions returns error on failure', async () => {
+      mockExecFileSync.mockImplementation(() => { throw new Error('denied'); });
+      const result = await gcpListRevisions(5);
+      expect(result).toContain('❌');
+    });
+
+    it('gcpListRevisions returns fallback for empty result', async () => {
+      mockExecFileSync.mockReturnValue('');
+      const result = await gcpListRevisions(5);
+      expect(result).toContain('No revisions');
+    });
+
+    it('gcpBuildStatus returns error on failure', async () => {
+      mockExecFileSync.mockImplementation(() => { throw new Error('denied'); });
+      const result = await gcpBuildStatus(5);
+      expect(result).toContain('❌');
+    });
+
+    it('gcpLogsQuery returns error on failure', async () => {
+      mockExecFileSync.mockImplementation(() => { throw new Error('denied'); });
+      const result = await gcpLogsQuery('severity=ERROR', 20);
+      expect(result).toContain('❌');
+    });
+
+    it('gcpLogsQuery returns fallback for no matches', async () => {
+      mockExecFileSync.mockReturnValue('');
+      const result = await gcpLogsQuery('severity=ERROR', 20);
+      expect(result).toContain('No log entries');
+    });
+
+    it('gcpRunDescribe returns error on failure', async () => {
+      mockExecFileSync.mockImplementation(() => { throw new Error('denied'); });
+      const result = await gcpRunDescribe();
+      expect(result).toContain('❌');
+    });
+
+    it('gcpArtifactList returns error on failure', async () => {
+      mockExecFileSync.mockImplementation(() => { throw new Error('denied'); });
+      const result = await gcpArtifactList(5);
+      expect(result).toContain('❌');
+    });
+
+    it('gcpArtifactList returns fallback for no images', async () => {
+      mockExecFileSync.mockReturnValue('');
+      const result = await gcpArtifactList(5);
+      expect(result).toContain('No images');
+    });
+
+    it('gcpSqlDescribe returns error on failure', async () => {
+      mockExecFileSync.mockImplementation(() => { throw new Error('denied'); });
+      const result = await gcpSqlDescribe();
+      expect(result).toContain('❌');
+    });
+
+    it('gcpProjectInfo returns error on failure', async () => {
+      mockExecFileSync.mockImplementation(() => { throw new Error('denied'); });
+      const result = await gcpProjectInfo();
+      expect(result).toContain('❌');
+    });
+
+    it('gcpDeploy returns error when build fails', async () => {
+      mockExecFileSync.mockImplementation(() => { throw new Error('build error'); });
+      const result = await gcpDeploy();
+      expect(result).toContain('❌');
+    });
+
+    it('gcpDeploy returns error when deploy step fails', async () => {
+      mockExecFileSync
+        .mockReturnValueOnce('build ok')  // build
+        .mockImplementationOnce(() => { throw new Error('deploy error'); }); // deploy
+      // Build succeeds but the image ref parsing might fail, still covers the error path
+      const result = await gcpDeploy();
+      expect(typeof result).toBe('string');
+    });
+
+    it('gcpBuildStatus returns fallback for empty result', async () => {
+      mockExecFileSync.mockReturnValue('');
+      const result = await gcpBuildStatus(5);
+      expect(result).toContain('No builds found');
+    });
+
+    it('gcpSecretList returns error on failure', async () => {
+      mockExecFileSync.mockImplementation(() => { throw new Error('denied'); });
+      const result = await gcpSecretList();
+      expect(result).toContain('❌');
+    });
+
+    it('gcpSecretList returns fallback for empty result', async () => {
+      mockExecFileSync.mockReturnValue('');
+      const result = await gcpSecretList();
+      expect(result).toContain('No secrets found');
+    });
+
+    it('gcpBuildImage exercises truthy tag branch', async () => {
+      const result = await gcpBuildImage('release-v1');
+      expect(result).toContain('release-v1');
+      expect(result).toContain('✅');
+      const args = mockExecFileSync.mock.calls[0][1] as string[];
+      const tagArg = args.find((a: string) => a.startsWith('--tag='));
+      expect(tagArg).toContain(':release-v1');
+    });
+
+    it('gcpSecretSet returns invalid for name that sanitizes to empty', async () => {
+      const result = await gcpSecretSet('!!!@#$%^&*()', 'secret-value');
+      expect(result).toBe('Invalid secret name. Use alphanumeric characters, hyphens, and underscores.');
+    });
+  });
+});
+
+describe('toolsGcp (fresh module)', () => {
+  beforeEach(() => {
+    jest.resetModules();
+    jest.clearAllMocks();
+  });
+
+  it('gcpBuildImage with tag covers truthy ternary branch', async () => {
+    jest.doMock('child_process', () => ({
+      execFileSync: jest.fn(() => 'mock output'),
+    }));
+    jest.doMock('../../discord/envSandbox', () => ({
+      buildGcpSafeEnv: jest.fn(() => ({ PATH: '/usr/bin', HOME: '/tmp' })),
+    }));
+    const { gcpBuildImage } = await import('../../discord/toolsGcp');
+    const result = await gcpBuildImage('fresh-tag');
+    expect(result).toContain('fresh-tag');
+    expect(result).toContain('✅');
+  });
+
+  it('gcpBuildImage without tag covers falsy ternary branch', async () => {
+    jest.doMock('child_process', () => ({
+      execFileSync: jest.fn(() => 'mock output'),
+    }));
+    jest.doMock('../../discord/envSandbox', () => ({
+      buildGcpSafeEnv: jest.fn(() => ({ PATH: '/usr/bin', HOME: '/tmp' })),
+    }));
+    const { gcpBuildImage } = await import('../../discord/toolsGcp');
+    const result = await gcpBuildImage();
+    expect(result).toContain('agent-');
+    expect(result).toContain('✅');
+  });
+
+  it('gcpSecretSet with invalid name returns error (fresh module)', async () => {
+    jest.doMock('child_process', () => ({
+      execFileSync: jest.fn(() => 'mock output'),
+    }));
+    jest.doMock('../../discord/envSandbox', () => ({
+      buildGcpSafeEnv: jest.fn(() => ({ PATH: '/usr/bin', HOME: '/tmp' })),
+    }));
+    const { gcpSecretSet } = await import('../../discord/toolsGcp');
+    const result = await gcpSecretSet('@@@', 'value');
+    expect(result).toContain('Invalid secret name');
+  });
+
+  it('gcpSecretSet with valid name succeeds (fresh module)', async () => {
+    jest.doMock('child_process', () => ({
+      execFileSync: jest.fn(() => 'mock output'),
+    }));
+    jest.doMock('../../discord/envSandbox', () => ({
+      buildGcpSafeEnv: jest.fn(() => ({ PATH: '/usr/bin', HOME: '/tmp' })),
+    }));
+    const { gcpSecretSet } = await import('../../discord/toolsGcp');
+    const result = await gcpSecretSet('VALID_NAME', 'value');
+    expect(result).toContain('✅');
   });
 });

@@ -120,3 +120,104 @@ describe('diagnosticsWebhook', () => {
     });
   });
 });
+
+describe('webhook error status handling (fresh module)', () => {
+  beforeEach(() => {
+    jest.resetModules();
+    jest.clearAllMocks();
+    delete process.env.DISCORD_DIAGNOSTIC_WEBHOOK_URL;
+    delete process.env.DIAGNOSTIC_WEBHOOK_VERBOSE;
+    (global as any).fetch = mockFetch;
+  });
+
+  it('permanently disables webhook on 401', async () => {
+    const { postDiagnostic: post } = require('../../../discord/services/diagnosticsWebhook');
+    process.env.DISCORD_DIAGNOSTIC_WEBHOOK_URL = 'https://hook.test';
+    mockFetch.mockResolvedValueOnce({
+      ok: false, status: 401,
+      text: jest.fn().mockResolvedValue('Unauthorized'),
+    });
+
+    await post('test');
+    // Should be disabled now — second call should not fetch
+    mockFetch.mockClear();
+    await post('test2');
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it('permanently disables webhook on 404', async () => {
+    const { postDiagnostic: post } = require('../../../discord/services/diagnosticsWebhook');
+    process.env.DISCORD_DIAGNOSTIC_WEBHOOK_URL = 'https://hook.test';
+    mockFetch.mockResolvedValueOnce({
+      ok: false, status: 404,
+      text: jest.fn().mockResolvedValue('Not Found'),
+    });
+
+    await post('test');
+    mockFetch.mockClear();
+    await post('test2');
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it('permanently disables webhook on 410', async () => {
+    const { postDiagnostic: post } = require('../../../discord/services/diagnosticsWebhook');
+    process.env.DISCORD_DIAGNOSTIC_WEBHOOK_URL = 'https://hook.test';
+    mockFetch.mockResolvedValueOnce({
+      ok: false, status: 410,
+      text: jest.fn().mockResolvedValue('Gone'),
+    });
+
+    await post('test');
+    mockFetch.mockClear();
+    await post('test2');
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it('does not disable webhook on 500', async () => {
+    const warnSpy = jest.spyOn(console, 'warn').mockImplementation();
+    const { postDiagnostic: post } = require('../../../discord/services/diagnosticsWebhook');
+    process.env.DISCORD_DIAGNOSTIC_WEBHOOK_URL = 'https://hook.test';
+    mockFetch.mockResolvedValueOnce({
+      ok: false, status: 500,
+      text: jest.fn().mockResolvedValue('Internal Server Error'),
+    });
+
+    await post('test');
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('Diagnostic webhook failed: 500'));
+
+    // Should NOT be disabled — second call should still fetch
+    mockFetch.mockResolvedValueOnce({ ok: true });
+    await post('test2');
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+    warnSpy.mockRestore();
+  });
+
+  it('logs verbose warning when 401 and diagnosticsVerbose is true', async () => {
+    const warnSpy = jest.spyOn(console, 'warn').mockImplementation();
+    const { postDiagnostic: post } = require('../../../discord/services/diagnosticsWebhook');
+    process.env.DISCORD_DIAGNOSTIC_WEBHOOK_URL = 'https://hook.test';
+    process.env.DIAGNOSTIC_WEBHOOK_VERBOSE = 'true';
+    mockFetch.mockResolvedValueOnce({
+      ok: false, status: 401,
+      text: jest.fn().mockResolvedValue('Unauthorized'),
+    });
+
+    await post('test');
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('Diagnostic webhook disabled for process lifetime'));
+    warnSpy.mockRestore();
+  });
+
+  it('handles res.text() rejection gracefully', async () => {
+    const warnSpy = jest.spyOn(console, 'warn').mockImplementation();
+    const { postDiagnostic: post } = require('../../../discord/services/diagnosticsWebhook');
+    process.env.DISCORD_DIAGNOSTIC_WEBHOOK_URL = 'https://hook.test';
+    mockFetch.mockResolvedValueOnce({
+      ok: false, status: 500,
+      text: jest.fn().mockRejectedValue(new Error('read error')),
+    });
+
+    await post('test');
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('Diagnostic webhook failed: 500'));
+    warnSpy.mockRestore();
+  });
+});

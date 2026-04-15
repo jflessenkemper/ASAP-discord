@@ -170,4 +170,220 @@ describe('modelHealth', () => {
       expect(getModelStatus('gemini-2.5-flash')).toBe('healthy');
     });
   });
+
+  describe('downUntil cooldown', () => {
+    it('stays down while downUntil is in the future', () => {
+      // Exhaust quota to set downUntil far in the future
+      recordModelFailure('test-model', 'quota_exhausted');
+      recordModelFailure('test-model', 'quota_exhausted');
+      recordModelFailure('test-model', 'quota_exhausted');
+      expect(getModelStatus('test-model')).toBe('down');
+      // Even after recording a success, downUntil keeps it down
+      recordModelSuccess('test-model', 50);
+      expect(getModelStatus('test-model')).toBe('down');
+    });
+  });
+
+  describe('MIN_SAMPLES guard', () => {
+    it('reports healthy when below MIN_SAMPLES even with failures', () => {
+      // Only 2 samples (below default MIN_SAMPLES of 3)
+      recordModelFailure('test-model', 'error');
+      recordModelSuccess('test-model', 100);
+      expect(getModelStatus('test-model')).toBe('healthy');
+    });
+  });
+
+  describe('all models down warning', () => {
+    it('returns preferred model and logs error when entire chain is down', () => {
+      const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+      const models = ['gemini-2.5-flash', 'gemini-2.5-pro', 'claude-opus-4-6'];
+      for (const m of models) {
+        recordModelFailure(m, 'error');
+        recordModelFailure(m, 'error');
+        recordModelFailure(m, 'error');
+      }
+      const result = resolveHealthyModel('gemini-2.5-flash');
+      expect(result).toBe('gemini-2.5-flash');
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.stringContaining('ALL MODELS DOWN'),
+      );
+      errorSpy.mockRestore();
+    });
+  });
+
+  describe('updateStatus threshold transitions', () => {
+    it('sets degraded when failureRate crosses DEGRADED_THRESHOLD', () => {
+      // 1 failure + 2 successes = 33% > 0.3 → degraded
+      recordModelSuccess('degrade-test', 100);
+      recordModelSuccess('degrade-test', 100);
+      recordModelFailure('degrade-test', 'error');
+      expect(getModelStatus('degrade-test')).toBe('degraded');
+      resetModelHealth('degrade-test');
+    });
+
+    it('sets down when failureRate crosses DOWN_THRESHOLD', () => {
+      // 3 failures + 1 success = 75% > 0.7 → down
+      recordModelSuccess('down-thresh', 100);
+      recordModelFailure('down-thresh', 'error');
+      recordModelFailure('down-thresh', 'error');
+      recordModelFailure('down-thresh', 'error');
+      expect(getModelStatus('down-thresh')).toBe('down');
+      resetModelHealth('down-thresh');
+    });
+
+    it('stays down when downUntil is in the future (updateStatus early return)', () => {
+      recordModelFailure('cooldown-lock', 'quota_exhausted');
+      recordModelFailure('cooldown-lock', 'quota_exhausted');
+      recordModelFailure('cooldown-lock', 'quota_exhausted');
+      recordModelSuccess('cooldown-lock', 50);
+      recordModelSuccess('cooldown-lock', 50);
+      recordModelSuccess('cooldown-lock', 50);
+      expect(getModelStatus('cooldown-lock')).toBe('down');
+      expect(isModelAvailable('cooldown-lock')).toBe(false);
+      resetModelHealth('cooldown-lock');
+    });
+  });
+
+  describe('resolveHealthyModel fallback chain', () => {
+    it('logs warning when routing to fallback', () => {
+      const warnSpy = jest.spyOn(console, 'warn').mockImplementation();
+      recordModelFailure('gemini-2.5-flash', 'error');
+      recordModelFailure('gemini-2.5-flash', 'error');
+      recordModelFailure('gemini-2.5-flash', 'error');
+      const result = resolveHealthyModel('gemini-2.5-flash');
+      expect(result).not.toBe('gemini-2.5-flash');
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('routing to'));
+      warnSpy.mockRestore();
+    });
+
+    it('walks entire chain and falls back to last healthy model', () => {
+      const warnSpy = jest.spyOn(console, 'warn').mockImplementation();
+      for (const m of ['gemini-2.5-flash', 'gemini-2.5-pro']) {
+        recordModelFailure(m, 'error');
+        recordModelFailure(m, 'error');
+        recordModelFailure(m, 'error');
+      }
+      expect(resolveHealthyModel('gemini-2.5-flash')).toBe('claude-opus-4-6');
+      warnSpy.mockRestore();
+    });
+
+    it('returns preferred model as last resort when entire chain is down', () => {
+      const errorSpy = jest.spyOn(console, 'error').mockImplementation();
+      const warnSpy = jest.spyOn(console, 'warn').mockImplementation();
+      for (const m of ['gemini-2.5-flash', 'gemini-2.5-pro', 'claude-opus-4-6']) {
+        recordModelFailure(m, 'error');
+        recordModelFailure(m, 'error');
+        recordModelFailure(m, 'error');
+      }
+      expect(resolveHealthyModel('gemini-2.5-flash')).toBe('gemini-2.5-flash');
+      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('ALL MODELS DOWN'));
+      errorSpy.mockRestore();
+      warnSpy.mockRestore();
+    });
+  });
+});
+
+describe('modelHealth (fresh module)', () => {
+  beforeEach(() => {
+    jest.resetModules();
+    jest.clearAllMocks();
+  });
+
+  it('updateStatus normal flow — downUntil <= now', async () => {
+    jest.doMock('../../db/pool', () => ({
+      default: { query: jest.fn().mockResolvedValue({ rows: [], rowCount: 0 }) },
+      __esModule: true,
+    }));
+    const {
+      recordModelSuccess,
+      recordModelFailure,
+      getModelStatus,
+      isModelAvailable,
+      resetModelHealth,
+    } = await import('../../discord/modelHealth');
+    recordModelSuccess('fresh-model', 100);
+    expect(getModelStatus('fresh-model')).toBe('healthy');
+    resetModelHealth('fresh-model');
+  });
+
+  it('failureRate triggers DOWN_THRESHOLD path', async () => {
+    jest.doMock('../../db/pool', () => ({
+      default: { query: jest.fn().mockResolvedValue({ rows: [], rowCount: 0 }) },
+      __esModule: true,
+    }));
+    const {
+      recordModelSuccess,
+      recordModelFailure,
+      getModelStatus,
+      resetModelHealth,
+    } = await import('../../discord/modelHealth');
+    recordModelSuccess('threshold-m', 100);
+    recordModelFailure('threshold-m', 'error');
+    recordModelFailure('threshold-m', 'error');
+    recordModelFailure('threshold-m', 'error');
+    expect(getModelStatus('threshold-m')).toBe('down');
+    resetModelHealth('threshold-m');
+  });
+
+  it('failureRate triggers DEGRADED_THRESHOLD path', async () => {
+    jest.doMock('../../db/pool', () => ({
+      default: { query: jest.fn().mockResolvedValue({ rows: [], rowCount: 0 }) },
+      __esModule: true,
+    }));
+    const {
+      recordModelSuccess,
+      recordModelFailure,
+      getModelStatus,
+      resetModelHealth,
+    } = await import('../../discord/modelHealth');
+    recordModelSuccess('degrade-m', 100);
+    recordModelSuccess('degrade-m', 100);
+    recordModelFailure('degrade-m', 'error');
+    expect(getModelStatus('degrade-m')).toBe('degraded');
+    resetModelHealth('degrade-m');
+  });
+
+  it('resolveHealthyModel walks fallback chain and logs warning', async () => {
+    jest.doMock('../../db/pool', () => ({
+      default: { query: jest.fn().mockResolvedValue({ rows: [], rowCount: 0 }) },
+      __esModule: true,
+    }));
+    const warnSpy = jest.spyOn(console, 'warn').mockImplementation();
+    const {
+      recordModelFailure,
+      resolveHealthyModel,
+      resetModelHealth,
+    } = await import('../../discord/modelHealth');
+    recordModelFailure('gemini-2.5-flash', 'error');
+    recordModelFailure('gemini-2.5-flash', 'error');
+    recordModelFailure('gemini-2.5-flash', 'error');
+    const result = resolveHealthyModel('gemini-2.5-flash');
+    expect(result).not.toBe('gemini-2.5-flash');
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('routing to'));
+    warnSpy.mockRestore();
+    resetModelHealth('gemini-2.5-flash');
+  });
+
+  it('resolveHealthyModel returns preferred when entire chain down', async () => {
+    jest.doMock('../../db/pool', () => ({
+      default: { query: jest.fn().mockResolvedValue({ rows: [], rowCount: 0 }) },
+      __esModule: true,
+    }));
+    const errorSpy = jest.spyOn(console, 'error').mockImplementation();
+    const warnSpy = jest.spyOn(console, 'warn').mockImplementation();
+    const {
+      recordModelFailure,
+      resolveHealthyModel,
+      resetModelHealth,
+    } = await import('../../discord/modelHealth');
+    for (const m of ['gemini-2.5-flash', 'gemini-2.5-pro', 'claude-opus-4-6']) {
+      recordModelFailure(m, 'error');
+      recordModelFailure(m, 'error');
+      recordModelFailure(m, 'error');
+    }
+    expect(resolveHealthyModel('gemini-2.5-flash')).toBe('gemini-2.5-flash');
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('ALL MODELS DOWN'));
+    errorSpy.mockRestore();
+    warnSpy.mockRestore();
+  });
 });

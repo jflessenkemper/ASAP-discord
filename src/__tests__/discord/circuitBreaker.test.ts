@@ -1,4 +1,4 @@
-import { CircuitBreaker, CircuitOpenError } from '../../discord/circuitBreaker';
+import { CircuitBreaker, CircuitOpenError, getCircuitBreakerForTool, getCircuitBreaker, getAllCircuitBreakerStats } from '../../discord/circuitBreaker';
 
 describe('CircuitBreaker', () => {
   let breaker: CircuitBreaker;
@@ -102,5 +102,153 @@ describe('CircuitBreaker', () => {
     expect(err.serviceName).toBe('github');
     expect(err.message).toContain('github');
     expect(err.name).toBe('CircuitOpenError');
+  });
+
+  test('throws CircuitOpenError when open and cooldown has not expired', async () => {
+    // Use a long cooldown so it definitely hasn't expired
+    const b = new CircuitBreaker('slow-cooldown', 2, 60_000);
+    await expect(b.call(async () => { throw new Error('f1'); })).rejects.toThrow('f1');
+    await expect(b.call(async () => { throw new Error('f2'); })).rejects.toThrow('f2');
+    expect(b.getStats().state).toBe('open');
+
+    // Immediate call should throw CircuitOpenError (cooldown not expired)
+    await expect(b.call(async () => 'ok')).rejects.toThrow(CircuitOpenError);
+    expect(b.getStats().state).toBe('open');
+  });
+
+  test('half-open probe failure re-opens circuit', async () => {
+    const b = new CircuitBreaker('probe-fail', 2, 50);
+    await expect(b.call(async () => { throw new Error('f1'); })).rejects.toThrow();
+    await expect(b.call(async () => { throw new Error('f2'); })).rejects.toThrow();
+    expect(b.getStats().state).toBe('open');
+
+    // Wait for cooldown
+    await new Promise((r) => setTimeout(r, 70));
+    // Probe call should fail and re-open
+    await expect(b.call(async () => { throw new Error('still down'); })).rejects.toThrow('still down');
+    expect(b.getStats().state).toBe('open');
+    expect(b.getStats().halfOpenProbeInFlight).toBe(false);
+  });
+});
+
+describe('Service registry', () => {
+  test('getCircuitBreakerForTool returns CircuitBreaker for mapped tool', () => {
+    const cb = getCircuitBreakerForTool('gcp_deploy');
+    expect(cb).toBeInstanceOf(CircuitBreaker);
+    expect(cb!.name).toBe('gcp');
+  });
+
+  test('getCircuitBreakerForTool returns same breaker for same service', () => {
+    const a = getCircuitBreakerForTool('gcp_deploy');
+    const b = getCircuitBreakerForTool('gcp_build_image');
+    expect(a).toBe(b);
+  });
+
+  test('getCircuitBreakerForTool returns undefined for unknown tool', () => {
+    expect(getCircuitBreakerForTool('unknown_tool')).toBeUndefined();
+  });
+
+  test('getCircuitBreaker creates new breaker via registry', () => {
+    const cb = getCircuitBreaker('new-unique-service');
+    expect(cb).toBeInstanceOf(CircuitBreaker);
+    expect(cb.name).toBe('new-unique-service');
+  });
+
+  test('getAllCircuitBreakerStats returns stats array', () => {
+    // Ensure at least one breaker exists
+    getCircuitBreakerForTool('gcp_deploy');
+    const stats = getAllCircuitBreakerStats();
+    expect(Array.isArray(stats)).toBe(true);
+    expect(stats.length).toBeGreaterThan(0);
+    expect(stats[0]).toHaveProperty('name');
+    expect(stats[0]).toHaveProperty('state');
+  });
+});
+
+describe('CircuitBreaker edge cases', () => {
+  test('call() throws CircuitOpenError when open and cooldown has NOT elapsed', async () => {
+    const b = new CircuitBreaker('edge-open', 2, 60_000);
+    await expect(b.call(async () => { throw new Error('f1'); })).rejects.toThrow('f1');
+    await expect(b.call(async () => { throw new Error('f2'); })).rejects.toThrow('f2');
+    expect(b.getStats().state).toBe('open');
+    await expect(b.call(async () => 'should not run')).rejects.toThrow(CircuitOpenError);
+  });
+
+  test('call() catch block calls onFailure and rethrows', async () => {
+    const b = new CircuitBreaker('catch-test', 5, 100);
+    await expect(b.call(async () => { throw new Error('failure'); })).rejects.toThrow('failure');
+    expect(b.getStats().failures).toBe(1);
+  });
+
+  test('onFailure in half_open re-opens circuit', async () => {
+    const b = new CircuitBreaker('half-open-fail', 2, 50);
+    await expect(b.call(async () => { throw new Error('f1'); })).rejects.toThrow();
+    await expect(b.call(async () => { throw new Error('f2'); })).rejects.toThrow();
+    expect(b.getStats().state).toBe('open');
+    await new Promise((r) => setTimeout(r, 70));
+    // Probe call in half_open state fails → onFailure with half_open → re-opens
+    await expect(b.call(async () => { throw new Error('probe fail'); })).rejects.toThrow('probe fail');
+    expect(b.getStats().state).toBe('open');
+    expect(b.getStats().halfOpenProbeInFlight).toBe(false);
+  });
+
+  test('decayIfStale closes open circuit when failures decay below threshold', async () => {
+    // Use a very short window so decayIfStale triggers
+    const b = new CircuitBreaker('decay-close', 3, 50, 80);
+    // Open the circuit
+    await expect(b.call(async () => { throw new Error('f1'); })).rejects.toThrow();
+    await expect(b.call(async () => { throw new Error('f2'); })).rejects.toThrow();
+    await expect(b.call(async () => { throw new Error('f3'); })).rejects.toThrow();
+    expect(b.getStats().state).toBe('open');
+    // Wait for both cooldown AND window to expire, so decayIfStale halves failures
+    await new Promise((r) => setTimeout(r, 100));
+    // isAvailable() calls decayIfStale(); failures: 3 → 1 (halved), < threshold 3 → closes
+    expect(b.isAvailable()).toBe(true);
+    expect(b.getStats().state).toBe('closed');
+  });
+});
+
+describe('CircuitBreaker (fresh module)', () => {
+  beforeEach(() => {
+    jest.resetModules();
+    jest.clearAllMocks();
+  });
+
+  test('open circuit rejects with CircuitOpenError before cooldown (fresh)', async () => {
+    const { CircuitBreaker: CB, CircuitOpenError: COE } = await import('../../discord/circuitBreaker');
+    const b = new CB('fresh-open', 2, 60_000);
+    await expect(b.call(async () => { throw new Error('f1'); })).rejects.toThrow('f1');
+    await expect(b.call(async () => { throw new Error('f2'); })).rejects.toThrow('f2');
+    expect(b.getStats().state).toBe('open');
+    await expect(b.call(async () => 'nope')).rejects.toThrow(COE);
+  });
+
+  test('call catch rethrows after onFailure (fresh)', async () => {
+    const { CircuitBreaker: CB } = await import('../../discord/circuitBreaker');
+    const b = new CB('fresh-catch', 5, 100);
+    await expect(b.call(async () => { throw new Error('oops'); })).rejects.toThrow('oops');
+    expect(b.getStats().failures).toBe(1);
+  });
+
+  test('onFailure in half_open re-opens (fresh)', async () => {
+    const { CircuitBreaker: CB } = await import('../../discord/circuitBreaker');
+    const b = new CB('fresh-half', 2, 50);
+    await expect(b.call(async () => { throw new Error('f1'); })).rejects.toThrow();
+    await expect(b.call(async () => { throw new Error('f2'); })).rejects.toThrow();
+    await new Promise((r) => setTimeout(r, 70));
+    await expect(b.call(async () => { throw new Error('probe'); })).rejects.toThrow('probe');
+    expect(b.getStats().state).toBe('open');
+  });
+
+  test('decayIfStale recovers open circuit (fresh)', async () => {
+    const { CircuitBreaker: CB } = await import('../../discord/circuitBreaker');
+    const b = new CB('fresh-decay', 3, 50, 80);
+    await expect(b.call(async () => { throw new Error('f1'); })).rejects.toThrow();
+    await expect(b.call(async () => { throw new Error('f2'); })).rejects.toThrow();
+    await expect(b.call(async () => { throw new Error('f3'); })).rejects.toThrow();
+    expect(b.getStats().state).toBe('open');
+    await new Promise((r) => setTimeout(r, 100));
+    expect(b.isAvailable()).toBe(true);
+    expect(b.getStats().state).toBe('closed');
   });
 });

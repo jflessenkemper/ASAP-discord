@@ -31,6 +31,21 @@ describe('services/github', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     process.env.GITHUB_TOKEN = 'test-token';
+    // Reset the cached Octokit instance so getOctokit() re-creates it
+    jest.resetModules();
+  });
+
+  describe('getOctokit (via createBranch)', () => {
+    it('throws when GITHUB_TOKEN is not set', async () => {
+      delete process.env.GITHUB_TOKEN;
+      // Re-import to get a fresh module with no cached octokit
+      jest.resetModules();
+      jest.mock('@octokit/rest', () => ({
+        Octokit: jest.fn().mockImplementation(() => ({})),
+      }));
+      const { createBranch: freshCreateBranch } = await import('../../services/github');
+      await expect(freshCreateBranch('feature/x')).rejects.toThrow('GITHUB_TOKEN not set');
+    });
   });
 
   describe('createBranch', () => {
@@ -43,6 +58,16 @@ describe('services/github', () => {
       expect(result).toContain('abc1234');
       expect(mockCreateRef).toHaveBeenCalledWith(
         expect.objectContaining({ ref: 'refs/heads/feature/x', sha: 'abc1234567' })
+      );
+    });
+
+    it('defaults baseBranch to main', async () => {
+      mockGetRef.mockResolvedValueOnce({ data: { object: { sha: 'def5678' } } });
+      mockCreateRef.mockResolvedValueOnce({});
+
+      await createBranch('feature/y');
+      expect(mockGetRef).toHaveBeenCalledWith(
+        expect.objectContaining({ ref: 'heads/main' })
       );
     });
   });
@@ -126,6 +151,18 @@ describe('services/github', () => {
       });
       const result = await searchGitHub('fix', 'commits');
       expect(result).toContain('abc1234');
+    });
+
+    it('returns no matches message for empty issues search', async () => {
+      mockSearchIssues.mockResolvedValueOnce({ data: { total_count: 0, items: [] } });
+      const result = await searchGitHub('nonexistent', 'issues');
+      expect(result).toContain('No matching issues');
+    });
+
+    it('returns no matches message for empty commits search', async () => {
+      mockSearchCommits.mockResolvedValueOnce({ data: { total_count: 0, items: [] } });
+      const result = await searchGitHub('nonexistent', 'commits');
+      expect(result).toContain('No matching commits');
     });
   });
 });

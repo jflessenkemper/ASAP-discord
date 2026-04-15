@@ -201,6 +201,27 @@ describe('toolsDb', () => {
       expect(result).toContain('150 row(s) returned');
       expect(result).toContain('and 50 more rows');
     });
+
+    it('renders NULL for null column values', async () => {
+      mockQuery.mockResolvedValueOnce({
+        command: 'SELECT',
+        rows: [{ id: 1, name: null }],
+        rowCount: 1,
+      });
+      const result = await dbQuery('SELECT id, name FROM users');
+      expect(result).toContain('NULL');
+    });
+
+    it('serializes object column values as JSON', async () => {
+      mockQuery.mockResolvedValueOnce({
+        command: 'SELECT',
+        rows: [{ id: 1, meta: { key: 'value' } }],
+        rowCount: 1,
+      });
+      const result = await dbQuery('SELECT id, meta FROM users');
+      expect(result).toContain('"key"');
+      expect(result).toContain('"value"');
+    });
   });
 
   describe('dbQueryReadonly()', () => {
@@ -278,6 +299,56 @@ describe('toolsDb', () => {
       // The sanitized name should not contain SQL injection
       const callArgs = mockQuery.mock.calls[0][1];
       expect(callArgs[0]).toBe('usersDROPTABLE');
+    });
+
+    it('returns cache hit on repeated call for same table', async () => {
+      mockQuery
+        .mockResolvedValueOnce({
+          rows: [{ column_name: 'id', data_type: 'integer', is_nullable: 'NO', column_default: null }],
+        })
+        .mockResolvedValueOnce({ rows: [] });
+
+      const first = await dbSchema('cache_test_tbl');
+      expect(first).toContain('Table: cache_test_tbl');
+
+      const second = await dbSchema('cache_test_tbl');
+      expect(second).toContain('(cache: hit)');
+      // No additional DB queries for the second call
+      expect(mockQuery).toHaveBeenCalledTimes(2);
+    });
+
+    it('includes foreign key references in constraint info', async () => {
+      mockQuery
+        .mockResolvedValueOnce({
+          rows: [{ column_name: 'user_id', data_type: 'integer', is_nullable: 'NO', column_default: null }],
+        })
+        .mockResolvedValueOnce({
+          rows: [{ constraint_type: 'FOREIGN KEY', column_name: 'user_id', references_table: 'users', references_column: 'id' }],
+        });
+      const result = await dbSchema('orders_fk');
+      expect(result).toContain('FOREIGN KEY');
+      expect(result).toContain('→ users.id');
+    });
+
+    it('includes column default value', async () => {
+      mockQuery
+        .mockResolvedValueOnce({
+          rows: [{ column_name: 'status', data_type: 'text', is_nullable: 'NO', column_default: "'active'" }],
+        })
+        .mockResolvedValueOnce({ rows: [] });
+      const result = await dbSchema('defaults_tbl');
+      expect(result).toContain("default='active'");
+    });
+  });
+
+  describe('dbSchema (fresh module)', () => {
+    it('returns no tables found for empty schema', async () => {
+      jest.resetModules();
+      mockQuery.mockReset();
+      mockQuery.mockResolvedValueOnce({ rows: [] });
+      const { dbSchema: freshDbSchema } = await import('../../discord/toolsDb');
+      const result = await freshDbSchema();
+      expect(result).toContain('No tables found');
     });
   });
 });

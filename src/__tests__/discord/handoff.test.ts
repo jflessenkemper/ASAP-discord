@@ -67,6 +67,28 @@ describe('handoff', () => {
       );
     });
 
+    it('formats filesModified in relevantContext', () => {
+      const ctx = buildHandoffContext({
+        fromAgent: 'riley',
+        toAgent: 'ace',
+        traceId: 'abc',
+        task: 'task',
+        filesModified: ['a.ts', 'b.ts'],
+      });
+      expect(ctx.relevantContext).toContain('Files already modified: a.ts, b.ts');
+    });
+
+    it('formats toolsUsed in relevantContext', () => {
+      const ctx = buildHandoffContext({
+        fromAgent: 'riley',
+        toAgent: 'ace',
+        traceId: 'abc',
+        task: 'task',
+        toolsUsed: ['grep', 'read_file'],
+      });
+      expect(ctx.relevantContext).toContain('Tools already used: grep, read_file');
+    });
+
     it('applies custom priority', () => {
       const ctx = buildHandoffContext({
         fromAgent: 'riley',
@@ -261,6 +283,59 @@ describe('handoff', () => {
         fromAgent: 'riley', toAgent: 'max', traceId: 'tr', task: 'task',
       });
       expect(canRunInParallel([a, b])).toBe(true);
+    });
+  });
+
+  describe('formatHandoffPrompt() coverage', () => {
+    it('includes relevantContext items in prompt output', () => {
+      const ctx = buildHandoffContext({
+        fromAgent: 'riley',
+        toAgent: 'ace',
+        traceId: 'tr',
+        task: 'Fix bug',
+        conversationSummary: 'User reported crash',
+        filesModified: ['app.ts', 'index.ts'],
+        toolsUsed: ['grep', 'read_file'],
+      });
+      const prompt = formatHandoffPrompt(ctx);
+      expect(prompt).toContain('Context:');
+      expect(prompt).toContain('User reported crash');
+      expect(prompt).toContain('app.ts');
+      expect(prompt).toContain('grep');
+    });
+
+    it('includes expectedOutput in prompt output', () => {
+      const ctx = buildHandoffContext({
+        fromAgent: 'riley',
+        toAgent: 'ace',
+        traceId: 'tr',
+        task: 'Write tests',
+        expectedOutput: 'All tests pass with 100% coverage',
+      });
+      const prompt = formatHandoffPrompt(ctx);
+      expect(prompt).toContain('Expected output: All tests pass with 100% coverage');
+    });
+  });
+
+  describe('buildHandoffContext branch coverage', () => {
+    it('skips filesModified when empty array', () => {
+      const ctx = buildHandoffContext({
+        fromAgent: 'riley', toAgent: 'ace', traceId: 'tr', task: 'task',
+        filesModified: [],
+      });
+      expect(ctx.relevantContext).not.toEqual(
+        expect.arrayContaining([expect.stringContaining('Files already modified')])
+      );
+    });
+
+    it('skips toolsUsed when empty array', () => {
+      const ctx = buildHandoffContext({
+        fromAgent: 'riley', toAgent: 'ace', traceId: 'tr', task: 'task',
+        toolsUsed: [],
+      });
+      expect(ctx.relevantContext).not.toEqual(
+        expect.arrayContaining([expect.stringContaining('Tools already used')])
+      );
     });
   });
 });

@@ -172,4 +172,185 @@ describe('handleGitHubEvent', () => {
     });
     expect(mockSend).not.toHaveBeenCalled();
   });
+
+  it('handles channel.send error gracefully', async () => {
+    const errorSpy = jest.spyOn(console, 'error').mockImplementation();
+    mockSend.mockRejectedValueOnce(new Error('Missing Permissions'));
+
+    await handleGitHubEvent('push', {
+      ref: 'refs/heads/main',
+      commits: [{ id: 'abc1234567', message: 'fix' }],
+      pusher: { name: 'dev' },
+    });
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining('GitHub webhook post error'),
+      expect.any(String),
+    );
+    errorSpy.mockRestore();
+  });
+
+  it('triggers captureAndPostScreenshots for successful workflow_run', async () => {
+    const { captureAndPostScreenshots } = require('../../../discord/services/screenshots');
+    await handleGitHubEvent('workflow_run', {
+      action: 'completed',
+      workflow_run: {
+        conclusion: 'success',
+        name: 'CI',
+        head_branch: 'main',
+        head_sha: 'abcdef1234567',
+        actor: { login: 'bot' },
+      },
+    });
+    expect(mockSend).toHaveBeenCalledTimes(1);
+    expect(captureAndPostScreenshots).toHaveBeenCalledWith(
+      expect.any(String),
+      'abcdef1',
+    );
+  });
+
+  it('triggers captureAndPostScreenshots with "deploy" label for deployment_status success', async () => {
+    const { captureAndPostScreenshots } = require('../../../discord/services/screenshots');
+    await handleGitHubEvent('deployment_status', {
+      deployment_status: { state: 'success', environment: 'prod' },
+      sender: { login: 'system' },
+    });
+    expect(mockSend).toHaveBeenCalledTimes(1);
+    expect(captureAndPostScreenshots).toHaveBeenCalledWith(
+      expect.any(String),
+      'deploy',
+    );
+  });
+
+  it('uses "latest" label when workflow_run head_sha is missing', async () => {
+    const { captureAndPostScreenshots } = require('../../../discord/services/screenshots');
+    await handleGitHubEvent('workflow_run', {
+      action: 'completed',
+      workflow_run: {
+        conclusion: 'success',
+        name: 'CI',
+        head_branch: 'main',
+        actor: { login: 'bot' },
+      },
+    });
+    expect(captureAndPostScreenshots).toHaveBeenCalledWith(
+      expect.any(String),
+      'latest',
+    );
+  });
+
+  it('does not screenshot when workflow_run conclusion is failure', async () => {
+    const { captureAndPostScreenshots } = require('../../../discord/services/screenshots');
+    captureAndPostScreenshots.mockClear();
+    await handleGitHubEvent('workflow_run', {
+      action: 'completed',
+      workflow_run: {
+        conclusion: 'failure',
+        name: 'CI',
+        head_branch: 'main',
+        actor: { login: 'bot' },
+      },
+    });
+    expect(captureAndPostScreenshots).not.toHaveBeenCalled();
+  });
+
+  it('does not screenshot when deployment_status state is failure', async () => {
+    const { captureAndPostScreenshots } = require('../../../discord/services/screenshots');
+    captureAndPostScreenshots.mockClear();
+    await handleGitHubEvent('deployment_status', {
+      deployment_status: { state: 'failure', environment: 'prod' },
+      sender: { login: 'system' },
+    });
+    expect(captureAndPostScreenshots).not.toHaveBeenCalled();
+  });
+
+  it('handles captureAndPostScreenshots rejection gracefully', async () => {
+    const { captureAndPostScreenshots } = require('../../../discord/services/screenshots');
+    const errorSpy = jest.spyOn(console, 'error').mockImplementation();
+    captureAndPostScreenshots.mockReturnValueOnce(Promise.reject(new Error('screenshot fail')));
+
+    await handleGitHubEvent('workflow_run', {
+      action: 'completed',
+      workflow_run: { conclusion: 'success', name: 'CI', head_branch: 'main', head_sha: 'abc123', actor: { login: 'bot' } },
+    });
+    // Allow the microtask (.catch) to flush
+    await new Promise(r => setTimeout(r, 50));
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining('Post-build screenshot error'),
+      expect.any(String),
+    );
+    errorSpy.mockRestore();
+  });
+
+  /* ---- sparse payloads: || fallback branches ---- */
+
+  it('handles push with missing pusher/commit fields', async () => {
+    await handleGitHubEvent('push', {
+      ref: undefined,
+      commits: [{}],
+      pusher: {},
+    });
+    expect(mockSend).toHaveBeenCalledTimes(1);
+  });
+
+  it('handles pull_request with minimal payload', async () => {
+    await handleGitHubEvent('pull_request', {
+      action: 'closed',
+      pull_request: { merged: false },
+    });
+    expect(mockSend).toHaveBeenCalledTimes(1);
+  });
+
+  it('handles issue with missing fields', async () => {
+    await handleGitHubEvent('issues', {
+      action: 'opened',
+      issue: {},
+    });
+    expect(mockSend).toHaveBeenCalledTimes(1);
+  });
+
+  it('handles issue_comment with missing fields', async () => {
+    await handleGitHubEvent('issue_comment', {
+      issue: {},
+      comment: {},
+    });
+    expect(mockSend).toHaveBeenCalledTimes(1);
+  });
+
+  it('handles create with missing fields', async () => {
+    await handleGitHubEvent('create', {});
+    expect(mockSend).toHaveBeenCalledTimes(1);
+  });
+
+  it('handles delete with missing fields', async () => {
+    await handleGitHubEvent('delete', {});
+    expect(mockSend).toHaveBeenCalledTimes(1);
+  });
+
+  it('handles release with missing fields', async () => {
+    await handleGitHubEvent('release', { release: {} });
+    expect(mockSend).toHaveBeenCalledTimes(1);
+  });
+
+  it('handles deployment_status with missing fields', async () => {
+    await handleGitHubEvent('deployment_status', {});
+    expect(mockSend).toHaveBeenCalledTimes(1);
+  });
+
+  it('handles workflow_run completed with missing fields', async () => {
+    await handleGitHubEvent('workflow_run', {
+      action: 'completed',
+      workflow_run: {},
+    });
+    expect(mockSend).toHaveBeenCalledTimes(1);
+  });
+
+  it('handles star with missing sender', async () => {
+    await handleGitHubEvent('star', { action: 'created' });
+    expect(mockSend).toHaveBeenCalledTimes(1);
+  });
+
+  it('handles fork with missing sender', async () => {
+    await handleGitHubEvent('fork', {});
+    expect(mockSend).toHaveBeenCalledTimes(1);
+  });
 });

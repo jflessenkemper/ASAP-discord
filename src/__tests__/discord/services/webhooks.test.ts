@@ -163,3 +163,121 @@ describe('clearWebhookCache', () => {
     expect(() => clearWebhookCache()).not.toThrow();
   });
 });
+
+describe('resolveWebhookParent – thread without valid parent', () => {
+  it('throws when thread parent is null', async () => {
+    const thread = { id: 'thread-orphan', type: 11, parent: null };
+    await expect(getWebhook(thread as any)).rejects.toThrow('does not have a text-channel parent');
+  });
+
+  it('throws when thread parent type is not GuildText', async () => {
+    const thread = { id: 'thread-wrong', type: 12, parent: { id: 'voice-1', type: 2 } };
+    await expect(getWebhook(thread as any)).rejects.toThrow('does not have a text-channel parent');
+  });
+});
+
+describe('getWebhook – stale cache', () => {
+  it('refetches when cache TTL expires', async () => {
+    const existingWh = { id: 'wh-ttl', name: 'ASAP Agent', owner: { id: 'bot-1' } };
+    const channel = makeTextChannel({
+      fetchWebhooks: jest.fn().mockResolvedValue({ find: (fn: any) => fn(existingWh) ? existingWh : undefined }),
+    });
+
+    await getWebhook(channel);
+    expect(channel.fetchWebhooks).toHaveBeenCalledTimes(1);
+
+    // Advance Date.now past the default 6h TTL
+    const realNow = Date.now();
+    jest.spyOn(Date, 'now').mockReturnValue(realNow + 22_000_000);
+
+    await getWebhook(channel);
+    expect(channel.fetchWebhooks).toHaveBeenCalledTimes(2);
+    jest.restoreAllMocks();
+  });
+});
+
+describe('isStaleWebhookError – alternate true branches', () => {
+  it('retries on code 10003 (Unknown Channel)', async () => {
+    const mockSendFail = jest.fn()
+      .mockRejectedValueOnce({ code: 10003, message: 'Unknown Channel' })
+      .mockResolvedValueOnce({ id: 'msg-10003' });
+    const wh = { id: 'wh-10003', name: 'ASAP Agent', owner: { id: 'bot-1' }, send: mockSendFail };
+    const channel = makeTextChannel({
+      fetchWebhooks: jest.fn().mockResolvedValue({ find: (fn: any) => fn(wh) ? wh : undefined }),
+    });
+    const result = await sendWebhookMessage(channel, { content: 'test' } as any);
+    expect(result).toEqual({ id: 'msg-10003' });
+  });
+
+  it('retries on message containing "unknown channel"', async () => {
+    const mockSendFail = jest.fn()
+      .mockRejectedValueOnce(new Error('unknown channel 12345'))
+      .mockResolvedValueOnce({ id: 'msg-uc' });
+    const wh = { id: 'wh-uc', name: 'ASAP Agent', owner: { id: 'bot-1' }, send: mockSendFail };
+    const channel = makeTextChannel({
+      fetchWebhooks: jest.fn().mockResolvedValue({ find: (fn: any) => fn(wh) ? wh : undefined }),
+    });
+    const result = await sendWebhookMessage(channel, { content: 'test' } as any);
+    expect(result).toEqual({ id: 'msg-uc' });
+  });
+
+  it('retries on message containing "404"', async () => {
+    const mockSendFail = jest.fn()
+      .mockRejectedValueOnce(new Error('404 Not Found'))
+      .mockResolvedValueOnce({ id: 'msg-404' });
+    const wh = { id: 'wh-404', name: 'ASAP Agent', owner: { id: 'bot-1' }, send: mockSendFail };
+    const channel = makeTextChannel({
+      fetchWebhooks: jest.fn().mockResolvedValue({ find: (fn: any) => fn(wh) ? wh : undefined }),
+    });
+    const result = await sendWebhookMessage(channel, { content: 'test' } as any);
+    expect(result).toEqual({ id: 'msg-404' });
+  });
+});
+
+describe('sanitizeWebhookUsername – edge cases', () => {
+  it('sends without username when username is null', async () => {
+    const mockSend = jest.fn().mockResolvedValue({ id: 'msg-null' });
+    const wh = { id: 'wh-null', name: 'ASAP Agent', owner: { id: 'bot-1' }, send: mockSend };
+    const channel = makeTextChannel({
+      fetchWebhooks: jest.fn().mockResolvedValue({ find: (fn: any) => fn(wh) ? wh : undefined }),
+    });
+    await sendWebhookMessage(channel, { content: 'Hi', username: null } as any);
+    const sentOptions = mockSend.mock.calls[0][0];
+    // sanitizeWebhookUsername returns undefined for null → original options used
+    expect(sentOptions.content).toBe('Hi');
+  });
+
+  it('sends without username when username is empty string', async () => {
+    const mockSend = jest.fn().mockResolvedValue({ id: 'msg-empty' });
+    const wh = { id: 'wh-empty', name: 'ASAP Agent', owner: { id: 'bot-1' }, send: mockSend };
+    const channel = makeTextChannel({
+      fetchWebhooks: jest.fn().mockResolvedValue({ find: (fn: any) => fn(wh) ? wh : undefined }),
+    });
+    await sendWebhookMessage(channel, { content: 'Hi', username: '' } as any);
+    const sentOptions = mockSend.mock.calls[0][0];
+    expect(sentOptions.content).toBe('Hi');
+  });
+
+  it('strips trailing symbol clusters separated by whitespace', async () => {
+    const mockSend = jest.fn().mockResolvedValue({ id: 'msg-sym' });
+    const wh = { id: 'wh-sym', name: 'ASAP Agent', owner: { id: 'bot-1' }, send: mockSend };
+    const channel = makeTextChannel({
+      fetchWebhooks: jest.fn().mockResolvedValue({ find: (fn: any) => fn(wh) ? wh : undefined }),
+    });
+    await sendWebhookMessage(channel, { content: 'Hi', username: 'Riley ★' } as any);
+    const sentOptions = mockSend.mock.calls[0][0];
+    expect(sentOptions.username).toBe('Riley');
+  });
+
+  it('clips username to 80 characters', async () => {
+    const mockSend = jest.fn().mockResolvedValue({ id: 'msg-long' });
+    const wh = { id: 'wh-long', name: 'ASAP Agent', owner: { id: 'bot-1' }, send: mockSend };
+    const channel = makeTextChannel({
+      fetchWebhooks: jest.fn().mockResolvedValue({ find: (fn: any) => fn(wh) ? wh : undefined }),
+    });
+    const longName = 'A'.repeat(100);
+    await sendWebhookMessage(channel, { content: 'Hi', username: longName } as any);
+    const sentOptions = mockSend.mock.calls[0][0];
+    expect(sentOptions.username.length).toBe(80);
+  });
+});

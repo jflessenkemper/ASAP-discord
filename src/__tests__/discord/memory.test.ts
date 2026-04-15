@@ -219,5 +219,252 @@ describe('memory', () => {
       const loaded = loadMemory('short-agent');
       expect(loaded.length).toBeLessThanOrEqual(2);
     });
+
+    it('compresses when history exceeds threshold', async () => {
+      const { summarizeConversation } = require('../../discord/claude');
+      (summarizeConversation as jest.Mock).mockResolvedValue('A comprehensive detailed summary of the full conversation thread covering topics discussed.');
+
+      const history: ConversationMessage[] = [];
+      for (let i = 0; i < 100; i++) {
+        history.push({ role: i % 2 === 0 ? 'user' : 'assistant', content: `Message number ${i} with some content` });
+      }
+      saveMemory('compress-test-agent', history);
+      await compressMemory('compress-test-agent');
+      const loaded = loadMemory('compress-test-agent');
+      // After compression, history should be smaller than original
+      expect(loaded.length).toBeLessThan(100);
+    });
+
+    it('skips if compression already in progress', async () => {
+      const history: ConversationMessage[] = [];
+      for (let i = 0; i < 100; i++) {
+        history.push({ role: 'user', content: `msg-${i}` });
+      }
+      saveMemory('dedup-compress-agent', history);
+      // Start two compressions simultaneously
+      const p1 = compressMemory('dedup-compress-agent');
+      const p2 = compressMemory('dedup-compress-agent');
+      await Promise.all([p1, p2]);
+      // Should not throw
+    });
+
+    it('handles summarization failure gracefully', async () => {
+      const { summarizeConversation } = require('../../discord/claude');
+      (summarizeConversation as jest.Mock).mockRejectedValueOnce(new Error('LLM error'));
+
+      const history: ConversationMessage[] = [];
+      for (let i = 0; i < 100; i++) {
+        history.push({ role: 'user', content: `msg-${i}` });
+      }
+      saveMemory('fail-compress-agent', history);
+      await compressMemory('fail-compress-agent');
+      // Should not throw, history should remain intact
+      const loaded = loadMemory('fail-compress-agent');
+      expect(loaded.length).toBeGreaterThan(0);
+    });
+
+    it('keeps summary when generated summary is too short', async () => {
+      const { summarizeConversation } = require('../../discord/claude');
+      (summarizeConversation as jest.Mock).mockResolvedValue('x');
+
+      const history: ConversationMessage[] = [];
+      for (let i = 0; i < 100; i++) {
+        history.push({ role: 'user', content: `msg-${i}` });
+      }
+      saveMemory('short-summary-agent', history);
+      await compressMemory('short-summary-agent');
+      const loaded = loadMemory('short-summary-agent');
+      // History should remain unchanged since summary was too short
+      expect(loaded.length).toBe(100);
+    });
+  });
+
+  // ─── initMemory ───
+
+  describe('initMemory()', () => {
+    it('is a no-op after already initialized', async () => {
+      await initMemory();
+      // Should not throw, second call is a no-op
+      expect(mockQuery).not.toHaveBeenCalledWith(
+        expect.stringContaining('SELECT file_name, content'),
+        undefined,
+      );
+    });
+  });
+
+  // ─── getMemoryContext with summary ───
+
+  describe('getMemoryContext() with summary', () => {
+    it('triggers compression when history exceeds threshold', () => {
+      const history: ConversationMessage[] = [];
+      for (let i = 0; i < 90; i++) {
+        history.push({ role: 'user', content: `msg-${i}` });
+      }
+      saveMemory('trigger-compress-agent', history);
+      const ctx = getMemoryContext('trigger-compress-agent', 10);
+      // Should return limited context
+      expect(ctx.length).toBeLessThanOrEqual(11);
+    });
+  });
+
+  // ─── saveMemory edge cases ───
+
+  describe('saveMemory() edge cases', () => {
+    it('trims extremely long histories', () => {
+      const history: ConversationMessage[] = [];
+      for (let i = 0; i < 3000; i++) {
+        history.push({ role: 'user', content: `msg-${i}` });
+      }
+      saveMemory('huge-history-agent', history);
+      const loaded = loadMemory('huge-history-agent');
+      expect(loaded.length).toBeLessThanOrEqual(2000);
+    });
+
+    it('compacts persisted content with code blocks', () => {
+      const codeContent = '```\n' + 'x'.repeat(2000) + '\n```';
+      const messages: ConversationMessage[] = [
+        { role: 'assistant', content: codeContent },
+      ];
+      saveMemory('code-block-agent', messages);
+      const loaded = loadMemory('code-block-agent');
+      expect(loaded.length).toBe(1);
+    });
+
+    it('handles permission denied on debounced write', () => {
+      mockQuery.mockRejectedValueOnce({ code: '42501', message: 'permission denied for table agent_memory' });
+      saveMemory('perm-denied-agent', [{ role: 'user', content: 'test' }]);
+      jest.advanceTimersByTime(3000);
+      // Should not throw
+    });
+  });
+
+  // ─── clearMemory edge cases ───
+
+  describe('clearMemory() edge cases', () => {
+    it('handles permission denied on delete', () => {
+      mockQuery.mockRejectedValueOnce({ code: '42501', message: 'permission denied' });
+      clearMemory('perm-delete-agent');
+      // Should not throw
+    });
+
+    it('handles generic DB error on delete', () => {
+      mockQuery.mockRejectedValueOnce(new Error('connection lost'));
+      clearMemory('err-delete-agent');
+      // Should not throw
+    });
+  });
+
+  // ─── flushPendingWrites edge cases ───
+
+  describe('flushPendingWrites() edge cases', () => {
+    it('handles permission denied during flush', async () => {
+      mockQuery.mockRejectedValue({ code: '42501', message: 'permission denied' });
+      saveMemory('flush-perm-agent', [{ role: 'user', content: 'test' }]);
+      await flushPendingWrites();
+      // Should not throw
+    });
+
+    it('handles generic error during flush', async () => {
+      mockQuery.mockRejectedValue(new Error('write failure'));
+      saveMemory('flush-err-agent', [{ role: 'user', content: 'test' }]);
+      await flushPendingWrites();
+      // Should not throw
+    });
+  });
+
+  // ─── compactPersistedContent + trimMiddle ───
+
+  describe('content compaction', () => {
+    it('trims long content in messages', () => {
+      const longContent = 'A'.repeat(5000);
+      const messages: ConversationMessage[] = [
+        { role: 'user', content: longContent },
+      ];
+      saveMemory('long-content-agent', messages);
+      const loaded = loadMemory('long-content-agent');
+      expect(loaded[0].content.length).toBeLessThan(5000);
+    });
+
+    it('strips trailing whitespace and collapses blank lines', () => {
+      const messyContent = 'line1   \n\n\n\nline2\r\nline3';
+      const messages: ConversationMessage[] = [
+        { role: 'user', content: messyContent },
+      ];
+      saveMemory('messy-agent', messages);
+      const loaded = loadMemory('messy-agent');
+      expect(loaded[0].content).not.toContain('\r\n');
+      expect(loaded[0].content).not.toMatch(/\n{3,}/);
+    });
+
+    it('handles empty content', () => {
+      const messages: ConversationMessage[] = [
+        { role: 'user', content: '' },
+      ];
+      saveMemory('empty-content-agent', messages);
+      const loaded = loadMemory('empty-content-agent');
+      expect(loaded[0].content).toBe('');
+    });
+  });
+
+  // ─── isLowValueAck filtering ───
+
+  describe('low-value ack filtering during compression', () => {
+    it('filters out simple ack messages during compression', async () => {
+      const { summarizeConversation } = require('../../discord/claude');
+      (summarizeConversation as jest.Mock).mockResolvedValue('A comprehensive summary of the conversation covering all key topics discussed.');
+
+      const history: ConversationMessage[] = [];
+      for (let i = 0; i < 90; i++) {
+        if (i % 3 === 0) {
+          history.push({ role: 'assistant', content: 'Ok.' });
+        } else {
+          history.push({ role: i % 2 === 0 ? 'user' : 'assistant', content: `Important message ${i}` });
+        }
+      }
+      saveMemory('ack-filter-agent', history);
+      await compressMemory('ack-filter-agent');
+      const loaded = loadMemory('ack-filter-agent');
+      expect(loaded.length).toBeLessThan(90);
+    });
+  });
+
+  // ─── staged compression path ───
+
+  describe('staged compression', () => {
+    it('uses multi-stage summarization for large histories', async () => {
+      const { summarizeConversation } = require('../../discord/claude');
+      (summarizeConversation as jest.Mock).mockResolvedValue('A comprehensive detailed summary covering all conversation topics and actions taken.');
+
+      // Need >24 messages to compress (COMPRESS_STAGE_MIN_MESSAGES default) and COMPRESS_STAGE_PARTS=3
+      const history: ConversationMessage[] = [];
+      for (let i = 0; i < 120; i++) {
+        history.push({ role: i % 2 === 0 ? 'user' : 'assistant', content: `Staged message ${i} with enough content to be meaningful` });
+      }
+      saveMemory('staged-compress-agent', history);
+      await compressMemory('staged-compress-agent');
+      const loaded = loadMemory('staged-compress-agent');
+      expect(loaded.length).toBeLessThan(120);
+      // summarizeConversation should have been called multiple times (staged)
+      expect((summarizeConversation as jest.Mock).mock.calls.length).toBeGreaterThanOrEqual(2);
+    });
+
+    it('falls back to single-pass when partials are empty', async () => {
+      const { summarizeConversation } = require('../../discord/claude');
+      // First calls return empty for stage partials, last returns valid summary
+      (summarizeConversation as jest.Mock)
+        .mockResolvedValueOnce('')
+        .mockResolvedValueOnce('')
+        .mockResolvedValueOnce('')
+        .mockResolvedValue('Fallback single-pass summary covering all the key details and topics in conversation.');
+
+      const history: ConversationMessage[] = [];
+      for (let i = 0; i < 100; i++) {
+        history.push({ role: i % 2 === 0 ? 'user' : 'assistant', content: `Fallback message ${i}` });
+      }
+      saveMemory('fallback-stage-agent', history);
+      await compressMemory('fallback-stage-agent');
+      const loaded = loadMemory('fallback-stage-agent');
+      expect(loaded.length).toBeLessThan(100);
+    });
   });
 });

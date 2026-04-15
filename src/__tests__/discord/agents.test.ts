@@ -192,6 +192,13 @@ describe('agents', () => {
       expect(guide).toContain('Max');
       expect(guide.split(', ').length).toBe(2);
     });
+
+    it('filters out null entries for invalid agent IDs', () => {
+      const guide = buildAgentMentionGuide(['developer', 'nonexistent' as any]);
+      expect(guide).toContain('Ace');
+      expect(guide).not.toContain('nonexistent');
+      expect(guide.split(', ').length).toBe(1);
+    });
   });
 
   describe('getAgentByChannelName()', () => {
@@ -218,5 +225,61 @@ describe('agents', () => {
     it('returns null for memory when .github dir not found', () => {
       expect(getRileyMemory()).toBeNull();
     });
+  });
+});
+
+describe('agents (fresh module — .github dir found)', () => {
+  beforeEach(() => {
+    jest.resetModules();
+  });
+
+  it('loads system prompt from .github when directory is accessible', async () => {
+    jest.doMock('fs', () => {
+      const actual = jest.requireActual('fs');
+      return {
+        ...actual,
+        accessSync: jest.fn(),
+        readFileSync: jest.fn(() => '---\ntitle: Test\n---\nYou are a test agent.'),
+        existsSync: actual.existsSync,
+      };
+    });
+    const { getAgents } = await import('../../discord/agents');
+    const agents = getAgents();
+    for (const agent of agents.values()) {
+      expect(agent.systemPrompt).toBe('You are a test agent.');
+    }
+  });
+
+  it('falls back to default prompt when readFileSync throws', async () => {
+    jest.doMock('fs', () => {
+      const actual = jest.requireActual('fs');
+      return {
+        ...actual,
+        accessSync: jest.fn(),
+        readFileSync: jest.fn(() => { throw new Error('ENOENT'); }),
+        existsSync: actual.existsSync,
+      };
+    });
+    const warnSpy = jest.spyOn(console, 'warn').mockImplementation();
+    const { getAgents } = await import('../../discord/agents');
+    const agents = getAgents();
+    for (const agent of agents.values()) {
+      expect(agent.systemPrompt).toContain('agent for the ASAP project');
+    }
+    warnSpy.mockRestore();
+  });
+
+  it('getAgentAliases returns [id] for unknown agent (fresh module)', async () => {
+    jest.doMock('fs', () => {
+      const actual = jest.requireActual('fs');
+      return {
+        ...actual,
+        accessSync: jest.fn(() => { throw new Error('not found'); }),
+        readFileSync: jest.fn(() => { throw new Error('not found'); }),
+        existsSync: actual.existsSync,
+      };
+    });
+    const { getAgentAliases } = await import('../../discord/agents');
+    expect(getAgentAliases('totally-fake' as any)).toEqual(['totally-fake']);
   });
 });

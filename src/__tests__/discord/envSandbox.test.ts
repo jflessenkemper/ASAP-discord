@@ -102,6 +102,12 @@ describe('buildSafeCommandEnv', () => {
     expect(env.GREENHOUSE_API_KEY).toBeUndefined();
   });
 
+  test('skips entries with undefined values', () => {
+    process.env.PATH = undefined;
+    const env = buildSafeCommandEnv();
+    expect(env.PATH).toBeUndefined();
+  });
+
   test('only contains keys from the safe allowlist (+ NODE_ENV)', () => {
     const env = buildSafeCommandEnv();
     for (const key of Object.keys(env)) {
@@ -164,6 +170,12 @@ describe('buildGcpSafeEnv', () => {
   test('includes GCS_ prefixed vars', () => {
     const env = buildGcpSafeEnv();
     expect(env.GCS_PROJECT_ID).toBe('gcs-proj');
+  });
+
+  test('skips GCP entries with undefined values', () => {
+    process.env.GOOGLE_CLOUD_PROJECT = undefined;
+    const env = buildGcpSafeEnv();
+    expect(env.GOOGLE_CLOUD_PROJECT).toBeUndefined();
   });
 
   test('still strips non-GCP secrets', () => {

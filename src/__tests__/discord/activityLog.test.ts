@@ -22,6 +22,13 @@ describe('activityLog', () => {
   });
 
   describe('logAgentEvent()', () => {
+    it('exercises shouldPostAgentError for a fresh agent', () => {
+      // Use unique ids to ensure shouldPostAgentError code-path is fresh
+      logAgentEvent('freshAgent1', 'error', 'brand new error msg 1');
+      expect(postAgentErrorLog).toHaveBeenCalledTimes(1);
+      expect(mockQuery).toHaveBeenCalled();
+    });
+
     it('logs invoke events to database', () => {
       logAgentEvent('developer', 'invoke', 'Handling user message');
       expect(mockQuery).toHaveBeenCalledWith(
@@ -130,6 +137,131 @@ describe('activityLog', () => {
       logAgentEvent('developer', 'rate_limit', 'Limited');
       logAgentEvent('developer', 'cache', 'Hit');
       expect(postAgentErrorLog).not.toHaveBeenCalled();
+    });
+
+    it('includes meta details when extra params provided on error', () => {
+      logAgentEvent('qa', 'error', 'Some new error X', {
+        durationMs: 1234,
+        tokensIn: 100,
+        tokensOut: 50,
+      });
+      expect(postAgentErrorLog).toHaveBeenCalledWith(
+        'agent:qa',
+        'Some new error X',
+        expect.objectContaining({ detail: 'durationMs=1234 tokensIn=100 tokensOut=50' })
+      );
+    });
+
+    it('passes undefined detail when no extra meta', () => {
+      logAgentEvent('qa', 'error', 'Another distinct error Q');
+      expect(postAgentErrorLog).toHaveBeenCalledWith(
+        'agent:qa',
+        'Another distinct error Q',
+        expect.objectContaining({ detail: undefined })
+      );
+    });
+
+    it('uses "Agent error" as default when detail is undefined', () => {
+      logAgentEvent('qa', 'error', undefined);
+      expect(postAgentErrorLog).toHaveBeenCalledWith(
+        'agent:qa',
+        'Agent error',
+        expect.anything()
+      );
+    });
+
+    it('classifies resource_exhausted as warn', () => {
+      logAgentEvent('qa', 'error', 'resource_exhausted for project');
+      expect(postAgentErrorLog).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.anything(),
+        expect.objectContaining({ level: 'warn' })
+      );
+    });
+
+    it('classifies empty detail as error level', () => {
+      logAgentEvent('dev', 'error', '');
+      // empty detail → shouldPostAgentError returns true with empty key, classifyAgentErrorLevel('') returns 'error'
+      // but empty string is falsy so 'Agent error' is used as message
+      expect(postAgentErrorLog).toHaveBeenCalledWith(
+        'agent:dev',
+        'Agent error',
+        expect.objectContaining({ level: 'error' })
+      );
+    });
+
+    it('logs console.error for non-permission, non-42P01 errors', async () => {
+      const spy = jest.spyOn(console, 'error').mockImplementation(() => {});
+      mockQuery.mockRejectedValueOnce(new Error('connection timeout'));
+
+      logAgentEvent('dev2', 'memory', 'test memory event');
+      await new Promise((r) => setImmediate(r));
+
+      expect(spy).toHaveBeenCalledWith('Activity log write error:', 'connection timeout');
+      spy.mockRestore();
+    });
+
+    it('silently ignores 42P01 (undefined table) errors', async () => {
+      const spy = jest.spyOn(console, 'error').mockImplementation(() => {});
+      const err = new Error('relation "agent_activity_log" does not exist');
+      (err as any).code = '42P01';
+      mockQuery.mockRejectedValueOnce(err);
+
+      logAgentEvent('dev2', 'guardrail', 'test');
+      await new Promise((r) => setImmediate(r));
+
+      expect(spy).not.toHaveBeenCalledWith(expect.stringContaining('Activity log write error'), expect.anything());
+      spy.mockRestore();
+    });
+
+    it('silently ignores pool-ended errors', async () => {
+      const spy = jest.spyOn(console, 'error').mockImplementation(() => {});
+      mockQuery.mockRejectedValueOnce(new Error('Cannot use a pool after calling end on the pool'));
+
+      logAgentEvent('dev2', 'memory', 'event');
+      await new Promise((r) => setImmediate(r));
+
+      expect(spy).not.toHaveBeenCalledWith(expect.stringContaining('Activity log write error'), expect.anything());
+      spy.mockRestore();
+    });
+
+    it('cleans up stale entries when dedup map exceeds 2000', () => {
+      // Freeze Date.now for the bulk inserts
+      const baseTime = 1000000000;
+      const dateNowSpy = jest.spyOn(Date, 'now').mockReturnValue(baseTime);
+
+      // Fill the dedup map with > 2000 unique entries
+      for (let i = 0; i < 2002; i++) {
+        logAgentEvent(`cleanup-agent-${i}`, 'error', `unique-err-${i}`);
+      }
+
+      // Now advance time past the dedup window * 2 and add one more entry
+      // The module uses Math.max(30000, ...) so AGENT_ERROR_DEDUPE_WINDOW_MS >= 30000
+      // Cleanup threshold = AGENT_ERROR_DEDUPE_WINDOW_MS * 2 (at least 60000ms)
+      dateNowSpy.mockReturnValue(baseTime + 400_000);
+      logAgentEvent('cleanup-final', 'error', 'trigger-cleanup');
+
+      dateNowSpy.mockRestore();
+    });
+
+    // This test MUST be last because it permanently sets activityLogDbDisabled=true in the module
+    it('disables DB logging on permission denied error', async () => {
+      const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+      const permError = new Error('permission denied for relation agent_activity_log');
+      (permError as any).code = '42501';
+      mockQuery.mockRejectedValueOnce(permError);
+
+      logAgentEvent('dev2', 'invoke', 'Starting fresh');
+      // Flush microtask queue so .catch runs
+      await new Promise((r) => setImmediate(r));
+
+      expect(warnSpy).toHaveBeenCalledWith('Activity log DB persistence disabled due to permission error.');
+      warnSpy.mockRestore();
+
+      // Now the DB should be disabled — next call should NOT call mockQuery
+      mockQuery.mockClear();
+      logAgentEvent('dev2', 'invoke', 'After disable');
+      expect(mockQuery).not.toHaveBeenCalled();
     });
   });
 });

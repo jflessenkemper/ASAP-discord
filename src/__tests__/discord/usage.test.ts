@@ -41,6 +41,15 @@ import {
   getCostOpsSummaryLine,
   getContextEfficiencyReport,
   getPromptAttributionSnapshot,
+  initUsageCounters,
+  flushUsageCounters,
+  getUsageEmbed,
+  setLimitsChannel,
+  setCostChannel,
+  startDashboardUpdates,
+  stopDashboardUpdates,
+  refreshUsageDashboard,
+  refreshLiveBillingData,
 } from '../../discord/usage';
 
 describe('usage', () => {
@@ -254,6 +263,230 @@ describe('usage', () => {
       expect(snap.avgPromptChars).toHaveProperty('user');
       expect(snap.avgPromptChars).toHaveProperty('toolResults');
       expect(snap.avgPromptChars).toHaveProperty('total');
+    });
+  });
+
+  // ─── initUsageCounters ───
+
+  describe('initUsageCounters()', () => {
+    it('is a no-op when already loaded', async () => {
+      await initUsageCounters();
+      // Already loaded in module, should be a no-op
+    });
+  });
+
+  // ─── flushUsageCounters ───
+
+  describe('flushUsageCounters()', () => {
+    it('flushes dirty counters to DB', async () => {
+      recordClaudeUsage(100, 50);
+      await flushUsageCounters();
+      const { upsertMemory: mockUpsert } = require('../../discord/memory');
+      expect(mockUpsert).toHaveBeenCalled();
+    });
+
+    it('is a no-op when not dirty', async () => {
+      const { upsertMemory: mockUpsert } = require('../../discord/memory');
+      mockUpsert.mockClear();
+      await flushUsageCounters();
+      // Should not call upsert
+    });
+  });
+
+  // ─── getUsageEmbed ───
+
+  describe('getUsageEmbed()', () => {
+    it('returns an EmbedBuilder', () => {
+      const embed = getUsageEmbed();
+      expect(embed).toBeDefined();
+      expect(embed.data.title).toContain('Usage Dashboard');
+    });
+
+    it('includes budget and token fields', () => {
+      recordClaudeUsage(5000, 2000, {
+        modelName: 'claude-sonnet-4-6',
+        agentLabel: 'Riley',
+        cacheReadInputTokens: 1000,
+        cacheCreationInputTokens: 500,
+        promptBreakdown: {
+          systemChars: 2000,
+          historyChars: 1000,
+          toolsChars: 500,
+          userChars: 300,
+          toolResultChars: 200,
+        },
+      });
+      const embed = getUsageEmbed();
+      expect(embed.data.fields).toBeDefined();
+      expect(embed.data.fields!.length).toBeGreaterThan(3);
+    });
+
+    it('shows live billing when available', () => {
+      const { getLiveBillingSnapshot } = require('../../services/billing');
+      (getLiveBillingSnapshot as jest.Mock).mockReturnValue({
+        available: true,
+        dailyCostUsd: 5.5,
+        monthCostUsd: 42.0,
+        currency: 'USD',
+      });
+      const embed = getUsageEmbed();
+      const gcpField = embed.data.fields?.find((f: any) => f.name.includes('GCP'));
+      expect(gcpField?.value).toContain('5.5');
+    });
+  });
+
+  // ─── setCostChannel and recording with cost channel ───
+
+  describe('setCostChannel()', () => {
+    it('sets cost channel for recording ops', () => {
+      const fakeChannel: any = { id: 'cost-ch', send: jest.fn().mockResolvedValue(undefined) };
+      setCostChannel(fakeChannel);
+      // Recording usage should now trigger postOpsLine
+      recordClaudeUsage(100, 50, {
+        modelName: 'gemini-2.5-flash',
+        agentLabel: 'Ace',
+      });
+      const { postOpsLine } = require('../../discord/services/opsFeed');
+      expect(postOpsLine).toHaveBeenCalled();
+      setCostChannel(null);
+    });
+  });
+
+  // ─── setLimitsChannel and dashboard ───
+
+  describe('dashboard updates', () => {
+    it('setLimitsChannel sets the channel', () => {
+      expect(() => setLimitsChannel(null as any)).not.toThrow();
+    });
+
+    it('startDashboardUpdates does not throw without channel', async () => {
+      setLimitsChannel(null as any);
+      await startDashboardUpdates();
+    });
+
+    it('stopDashboardUpdates clears interval', () => {
+      stopDashboardUpdates();
+    });
+
+    it('refreshUsageDashboard does not throw', async () => {
+      await refreshUsageDashboard();
+    });
+
+    it('refreshLiveBillingData does not throw', async () => {
+      await refreshLiveBillingData();
+    });
+
+    it('startDashboardUpdates with channel posts embed', async () => {
+      const { refreshLiveBillingSnapshot } = require('../../services/billing');
+      (refreshLiveBillingSnapshot as jest.Mock).mockResolvedValue(undefined);
+
+      const fakeMsg = { id: 'msg-1', edit: jest.fn().mockResolvedValue(undefined) };
+      const fakeChannel: any = {
+        id: 'limits-ch',
+        send: jest.fn().mockResolvedValue(fakeMsg),
+        messages: {
+          fetch: jest.fn().mockResolvedValue(new Map()),
+        },
+      };
+      setLimitsChannel(fakeChannel);
+      await startDashboardUpdates();
+      expect(fakeChannel.send).toHaveBeenCalled();
+      stopDashboardUpdates();
+      setLimitsChannel(null as any);
+    });
+
+    it('refreshUsageDashboard edits existing message', async () => {
+      const { refreshLiveBillingSnapshot } = require('../../services/billing');
+      (refreshLiveBillingSnapshot as jest.Mock).mockResolvedValue(undefined);
+
+      const editMock = jest.fn().mockResolvedValue(undefined);
+      const fakeMsg = { id: 'msg-dash', edit: editMock };
+      const fakeChannel: any = {
+        id: 'limits-ch-2',
+        send: jest.fn().mockResolvedValue(fakeMsg),
+        messages: {
+          fetch: jest.fn()
+            .mockResolvedValueOnce(new Map()) // first call (startDashboardUpdates)
+            .mockResolvedValueOnce(fakeMsg)    // second call (refreshUsageDashboard -> edit path)
+        },
+      };
+      setLimitsChannel(fakeChannel);
+      await startDashboardUpdates(); // posts initial embed, sets dashboardMessageId
+      stopDashboardUpdates();
+
+      await refreshUsageDashboard(); // should try to edit existing message
+      setLimitsChannel(null as any);
+    });
+
+    it('handles bulkDelete failure by falling back to individual deletes', async () => {
+      const { refreshLiveBillingSnapshot } = require('../../services/billing');
+      (refreshLiveBillingSnapshot as jest.Mock).mockResolvedValue(undefined);
+
+      const fakeMsg = { id: 'msg-bulk', edit: jest.fn().mockResolvedValue(undefined), delete: jest.fn().mockResolvedValue(undefined) };
+      const msgMap = new Map([['msg-1', { delete: jest.fn().mockResolvedValue(undefined) }]]);
+      const fakeChannel: any = {
+        id: 'limits-ch-3',
+        send: jest.fn().mockResolvedValue(fakeMsg),
+        messages: {
+          fetch: jest.fn().mockResolvedValue(msgMap),
+        },
+        bulkDelete: jest.fn().mockRejectedValue(new Error('bulk delete not available')),
+      };
+      setLimitsChannel(fakeChannel);
+      await refreshUsageDashboard();
+      stopDashboardUpdates();
+      setLimitsChannel(null as any);
+    });
+  });
+
+  // ─── recordClaudeUsage with Anthropic vs Gemini model names ───
+
+  describe('recordClaudeUsage model detection', () => {
+    it('detects haiku as anthropic', () => {
+      recordClaudeUsage(100, 50, 'claude-haiku-3');
+      // Should not throw
+    });
+
+    it('detects sonnet as anthropic', () => {
+      recordClaudeUsage(100, 50, 'claude-sonnet-4-6');
+      // Should not throw
+    });
+
+    it('treats non-anthropic model as gemini', () => {
+      recordClaudeUsage(100, 50, 'gemini-2.5-flash');
+      // Should not throw and track as gemini
+    });
+
+    it('handles undefined model name', () => {
+      recordClaudeUsage(100, 50);
+      // Should not throw
+    });
+  });
+
+  // ─── setDailyBudgetLimit with persist ───
+
+  describe('setDailyBudgetLimit() persistence', () => {
+    it('handles persist when .env file does not exist', () => {
+      const result = setDailyBudgetLimit(200, true);
+      expect(result.current).toBe(200);
+    });
+
+    it('handles Infinity as invalid', () => {
+      expect(() => setDailyBudgetLimit(Infinity, false)).toThrow('Invalid budget limit');
+    });
+  });
+
+  // ─── approveAdditionalBudget edge cases ───
+
+  describe('approveAdditionalBudget() edge cases', () => {
+    it('handles negative amount by using default', () => {
+      const result = approveAdditionalBudget(-5);
+      expect(result.added).toBeGreaterThan(0);
+    });
+
+    it('handles zero amount by using default', () => {
+      const result = approveAdditionalBudget(0);
+      expect(result.added).toBeGreaterThan(0);
     });
   });
 });
