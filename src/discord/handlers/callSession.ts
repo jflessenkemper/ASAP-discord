@@ -647,6 +647,17 @@ export async function startCall(
   const joinStartMs = Date.now();
   await joinTesterVoiceChannel(voiceChannel);
   const connection = getTesterVoiceConnection()!;
+  const testerMember = voiceChannel.guild.members.me;
+
+  console.log(
+    `[VOICE_DEBUG] joined channel=${voiceChannel.name} ` +
+    `join_ms=${Date.now() - joinStartMs} ` +
+    `selfMute=${testerMember?.voice.selfMute ?? 'unknown'} ` +
+    `selfDeaf=${testerMember?.voice.selfDeaf ?? 'unknown'} ` +
+    `serverMute=${testerMember?.voice.serverMute ?? 'unknown'} ` +
+    `serverDeaf=${testerMember?.voice.serverDeaf ?? 'unknown'} ` +
+    `channelId=${testerMember?.voice.channelId ?? 'unknown'}`
+  );
 
   await postVoiceStageLog(
     'join_vc',
@@ -722,6 +733,14 @@ export async function startCall(
     }
   }, HEARTBEAT_INTERVAL);
 
+  const onConnectionStateChange = (oldState: { status: string }, newState: { status: string }) => {
+    console.log(`[VOICE_DEBUG] connection_state ${oldState.status} -> ${newState.status}`);
+  };
+  connection.on('stateChange', onConnectionStateChange);
+  activeSession.unsubscribers.push(() => {
+    connection.off('stateChange', onConnectionStateChange);
+  });
+
   const unsub = listenToAllMembersSmart(
     connection,
     voiceChannel,
@@ -734,6 +753,7 @@ export async function startCall(
       });
     },
     (member) => {
+      console.log(`[VOICE_DEBUG] speech_detected user=${member.displayName}`);
       void postVoiceStageLog('speech_detected', `user=${member.displayName}`);
     }
   );
@@ -743,6 +763,7 @@ export async function startCall(
     if (!activeSession?.active) return;
     const member = voiceChannel.members.get(userId);
     if (!member || member.user.bot) return;
+    console.log(`[VOICE_DEBUG] receiver_speaking_start user=${member.displayName}`);
     if (!activeSession.outputActive) return;
     if (activeSession.outputStartedAt > 0) {
       const activeForMs = Date.now() - activeSession.outputStartedAt;
