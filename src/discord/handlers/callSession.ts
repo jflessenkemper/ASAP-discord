@@ -120,14 +120,18 @@ async function postVoiceStageLog(stage: string, detail: string, level: 'info' | 
     : level === 'warn'
       ? 'check voice stage health if repeated'
       : 'none';
-  await postOpsLine(voiceErrorChannel, {
-    actor: 'system',
-    scope: `voice:${stage}`,
-    metric: 'voice-stage',
-    delta: `instance=${RUNTIME_INSTANCE_TAG} ${detail}`,
-    action,
-    severity: level,
-  });
+  try {
+    await postOpsLine(voiceErrorChannel, {
+      actor: 'system',
+      scope: `voice:${stage}`,
+      metric: 'voice-stage',
+      delta: `instance=${RUNTIME_INSTANCE_TAG} ${detail}`,
+      action,
+      severity: level,
+    });
+  } catch (err) {
+    console.warn(`Voice stage log failed for ${stage}:`, errMsg(err));
+  }
 }
 
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
