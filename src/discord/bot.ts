@@ -803,21 +803,27 @@ export async function startBot(): Promise<void> {
       return;
     }
 
-    try {
-      if (joinedTarget && !isCallActive()) {
+    if (joinedTarget && !isCallActive()) {
+      try {
         await startCall(botChannels.voiceChannel, botChannels.groupchat, botChannels.callLog, member);
+      } catch (err) {
+        const msg = err instanceof Error ? err.stack || err.message : 'Unknown';
+        console.error('Voice auto join handler error:', errMsg(err));
+        void postAgentErrorLog('discord:voice-auto-start', 'Voice auto join error', { detail: msg, level: 'warn' });
       }
+    }
 
-      if (leftTarget && isCallActive()) {
-        const remainingHumans = botChannels.voiceChannel.members.filter((m) => !m.user.bot).size;
-        if (remainingHumans === 0) {
+    if (leftTarget && isCallActive()) {
+      const remainingHumans = botChannels.voiceChannel.members.filter((m) => !m.user.bot).size;
+      if (remainingHumans === 0) {
+        try {
           await endCall();
+        } catch (err) {
+          const msg = err instanceof Error ? err.stack || err.message : 'Unknown';
+          console.error('Voice auto leave handler error:', errMsg(err));
+          void postAgentErrorLog('discord:voice-auto-end', 'Voice auto leave error', { detail: msg, level: 'warn' });
         }
       }
-    } catch (err) {
-      const msg = err instanceof Error ? err.stack || err.message : 'Unknown';
-      console.error('Voice auto join/leave handler error:', errMsg(err));
-      void postAgentErrorLog('discord:voice-auto', 'Voice auto join/leave error', { detail: msg, level: 'warn' });
     }
   });
 
