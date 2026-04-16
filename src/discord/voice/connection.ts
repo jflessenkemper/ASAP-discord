@@ -216,14 +216,28 @@ export interface VoiceTranscription {
 }
 
 function getSttProviderPreference(): 'deepgram' | 'elevenlabs' {
+  const configured = String(process.env.VOICE_STT_PROVIDER || '').trim().toLowerCase();
+
+  if (configured === 'deepgram' && isDeepgramAvailable()) {
+    return 'deepgram';
+  }
+
+  if (configured === 'elevenlabs') {
+    return 'elevenlabs';
+  }
+
   if (VOICE_REALTIME_MODE && isElevenLabsRealtimeAvailable()) {
     return 'elevenlabs';
   }
+
   if (VOICE_REALTIME_MODE && isDeepgramAvailable()) {
     return 'deepgram';
   }
-  const configured = String(process.env.VOICE_STT_PROVIDER || '').trim().toLowerCase();
-  if (configured === 'elevenlabs') return 'elevenlabs';
+
+  if (isDeepgramAvailable()) {
+    return 'deepgram';
+  }
+
   return 'elevenlabs';
 }
 
