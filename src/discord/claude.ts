@@ -3604,6 +3604,8 @@ function formatToolSummary(toolName: string, input: Record<string, string>): str
       return `Getting Cloud SQL instance details`;
     case 'gcp_vm_ssh':
       return `Running on VM: ${(input.command || '').slice(0, 60)}`;
+    case 'gcp_redeploy_bot_vm':
+      return `Starting bot VM redeploy${input.ref ? ` (${input.ref})` : ''}`;
     case 'gcp_project_info':
       return `Getting GCP project info and enabled APIs`;
     case 'fetch_url':

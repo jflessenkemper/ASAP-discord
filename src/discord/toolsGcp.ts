@@ -369,6 +369,51 @@ export async function gcpVmSsh(command: string): Promise<string> {
   }
 }
 
+export async function gcpRedeployBotVm(ref = 'origin/main'): Promise<string> {
+  const safeRef = String(ref || 'origin/main').trim();
+  if (!/^[A-Za-z0-9._/-]{1,120}$/.test(safeRef)) {
+    return '❌ Invalid git ref. Use a simple ref like origin/main or a branch name.';
+  }
+
+  const remoteRoot = '/opt/asap-bot';
+  const logPath = '/tmp/asap-bot-redeploy.log';
+  const remoteScript = [
+    'set -euo pipefail',
+    `sudo chown -R $USER:$USER ${remoteRoot}`,
+    `cd ${remoteRoot}`,
+    'git fetch origin',
+    `git reset --hard ${safeRef}`,
+    'export PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1',
+    'export npm_config_playwright_skip_browser_download=true',
+    'npm ci',
+    'node_modules/.bin/tsc --project ./tsconfig.json',
+    'pm2 stop asap-bot 2>/dev/null || true',
+    'pm2 delete asap-bot 2>/dev/null || true',
+    `pm2 start dist/index.js --name asap-bot --cwd ${remoteRoot} --node-args="-r dotenv/config"`,
+    'pm2 status asap-bot | cat',
+  ].join('; ');
+
+  const detachedCommand = [
+    `rm -f ${logPath}`,
+    `nohup bash -lc '${remoteScript}' >${logPath} 2>&1 < /dev/null &`,
+    'echo STARTED',
+  ].join(' && ');
+
+  try {
+    const result = gcpExecArgs([
+      'compute', 'ssh', GCP_BOT_VM,
+      `--zone=${GCP_BOT_ZONE}`, `--project=${GCP_PROJECT}`,
+      '--quiet', `--command=${detachedCommand}`,
+    ]);
+    if (!result.includes('STARTED')) {
+      return `❌ Bot VM redeploy did not acknowledge start. Output:\n${result.slice(0, 1200)}`;
+    }
+    return `✅ Bot VM redeploy started in background on ${GCP_BOT_VM} (${GCP_BOT_ZONE}) using ref ${safeRef}. Check ${logPath} via gcp_vm_ssh after the bot returns.`;
+  } catch (err) {
+    return `❌ Bot VM redeploy failed to start: ${errMsg(err)}`;
+  }
+}
+
 export async function gcpProjectInfo(): Promise<string> {
   try {
     const info = gcpExecArgs([

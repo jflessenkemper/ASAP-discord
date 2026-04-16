@@ -108,6 +108,7 @@ describe('tools — tool definitions', () => {
       expect(names.has('gcp_deploy')).toBe(true);
       expect(names.has('gcp_logs_query')).toBe(true);
       expect(names.has('gcp_preflight')).toBe(true);
+      expect(names.has('gcp_redeploy_bot_vm')).toBe(true);
     });
 
     it('includes DB tools', () => {
@@ -168,6 +169,7 @@ describe('tools — tool definitions', () => {
       expect(names.has('edit_file')).toBe(true);
       expect(names.has('run_command')).toBe(true);
       expect(names.has('gcp_deploy')).toBe(true);
+      expect(names.has('gcp_redeploy_bot_vm')).toBe(true);
       expect(names.has('create_pull_request')).toBe(true);
       expect(names.has('merge_pull_request')).toBe(true);
     });
@@ -289,6 +291,7 @@ describe('tools — agent access control', () => {
     it('Riley can use autonomy tools', () => {
       expect(agentCanUseTool('executive-assistant', 'write_file')).toBe(true);
       expect(agentCanUseTool('executive-assistant', 'gcp_deploy')).toBe(true);
+      expect(agentCanUseTool('executive-assistant', 'gcp_redeploy_bot_vm')).toBe(true);
       expect(agentCanUseTool('executive-assistant', 'merge_pull_request')).toBe(true);
     });
   });

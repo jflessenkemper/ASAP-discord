@@ -55,7 +55,7 @@ import {
 import { jobScoreColor, SYSTEM_COLORS, BUTTON_IDS } from './ui/constants';
 import { errMsg } from '../utils/errors';
 import { formatAge } from '../utils/time';
-import { gcpDeploy, gcpBuildImage, gcpPreflight, gcpSetEnv, gcpGetEnv, gcpListRevisions, gcpRollback, gcpSecretSet, gcpSecretBind, gcpSecretList, gcpBuildStatus, gcpLogsQuery, gcpRunDescribe, gcpStorageLs, gcpArtifactList, gcpSqlDescribe, gcpVmSsh, gcpProjectInfo } from './toolsGcp';
+import { gcpDeploy, gcpBuildImage, gcpPreflight, gcpSetEnv, gcpGetEnv, gcpListRevisions, gcpRollback, gcpSecretSet, gcpSecretBind, gcpSecretList, gcpBuildStatus, gcpLogsQuery, gcpRunDescribe, gcpStorageLs, gcpArtifactList, gcpSqlDescribe, gcpVmSsh, gcpRedeployBotVm, gcpProjectInfo } from './toolsGcp';
 import { buildSafeCommandEnv } from './envSandbox';
 import { DDL_PATTERN, sanitizeSql, isReadOnlySql, dbQuery, dbQueryReadonly, dbSchema } from './toolsDb';
 
@@ -191,7 +191,7 @@ const TOOL_SERVICE_MAP: Record<string, string> = {
   gcp_get_env: 'gcp', gcp_list_revisions: 'gcp', gcp_rollback: 'gcp', gcp_secret_set: 'gcp',
   gcp_secret_bind: 'gcp', gcp_secret_list: 'gcp', gcp_build_status: 'gcp', gcp_logs_query: 'gcp',
   gcp_run_describe: 'gcp', gcp_storage_ls: 'gcp', gcp_artifact_list: 'gcp', gcp_sql_describe: 'gcp',
-  gcp_vm_ssh: 'gcp', gcp_project_info: 'gcp',
+  gcp_vm_ssh: 'gcp', gcp_redeploy_bot_vm: 'gcp', gcp_project_info: 'gcp',
   fetch_url: 'fetch', capture_screenshots: 'screenshots', job_scan: 'job_search',
 };
 
@@ -1292,6 +1292,21 @@ export const REPO_TOOLS = [
     },
   },
   {
+    name: 'gcp_redeploy_bot_vm',
+    description:
+      'Redeploy the VM-hosted Discord bot in the background. Fetches git, resets to a ref, installs deps, builds, and restarts PM2 without requiring arbitrary SSH commands.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        ref: {
+          type: 'string',
+          description: 'Optional git ref to deploy on the bot VM (default: origin/main)',
+        },
+      },
+      required: [],
+    },
+  },
+  {
     name: 'gcp_project_info',
     description:
       'Get a high-level overview of the GCP project: enabled APIs, project ID, and region. Use to confirm what services are active or debug "API not enabled" errors.',
@@ -1766,7 +1781,7 @@ const RILEY_TOOL_NAMES = new Set([
   // ── Riley autonomy: code mutation, PR workflow, deploy ──
   'write_file', 'edit_file', 'batch_edit', 'run_command',
   'git_create_branch', 'create_pull_request', 'merge_pull_request', 'add_pr_comment', 'list_pull_requests',
-  'gcp_deploy', 'gcp_rollback',
+  'gcp_deploy', 'gcp_rollback', 'gcp_redeploy_bot_vm',
   // ── Riley agent lifecycle ──
   'create_agent', 'remove_agent', 'list_agents',
   // ── Riley ops & error analysis ──
@@ -2126,6 +2141,27 @@ async function executeToolInternal(
         return await gcpSqlDescribe();
       case 'gcp_vm_ssh':
         return await gcpVmSsh(input.command);
+      case 'gcp_redeploy_bot_vm': {
+        if (context?.agentId === 'executive-assistant') {
+          const testResult = runTests();
+          if (testResult.includes('FAIL') || testResult.includes('Command failed')) {
+            return `❌ Bot VM redeploy blocked — tests failed:\n${testResult.slice(0, 1000)}`;
+          }
+          const tcResult = runTypecheck('server');
+          if (tcResult.includes('❌')) {
+            return `❌ Bot VM redeploy blocked — typecheck failed:\n${tcResult.slice(0, 1000)}`;
+          }
+        }
+        const redeployResult = await gcpRedeployBotVm(input.ref);
+        if (context?.agentId === 'executive-assistant' && redeployResult.startsWith('✅')) {
+          const auditCb = getToolAuditCallback();
+          if (auditCb) auditCb(context.agentId, 'gcp_redeploy_bot_vm', `Riley self-redeployed bot VM: ${input.ref || 'origin/main'}`);
+          const notifyMsg = `🤖 **Riley started a bot VM redeploy** using ${input.ref || 'origin/main'}. Tests + typecheck passed. @${getOwnerName().toLowerCase()}`;
+          await discordSendMessage('groupchat', notifyMsg, undefined, context.agentId).catch(e => console.error('[bot-redeploy] groupchat notify failed:', errMsg(e)));
+          await discordSendMessage('upgrades', `🤖 Riley started bot VM redeploy: ${input.ref || 'origin/main'}`, undefined, context.agentId).catch(e => console.error('[bot-redeploy] upgrades notify failed:', errMsg(e)));
+        }
+        return redeployResult;
+      }
       case 'gcp_project_info':
         return await gcpProjectInfo();
       case 'set_daily_budget': {
