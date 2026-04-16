@@ -209,7 +209,7 @@ Anthropic's documented Admin API provides usage and cost reporting, but not a si
 
 1. `ANTHROPIC_ADMIN_API_KEY` must be set.
 2. The key must be an Anthropic Admin API key, not a normal inference key.
-3. If you want cleaner attribution, pass `--api-key-ids` or `--workspace-ids` to filter the report.
+3. If you want cleaner attribution, pass `--api-key-ids` for usage filtering and `--workspace-ids` for usage and cost filtering.
 
 ### Example Workflow
 

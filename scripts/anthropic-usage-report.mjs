@@ -53,6 +53,40 @@ async function requestJson(url) {
   return response.json();
 }
 
+async function requestAllPages(endpointPath, params) {
+  const rows = [];
+  let nextPage = '';
+  let pageCount = 0;
+
+  while (true) {
+    const query = buildQuery({
+      ...params,
+      page: nextPage || undefined,
+    });
+    const payload = await requestJson(`${API_BASE}${endpointPath}?${query}`);
+    const data = Array.isArray(payload?.data) ? payload.data : [];
+    rows.push(...data);
+    pageCount += 1;
+
+    if (!payload?.has_more) {
+      return {
+        ...payload,
+        data: rows,
+        pageCount,
+      };
+    }
+
+    nextPage = String(payload?.next_page || '').trim();
+    if (!nextPage) {
+      return {
+        ...payload,
+        data: rows,
+        pageCount,
+      };
+    }
+  }
+}
+
 function buildQuery(params) {
   const search = new URLSearchParams();
   for (const [key, value] of Object.entries(params)) {
@@ -124,6 +158,15 @@ function parseUsdDecimalToNumber(raw) {
   return Number.isFinite(value) ? value : 0;
 }
 
+function parseAnthropicAmountToUsd(result) {
+  if (result?.amount_usd !== undefined && result?.amount_usd !== null && result?.amount_usd !== '') {
+    return parseUsdDecimalToNumber(result.amount_usd);
+  }
+
+  const rawAmount = parseUsdDecimalToNumber(result?.amount);
+  return rawAmount / 100;
+}
+
 function sumCostResults(data) {
   const rows = Array.isArray(data?.data) ? data.data : [];
   let totalUsd = 0;
@@ -132,7 +175,7 @@ function sumCostResults(data) {
   for (const bucket of rows) {
     const results = Array.isArray(bucket?.results) ? bucket.results : [];
     for (const result of results) {
-      const amountUsd = parseUsdDecimalToNumber(result.amount_usd);
+      const amountUsd = parseAnthropicAmountToUsd(result);
       const description = result.description || result.line_item || 'unknown';
       totalUsd += amountUsd;
       byDescription.set(description, (byDescription.get(description) || 0) + amountUsd);
@@ -239,13 +282,27 @@ async function captureSnapshot() {
   const costQuery = buildQuery({
     starting_at: startingAt,
     ending_at: endingAt,
+    bucket_width: '1d',
     'group_by[]': ['description'],
     'workspace_ids[]': workspaceIds,
   });
 
   const [usageRaw, costRaw] = await Promise.all([
-    requestJson(`${API_BASE}/v1/organizations/usage_report/messages?${usageQuery}`),
-    requestJson(`${API_BASE}/v1/organizations/cost_report?${costQuery}`),
+    requestAllPages('/v1/organizations/usage_report/messages', {
+      starting_at: startingAt,
+      ending_at: endingAt,
+      bucket_width: '1d',
+      'group_by[]': ['model'],
+      'api_key_ids[]': apiKeyIds,
+      'workspace_ids[]': workspaceIds,
+    }),
+    requestAllPages('/v1/organizations/cost_report', {
+      starting_at: startingAt,
+      ending_at: endingAt,
+      bucket_width: '1d',
+      'group_by[]': ['description'],
+      'workspace_ids[]': workspaceIds,
+    }),
   ]);
 
   const payload = {
@@ -258,6 +315,15 @@ async function captureSnapshot() {
       apiKeyIds,
       workspaceIds,
     },
+    notes: {
+      costFilterScope: apiKeyIds.length > 0 && workspaceIds.length === 0
+        ? 'Anthropic cost reports do not expose API-key filtering. Usage is filtered by api_key_ids, but cost remains organization/workspace scoped for the selected time window.'
+        : null,
+    },
+    pagination: {
+      usagePages: Number(usageRaw?.pageCount || 0),
+      costPages: Number(costRaw?.pageCount || 0),
+    },
     usageSummary: sumUsageResults(usageRaw),
     costSummary: sumCostResults(costRaw),
     usageRaw,
@@ -266,7 +332,12 @@ async function captureSnapshot() {
 
   const filePath = writeSnapshotFile(label, payload);
   console.log(`Snapshot written: ${filePath}`);
+  console.log(`Anthropic usage pages fetched: ${payload.pagination.usagePages}`);
+  console.log(`Anthropic cost pages fetched: ${payload.pagination.costPages}`);
   console.log(`Anthropic cumulative cost at snapshot: ${formatUsd(payload.costSummary.totalUsd)}`);
+  if (payload.notes.costFilterScope) {
+    console.log(`Note: ${payload.notes.costFilterScope}`);
+  }
 }
 
 async function diffSnapshots() {
@@ -299,6 +370,8 @@ Optional filters:
 Notes:
   - Requires ANTHROPIC_ADMIN_API_KEY.
   - Anthropic exposes usage and cost reports, not a simple remaining-credit balance endpoint.
+  - Snapshot capture paginates through all Anthropic report pages automatically.
+  - Usage can be filtered by API key ids, but Anthropic cost reports are not API-key filterable.
   - For short tests, snapshot before and after the test and diff the results.`);
 }
 
