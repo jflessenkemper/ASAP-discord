@@ -17,8 +17,14 @@ jest.mock('discord.js', () => ({
   GuildMember: jest.fn(),
 }));
 
+const mockPoolQuery = jest.fn().mockResolvedValue({ rows: [], rowCount: 0 });
+const mockPoolRelease = jest.fn();
+const mockPoolConnect = jest.fn().mockResolvedValue({
+  query: mockPoolQuery,
+  release: mockPoolRelease,
+});
 jest.mock('../../../db/pool', () => ({
-  default: { query: jest.fn().mockResolvedValue({ rows: [], rowCount: 0 }), on: jest.fn() },
+  default: { query: mockPoolQuery, connect: mockPoolConnect, on: jest.fn() },
   __esModule: true,
 }));
 

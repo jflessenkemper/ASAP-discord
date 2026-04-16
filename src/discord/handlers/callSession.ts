@@ -1,5 +1,6 @@
 import { VoiceConnectionStatus } from '@discordjs/voice';
 import { TextChannel, VoiceChannel, GuildMember } from 'discord.js';
+import pool from '../../db/pool';
 
 import { getAgent, AgentId } from '../agents';
 import { agentRespond, ConversationMessage, summarizeCall, ReusableAgentChatSession } from '../claude';
@@ -56,6 +57,17 @@ const VOICE_LIFECYCLE_DEDUPE_MS = parseInt(process.env.VOICE_LIFECYCLE_DEDUPE_MS
 let callStartInProgress = false;
 const lifecycleNoticeLastSentAt = new Map<string, number>();
 
+async function withPgAdvisoryLock<T>(lockKey: string, fn: () => Promise<T>): Promise<T> {
+  const client = await pool.connect();
+  try {
+    await client.query('SELECT pg_advisory_lock(hashtext($1))', [lockKey]);
+    return await fn();
+  } finally {
+    await client.query('SELECT pg_advisory_unlock(hashtext($1))', [lockKey]).catch(() => {});
+    client.release();
+  }
+}
+
 function decodeBotIdFromToken(token: string): string | null {
   try {
     const head = String(token || '').split('.')[0];
@@ -77,6 +89,22 @@ function isTesterBotId(userId: string): boolean {
   const tokenDerived = decodeBotIdFromToken(process.env.DISCORD_TEST_BOT_TOKEN || '');
   const allowed = new Set([DEFAULT_TESTER_BOT_ID, ...configured, ...(tokenDerived ? [tokenDerived] : [])]);
   return allowed.has(userId);
+}
+
+function hasManagedTesterBotInChannel(voiceChannel: VoiceChannel): boolean {
+  const members = (voiceChannel as { members?: unknown }).members;
+  if (!members) return false;
+  if (typeof (members as { some?: unknown }).some === 'function') {
+    return (members as { some: (predicate: (member: GuildMember) => boolean) => boolean }).some(
+      (member) => isTesterBotId(member.user.id)
+    );
+  }
+  if (typeof (members as { values?: unknown }).values === 'function') {
+    for (const member of (members as { values: () => Iterable<GuildMember> }).values()) {
+      if (isTesterBotId(member.user.id)) return true;
+    }
+  }
+  return false;
 }
 
 let voiceErrorChannel: TextChannel | null = null;
@@ -575,28 +603,29 @@ export async function startCall(
   callLog: TextChannel,
   initiator: GuildMember
 ): Promise<void> {
-  const callStartMs = Date.now();
-  if (callStartInProgress) {
-    await sendLifecycleNoticeOnce(groupchat, `start_in_progress:${voiceChannel.id}`, '📞 A call start is already being processed. Please wait a few seconds.');
-    return;
-  }
+  await withPgAdvisoryLock(`voice-call:${voiceChannel.guild.id}:${voiceChannel.id}`, async () => {
+    const callStartMs = Date.now();
+    if (callStartInProgress) {
+      await sendLifecycleNoticeOnce(groupchat, `start_in_progress:${voiceChannel.id}`, '📞 A call start is already being processed. Please wait a few seconds.');
+      return;
+    }
 
-  callStartInProgress = true;
-  try {
-  if (activeSession?.active) {
-    await sendLifecycleNoticeOnce(groupchat, `already_active:${voiceChannel.id}`, '⚠️ A call is already in progress. Say `LEAVE` to end it first.');
-    return;
-  }
+    callStartInProgress = true;
+    try {
+    if (activeSession?.active || hasManagedTesterBotInChannel(voiceChannel)) {
+      await sendLifecycleNoticeOnce(groupchat, `already_active:${voiceChannel.id}`, '⚠️ A call is already in progress. Say `LEAVE` to end it first.');
+      return;
+    }
 
-  const inputReady = isVoiceInputAvailable();
-  if (!inputReady.ok) {
-    await sendAsAgent(
-      groupchat,
-      `⚠️ I can't join voice yet because listening is unavailable: ${inputReady.reason} ` +
-      `Configure ElevenLabs realtime STT (preferred) or restore Gemini transcription before joining.`
-    );
-    return;
-  }
+    const inputReady = isVoiceInputAvailable();
+    if (!inputReady.ok) {
+      await sendAsAgent(
+        groupchat,
+        `⚠️ I can't join voice yet because listening is unavailable: ${inputReady.reason} ` +
+        `Configure ElevenLabs realtime STT (preferred) or restore Gemini transcription before joining.`
+      );
+      return;
+    }
 
   const testerVoiceId = process.env.ASAPTESTER_DISCORD_VOICE_ID || 'lsgXALPNLFUcQfT1dmP1';
   const isTesterInitiated = isTesterBotId(initiator.user.id);
@@ -772,12 +801,13 @@ export async function startCall(
     })();
   }
 
-  await postVoiceStageLog('call_started', `channel=${voiceChannel.name} total_startup_ms=${Date.now() - callStartMs}`);
-  recordLoopHealth('voice-session', 'ok', `call started channel=${voiceChannel.name}`);
-  primeElevenLabsVoiceCache(selectedRileyVoice, RILEY_WARM_PHRASES).catch(() => {});
-  } finally {
-    callStartInProgress = false;
-  }
+    await postVoiceStageLog('call_started', `channel=${voiceChannel.name} total_startup_ms=${Date.now() - callStartMs}`);
+    recordLoopHealth('voice-session', 'ok', `call started channel=${voiceChannel.name}`);
+    primeElevenLabsVoiceCache(selectedRileyVoice, RILEY_WARM_PHRASES).catch(() => {});
+    } finally {
+      callStartInProgress = false;
+    }
+  });
 }
 
 /**

@@ -4,6 +4,7 @@ import { formatAge } from '../../utils/time';
 import { promisify } from 'util';
 import fs from 'fs';
 import path from 'path';
+import pool from '../../db/pool';
 
 import { Message, TextChannel, GuildMember, EmbedBuilder, ThreadAutoArchiveDuration, ButtonBuilder, ActionRowBuilder, ButtonStyle, ComponentType } from 'discord.js';
 
@@ -217,6 +218,17 @@ let threadStatusChannel: TextChannel | null = null;
 let threadStatusSourceChannel: TextChannel | null = null;
 let threadStatusReporter: ReturnType<typeof setInterval> | null = null;
 const recentGroupchatFingerprints = new Map<string, number>();
+
+async function withPgAdvisoryLock<T>(lockKey: string, fn: () => Promise<T>): Promise<T> {
+  const client = await pool.connect();
+  try {
+    await client.query('SELECT pg_advisory_lock(hashtext($1))', [lockKey]);
+    return await fn();
+  } finally {
+    await client.query('SELECT pg_advisory_unlock(hashtext($1))', [lockKey]).catch(() => {});
+    client.release();
+  }
+}
 
 function isDuplicateGroupchatMessage(message: Message, content: string): boolean {
   const normalized = String(content || '').replace(/\s+/g, ' ').trim().toLowerCase();
@@ -740,15 +752,34 @@ async function syncGoalSequence(groupchat: TextChannel): Promise<void> {
   }
 }
 
-function buildGoalThreadName(senderName: string, content: string): string {
-  const goalId = goalState.nextThreadSequence().toString().padStart(4, '0');
+function buildGoalThreadDescriptor(senderName: string, content: string): string {
   const sender = sanitizeThreadName(senderName).replace(/\s+/g, '-').toLowerCase() || 'user';
   // Extract a concise task-oriented preview by stripping filler words
   const FILLER = new Set(['hey', 'hi', 'hello', 'please', 'can', 'you', 'could', 'would', 'riley', 'the', 'a', 'an', 'i', 'we', 'need', 'want', 'to', 'me', 'my', 'our', 'this', 'that', 'it', 'is', 'for', 'on', 'in', 'of', 'and', 'or', 'with', 'some', 'just', 'also']);
   const words = sanitizeThreadName(content).split(' ').filter(Boolean);
   const meaningful = words.filter(w => !FILLER.has(w.toLowerCase()));
   const preview = (meaningful.length >= 3 ? meaningful : words).slice(0, 6).join(' ');
-  return sanitizeThreadName(`Goal-${goalId} ${sender} ${preview}`) || `Goal-${goalId}`;
+  return sanitizeThreadName(`${sender} ${preview}`) || sender;
+}
+
+function buildGoalThreadName(senderName: string, content: string): string {
+  const goalId = goalState.nextThreadSequence().toString().padStart(4, '0');
+  const descriptor = buildGoalThreadDescriptor(senderName, content);
+  return sanitizeThreadName(`Goal-${goalId} ${descriptor}`) || `Goal-${goalId}`;
+}
+
+function stripGoalThreadPrefix(name: string): string {
+  return String(name || '').replace(/^Goal-\d+\s+/i, '').trim();
+}
+
+async function findMatchingGoalWorkspace(groupchat: TextChannel, senderName: string, content: string): Promise<WebhookCapableChannel | null> {
+  const descriptor = buildGoalThreadDescriptor(senderName, content);
+  const cached = [...groupchat.threads.cache.values()];
+  const active = await groupchat.threads.fetchActive().catch(() => null);
+  const candidates = [...cached, ...(active ? [...active.threads.values()] : [])]
+    .filter((thread) => !thread.archived && stripGoalThreadPrefix(thread.name) === descriptor)
+    .sort((a, b) => (b.createdTimestamp || 0) - (a.createdTimestamp || 0));
+  return candidates[0] || null;
 }
 
 async function closeGoalWorkspace(
@@ -1034,37 +1065,47 @@ ${trimCommandOutput(output, 1800)}`;
 }
 
 async function ensureGoalWorkspace(groupchat: TextChannel, senderName: string, content: string): Promise<WebhookCapableChannel> {
-  if (goalState.threadId) {
-    const existing = groupchat.threads.cache.get(goalState.threadId)
-      || await groupchat.threads.fetch(goalState.threadId).catch(() => null);
-    if (existing && !existing.archived) return existing;
-    goalState.threadId = null;
-  }
+  return withPgAdvisoryLock(`goal-workspace:${groupchat.guild.id}:${groupchat.id}`, async () => {
+    if (goalState.threadId) {
+      const existing = groupchat.threads.cache.get(goalState.threadId)
+        || await groupchat.threads.fetch(goalState.threadId).catch(() => null);
+      if (existing && !existing.archived) return existing;
+      goalState.threadId = null;
+    }
 
-  await syncGoalSequence(groupchat);
-  const threadName = buildGoalThreadName(senderName, content);
-  const thread = await groupchat.threads.create({
-    name: threadName,
-    autoArchiveDuration: ThreadAutoArchiveDuration.OneDay,
-    reason: `Goal workspace for ${senderName}`,
+    const matching = await findMatchingGoalWorkspace(groupchat, senderName, content);
+    if (matching) {
+      goalState.threadId = matching.id;
+      goalState.startedAt = matching.createdTimestamp || Date.now();
+      lastThreadCloseReviewAt = 0;
+      return matching;
+    }
+
+    await syncGoalSequence(groupchat);
+    const threadName = buildGoalThreadName(senderName, content);
+    const thread = await groupchat.threads.create({
+      name: threadName,
+      autoArchiveDuration: ThreadAutoArchiveDuration.OneDay,
+      reason: `Goal workspace for ${senderName}`,
+    });
+
+    goalState.threadId = thread.id;
+    goalState.startedAt = Date.now();
+    lastThreadCloseReviewAt = 0;
+
+    const riley = getAgent('executive-assistant' as AgentId);
+    if (riley) {
+      await sendWebhookMessage(thread, {
+        content: `🧵 Workspace created for: ${content.slice(0, 300)}`,
+        username: `${riley.emoji} ${riley.name}`,
+        avatarURL: riley.avatarUrl,
+      }).catch(() => {});
+    }
+
+    await groupchat.send(`🧵 Created workspace thread: <#${thread.id}>`).catch(() => {});
+
+    return thread;
   });
-
-  goalState.threadId = thread.id;
-  goalState.startedAt = Date.now();
-  lastThreadCloseReviewAt = 0;
-
-  const riley = getAgent('executive-assistant' as AgentId);
-  if (riley) {
-    await sendWebhookMessage(thread, {
-      content: `🧵 Workspace created for: ${content.slice(0, 300)}`,
-      username: `${riley.emoji} ${riley.name}`,
-      avatarURL: riley.avatarUrl,
-    }).catch(() => {});
-  }
-
-  await groupchat.send(`🧵 Created workspace thread: <#${thread.id}>`).catch(() => {});
-
-  return thread;
 }
 
 async function runLimited<T>(items: Array<() => Promise<T>>, concurrency: number): Promise<PromiseSettledResult<T>[]> {
