@@ -163,11 +163,28 @@ flowchart TB
         SchemaCheck --> MigrationCheck --> LegacyCheck
     end
 
+    %% ── Logging Engine Loop ──
+    subgraph LoggingLoop["🪵 Logging Engine Loop"]
+        direction LR
+        SweepActivity["Read recent agent_activity_log rows"]
+        SweepChannels["Read latest ops-channel messages"]
+        SweepCloud["Pull Cloud Run / GCP runtime logs"]
+        CondenseLogs["Condense DB, Discord, and cloud signals\ninto one Riley-readable report"]
+
+        SweepActivity --> CondenseLogs
+        SweepChannels --> CondenseLogs
+        SweepCloud --> CondenseLogs
+    end
+
     TestEngine -->|"smoke insights"| MemoryLoop
     MemoryLoop -->|"learnings feed\nagent prompts"| LLM
     agentErrors -->|"error feed"| ErrorPatterns
     DBOps --> DatabaseLoop
     DatabaseLoop -->|"ops summary + warnings"| OpsChannels
+    PGActivity --> SweepActivity
+    OpsChannels --> SweepChannels
+    GCPStore --> SweepCloud
+    CondenseLogs -->|"single log view"| Riley
 
     %% ── Persistence Layer ──
     subgraph Storage["💾 Persistence"]
@@ -207,22 +224,23 @@ flowchart TB
 
 ## Main Runtime Loops
 
-There are now 8 notable runtime loops or recurring control cycles:
+There are now 9 notable runtime loops or recurring control cycles:
 
 1. Self-Improvement Loop — Riley identifies work, Ace implements, specialists review, deploy closes the loop.
 2. Test Engine Loop — post-merge file mapping triggers targeted smoke coverage and records the result.
-3. Memory Loop — periodic consolidation plus recurring-error learning feeds future conversations.
-4. Database Audit Loop — read-only schema and migration checks post warnings without applying DDL.
-5. Channel Heartbeat Loop — stale ops feeds are detected and lightly self-healed.
-6. Upgrades Triage Loop — upgrade suggestions are classified, summarized, and top accepted items are dispatched.
-7. Voice Session Loop — live call heartbeat plus turn watchdog keeps voice sessions responsive, lets Riley ask for decisions directly, and avoids the decisions channel during active calls.
-8. Goal/Thread Watchdog Loop — Riley orchestration monitors stalled goals and thread status over time.
+3. Logging Engine Loop — structured activity logs plus the latest ops-channel events are condensed into one Riley-readable report.
+4. Memory Loop — periodic consolidation plus recurring-error learning feeds future conversations.
+5. Database Audit Loop — read-only schema and migration checks post warnings without applying DDL.
+6. Channel Heartbeat Loop — stale ops feeds are detected and lightly self-healed.
+7. Upgrades Triage Loop — upgrade suggestions are classified, summarized, and top accepted items are dispatched.
+8. Voice Session Loop — live call heartbeat plus turn watchdog keeps voice sessions responsive, lets Riley ask for decisions directly, and avoids the decisions channel during active calls.
+9. Goal/Thread Watchdog Loop — Riley orchestration monitors stalled goals and thread status over time.
 
 ## Text And Voice Use
 
 Riley is the primary interface now. You do not need slash commands to operate the system.
 
-1. Text in #groupchat — ask Riley for status, loops, limits, threads, or give her a build goal. She can use the runtime loops to keep the work moving.
+1. Text in #groupchat — ask Riley for status, loops, logs, limits, threads, or give her a build goal. She can use the runtime loops to keep the work moving.
 2. Groupchat decisions — if Riley needs a major decision from you in groupchat, the bot tags Jordan directly so the decision is visible immediately.
 3. Decisions channel — this remains the queue for overnight or away-from-keyboard decisions.
 4. Voice calls — Riley stays in voice, suggests next steps out loud, and asks you directly for major decisions instead of routing you to the decisions channel.
@@ -337,11 +355,18 @@ flowchart TD
             L4A --> L4B --> L4C
         end
 
-        subgraph Loop5["🎙️ Voice Session"]
-            L5A["Listen to Jordan live"]
-            L5B["Riley answers or suggests next step"]
-            L5C["Ask for major decisions directly in voice"]
+        subgraph Loop5["🪵 Logging Engine"]
+            L5A["Read DB activity events"]
+            L5B["Pull Discord + Cloud Run / GCP logs"]
+            L5C["Condense into one view for Riley"]
             L5A --> L5B --> L5C
+        end
+
+        subgraph Loop6["🎙️ Voice Session"]
+            L6A["Listen to Jordan live"]
+            L6B["Riley answers or suggests next step"]
+            L6C["Ask for major decisions directly in voice"]
+            L6A --> L6B --> L6C
         end
     end
 

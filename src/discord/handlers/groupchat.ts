@@ -38,6 +38,7 @@ import { LOW_SIGNAL_COMPLETION_RE } from './responseNormalization';
 import { sendAgentMessage, clearHistory } from './textChannel';
 import { errMsg } from '../../utils/errors';
 import { buildLoopHealthCompactSummary, buildLoopHealthDetailedReport, recordLoopHealth } from '../loopHealth';
+import { buildLoggingEngineReport, runLoggingEngine } from '../loggingEngine';
 import { buildGroupchatDecisionAttention, buildTextStatusSummary } from '../rileyInteraction';
 
 
@@ -1316,7 +1317,7 @@ async function handleDirectVoiceActionIfRequested(message: Message, content: str
   return true;
 }
 
-function detectDirectOpsAction(text: string): 'status' | 'limits' | 'threads' | 'loops' | 'help' | null {
+function detectDirectOpsAction(text: string): 'status' | 'limits' | 'threads' | 'loops' | 'logs' | 'help' | null {
   const normalized = stripMentionsForIntent(text).toLowerCase();
   if (!normalized) return null;
 
@@ -1328,12 +1329,14 @@ function detectDirectOpsAction(text: string): 'status' | 'limits' | 'threads' | 
   const limitsPattern = new RegExp(`${lead}(?:limits|usage|budget|spend|costs|token\\s+usage|show\\s+limits|show\\s+usage)\\??$`, 'i');
   const threadsPattern = new RegExp(`${lead}(?:threads|thread\\s+status|open\\s+threads|workspace\\s+threads)\\??$`, 'i');
   const loopsPattern = new RegExp(`${lead}(?:loops|loop\\s+health|runtime\\s+loops|monitoring)\\??$`, 'i');
+  const logsPattern = new RegExp(`${lead}(?:logs|recent\\s+logs|ops\\s+logs|logging\\s+engine|show\\s+logs)\\??$`, 'i');
   const helpPattern = new RegExp(`${lead}(?:help|what\\s+can\\s+you\\s+do|commands?)\\??$`, 'i');
 
   if (statusPattern.test(normalized)) return 'status';
   if (limitsPattern.test(normalized)) return 'limits';
   if (threadsPattern.test(normalized)) return 'threads';
   if (loopsPattern.test(normalized)) return 'loops';
+  if (logsPattern.test(normalized)) return 'logs';
   if (helpPattern.test(normalized)) return 'help';
   return null;
 }
@@ -1354,7 +1357,7 @@ async function handleDirectOpsActionIfRequested(content: string, groupchat: Text
   if (action === 'help') {
     await sendQuickRileyMessage(
       groupchat,
-      '⚡ Quick actions: `status`, `loops`, `limits`, `threads`, `join voice`, `leave voice`, `cleanup`, `smoke`, `health`.'
+      '⚡ Quick actions: `status`, `loops`, `logs`, `limits`, `threads`, `join voice`, `leave voice`, `cleanup`, `smoke`, `health`.'
     );
     return true;
   }
@@ -1369,6 +1372,15 @@ async function handleDirectOpsActionIfRequested(content: string, groupchat: Text
 
   if (action === 'loops') {
     await sendQuickRileyMessage(groupchat, buildLoopHealthDetailedReport());
+    return true;
+  }
+
+  if (action === 'logs') {
+    const channels = getBotChannels();
+    if (channels) {
+      await runLoggingEngine(channels).catch(() => {});
+    }
+    await sendQuickRileyMessage(groupchat, buildLoggingEngineReport());
     return true;
   }
 

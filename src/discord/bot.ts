@@ -27,6 +27,7 @@ import { handleGroupchatMessage, dispatchUpgradeToRiley } from './handlers/group
 import { getThreadStatusOpsLine } from './handlers/groupchat';
 import { autoReviewPR } from './handlers/review';
 import { handleAgentMessage } from './handlers/textChannel';
+import { runLoggingEngine } from './loggingEngine';
 import { flushPendingWrites, initMemory } from './memory';
 import { flushAllOpsDigests, formatToolAuditHuman, postOpsLine } from './activityLog';
 import { setAgentErrorChannel, postAgentErrorLog } from './services/agentErrors';
@@ -62,6 +63,7 @@ let channelHeartbeatTimer: ReturnType<typeof setInterval> | null = null;
 let upgradesTriageTimer: ReturnType<typeof setInterval> | null = null;
 let memoryConsolidationTimer: ReturnType<typeof setInterval> | null = null;
 let databaseAuditTimer: ReturnType<typeof setInterval> | null = null;
+let loggingEngineTimer: ReturnType<typeof setInterval> | null = null;
 const staleAlertDedupe = new Map<string, number>();
 /** Tracks recovery attempts per feed to prevent infinite heal loops. */
 const staleHealAttempts = new Map<string, { count: number; lastAttemptAt: number }>();
@@ -76,6 +78,7 @@ const CHANNEL_HEARTBEAT_INTERVAL_MS = Math.max(5 * 60 * 1000, parseInt(process.e
 const STALE_ALERT_COOLDOWN_MS = Math.max(10 * 60 * 1000, parseInt(process.env.CHANNEL_STALE_ALERT_COOLDOWN_MS || '7200000', 10));
 const UPGRADES_TRIAGE_INTERVAL_MS = Math.max(30 * 60 * 1000, parseInt(process.env.UPGRADES_TRIAGE_INTERVAL_MS || '21600000', 10));
 const DATABASE_AUDIT_INTERVAL_MS = Math.max(60 * 60 * 1000, parseInt(process.env.DATABASE_AUDIT_INTERVAL_MS || '21600000', 10));
+const LOGGING_ENGINE_INTERVAL_MS = Math.max(10 * 60 * 1000, parseInt(process.env.LOGGING_ENGINE_INTERVAL_MS || '1800000', 10));
 const NON_TESTER_TRIGGER_NOTICE_COOLDOWN_MS = parseInt(process.env.NON_TESTER_TRIGGER_NOTICE_COOLDOWN_MS || '120000', 10);
 const UPGRADES_TRIAGE_MARKER = '[UPGRADES_TRIAGE_V1]';
 
@@ -355,6 +358,7 @@ function startOpsMonitors(channels: BotChannels): void {
   if (upgradesTriageTimer) clearInterval(upgradesTriageTimer);
   if (memoryConsolidationTimer) clearInterval(memoryConsolidationTimer);
   if (databaseAuditTimer) clearInterval(databaseAuditTimer);
+  if (loggingEngineTimer) clearInterval(loggingEngineTimer);
 
   channelHeartbeatTimer = setInterval(() => {
     void runChannelHeartbeat(channels).catch(() => {});
@@ -382,8 +386,12 @@ function startOpsMonitors(channels: BotChannels): void {
   databaseAuditTimer = setInterval(() => {
     void runDatabaseAudit(channels).catch(() => {});
   }, DATABASE_AUDIT_INTERVAL_MS);
+  loggingEngineTimer = setInterval(() => {
+    void runLoggingEngine(channels).catch(() => {});
+  }, LOGGING_ENGINE_INTERVAL_MS);
 
   void runChannelHeartbeat(channels).catch(() => {});
+  void runLoggingEngine(channels).catch(() => {});
   void runUpgradesTriage(channels).catch(() => {});
   void runDatabaseAudit(channels).catch(() => {});
 }

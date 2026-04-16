@@ -11,7 +11,7 @@ This repo is the runtime behind that system.
 - Lets me run software projects from Discord through text or voice.
 - Gives Riley a team of specialist agents for coding, QA, DevOps, security, legal, design, API review, database work, and more.
 - Supports "couch mode": I can sit in voice and ask Riley to plan, build, explain, or ask me for decisions directly.
-- Tracks activity, cost, errors, memory, and health automatically.
+- Tracks activity, cost, errors, memory, and health automatically, with one condensed log sweep Riley can read.
 - Runs smoke tests after important changes and learns from repeated failures.
 - Keeps an overnight decision queue so work can continue while I am away.
 - Includes a career-ops workflow for job search, job scoring, drafting, and application support.
@@ -36,8 +36,9 @@ flowchart TD
     Riley[Riley<br/>manager and main interface]
     Ace[Ace<br/>builds and ships work]
     Specialists[Specialist reviewers<br/>QA, UX, Security, API, DBA, DevOps, Legal]
-    Loops[Background loops<br/>testing, memory, voice, monitoring, database audit]
+    Loops[Background loops<br/>testing, logging, memory, voice, monitoring, database audit]
     Tools[Code, GitHub, Cloud, Discord, database tools]
+    CloudLogs[Cloud Run and GCP logs]
 
     User -->|text or voice| Riley
     Riley --> Ace
@@ -45,6 +46,8 @@ flowchart TD
     Specialists --> Ace
     Ace --> Tools
     Tools --> Ace
+    Tools --> CloudLogs
+    CloudLogs --> Loops
     Riley --> Loops
     Loops --> Riley
     Riley -->|answers, updates, decisions| User
@@ -64,18 +67,19 @@ The full architecture diagram is in [.github/ARCHITECTURE.md](.github/ARCHITECTU
 - Usage and budget tracking built into the runtime.
 - GitHub, deployment, screenshot, and diagnostics integrations.
 
-## The 8 Runtime Loops
+## The 9 Runtime Loops
 
 These loops are the part I would usually show an employer because they explain why the bot is more than a chat wrapper.
 
 1. Self-improvement loop: Riley spots work, Ace implements it, reviewers check it, and deploy closes the loop.
 2. Test engine loop: after code changes, the system maps the changed files to the right smoke tests.
-3. Memory loop: useful decisions and repeated failure patterns get turned into future context.
-4. Database audit loop: the runtime checks that the expected tables and migrations are present.
-5. Channel heartbeat loop: the bot watches its own status feeds and notices when one goes stale.
-6. Upgrades triage loop: suggestions are collected, grouped, and surfaced back to Riley.
-7. Voice session loop: live voice calls stay responsive and Riley asks for decisions in voice.
-8. Goal and thread watchdog loop: the system watches long-running tasks so work does not silently stall.
+3. Logging engine loop: Riley gets one condensed view of recent activity-log events and the latest ops-channel signals.
+4. Memory loop: useful decisions and repeated failure patterns get turned into future context.
+5. Database audit loop: the runtime checks that the expected tables and migrations are present.
+6. Channel heartbeat loop: the bot watches its own status feeds and notices when one goes stale.
+7. Upgrades triage loop: suggestions are collected, grouped, and surfaced back to Riley.
+8. Voice session loop: live voice calls stay responsive and Riley asks for decisions in voice.
+9. Goal and thread watchdog loop: the system watches long-running tasks so work does not silently stall.
 
 ## Token And Cost Optimisation
 

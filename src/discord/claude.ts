@@ -11,6 +11,7 @@ import { AgentConfig, getRileyPersonality, getRileyMemory, getOwnerName } from '
 import { getOrCreateContentCache } from './contextCache';
 import { classifyInput, classifyOutput, sanitizeOutputForSecrets } from './guardrails';
 import { isLowSignalCompletion } from './handlers/responseNormalization';
+import { getLoggingEngineRuntimeContext } from './loggingEngine';
 import { recordModelSuccess, recordModelFailure, resolveHealthyModel, isModelAvailable } from './modelHealth';
 import { recordAgentResponse, recordRateLimitHit } from './metrics';
 import { REPO_TOOLS, getToolsForAgent, executeTool, getToolAuditCallback } from './tools';
@@ -3638,7 +3639,8 @@ export function getContextRuntimeReport(): string {
     `Estimated chars saved: ${contextRuntimeStats.charsSaved.toLocaleString()} (avg ${avgCharsSaved.toLocaleString()} per pass)\n` +
     `Preemptive guards: ${contextRuntimeStats.preemptiveGuards}\n` +
     `Overflow recoveries: ${contextRuntimeStats.overflowRecoveries}\n` +
-    `Cache heartbeats: ${contextRuntimeStats.cacheHeartbeats}`
+    `Cache heartbeats: ${contextRuntimeStats.cacheHeartbeats}\n\n` +
+    getLoggingEngineRuntimeContext()
   );
 }
 

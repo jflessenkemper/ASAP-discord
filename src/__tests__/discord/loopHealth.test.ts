@@ -13,6 +13,7 @@ describe('loopHealth', () => {
   it('shows idle loops before anything has run', () => {
     const summary = buildLoopHealthCompactSummary();
     expect(summary).toContain('channel-heartbeat: never');
+    expect(summary).toContain('logging-engine: never');
     expect(summary).toContain('database-audit: never');
   });
 

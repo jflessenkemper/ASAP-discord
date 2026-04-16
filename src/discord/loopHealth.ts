@@ -2,6 +2,7 @@ export type LoopHealthStatus = 'ok' | 'warn' | 'error';
 
 export type LoopId =
   | 'channel-heartbeat'
+  | 'logging-engine'
   | 'upgrades-triage'
   | 'memory-consolidation'
   | 'database-audit'
@@ -23,6 +24,7 @@ type MutableLoopHealthEntry = Omit<LoopHealthEntry, 'id' | 'label'>;
 
 const LOOP_LABELS: Record<LoopId, string> = {
   'channel-heartbeat': 'Channel Heartbeat',
+  'logging-engine': 'Logging Engine',
   'upgrades-triage': 'Upgrades Triage',
   'memory-consolidation': 'Memory Consolidation',
   'database-audit': 'Database Audit',
@@ -34,6 +36,7 @@ const LOOP_LABELS: Record<LoopId, string> = {
 
 const LOOP_ORDER: LoopId[] = [
   'channel-heartbeat',
+  'logging-engine',
   'upgrades-triage',
   'memory-consolidation',
   'database-audit',
