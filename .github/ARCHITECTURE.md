@@ -227,6 +227,10 @@ Riley is the primary interface now. You do not need slash commands to operate th
 3. Decisions channel — this remains the queue for overnight or away-from-keyboard decisions.
 4. Voice calls — Riley stays in voice, suggests next steps out loud, and asks you directly for major decisions instead of routing you to the decisions channel.
 
+## Validation Pack
+
+If you want to test the architecture through Riley directly, use `.github/RILEY_ARCHITECTURE_PROMPT_PACK.md`.
+
 ## Key Files
 
 | Layer | File | Purpose |

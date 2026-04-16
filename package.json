@@ -17,6 +17,8 @@
     "discord:test:fast:with-runtime": "bash ./scripts/discord-smoke-fast.sh",
     "discord:test:full": "DISCORD_SMOKE_PRE_CLEAR=true node dist/discord/tester.js",
     "discord:test:readiness": "DISCORD_SMOKE_PROFILE=readiness DISCORD_TEST_TIMEOUT_MS=30000 DISCORD_SMOKE_CAPABILITY_ATTEMPTS=2 DISCORD_SMOKE_ELEVENLABS_VOICE_BRIDGE=false node dist/discord/tester.js",
+    "anthropic:usage:snapshot": "node scripts/anthropic-usage-report.mjs snapshot",
+    "anthropic:usage:report": "node scripts/anthropic-usage-report.mjs diff",
     "visual:baseline": "tsx src/services/visualRegression.ts baseline",
     "visual:check": "tsx src/services/visualRegression.ts check",
     "db:grant-agent-memory": "tsx src/db/checkAndGrantAgentMemoryPerms.ts",
