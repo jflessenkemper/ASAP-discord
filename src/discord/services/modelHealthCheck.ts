@@ -3,6 +3,18 @@ import type { PoolClient } from 'pg';
 
 import pool from '../../db/pool';
 import { ensureGoogleCredentials, getAccessTokenViaGcloud } from '../../services/googleCredentials';
+import {
+  ANTHROPIC_HEALTHCHECK_MODELS,
+  DEFAULT_CODING_MODEL,
+  USE_VERTEX_ANTHROPIC,
+  VERTEX_PROJECT_ID,
+  VERTEX_LOCATION,
+  VERTEX_ANTHROPIC_LOCATION,
+  VERTEX_ANTHROPIC_FALLBACK_LOCATIONS,
+  VERTEX_ANTHROPIC_VERSION,
+  getPreferredAnthropicLocations,
+  shouldTryAnotherAnthropicLocation,
+} from '../../services/modelConfig';
 
 import { postDiagnostic } from './diagnosticsWebhook';
 import { errMsg } from '../../utils/errors';
@@ -13,48 +25,8 @@ interface CheckResult {
   detail: string;
 }
 
-const ANTHROPIC_MODELS = ['claude-sonnet-4-6', 'claude-opus-4-6'];
-const GEMINI_TEXT_MODEL = 'gemini-2.5-flash';
-const GEMINI_TTS_MODEL = 'gemini-2.5-flash-preview-tts';
-const USE_VERTEX_ANTHROPIC = process.env.ANTHROPIC_USE_VERTEX_AI === 'true' || process.env.OPUS_USE_VERTEX_AI === 'true';
-const VERTEX_PROJECT_ID = process.env.VERTEX_PROJECT_ID || process.env.GOOGLE_CLOUD_PROJECT || process.env.GCLOUD_PROJECT || '';
-const VERTEX_LOCATION = process.env.VERTEX_LOCATION || 'us-central1';
-const VERTEX_ANTHROPIC_LOCATION = process.env.VERTEX_ANTHROPIC_LOCATION || process.env.VERTEX_PARTNER_LOCATION || VERTEX_LOCATION;
-const VERTEX_ANTHROPIC_FALLBACK_LOCATIONS = (process.env.VERTEX_ANTHROPIC_FALLBACK_LOCATIONS || 'us-east5')
-  .split(',')
-  .map((value) => value.trim())
-  .filter(Boolean);
-const VERTEX_ANTHROPIC_VERSION = process.env.VERTEX_ANTHROPIC_VERSION || 'vertex-2023-10-16';
 let vertexAuth: GoogleAuth | null = null;
 let lockClient: PoolClient | null = null;
-
-function uniqueLocations(locations: string[]): string[] {
-  const seen = new Set<string>();
-  const out: string[] = [];
-  for (const location of locations) {
-    const normalized = String(location || '').trim();
-    if (!normalized || seen.has(normalized)) continue;
-    seen.add(normalized);
-    out.push(normalized);
-  }
-  return out;
-}
-
-function preferredAnthropicLocations(modelName: string): string[] {
-  const normalizedModel = String(modelName || '').toLowerCase();
-  if (normalizedModel.includes('opus-4-6')) {
-    return uniqueLocations(['us-east5', VERTEX_ANTHROPIC_LOCATION, ...VERTEX_ANTHROPIC_FALLBACK_LOCATIONS]);
-  }
-  return uniqueLocations([VERTEX_ANTHROPIC_LOCATION, ...VERTEX_ANTHROPIC_FALLBACK_LOCATIONS]);
-}
-
-function shouldTryAnotherLocation(status: number, bodyText: string): boolean {
-  const msg = String(bodyText || '').toLowerCase();
-  if (status === 429) return true;
-  if (status === 404) return true;
-  if (status === 400 && (msg.includes('not servable') || msg.includes('not found'))) return true;
-  return false;
-}
 
 async function getVertexAccessToken(): Promise<string> {
   await ensureGoogleCredentials(VERTEX_PROJECT_ID).catch(() => false);
@@ -100,8 +72,6 @@ export async function runModelHealthChecks(): Promise<void> {
   const results: CheckResult[] = [];
 
   results.push(await checkAnthropic());
-  results.push(await checkGeminiText());
-  results.push(await checkGeminiTTS());
   results.push(await checkDeepgram());
   results.push(await checkElevenLabs());
 
@@ -145,10 +115,10 @@ async function checkAnthropic(): Promise<CheckResult> {
       return { name: 'Anthropic', ok: false, detail: 'Vertex Anthropic enabled but VERTEX_PROJECT_ID is missing' };
     }
 
-    const modelName = process.env.ANTHROPIC_CODING_MODEL || ANTHROPIC_MODELS[1];
+    const modelName = DEFAULT_CODING_MODEL;
     try {
       const token = await getVertexAccessToken();
-      const locations = preferredAnthropicLocations(modelName);
+      const locations = getPreferredAnthropicLocations(modelName);
       let lastFailure = 'request failed';
 
       for (let index = 0; index < locations.length; index += 1) {
@@ -174,7 +144,7 @@ async function checkAnthropic(): Promise<CheckResult> {
 
         const body = await safeText(res);
         lastFailure = `Vertex HTTP ${res.status} (${location}) ${body.slice(0, 120)}`;
-        if (index < locations.length - 1 && shouldTryAnotherLocation(res.status, body)) {
+        if (index < locations.length - 1 && shouldTryAnotherAnthropicLocation(res.status, body)) {
           continue;
         }
         return { name: 'Anthropic', ok: false, detail: lastFailure };
@@ -205,80 +175,13 @@ async function checkAnthropic(): Promise<CheckResult> {
 
     const data = await res.json() as { data?: Array<{ id?: string }> };
     const ids = new Set((data.data || []).map((m) => m.id).filter(Boolean) as string[]);
-    const missing = ANTHROPIC_MODELS.filter((id) => !ids.has(id));
+    const missing = ANTHROPIC_HEALTHCHECK_MODELS.filter((id) => !ids.has(id));
     if (missing.length > 0) {
       return { name: 'Anthropic', ok: false, detail: `missing models: ${missing.join(', ')}` };
     }
-    return { name: 'Anthropic', ok: true, detail: `models available: ${ANTHROPIC_MODELS.join(', ')}` };
+    return { name: 'Anthropic', ok: true, detail: `models available: ${ANTHROPIC_HEALTHCHECK_MODELS.join(', ')}` };
   } catch (err) {
     return { name: 'Anthropic', ok: false, detail: errMsg(err) };
-  }
-}
-
-async function checkGeminiText(): Promise<CheckResult> {
-  const key = process.env.GEMINI_API_KEY;
-  if (!key) return { name: 'Gemini text', ok: false, detail: 'GEMINI_API_KEY missing' };
-
-  const models = await getGeminiModels(key);
-  if (!models.ok) return { name: 'Gemini text', ok: false, detail: models.detail };
-  if (!models.names.has(`models/${GEMINI_TEXT_MODEL}`)) {
-    return { name: 'Gemini text', ok: false, detail: `${GEMINI_TEXT_MODEL} not listed for this API key/project` };
-  }
-
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_TEXT_MODEL}:generateContent?key=${encodeURIComponent(key)}`;
-  try {
-    const res = await fetchWithTimeout(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: [{ parts: [{ text: 'health check: respond with ok' }] }],
-        generationConfig: { maxOutputTokens: 8 },
-      }),
-    }, 15000);
-
-    if (!res.ok) {
-      const body = await safeText(res);
-      if (res.status === 429) {
-        return { name: 'Gemini text', ok: false, detail: 'quota exceeded or billing disabled for generateContent' };
-      }
-      return { name: 'Gemini text', ok: false, detail: `HTTP ${res.status} ${body.slice(0, 120)}` };
-    }
-    return { name: 'Gemini text', ok: true, detail: `${GEMINI_TEXT_MODEL} reachable` };
-  } catch (err) {
-    return { name: 'Gemini text', ok: false, detail: errMsg(err) };
-  }
-}
-
-async function checkGeminiTTS(): Promise<CheckResult> {
-  const key = process.env.GEMINI_API_KEY;
-  if (!key) return { name: 'Gemini TTS', ok: false, detail: 'GEMINI_API_KEY missing' };
-
-  const models = await getGeminiModels(key);
-  if (!models.ok) return { name: 'Gemini TTS', ok: false, detail: models.detail };
-  if (!models.names.has(`models/${GEMINI_TTS_MODEL}`)) {
-    return { name: 'Gemini TTS', ok: false, detail: `${GEMINI_TTS_MODEL} not listed for this API key/project` };
-  }
-  return { name: 'Gemini TTS', ok: true, detail: `${GEMINI_TTS_MODEL} enabled` };
-}
-
-async function getGeminiModels(key: string): Promise<{ ok: true; names: Set<string> } | { ok: false; detail: string }> {
-  const url = `https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(key)}`;
-  try {
-    const res = await fetchWithTimeout(url, { method: 'GET' }, 15000);
-    if (!res.ok) {
-      const body = await safeText(res);
-      if (res.status === 429) {
-        return { ok: false, detail: 'quota exceeded or billing disabled for Gemini API key' };
-      }
-      return { ok: false, detail: `HTTP ${res.status} ${body.slice(0, 120)}` };
-    }
-    const data = await res.json() as { models?: Array<{ name?: string }> };
-    return {
-      ok: true,
-      names: new Set((data.models || []).map((m) => m.name).filter(Boolean) as string[]),
-    };
-  } catch (err) {
-    return { ok: false, detail: errMsg(err) };
   }
 }
 

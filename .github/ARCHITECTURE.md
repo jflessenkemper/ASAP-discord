@@ -9,8 +9,7 @@ flowchart TB
         direction LR
         subgraph AgentChannels["Agent Channels"]
             direction TB
-            Riley["📋 Riley\nOrchestrator\nLifecycle control"]
-            Ace["💻 Ace\nTool Master\n77 tools"]
+            Riley["📋 Riley\nPrimary executor\nLifecycle control"]
             subgraph FullTools["🟢 Full Access"]
                 Jude["🚀 Jude · DevOps"]
                 Mia["🍎 Mia · iOS"]
@@ -46,12 +45,10 @@ flowchart TB
 
     %% ── Message Routing ──
     User -->|"text request or couch-mode build goal"| Riley
-    Riley -->|"handoff.ts\ntask + context"| Ace
-    Ace -->|"@mention in response"| FullTools
-    Ace -->|"@mention for review"| ReviewTools
-    ReviewTools -->|"feedback"| Ace
-    FullTools -->|"results"| Ace
-    Ace -->|"result summary"| Riley
+    Riley -->|"direct execution + focused delegation"| FullTools
+    Riley -->|"review requests"| ReviewTools
+    ReviewTools -->|"feedback"| Riley
+    FullTools -->|"results"| Riley
     Riley -->|"create_agent\nremove_agent\nlist_agents"| DynAgents
     Riley -->|"suggestions, status, loop health\nin #groupchat"| User
     Riley -->|"major decision in groupchat\n=> tag Jordan"| User
@@ -60,7 +57,7 @@ flowchart TB
     %% ── Voice System ──
     subgraph Voice["🎙️ Voice — callSession.ts"]
         direction LR
-        VoiceIn["ElevenLabs ConvAI\nGemini fallback"]
+        VoiceIn["ElevenLabs ConvAI\nAnthropic-backed prompts"]
         VoiceCmd["Live Riley voice mode\nanswer · suggest next step\nask for major decision directly"]
         VoiceIn --> VoiceCmd
     end
@@ -71,13 +68,13 @@ flowchart TB
     %% ── LLM Core ──
     subgraph LLM["🧠 claude.ts — agentRespond()"]
         direction TB
-        InputGuard["1. Input Guardrail\nguardrails.ts · Gemini Flash"]
+        InputGuard["1. Input Guardrail\nguardrails.ts · Anthropic fast model"]
         MemRecall["2. Memory Recall\nvectorMemory.ts · cosine search"]
         SmokeHealth["2b. Smoke Health\ngetLatestSmokeHealthLine()"]
-        ModelSelect["3. Model Selection\nmodelHealthCheck.ts · fallback chains"]
+        ModelSelect["3. Model Selection\nservices/modelConfig.ts + modelHealth.ts"]
         CacheCheck["4. Cache Check\ncontextCache.ts · save 50-75% tokens"]
         BudgetCheck["5. Budget Check\nusage.ts · 8M tokens / $250 daily"]
-        APICall["6. API Call\nClaude Opus 4.6 / Sonnet 4\nGemini Flash / Pro"]
+        APICall["6. API Call\nAnthropic model registry\nOpus / Sonnet plug-and-play"]
         ToolLoop["7. Tool Loop\ntools.ts · up to maxToolRounds\ncircuit breaker inlined"]
         OutputGuard["8. Output Guardrail\nguardrails.ts"]
         UsageRecord["9. Record\nusage.ts (includes tracing)"]
@@ -89,7 +86,6 @@ flowchart TB
     end
 
     Riley --> LLM
-    Ace --> LLM
     FullTools --> LLM
     ReviewTools --> LLM
     DynAgents --> LLM
@@ -128,8 +124,8 @@ flowchart TB
     subgraph SelfImprove["🔄 Self-Improvement Loop"]
         direction LR
         Identify["1. Riley spots\nbug or gap"]
-        Delegate["2. Delegate\nvia handoff.ts"]
-        WriteCode["3. Ace writes\ncode via tools"]
+        Delegate["2. Riley decides\nexecute vs specialist help"]
+        WriteCode["3. Riley writes\ncode via tools"]
         RunTests["4. Test\nJest (unit)\ntester.ts (smoke)"]
         CreatePR["5. PR + Review\n6 agents review"]
         Ship["6. Deploy\nmerge → build\n→ Cloud Run"]

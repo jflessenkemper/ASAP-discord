@@ -33,12 +33,11 @@ import {
 
 describe('agents', () => {
   describe('AGENT_IDS', () => {
-    it('contains all 13 agent IDs', () => {
-      expect(AGENT_IDS.length).toBe(13);
+    it('contains all 12 static agent IDs', () => {
+      expect(AGENT_IDS.length).toBe(12);
     });
 
     it('includes known agent IDs', () => {
-      expect(AGENT_IDS).toContain('developer');
       expect(AGENT_IDS).toContain('executive-assistant');
       expect(AGENT_IDS).toContain('qa');
       expect(AGENT_IDS).toContain('security-auditor');
@@ -49,7 +48,7 @@ describe('agents', () => {
     it('returns a Map of all agents', () => {
       const agents = getAgents();
       expect(agents).toBeInstanceOf(Map);
-      expect(agents.size).toBe(13);
+      expect(agents.size).toBe(12);
     });
 
     it('each agent has required properties', () => {
@@ -76,10 +75,10 @@ describe('agents', () => {
   });
 
   describe('getAgent()', () => {
-    it('returns agent by ID', () => {
+    it('returns Riley for the legacy developer compatibility ID', () => {
       const agent = getAgent('developer');
       expect(agent).toBeDefined();
-      expect(agent!.name).toContain('Ace');
+      expect(agent!.name).toContain('Riley');
     });
 
     it('returns undefined for unknown ID', () => {
@@ -89,32 +88,32 @@ describe('agents', () => {
 
   describe('resolveAgentId()', () => {
     it('resolves by exact ID', () => {
-      expect(resolveAgentId('developer')).toBe('developer');
+      expect(resolveAgentId('developer')).toBe('executive-assistant');
     });
 
     it('resolves by handle', () => {
-      expect(resolveAgentId('ace')).toBe('developer');
+      expect(resolveAgentId('ace')).toBe('executive-assistant');
       expect(resolveAgentId('riley')).toBe('executive-assistant');
     });
 
     it('resolves by alias', () => {
-      expect(resolveAgentId('dev')).toBe('developer');
+      expect(resolveAgentId('dev')).toBe('executive-assistant');
       expect(resolveAgentId('qa')).toBe('qa');
       expect(resolveAgentId('security')).toBe('security-auditor');
     });
 
     it('resolves with @ prefix', () => {
-      expect(resolveAgentId('@ace')).toBe('developer');
+      expect(resolveAgentId('@ace')).toBe('executive-assistant');
       expect(resolveAgentId('@@riley')).toBe('executive-assistant');
     });
 
     it('resolves case-insensitively', () => {
-      expect(resolveAgentId('ACE')).toBe('developer');
+      expect(resolveAgentId('ACE')).toBe('executive-assistant');
       expect(resolveAgentId('Riley')).toBe('executive-assistant');
     });
 
     it('resolves by role name', () => {
-      expect(resolveAgentId('Ace')).toBe('developer');
+      expect(resolveAgentId('Ace')).toBe('executive-assistant');
       expect(resolveAgentId('Riley')).toBe('executive-assistant');
     });
 
@@ -157,7 +156,7 @@ describe('agents', () => {
     });
 
     it('returns @handle when no role ID is set', () => {
-      expect(getAgentMention('developer')).toBe('@ace');
+      expect(getAgentMention('developer')).toBe('@riley');
     });
 
     it('returns Discord role mention when role ID is set', () => {
@@ -170,7 +169,7 @@ describe('agents', () => {
     it('returns deduplicated aliases including ID and handle', () => {
       const aliases = getAgentAliases('developer');
       expect(aliases).toContain('developer');
-      expect(aliases).toContain('ace');
+      expect(aliases).toContain('riley');
       expect(aliases).toContain('dev');
     });
 
@@ -182,35 +181,34 @@ describe('agents', () => {
   describe('buildAgentMentionGuide()', () => {
     it('builds guide for all agents', () => {
       const guide = buildAgentMentionGuide();
-      expect(guide).toContain('Ace');
       expect(guide).toContain('Riley');
-      expect(guide.split(', ').length).toBe(13);
+      expect(guide.split(', ').length).toBe(12);
     });
 
     it('builds guide for specified agents', () => {
-      const guide = buildAgentMentionGuide(['developer', 'qa']);
-      expect(guide).toContain('Ace');
+      const guide = buildAgentMentionGuide(['executive-assistant', 'qa']);
+      expect(guide).toContain('Riley');
       expect(guide).toContain('Max');
       expect(guide.split(', ').length).toBe(2);
     });
 
     it('filters out null entries for invalid agent IDs', () => {
       const guide = buildAgentMentionGuide(['developer', 'nonexistent' as any]);
-      expect(guide).toContain('Ace');
-      expect(guide).not.toContain('nonexistent');
       expect(guide.split(', ').length).toBe(1);
+      expect(guide).toContain('Riley');
+      expect(guide).not.toContain('nonexistent');
     });
   });
 
   describe('getAgentByChannelName()', () => {
     it('resolves by channel name', () => {
-      const agent = getAgentByChannelName('💻-developer');
-      expect(agent?.id).toBe('developer');
+      const agent = getAgentByChannelName('📋-executive-assistant');
+      expect(agent?.id).toBe('executive-assistant');
     });
 
     it('resolves by agent ID as channel name', () => {
-      const agent = getAgentByChannelName('developer');
-      expect(agent?.id).toBe('developer');
+      const agent = getAgentByChannelName('executive-assistant');
+      expect(agent?.id).toBe('executive-assistant');
     });
 
     it('returns undefined for unknown channel', () => {

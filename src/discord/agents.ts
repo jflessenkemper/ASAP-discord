@@ -17,7 +17,7 @@ export interface AgentConfig {
   emoji: string;
   /** Hex color for Discord embeds */
   color: number;
-  /** Gemini TTS voice name */
+  /** ElevenLabs voice name */
   voice: string;
   /** Avatar URL for webhook identity */
   avatarUrl: string;
@@ -40,16 +40,15 @@ const AGENT_REGISTRY = [
   { id: 'performance',         name: 'Kai (Performance)',         handle: 'kai',     roleName: 'Kai',    aliases: ['performance', 'perf', 'kai'],                         emoji: '⚡',  color: 0x0EA5E9, voice: 'Orus',      channelName: '⚡-performance' },
   { id: 'devops',              name: 'Jude (DevOps)',             handle: 'jude',    roleName: 'Jude',   aliases: ['devops', 'ops', 'jude'],                              emoji: '🚀',  color: 0x4338CA, voice: 'Vale',      channelName: '🚀-devops' },
   { id: 'copywriter',          name: 'Liv (Copywriter)',          handle: 'liv',     roleName: 'Liv',    aliases: ['copywriter', 'copy', 'liv'],                          emoji: '✍️',  color: 0x0F766E, voice: 'Zephyr',    channelName: '✍️-copywriter' },
-  { id: 'developer',           name: 'Ace (Developer)',           handle: 'ace',     roleName: 'Ace',    aliases: ['developer', 'dev', 'ace'],                            emoji: '💻',  color: 0x4682B4, voice: 'Achernar',  channelName: '💻-developer' },
   { id: 'lawyer',              name: 'Harper (Lawyer)',           handle: 'harper',  roleName: 'Harper', aliases: ['lawyer', 'legal', 'harper'],                          emoji: '⚖️',  color: 0x14532D, voice: 'Sulafat',   channelName: '⚖️-lawyer' },
-  { id: 'executive-assistant', name: 'Riley (Executive Assistant)', handle: 'riley', roleName: 'Riley',  aliases: ['executive-assistant', 'executive', 'assistant', 'riley'], emoji: '📋', color: 0x1D4ED8, voice: 'RileyEL',   channelName: '📋-executive-assistant' },
+  { id: 'executive-assistant', name: 'Riley (Executive Assistant)', handle: 'riley', roleName: 'Riley',  aliases: ['executive-assistant', 'executive', 'assistant', 'riley', 'developer', 'dev', 'ace'], emoji: '📋', color: 0x1D4ED8, voice: 'RileyEL',   channelName: '📋-executive-assistant' },
   { id: 'ios-engineer',        name: 'Mia (iOS Engineer)',        handle: 'mia',     roleName: 'Mia',    aliases: ['ios-engineer', 'ios', 'mia'],                         emoji: '🍎',  color: 0xF97316, voice: 'Enceladus', channelName: '🍎-ios-engineer' },
   { id: 'android-engineer',    name: 'Leo (Android Engineer)',    handle: 'leo',     roleName: 'Leo',    aliases: ['android-engineer', 'android', 'leo'],                 emoji: '🤖',  color: 0x16A34A, voice: 'Iapetus',   channelName: '🤖-android-engineer' },
 ] as const;
 
-const AGENT_IDS = AGENT_REGISTRY.map((a) => a.id) as unknown as readonly AgentId[];
+export type AgentId = (typeof AGENT_REGISTRY)[number]['id'] | 'developer';
 
-export type AgentId = (typeof AGENT_REGISTRY)[number]['id'];
+const AGENT_IDS = AGENT_REGISTRY.map((a) => a.id) as unknown as readonly AgentId[];
 
 /** Resolve the .github directory for loading agent prompts and personality files. */
 function resolveGithubDir(): string | null {
@@ -136,6 +135,12 @@ const dynamicAgents = new Map<string, AgentConfig>();
 
 const DYNAMIC_AGENTS_DB_KEY = 'dynamic-agent-registry';
 let dynamicAgentDbDisabled = false;
+
+function normalizeStaticAgentId(id: string): AgentId {
+  return (id === 'developer' || id === 'dev' || id === 'ace')
+    ? 'executive-assistant'
+    : id as AgentId;
+}
 
 async function persistDynamicAgents(): Promise<void> {
   if (dynamicAgentDbDisabled) return;
@@ -240,19 +245,20 @@ export function getAgents(): Map<AgentId, AgentConfig> {
 }
 
 export function getAgent(id: AgentId): AgentConfig | undefined {
-  return getAgents().get(id);
+  return getAgents().get(normalizeStaticAgentId(id));
 }
 
 export function setAgentRoleId(id: AgentId, roleId: string | null): void {
+  const normalizedId = normalizeStaticAgentId(id);
   if (roleId) {
-    agentRoleIds.set(id, roleId);
+    agentRoleIds.set(normalizedId, roleId);
     return;
   }
-  agentRoleIds.delete(id);
+  agentRoleIds.delete(normalizedId);
 }
 
 export function getAgentRoleId(id: AgentId): string | null {
-  return agentRoleIds.get(id) || null;
+  return agentRoleIds.get(normalizeStaticAgentId(id)) || null;
 }
 
 export function getAgentMention(id: AgentId): string {
@@ -263,7 +269,7 @@ export function getAgentMention(id: AgentId): string {
 }
 
 export function getAgentAliases(id: AgentId): string[] {
-  const agent = getAgent(id);
+  const agent = getAgent(normalizeStaticAgentId(id));
   if (!agent) return [id];
   return [...new Set([id, agent.handle, ...agent.aliases])];
 }
@@ -274,6 +280,9 @@ function normalizeAgentToken(token: string): string {
 
 export function resolveAgentId(token: string): AgentId | null {
   const normalized = normalizeAgentToken(token);
+  if (normalized === 'developer' || normalized === 'dev' || normalized === 'ace') {
+    return 'executive-assistant';
+  }
   for (const [id, agent] of getAgents()) {
     if (normalized === id) return id;
     if (normalized === agent.handle.toLowerCase()) return id;

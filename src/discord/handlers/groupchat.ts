@@ -367,7 +367,7 @@ function normalizeDirectedPrompt(prompt: string): string {
 }
 
 function shouldEchoDirectedResponseToGroupchat(agentIds: string[], userMessage: string): boolean {
-  if (agentIds.length !== 1 || agentIds[0] !== 'developer') return false;
+  if (agentIds.length !== 1 || agentIds[0] !== 'executive-assistant') return false;
   const normalized = normalizeDirectedPrompt(userMessage);
   if (!normalized) return false;
   if (normalized.length > 180) return false;
@@ -1779,11 +1779,10 @@ async function processGroupchatMessage(
         handleRileyMessage(content, senderName, message.member || undefined, groupchat, signal, workspaceChannel),
       );
     } else if (uniqueMentions.length === 1 && uniqueMentions[0] === 'developer') {
-      // Explicit direct-to-Ace requests are allowed.
+      // Legacy @ace/@developer mentions route to Riley.
       await handleDirectedMessage(content, senderName, uniqueMentions, groupchat, workspaceChannel, signal);
     } else {
-      // Hard-route multi/specialist mentions through Riley so she can delegate to Ace first.
-      const normalized = `${content}\n\n[System: route this through @ace first. Do not delegate directly to specialists.]`;
+      const normalized = `${content}\n\n[System: Riley should execute directly when possible and involve specialists only when needed.]`;
       goalState.setGoal(normalized);
       await withRileyResponseWatchdog(
         workspaceChannel,
@@ -1846,7 +1845,7 @@ export function getStatusSummary(): string | null {
 }
 
 /**
- * Riley receives the message, responds, and orchestrates Ace + sub-agents.
+ * Riley receives the message, responds, and can involve specialists when needed.
  * She can trigger system actions by including [ACTION:xxx] tags in her response.
  */
 async function handleRileyMessage(
@@ -1904,7 +1903,7 @@ async function handleRileyMessage(
 
     const rileyMemory = getMemoryContext('executive-assistant');
     const contextMessage = `[${senderName}]: ${userMessage}`;
-    const aceGuide = buildAgentMentionGuide(['developer']);
+    const specialistGuide = buildAgentMentionGuide(['qa', 'ux-reviewer', 'security-auditor', 'api-reviewer', 'dba', 'performance', 'devops', 'copywriter', 'lawyer', 'ios-engineer', 'android-engineer']);
     const cjkPattern = /[\u4e00-\u9fff\u3400-\u4dbf]/;
     const textLangHint = cjkPattern.test(userMessage)
       ? '\n\n[Language detected: Mandarin Chinese. Please reply in Mandarin Chinese (简体中文).]'
@@ -1913,8 +1912,8 @@ async function handleRileyMessage(
     const isDirectToolRequest = /smoke_test_agents|run\s+(all\s+)?(smoke|test)|test\s+engine/i.test(userMessage);
     const shouldExecuteDirectly = isSmokeTest || isDirectToolRequest;
     const mentionGuide = shouldExecuteDirectly
-      ? '\n\n[This is a direct tool request. Execute tools yourself directly — especially smoke_test_agents. Do NOT delegate to Ace or any specialist. Do NOT mention or tag any agent roles. Call the smoke_test_agents tool immediately.]'
-      : `\n\n[Delegation contract: route execution only via ${aceGuide}. Do not directly delegate to specialists; Ace may invoke them if needed.]`;
+      ? '\n\n[This is a direct tool request. Execute tools yourself directly — especially smoke_test_agents. Do NOT delegate to specialists. Do NOT mention or tag any agent roles. Call the smoke_test_agents tool immediately.]'
+      : `\n\n[Execution contract: execute directly whenever possible. Involve specialists only when a focused review or domain-specific help is needed. Available specialists: ${specialistGuide}.]`;
     const threadCloseGuide = `\n\n[Keep the workspace thread updated briefly. Include [ACTION:CLOSE_THREAD] only when the task is fully complete.]`;
     const decisionGuide = '\n\n[Decision policy: only ask the user for MAJOR decisions (prod risk, security/privacy, rollback/no-rollback, schema/data-loss risk, spend increase, legal/compliance impact). For routine implementation choices, decide and proceed. In #groupchat, when a major decision is needed, address the user directly and the system will tag them. Use the decisions channel for queued/offline decisions, not for live voice.]';
     const contextMessageWithLang = `${textLangHint ? `${contextMessage}${textLangHint}` : contextMessage}${mentionGuide}${threadCloseGuide}${decisionGuide}`;
@@ -1931,12 +1930,12 @@ async function handleRileyMessage(
     const responseEnvelope = extractAgentResponseEnvelope(response);
     const machineDelegateAgents = (responseEnvelope?.machine?.delegateAgents || [])
       .map((id) => resolveAgentId(id))
-      .filter((id): id is AgentId => Boolean(id) && id === 'developer');
+      .filter((id): id is AgentId => Boolean(id) && id !== 'executive-assistant');
     const machineActionTags = (responseEnvelope?.machine?.actionTags || [])
       .map((tag) => String(tag || '').trim())
       .filter((tag) => /^\[ACTION:[^\]]+\]$/i.test(tag));
     const machineRoutingSuffix = machineDelegateAgents.length > 0
-      ? `\n\n${machineDelegateAgents.map((id) => getAgentMention(id)).join(' ')} please take the lead on this task and involve other specialists only if needed.`
+      ? `\n\n${machineDelegateAgents.map((id) => getAgentMention(id)).join(' ')} please help Riley with the focused follow-up for this task.`
       : '';
     const visibleHumanResponse = sanitizeVisibleAgentReply(responseEnvelope?.human || response);
     const orchestrationResponse = `${visibleHumanResponse}${machineRoutingSuffix}`.trim();
@@ -2045,8 +2044,7 @@ async function handleRileyMessage(
       }
     }
 
-    const chainResponse = ensureAceFirstDelegation(orchestrationResponse, userMessage);
-    let chainResult = await handleAgentChain(chainResponse, groupchat, workspaceChannel, signal);
+    let chainResult = await handleAgentChain(orchestrationResponse, groupchat, workspaceChannel, signal);
 
     markGoalProgress('✅ Riley cycle 1 completed');
 
@@ -2066,11 +2064,11 @@ async function handleRileyMessage(
           break;
         }
 
-        const aceSummary = chainResult.summary
-          ? `Ace reported: ${chainResult.summary.slice(0, 500)}`
-          : 'Ace did not produce a completion summary.';
+        const executionSummary = chainResult.summary
+          ? `Specialist summary: ${chainResult.summary.slice(0, 500)}`
+          : 'No specialist follow-up summary was produced.';
 
-        const continuationPrompt = `[System continuation — cycle ${cycle}/${MAX_CONTINUATION_CYCLES}] Previous cycle status: ${lastStatus}. ${aceSummary}\n\nContinue with the next sub-task from the original goal: "${(goalState.goal || userMessage).slice(0, 300)}". Do not repeat completed work. Focus on the next unfinished item.`;
+        const continuationPrompt = `[System continuation — cycle ${cycle}/${MAX_CONTINUATION_CYCLES}] Previous cycle status: ${lastStatus}. ${executionSummary}\n\nContinue with the next sub-task from the original goal: "${(goalState.goal || userMessage).slice(0, 300)}". Do not repeat completed work. Focus on the next unfinished item.`;
 
         await sendAutopilotAudit(
           groupchat,
@@ -2114,9 +2112,7 @@ async function handleRileyMessage(
         // Update display for next iteration's status check
         displayResponse = contRendered;
 
-        // Run Ace on Riley's new instructions
-        const contChainText = ensureAceFirstDelegation(continuationResponse, continuationPrompt);
-        chainResult = await handleAgentChain(contChainText, groupchat, workspaceChannel, signal);
+        chainResult = await handleAgentChain(continuationResponse, groupchat, workspaceChannel, signal);
 
         markGoalProgress(`✅ Riley cycle ${cycle} completed`);
 
@@ -2183,7 +2179,7 @@ export async function dispatchUpgradeToRiley(
   upgradeDescription: string,
   groupchat: TextChannel
 ): Promise<void> {
-  const prompt = `[Upgrades triage — auto-dispatch] The following upgrade has been accepted by multiple agents and is ready for implementation. Review it and either implement it yourself or delegate to @ace:\n\n${upgradeDescription}`;
+  const prompt = `[Upgrades triage — auto-dispatch] The following upgrade has been accepted by multiple agents and is ready for implementation. Review it and either implement it directly or involve the right specialist:\n\n${upgradeDescription}`;
   await handleRileyMessage(prompt, 'system', undefined, groupchat);
 }
 
@@ -2549,11 +2545,11 @@ async function executeActions(
 }
 
 /**
- * Parse Riley/Ace's response for @agent directives using strict word-boundary regex.
+ * Parse Riley and specialist directives using strict word-boundary regex.
  * Only matches explicit @name patterns to avoid false positives.
  */
 const DIRECTED_AGENT_IDS = new Set<string>([
-  'developer', 'qa', 'ux-reviewer', 'security-auditor', 'api-reviewer',
+  'qa', 'ux-reviewer', 'security-auditor', 'api-reviewer',
   'dba', 'performance', 'devops', 'copywriter', 'lawyer',
   'ios-engineer', 'android-engineer',
 ]);
@@ -2569,7 +2565,7 @@ function parseDirectives(text: string): string[] {
 function shouldFanOutAllAgents(rileyResponse: string): boolean {
   const text = rileyResponse.toLowerCase();
   if (text.includes('no action needed') || text.includes('for awareness only')) return false;
-  if (/(only|just)\s+@(ace|max|sophie|kane|raj|elena|kai|jude|liv|harper|mia|leo)\b/i.test(rileyResponse)) return false;
+  if (/(only|just)\s+@(max|sophie|kane|raj|elena|kai|jude|liv|harper|mia|leo)\b/i.test(rileyResponse)) return false;
   return true;
 }
 
@@ -2657,16 +2653,7 @@ function inferSpecialistsForContext(text: string): string[] {
 }
 
 function shouldAutoDelegateToAce(userMessage: string, rileyResponse: string): boolean {
-  if (parseDirectives(rileyResponse).length > 0) return false;
-  const responseText = rileyResponse.toLowerCase();
-  if (responseText.includes('no action needed') || responseText.includes('for awareness only') || responseText.includes('decision required')) {
-    return false;
-  }
-  const msg = userMessage.toLowerCase();
-  // Never auto-delegate smoke test prompts or messages that explicitly refuse delegation
-  if (/\[smoke\s*test:/i.test(msg)) return false;
-  if (/do\s+not\s+delegate|don'?t\s+delegate/i.test(msg)) return false;
-  return ACE_FIRST_TASK_RE.test(userMessage);
+  return false;
 }
 
 function ensureAceFirstDelegation(rileyResponse: string, userMessage: string): string {

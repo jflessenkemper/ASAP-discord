@@ -19,5 +19,5 @@ export { postAgentErrorLog } from './services/agentErrors';
 export { getInboundTwiML, attachTelephonyWebSocket, isTelephonyAvailable } from './services/telephony';
 
 // Metrics + budget
-export { getMetricsText, PROMETHEUS_CONTENT_TYPE, updateGeminiSpend } from './metrics';
+export { getMetricsText, PROMETHEUS_CONTENT_TYPE, updateLlmSpend, updateGeminiSpend } from './metrics';
 export { getRemainingBudget } from './usage';

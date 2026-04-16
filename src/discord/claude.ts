@@ -5,6 +5,19 @@ import { GoogleGenerativeAI, Content, Part, FunctionDeclaration, Tool } from '@g
 import { GoogleAuth } from 'google-auth-library';
 
 import { ensureGoogleCredentials, getAccessTokenViaGcloud } from '../services/googleCredentials';
+import {
+  DEFAULT_CODING_MODEL,
+  DEFAULT_FAST_MODEL,
+  VOICE_FAST_MODEL,
+  USE_VERTEX_ANTHROPIC,
+  VERTEX_PROJECT_ID,
+  VERTEX_LOCATION,
+  VERTEX_ANTHROPIC_LOCATION,
+  VERTEX_ANTHROPIC_FALLBACK_LOCATIONS,
+  VERTEX_ANTHROPIC_VERSION,
+  getPreferredAnthropicLocations,
+  shouldTryAnotherAnthropicLocation,
+} from '../services/modelConfig';
 
 import { logAgentEvent } from './activityLog';
 import { AgentConfig, getRileyPersonality, getRileyMemory, getOwnerName } from './agents';
@@ -45,19 +58,14 @@ if (PROJECT_CONTEXT.length > PROJECT_CONTEXT_MAX_CHARS) {
 const PROJECT_CONTEXT_LIGHT_MAX_CHARS = parseInt(process.env.PROJECT_CONTEXT_LIGHT_MAX_CHARS || '500', 10);
 const PROJECT_CONTEXT_LIGHT = PROJECT_CONTEXT.slice(0, PROJECT_CONTEXT_LIGHT_MAX_CHARS);
 
-const GEMINI_FLASH = process.env.GEMINI_FLASH_MODEL || 'gemini-flash-latest';
-const GEMINI_FLASH_LITE = process.env.GEMINI_FLASH_LITE_MODEL || 'gemini-2.0-flash';
-const GEMINI_PRO = process.env.GEMINI_PRO_MODEL || 'gemini-2.5-pro';
-const ANTHROPIC_OPUS = process.env.ANTHROPIC_CODING_MODEL || 'claude-opus-4-6';
-const ANTHROPIC_SONNET = 'claude-sonnet-4-20250514';
-const DEFAULT_CODING_MODEL = process.env.CODING_AGENT_MODEL || ANTHROPIC_OPUS;
-const DEFAULT_FAST_MODEL = process.env.FAST_AGENT_MODEL || ANTHROPIC_SONNET;
-const VOICE_FAST_MODEL = process.env.VOICE_FAST_MODEL || DEFAULT_FAST_MODEL;
+const GEMINI_FLASH = DEFAULT_FAST_MODEL;
+const GEMINI_FLASH_LITE = DEFAULT_FAST_MODEL;
+const GEMINI_PRO = DEFAULT_CODING_MODEL;
 const VERTEX_OPUS_ONLY_MODE = process.env.VERTEX_OPUS_ONLY_MODE === 'true';
 const FORCE_OPUS_FOR_CODE_WORK = process.env.FORCE_OPUS_FOR_CODE_WORK === 'true';
 const DEVELOPER_ALWAYS_OPUS = process.env.DEVELOPER_ALWAYS_OPUS === 'true';
 const COMPACT_RUNTIME_TOOL_PROMPTS = process.env.COMPACT_RUNTIME_TOOL_PROMPTS !== 'false';
-const CODE_HEAVY_AGENT_IDS = new Set(['developer', 'devops', 'ios-engineer', 'android-engineer']);
+const CODE_HEAVY_AGENT_IDS = new Set(['executive-assistant', 'developer', 'devops', 'ios-engineer', 'android-engineer']);
 const CODE_WORK_RE = /\b(?:code|coding|implement(?:ation)?|fix(?:ing)?\s+(?:bug|error|crash|issue)|bug(?:fix)?|debug(?:ging)?|refactor(?:ing)?|build(?:ing)?\s+(?:the|a|this)|compile|lint(?:ing)?|typecheck(?:ing)?|deploy(?:ing|ment)?|migration|schema\s+(?:change|update|migration)|pull\s*request|merge\s+(?:pr|branch)|tsx|jsx|react\s+(?:native|component)|expo\s+(?:build|update))\b/i;
 const TOOL_ACTION_RE = /\b(?:run|read|search|grep|inspect|check|verify|edit|change|update|deploy|build|test|commit|push|rollback|migrate|open)\b/i;
 const SIMPLE_FAST_PATH_RE = /^(?:ok(?:ay)?|yes|no|thanks?|thank you|status|summary|summari[sz]e|what happened|why|how|help|ping|continue|proceed|looks good|sounds good)\b/i;
@@ -431,18 +439,9 @@ let vertexTokenCache: { token: string; expiresAtMs: number } | null = null;
 let vertexAuthUnavailable = false;
 
 const USE_VERTEX_AI = process.env.GEMINI_USE_VERTEX_AI === 'true';
-const USE_VERTEX_ANTHROPIC = process.env.ANTHROPIC_USE_VERTEX_AI !== 'false';
 const ANTHROPIC_DIRECT_API_KEY = process.env.ANTHROPIC_API_KEY || '';
 const ANTHROPIC_PREFER_DIRECT = process.env.ANTHROPIC_PREFER_DIRECT !== 'false'; // default: prefer direct API over Vertex when key available
-const VERTEX_PROJECT_ID = process.env.VERTEX_PROJECT_ID || process.env.GOOGLE_CLOUD_PROJECT || process.env.GCLOUD_PROJECT || '';
-const VERTEX_LOCATION = process.env.VERTEX_LOCATION || 'us-central1';
 const VERTEX_GEMINI_USE_GLOBAL = process.env.VERTEX_GEMINI_USE_GLOBAL !== 'false'; // default: global endpoint for Gemini
-const VERTEX_ANTHROPIC_LOCATION = process.env.VERTEX_ANTHROPIC_LOCATION || process.env.VERTEX_PARTNER_LOCATION || VERTEX_LOCATION;
-const VERTEX_ANTHROPIC_FALLBACK_LOCATIONS = (process.env.VERTEX_ANTHROPIC_FALLBACK_LOCATIONS || 'us-east5')
-  .split(',')
-  .map((value) => value.trim())
-  .filter(Boolean);
-const VERTEX_ANTHROPIC_VERSION = process.env.VERTEX_ANTHROPIC_VERSION || 'vertex-2023-10-16';
 const PARTNER_MODEL_CACHE_ENABLED = process.env.PARTNER_MODEL_CACHE_ENABLED !== 'false';
 let warnedVertexAnthropicMissingProject = false;
 
@@ -539,34 +538,6 @@ function makeVertexAnthropicError(
     err.location = location;
   }
   return err;
-}
-
-function uniqueLocations(locations: string[]): string[] {
-  const seen = new Set<string>();
-  const out: string[] = [];
-  for (const location of locations) {
-    const normalized = String(location || '').trim();
-    if (!normalized || seen.has(normalized)) continue;
-    seen.add(normalized);
-    out.push(normalized);
-  }
-  return out;
-}
-
-function preferredAnthropicLocations(modelName: string): string[] {
-  const normalizedModel = String(modelName || '').toLowerCase();
-  if (normalizedModel.includes('opus-4-6')) {
-    return uniqueLocations(['us-east5', VERTEX_ANTHROPIC_LOCATION, ...VERTEX_ANTHROPIC_FALLBACK_LOCATIONS]);
-  }
-  return uniqueLocations([VERTEX_ANTHROPIC_LOCATION, ...VERTEX_ANTHROPIC_FALLBACK_LOCATIONS]);
-}
-
-function shouldTryAnotherAnthropicLocation(status: number, bodyText: string): boolean {
-  const msg = String(bodyText || '').toLowerCase();
-  if (status === 429) return true;
-  if (status === 404) return true;
-  if (status === 400 && (msg.includes('not servable') || msg.includes('not found'))) return true;
-  return false;
 }
 
 function isVertexCredentialsUnavailableError(err: unknown): boolean {
@@ -730,7 +701,7 @@ async function callVertexAnthropicRawPredict(
   }
 
   let token = await getVertexAccessToken();
-  const locations = preferredAnthropicLocations(modelName);
+  const locations = getPreferredAnthropicLocations(modelName);
   let lastErr: Error | null = null;
   let retriedAuth = false;
 
@@ -2572,8 +2543,8 @@ export async function agentRespond(
   if (isCreditsExhaustedNow() && !isAnthropicModel(agentModel)) {
     const recoveryTime = formatRecoveryTime(creditsExhaustedUntil);
     return agent.id === 'executive-assistant'
-      ? `⚠️ Gemini quota is exhausted right now. Automatic retries resume at ${recoveryTime}. Pause the team and ask ${getOwnerName()} to check Google Cloud billing before more work continues.`
-      : `⚠️ Gemini quota is exhausted right now. Automatic retries resume at ${recoveryTime}. Ask Riley to request ${getOwnerName()} approval for more credits before continuing.`;
+      ? `⚠️ Anthropic quota is exhausted right now. Automatic retries resume at ${recoveryTime}. Pause the team and ask ${getOwnerName()} to check Anthropic billing before more work continues.`
+      : `⚠️ Anthropic quota is exhausted right now. Automatic retries resume at ${recoveryTime}. Ask Riley to request ${getOwnerName()} approval for more credits before continuing.`;
   }
 
   if (isBudgetExceeded()) {
@@ -3056,8 +3027,8 @@ ${getLatestSmokeHealthLine()}`;
           : `⚠️ Daily budget of $${roundLimit.toFixed(2)} has been reached ($${roundSpent.toFixed(2)} spent) and runtime auto-approval could not clear it. Ask Riley to escalate only if she confirms the block remains.`;
       }
       return agent.id === 'executive-assistant'
-        ? '⚠️ Daily Gemini token limit reached. Riley should request approval to raise DAILY_LIMIT_GEMINI_LLM_TOKENS (legacy: DAILY_LIMIT_CLAUDE_TOKENS) before the team continues.'
-        : '⚠️ Daily Gemini token limit reached. Ask Riley to request approval before continuing.';
+        ? '⚠️ Daily Anthropic token limit reached. Riley should request approval to raise DAILY_LIMIT_CLAUDE_TOKENS before the team continues.'
+        : '⚠️ Daily Anthropic token limit reached. Ask Riley to request approval before continuing.';
     }
 
     if (TOOL_LOOP_TIMEOUT > 0 && Date.now() - loopStart > TOOL_LOOP_TIMEOUT) {
@@ -3657,11 +3628,11 @@ export async function summarizeCall(
     return '⚠️ Daily token limit reached — cannot generate summary.';
   }
 
-  const model = createModel(GEMINI_FLASH, {
+  const model = createModel(DEFAULT_FAST_MODEL, {
     systemInstruction: 'You are a concise meeting summarizer. Produce a clear summary with key points, decisions, and action items. Format for Discord markdown. Keep under 1900 characters. Use only the provided participant names; do not introduce extra participants that are not explicitly listed.',
   });
 
-  const result = await withConcurrencyLimit(GEMINI_FLASH, () =>
+  const result = await withConcurrencyLimit(DEFAULT_FAST_MODEL, () =>
     withRetry(() => model.generateContent(
       `Summarize this voice call between ${participants.join(', ')}:\n\n${transcript.join('\n')}`
     ))
@@ -3670,7 +3641,7 @@ export async function summarizeCall(
   recordClaudeUsage(
     result.response.usageMetadata?.promptTokenCount || 0,
     result.response.usageMetadata?.candidatesTokenCount || 0,
-    { modelName: GEMINI_FLASH, agentLabel: 'system:voice-summary' },
+    { modelName: DEFAULT_FAST_MODEL, agentLabel: 'system:voice-summary' },
   );
   return result.response.text() || 'Could not generate summary.';
 }
@@ -3724,18 +3695,18 @@ Create a condensed summary. Prioritize:
 
 Keep the summary under 700 words. Use bullet points. Drop small talk and redundant exchanges.`;
 
-  const model = createModel(GEMINI_FLASH_LITE, {
+  const model = createModel(DEFAULT_FAST_MODEL, {
     systemInstruction: 'You are a conversation compressor. Produce structured, information-dense summaries that preserve all actionable context while discarding noise. Output only the summary — no meta-commentary.',
   });
 
-  const result = await withConcurrencyLimit(GEMINI_FLASH_LITE, () =>
+  const result = await withConcurrencyLimit(DEFAULT_FAST_MODEL, () =>
     withRetry(() => model.generateContent(prompt))
   , 'background');
 
   recordClaudeUsage(
     result.response.usageMetadata?.promptTokenCount || 0,
     result.response.usageMetadata?.candidatesTokenCount || 0,
-    { modelName: GEMINI_FLASH_LITE, agentLabel: `system:memory:${agentId}` },
+    { modelName: DEFAULT_FAST_MODEL, agentLabel: `system:memory:${agentId}` },
   );
   return result.response.text() || existingSummary || 'Could not generate summary.';
 }

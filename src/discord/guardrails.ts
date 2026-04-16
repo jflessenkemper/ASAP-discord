@@ -1,13 +1,11 @@
-import { GoogleAuth } from 'google-auth-library';
-
-import { ensureGoogleCredentials, getAccessTokenViaGcloud } from '../services/googleCredentials';
+import { generateAnthropicText } from '../services/anthropicText';
+import { GUARDRAILS_MODEL } from '../services/modelConfig';
 
 import { logAgentEvent } from './activityLog';
 import { errMsg } from '../utils/errors';
 
 // ─── Model-Based Guardrails ───
-// Uses Gemini Flash (cheapest model) to classify inputs and outputs.
-// Catches prompt injection, harmful content, and policy violations.
+// Uses Anthropic to classify inputs and outputs when regex heuristics are not sufficient.
 
 export type GuardrailVerdict = 'pass' | 'warn' | 'block';
 
@@ -19,106 +17,18 @@ export interface GuardrailResult {
 }
 
 const GUARDRAILS_ENABLED = process.env.GUARDRAILS_ENABLED !== 'false';
-const GUARDRAILS_MODEL = process.env.GUARDRAILS_MODEL || 'gemini-2.0-flash';
 const GUARDRAILS_INPUT_ENABLED = process.env.GUARDRAILS_INPUT_ENABLED !== 'false';
 const GUARDRAILS_OUTPUT_ENABLED = process.env.GUARDRAILS_OUTPUT_ENABLED !== 'false';
 const GUARDRAILS_MAX_INPUT_CHARS = parseInt(process.env.GUARDRAILS_MAX_INPUT_CHARS || '2000', 10);
 const GUARDRAILS_TIMEOUT_MS = parseInt(process.env.GUARDRAILS_TIMEOUT_MS || '5000', 10);
 const GUARDRAIL_SAMPLE_RATE = parseFloat(process.env.GUARDRAIL_INPUT_SAMPLE_RATE || '0.2');
-const USE_VERTEX_AI = process.env.GEMINI_USE_VERTEX_AI === 'true';
-const VERTEX_PROJECT_ID = process.env.VERTEX_PROJECT_ID || process.env.GOOGLE_CLOUD_PROJECT || process.env.GCLOUD_PROJECT || '';
-const VERTEX_LOCATION = process.env.VERTEX_LOCATION || 'us-central1';
-
-let vertexAuth: GoogleAuth | null = null;
-let guardrailsTokenCache: { token: string; expiresAtMs: number } | null = null;
-
-async function getVertexAccessToken(): Promise<string> {
-  // Reuse cached token if it has >60s remaining
-  const now = Date.now();
-  if (guardrailsTokenCache && guardrailsTokenCache.expiresAtMs - now > 60_000) {
-    return guardrailsTokenCache.token;
-  }
-
-  await ensureGoogleCredentials(VERTEX_PROJECT_ID).catch(() => false);
-
-  if (!vertexAuth) {
-    vertexAuth = new GoogleAuth({ scopes: ['https://www.googleapis.com/auth/cloud-platform'] });
-  }
-
-  let authClient: any;
-  let accessToken: any;
-  try {
-    authClient = await vertexAuth.getClient();
-    accessToken = await authClient.getAccessToken();
-  } catch (err) {
-    const msg = String((err as any)?.message || err || '').toLowerCase();
-    if (msg.includes('default credentials') || msg.includes('application default credentials')) {
-      const recovered = await ensureGoogleCredentials(VERTEX_PROJECT_ID).catch(() => false);
-      if (recovered) {
-        vertexAuth = new GoogleAuth({ scopes: ['https://www.googleapis.com/auth/cloud-platform'] });
-        authClient = await vertexAuth.getClient();
-        accessToken = await authClient.getAccessToken();
-      } else {
-        const tokenViaCli = getAccessTokenViaGcloud();
-        if (tokenViaCli) {
-          guardrailsTokenCache = { token: tokenViaCli, expiresAtMs: Date.now() + 45 * 60_000 };
-          return tokenViaCli;
-        }
-        throw new Error('Vertex auth unavailable: Application Default Credentials are not configured');
-      }
-    } else {
-      throw err;
-    }
-  }
-
-  const token = typeof accessToken === 'string' ? accessToken : accessToken?.token;
-  if (!token) throw new Error('Vertex auth failed: could not obtain access token');
-
-  guardrailsTokenCache = { token, expiresAtMs: Date.now() + 45 * 60_000 };
-  return token;
-}
-
-async function callVertexGenerateContent(prompt: string): Promise<string | null> {
-  if (!VERTEX_PROJECT_ID) return null;
-
-  const token = await getVertexAccessToken();
-  const endpoint = `https://${VERTEX_LOCATION}-aiplatform.googleapis.com/v1/projects/${VERTEX_PROJECT_ID}/locations/${VERTEX_LOCATION}/publishers/google/models/${encodeURIComponent(GUARDRAILS_MODEL)}:generateContent`;
-  const res = await fetch(endpoint, {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      contents: [{ role: 'user', parts: [{ text: prompt }] }],
-      generationConfig: { maxOutputTokens: 100, temperature: 0 },
-    }),
-    signal: AbortSignal.timeout(GUARDRAILS_TIMEOUT_MS),
-  });
-  if (!res.ok) {
-    const body = await res.text();
-    console.warn(`Vertex guardrails ${res.status}: ${body.slice(0, 200)}`);
-    return null;
-  }
-  const json: any = await res.json();
-  return json?.candidates?.[0]?.content?.parts?.[0]?.text?.trim() ?? null;
-}
-
-async function callGoogleAIGenerateContent(prompt: string): Promise<string | null> {
-  if (!process.env.GEMINI_API_KEY) return null;
-
-  const { GoogleGenerativeAI } = await import('@google/generative-ai');
-  const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-  const model = genAI.getGenerativeModel({ model: GUARDRAILS_MODEL });
-  const result = await model.generateContent({
-    contents: [{ role: 'user', parts: [{ text: prompt }] }],
-    generationConfig: { maxOutputTokens: 100, temperature: 0 },
-  });
-  return result.response.text().trim();
-}
-
 async function classify(prompt: string): Promise<string | null> {
-  if (USE_VERTEX_AI) {
-    return callVertexGenerateContent(prompt);
-  }
-  return callGoogleAIGenerateContent(prompt);
+  return generateAnthropicText({
+    prompt,
+    model: GUARDRAILS_MODEL,
+    maxTokens: 100,
+    temperature: 0,
+  });
 }
 
 const INPUT_CLASSIFICATION_PROMPT = `You are a security classifier for a Discord bot with AI agents.

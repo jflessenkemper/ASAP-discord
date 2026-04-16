@@ -72,11 +72,11 @@ function labelKey(labels: Record<string, string>): string {
 const voiceCallsTotal = registerCounter('asap_voice_calls_total', 'Total voice calls initiated');
 const ttsErrorsTotal  = registerCounter('asap_tts_errors_total',  'Total TTS failures by service');
 const agentInvocations = registerCounter('asap_agent_invocations_total', 'Total agent response invocations by agent id');
-const rateLimitHits   = registerCounter('asap_rate_limit_hits_total', 'Total 429 rate-limit hits from Gemini');
+const rateLimitHits   = registerCounter('asap_rate_limit_hits_total', 'Total 429 rate-limit hits from the model provider');
 const textChannelTimeouts = registerCounter('asap_text_channel_timeouts_total', 'Total text channel response timeouts by agent id');
 
 const voiceCallsActive = registerGauge('asap_voice_calls_active', 'Number of currently active voice calls');
-const geminiSpentUsd   = registerGauge('asap_gemini_spent_usd',   'USD spent on Gemini API today');
+const llmSpentUsd      = registerGauge('asap_llm_spent_usd',      'USD spent on LLM APIs today');
 const memoryUsageMb    = registerGauge('asap_memory_usage_mb',    'Heap memory usage in MB');
 const processUptimeSec = registerGauge('asap_process_uptime_seconds', 'Process uptime in seconds');
 const textChannelQueueDepth = registerGauge('asap_text_channel_queue_depth', 'Current queued text-channel tasks by agent id');
@@ -124,7 +124,7 @@ export function recordVoiceCallEnd(): void {
   setGauge(voiceCallsActive, Math.max(0, current - 1));
 }
 
-/** Call when TTS generation fails (e.g. ElevenLabs/Gemini error). */
+/** Call when TTS generation fails. */
 export function recordTtsError(service: 'elevenlabs' | 'gemini', errorType: string): void {
   incCounter(ttsErrorsTotal, { service, error_type: errorType });
 }
@@ -144,7 +144,7 @@ export function recordAgentResponse(agentId: string, latencyMs: number): void {
   observeHistogram(agentResponseMs, latencyMs, { agent: agentId });
 }
 
-/** Call when a Gemini 429 is received. */
+/** Call when a provider 429 is received. */
 export function recordRateLimitHit(): void {
   incCounter(rateLimitHits);
 }
@@ -159,9 +159,13 @@ export function updateTextChannelQueueDepth(agentId: string, depth: number): voi
   setGauge(textChannelQueueDepth, Math.max(0, depth), { agent: agentId });
 }
 
-/** Update Gemini USD spent gauge (called from usage.ts or similar). */
+/** Update LLM USD spent gauge (called from usage.ts or similar). */
+export function updateLlmSpend(usd: number): void {
+  setGauge(llmSpentUsd, usd);
+}
+
 export function updateGeminiSpend(usd: number): void {
-  setGauge(geminiSpentUsd, usd);
+  updateLlmSpend(usd);
 }
 
 /**

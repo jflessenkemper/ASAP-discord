@@ -19,7 +19,7 @@ import {
   isTelephonyAvailable,
   getMetricsText,
   PROMETHEUS_CONTENT_TYPE,
-  updateGeminiSpend,
+  updateLlmSpend,
   getRemainingBudget,
 } from './discord/bot.single';
 import { loadRuntimeSecrets } from './services/runtimeSecrets';
@@ -166,7 +166,7 @@ app.get('/api/metrics', (req, res) => {
     return;
   }
   const { spent } = getRemainingBudget();
-  updateGeminiSpend(spent);
+  updateLlmSpend(spent);
   res.set('Content-Type', PROMETHEUS_CONTENT_TYPE).send(getMetricsText());
 });
 

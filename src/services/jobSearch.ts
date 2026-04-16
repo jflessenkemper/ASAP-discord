@@ -6,6 +6,8 @@ import https from 'https';
 import pool from '../db/pool';
 import { errMsg } from '../utils/errors';
 import { getOwnerName } from '../discord/agents';
+import { generateAnthropicText } from './anthropicText';
+import { JOB_DRAFT_MODEL } from './modelConfig';
 
 // ── Types ──────────────────────────────────────────────────────────
 
@@ -432,7 +434,7 @@ export async function getPortalByCompany(company: string): Promise<{ company_nam
 }
 
 /**
- * Draft a tailored cover letter and resume highlights for a listing using Gemini Flash.
+ * Draft a tailored cover letter and resume highlights for a listing using Anthropic.
  * Returns the drafted text and saves it to the DB.
  */
 export async function draftApplication(listingId: number): Promise<{ coverLetter: string; resumeHighlights: string } | null> {
@@ -469,19 +471,13 @@ Write TWO sections separated by "---RESUME---":
 
 Output the cover letter text first, then "---RESUME---", then the resume highlights. No other formatting or headers.`;
 
-  // Use Gemini Flash via the same pattern as other services
-  const { GoogleGenerativeAI } = await import('@google/generative-ai');
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) {
-    console.error('draftApplication: GEMINI_API_KEY not set');
-    return null;
-  }
-
-  const genAI = new GoogleGenerativeAI(apiKey);
-  const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' });
-
-  const result = await model.generateContent(prompt);
-  const text = result.response.text().trim();
+  const text = (await generateAnthropicText({
+    prompt,
+    system: 'You write accurate, concise Australian job application materials. Do not fabricate experience, employers, or qualifications.',
+    model: JOB_DRAFT_MODEL,
+    maxTokens: 1400,
+    temperature: 0.2,
+  })).trim();
 
   const separatorIdx = text.indexOf('---RESUME---');
   let coverLetter: string;

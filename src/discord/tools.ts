@@ -1787,7 +1787,7 @@ const RILEY_TOOL_NAMES = new Set([
   // ── Riley ops & error analysis ──
   'error_patterns', 'recover_agent_memory',
 ]);
-export const RILEY_TOOLS = REPO_TOOLS.filter((t) => RILEY_TOOL_NAMES.has(t.name));
+export const RILEY_TOOLS = REPO_TOOLS;
 
 type PromptTool = {
   name: string;
@@ -1829,11 +1829,11 @@ function compactToolForPrompt(tool: any): PromptTool {
  */
 export const PROMPT_REPO_TOOLS: PromptTool[] = REPO_TOOLS.map(compactToolForPrompt);
 export const PROMPT_REVIEW_TOOLS: PromptTool[] = REVIEW_TOOLS.map(compactToolForPrompt);
-export const PROMPT_RILEY_TOOLS: PromptTool[] = RILEY_TOOLS.map(compactToolForPrompt);
+export const PROMPT_RILEY_TOOLS: PromptTool[] = PROMPT_REPO_TOOLS;
 
 const STRICT_AGENT_TOOL_ACCESS = String(process.env.STRICT_AGENT_TOOL_ACCESS ?? 'true').toLowerCase() !== 'false';
 const RILEY_AGENT_ID = 'executive-assistant';
-const FULL_TOOL_ACCESS_AGENT_IDS = new Set(['developer', 'devops', 'ios-engineer', 'android-engineer']);
+const FULL_TOOL_ACCESS_AGENT_IDS = new Set(['executive-assistant', 'devops', 'ios-engineer', 'android-engineer']);
 const REVIEW_TOOL_ACCESS_AGENT_IDS = new Set([
   'qa',
   'ux-reviewer',
@@ -1848,8 +1848,9 @@ const REVIEW_TOOL_ACCESS_AGENT_IDS = new Set([
 function getRawToolsForAgent(agentId: string): readonly (typeof REPO_TOOLS[number])[] {
   const id = String(agentId || '').trim().toLowerCase();
   if (!STRICT_AGENT_TOOL_ACCESS) return REPO_TOOLS;
+  if (id === 'developer' || id === 'dev' || id === 'ace') return REPO_TOOLS;
   if (FULL_TOOL_ACCESS_AGENT_IDS.has(id)) return REPO_TOOLS;
-  if (id === RILEY_AGENT_ID) return RILEY_TOOLS;
+  if (id === RILEY_AGENT_ID) return REPO_TOOLS;
   if (REVIEW_TOOL_ACCESS_AGENT_IDS.has(id)) return REVIEW_TOOLS;
   // Unknown agents default to review-grade least privilege.
   return REVIEW_TOOLS;

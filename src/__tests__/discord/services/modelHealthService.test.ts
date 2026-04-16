@@ -1,6 +1,6 @@
 /**
  * Tests for src/discord/services/modelHealthCheck.ts (service)
- * Model/provider health checks — Anthropic, Gemini, Deepgram, ElevenLabs.
+ * Model/provider health checks — Anthropic, Deepgram, ElevenLabs.
  */
 
 const mockQuery = jest.fn().mockResolvedValue({ rows: [], rowCount: 0 });
@@ -29,6 +29,7 @@ jest.mock('google-auth-library', () => ({
 
 import { runModelHealthChecks } from '../../../discord/services/modelHealthCheck';
 import { postDiagnostic } from '../../../discord/services/diagnosticsWebhook';
+import { ANTHROPIC_HEALTHCHECK_MODELS } from '../../../services/modelConfig';
 
 describe('services/modelHealthCheck', () => {
   let mockFetch: jest.Mock;
@@ -99,7 +100,6 @@ describe('services/modelHealthCheck', () => {
 
       // Set all required API keys
       process.env.ANTHROPIC_API_KEY = 'test-key';
-      process.env.GEMINI_API_KEY = 'test-key';
       process.env.DEEPGRAM_API_KEY = 'test-key';
       process.env.ELEVENLABS_API_KEY = 'test-key';
 
@@ -109,12 +109,7 @@ describe('services/modelHealthCheck', () => {
         status: 200,
         json: jest.fn().mockResolvedValue({
           data: [
-            { id: 'claude-sonnet-4-6' },
-            { id: 'claude-opus-4-6' },
-          ],
-          models: [
-            { name: 'models/gemini-2.5-flash' },
-            { name: 'models/gemini-2.5-flash-preview-tts' },
+            ...ANTHROPIC_HEALTHCHECK_MODELS.map((id) => ({ id })),
           ],
         }),
         text: jest.fn().mockResolvedValue('ok'),
@@ -128,7 +123,6 @@ describe('services/modelHealthCheck', () => {
       );
 
       delete process.env.ANTHROPIC_API_KEY;
-      delete process.env.GEMINI_API_KEY;
       delete process.env.DEEPGRAM_API_KEY;
       delete process.env.ELEVENLABS_API_KEY;
     });
@@ -141,12 +135,12 @@ describe('services/modelHealthCheck', () => {
 
       process.env.ANTHROPIC_API_KEY = 'test-key';
 
-      // Anthropic models list returns ok but missing a model
+      // Anthropic models list returns ok but misses part of the configured health-check set
       mockFetch.mockResolvedValue({
         ok: true,
         status: 200,
         json: jest.fn().mockResolvedValue({
-          data: [{ id: 'claude-sonnet-4-6' }], // Missing opus
+          data: [{ id: ANTHROPIC_HEALTHCHECK_MODELS[0] }],
           models: [],
         }),
         text: jest.fn().mockResolvedValue('ok'),

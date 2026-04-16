@@ -1,162 +1,14 @@
-import { createHash } from 'crypto';
-
-import { GoogleAuth } from 'google-auth-library';
-
-import pool from '../db/pool';
-import { ensureGoogleCredentials, getAccessTokenViaGcloud } from '../services/googleCredentials';
-
 import { logAgentEvent } from './activityLog';
-import { errMsg } from '../utils/errors';
-
-// ─── Vector Memory (Semantic Search via pgvector) ───
-// Stores key decisions, outcomes, and learnings as embeddings.
-// Agents can query past context semantically before broad searches.
-
-const VECTOR_MEMORY_ENABLED = process.env.VECTOR_MEMORY_ENABLED !== 'false';
-const EMBEDDING_MODEL = process.env.EMBEDDING_MODEL || 'text-embedding-004';
-const EMBEDDING_DIMENSIONS = parseInt(process.env.EMBEDDING_DIMENSIONS || '768', 10);
-const VECTOR_SEARCH_LIMIT = parseInt(process.env.VECTOR_SEARCH_LIMIT || '5', 10);
-const VECTOR_SIMILARITY_THRESHOLD = parseFloat(process.env.VECTOR_SIMILARITY_THRESHOLD || '0.6');
-const USE_VERTEX_AI = process.env.GEMINI_USE_VERTEX_AI === 'true';
-const VERTEX_PROJECT_ID = process.env.VERTEX_PROJECT_ID || process.env.GOOGLE_CLOUD_PROJECT || process.env.GCLOUD_PROJECT || '';
-const VERTEX_LOCATION = process.env.VERTEX_LOCATION || 'us-central1';
-
-let vertexAuth: GoogleAuth | null = null;
-let dbAvailable: boolean | null = null;
-
-async function getVertexAccessToken(): Promise<string> {
-  await ensureGoogleCredentials(VERTEX_PROJECT_ID).catch(() => false);
-
-  if (!vertexAuth) {
-    vertexAuth = new GoogleAuth({ scopes: ['https://www.googleapis.com/auth/cloud-platform'] });
-  }
-
-  let authClient: any;
-  let accessToken: any;
-  try {
-    authClient = await vertexAuth.getClient();
-    accessToken = await authClient.getAccessToken();
-  } catch (err) {
-    const msg = String((err as any)?.message || err || '').toLowerCase();
-    if (msg.includes('default credentials') || msg.includes('application default credentials')) {
-      const recovered = await ensureGoogleCredentials(VERTEX_PROJECT_ID).catch(() => false);
-      if (recovered) {
-        vertexAuth = new GoogleAuth({ scopes: ['https://www.googleapis.com/auth/cloud-platform'] });
-        authClient = await vertexAuth.getClient();
-        accessToken = await authClient.getAccessToken();
-      } else {
-        const tokenViaCli = getAccessTokenViaGcloud();
-        if (tokenViaCli) return tokenViaCli;
-        throw new Error('Vertex auth unavailable: Application Default Credentials are not configured');
-      }
-    } else {
-      throw err;
-    }
-  }
-
-  const token = typeof accessToken === 'string' ? accessToken : accessToken?.token;
-  if (!token) throw new Error('Vertex auth failed: could not obtain access token');
-  return token;
-}
-
-async function checkVectorSupport(): Promise<boolean> {
-  if (dbAvailable !== null) return dbAvailable;
-  try {
-    await pool.query('SELECT 1 FROM agent_embeddings LIMIT 0');
-    dbAvailable = true;
-  } catch {
-    dbAvailable = false;
-    console.warn('agent_embeddings table not available — vector memory disabled');
-  }
-  return dbAvailable;
-}
-
-function contentHash(content: string): string {
-  return createHash('sha256').update(content).digest('hex').slice(0, 32);
-}
-
-// ─── Embedding Generation ───
-
-async function generateEmbeddingVertex(text: string): Promise<number[] | null> {
-  if (!VERTEX_PROJECT_ID) return null;
-
-  try {
-    const token = await getVertexAccessToken();
-    const endpoint = `https://${VERTEX_LOCATION}-aiplatform.googleapis.com/v1/projects/${VERTEX_PROJECT_ID}/locations/${VERTEX_LOCATION}/publishers/google/models/${encodeURIComponent(EMBEDDING_MODEL)}:predict`;
-    const res = await fetch(endpoint, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ instances: [{ content: text.slice(0, 2000) }] }),
-    });
-    if (!res.ok) {
-      const body = await res.text();
-      console.warn(`Vertex embedding ${res.status}: ${body.slice(0, 200)}`);
-      return null;
-    }
-    const json: any = await res.json();
-    const values = json?.predictions?.[0]?.embeddings?.values;
-    if (Array.isArray(values) && values.length > 0) return values;
-    return null;
-  } catch (err) {
-    console.warn('Vertex embedding failed:', errMsg(err));
-    return null;
-  }
-}
-
-async function generateEmbedding(text: string): Promise<number[] | null> {
-  if (!VECTOR_MEMORY_ENABLED) return null;
-
-  // Prefer Vertex AI (avoids Google AI Studio billing cap)
-  if (USE_VERTEX_AI) {
-    return generateEmbeddingVertex(text);
-  }
-
-  // Fallback: Google AI Studio (API key)
-  if (!process.env.GEMINI_API_KEY) return null;
-
-  try {
-    const { GoogleGenerativeAI } = await import('@google/generative-ai');
-    const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-    const model = genAI.getGenerativeModel({ model: EMBEDDING_MODEL });
-    const result = await (model as any).embedContent(text.slice(0, 2000));
-    const values = result?.embedding?.values;
-    if (Array.isArray(values) && values.length > 0) return values;
-    return null;
-  } catch (err) {
-    console.warn('Embedding generation failed:', errMsg(err));
-    return null;
-  }
-}
-
-// ─── Store ───
+// Semantic embedding memory previously depended on Google-only embedding APIs.
+// Until an Anthropic-compatible replacement is wired in, preserve the API surface
+// and degrade the feature to a disabled state.
 
 export async function storeMemoryEmbedding(
-  agentId: string,
-  content: string,
-  metadata?: Record<string, unknown>,
+  _agentId: string,
+  _content: string,
+  _metadata?: Record<string, unknown>,
 ): Promise<boolean> {
-  if (!VECTOR_MEMORY_ENABLED) return false;
-  if (!(await checkVectorSupport())) return false;
-
-  const hash = contentHash(content);
-  const embedding = await generateEmbedding(content);
-  if (!embedding) return false;
-
-  try {
-    const embeddingStr = `[${embedding.join(',')}]`;
-    await pool.query(
-      `INSERT INTO agent_embeddings (agent_id, content, content_hash, embedding, metadata)
-       VALUES ($1, $2, $3, $4::vector, $5)
-       ON CONFLICT (agent_id, content_hash) DO UPDATE SET
-         embedding = EXCLUDED.embedding,
-         metadata = EXCLUDED.metadata`,
-      [agentId, content.slice(0, 5000), hash, embeddingStr, metadata ? JSON.stringify(metadata) : null],
-    );
-    return true;
-  } catch (err) {
-    console.warn('Vector memory store failed:', errMsg(err));
-    return false;
-  }
+  return false;
 }
 
 // ─── Search ───
@@ -169,50 +21,11 @@ export interface VectorSearchResult {
 }
 
 export async function searchSimilarMemories(
-  query: string,
-  agentId?: string,
-  limit?: number,
+  _query: string,
+  _agentId?: string,
+  _limit?: number,
 ): Promise<VectorSearchResult[]> {
-  if (!VECTOR_MEMORY_ENABLED) return [];
-  if (!(await checkVectorSupport())) return [];
-
-  const embedding = await generateEmbedding(query);
-  if (!embedding) return [];
-
-  try {
-    const embeddingStr = `[${embedding.join(',')}]`;
-    const maxResults = limit || VECTOR_SEARCH_LIMIT;
-
-    const queryText = agentId
-      ? `SELECT content, agent_id, metadata,
-           1 - (embedding <=> $1::vector) AS similarity
-         FROM agent_embeddings
-         WHERE agent_id = $2
-           AND 1 - (embedding <=> $1::vector) >= $3
-         ORDER BY embedding <=> $1::vector
-         LIMIT $4`
-      : `SELECT content, agent_id, metadata,
-           1 - (embedding <=> $1::vector) AS similarity
-         FROM agent_embeddings
-         WHERE 1 - (embedding <=> $1::vector) >= $2
-         ORDER BY embedding <=> $1::vector
-         LIMIT $3`;
-
-    const params = agentId
-      ? [embeddingStr, agentId, VECTOR_SIMILARITY_THRESHOLD, maxResults]
-      : [embeddingStr, VECTOR_SIMILARITY_THRESHOLD, maxResults];
-
-    const res = await pool.query(queryText, params);
-    return res.rows.map((row: any) => ({
-      content: row.content,
-      similarity: parseFloat(row.similarity) || 0,
-      agentId: row.agent_id,
-      metadata: row.metadata || undefined,
-    }));
-  } catch (err) {
-    console.warn('Vector memory search failed:', errMsg(err));
-    return [];
-  }
+  return [];
 }
 
 // ─── Store a key decision or learning ───
@@ -266,51 +79,7 @@ export async function recallRelevantContext(
 // ─── Memory Consolidation Loop ───
 
 export async function consolidateMemoryInsights(): Promise<string> {
-  if (!VECTOR_MEMORY_ENABLED) return '';
-  if (!(await checkVectorSupport())) return '';
-
-  try {
-    const res = await pool.query(
-      `SELECT agent_id, content, metadata
-       FROM agent_embeddings
-       WHERE created_at >= NOW() - INTERVAL '24 hours'
-         AND (metadata->>'type' = 'decision' OR metadata->>'type' = 'learning')
-       ORDER BY agent_id, created_at DESC
-       LIMIT 200`,
-    );
-
-    if (!res.rows || res.rows.length === 0) return '';
-
-    const grouped = new Map<string, string[]>();
-    for (const row of res.rows) {
-      const agentId = row.agent_id || 'unknown';
-      if (!grouped.has(agentId)) grouped.set(agentId, []);
-      grouped.get(agentId)!.push(String(row.content || '').slice(0, 300));
-    }
-
-    const smokePatterns: string[] = [];
-    for (const [agentId, entries] of grouped) {
-      for (const entry of entries) {
-        if (/smoke|test|fail|pass|regression/i.test(entry)) {
-          const failMatch = entry.match(/(?:fail(?:ed|ure)?|error|regression)[:\s]*([^\n]{0,120})/i);
-          const fixMatch = entry.match(/(?:fix(?:ed)?|resolve[d]?|patch(?:ed)?)[:\s]*([^\n]{0,120})/i);
-          if (failMatch) smokePatterns.push(`[${agentId}] failed: ${failMatch[1].trim()}`);
-          if (fixMatch) smokePatterns.push(`[${agentId}] fixed: ${fixMatch[1].trim()}`);
-        }
-      }
-    }
-
-    const parts: string[] = [`Consolidated ${res.rows.length} insights from ${grouped.size} agent(s) (last 24h).`];
-    if (smokePatterns.length > 0) {
-      parts.push(`Smoke/test patterns: ${smokePatterns.slice(0, 10).join('; ')}`);
-    }
-
-    console.log(`[memory-loop] ${parts[0]}`);
-    return parts.join(' ');
-  } catch (err) {
-    console.warn('[memory-loop] consolidation failed:', errMsg(err));
-    return '';
-  }
+  return '';
 }
 
 export async function recordSmokeInsight(
@@ -319,22 +88,12 @@ export async function recordSmokeInsight(
   summary: string,
 ): Promise<void> {
   const insight = `Smoke test result — categories: [${categories.join(', ')}], outcome: ${hasFails ? 'FAILURES' : 'PASS'}. ${summary.slice(0, 400)}`;
-  await recordAgentLearning('executive-assistant', insight).catch((err) => {
-    console.warn('[memory-loop] recordSmokeInsight failed:', errMsg(err));
-  });
+  await recordAgentLearning('executive-assistant', insight).catch(() => {});
 }
 
 // ─── Cleanup ───
 
 export async function cleanupOldEmbeddings(retentionDays = 90): Promise<number> {
-  if (!(await checkVectorSupport())) return 0;
-  try {
-    const res = await pool.query(
-      `DELETE FROM agent_embeddings WHERE created_at < NOW() - INTERVAL '1 day' * $1`,
-      [retentionDays],
-    );
-    return res.rowCount || 0;
-  } catch {
-    return 0;
-  }
+  void retentionDays;
+  return 0;
 }

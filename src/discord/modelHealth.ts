@@ -1,4 +1,5 @@
 import pool from '../db/pool';
+import { MODEL_FALLBACK_CHAINS } from '../services/modelConfig';
 
 // ─── Model Health Auto-Routing ───
 // Per-model health tracking with transparent fallback chains.
@@ -28,14 +29,6 @@ const MIN_SAMPLES = parseInt(process.env.MODEL_HEALTH_MIN_SAMPLES || '3', 10);
 let dbDisabled = false;
 
 // ─── Fallback Chains ───
-
-const FALLBACK_CHAINS: Record<string, string[]> = {
-  'gemini-2.5-flash': ['gemini-2.5-pro', 'claude-opus-4-6'],
-  'gemini-flash-latest': ['gemini-2.5-flash', 'gemini-2.5-pro', 'claude-opus-4-6'],
-  'gemini-2.5-pro': ['gemini-2.5-flash', 'claude-opus-4-6'],
-  'claude-opus-4-6': ['claude-sonnet-4-6', 'gemini-2.5-pro', 'gemini-2.5-flash'],
-  'claude-sonnet-4-6': ['claude-opus-4-6', 'gemini-2.5-pro', 'gemini-2.5-flash'],
-};
 
 /**
  * Check if a model resolved differently from the preferred model (i.e. is on fallback).
@@ -156,7 +149,7 @@ export function resolveHealthyModel(preferredModel: string): string {
   const key = normalizeModel(preferredModel);
   if (isModelAvailable(preferredModel)) return preferredModel;
 
-  const chain = FALLBACK_CHAINS[key] || [];
+  const chain = MODEL_FALLBACK_CHAINS[key] || [];
   for (const fallback of chain) {
     if (isModelAvailable(fallback)) {
       console.warn(`Model ${preferredModel} is ${getModelStatus(preferredModel)} — routing to ${fallback}`);

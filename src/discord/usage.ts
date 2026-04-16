@@ -119,9 +119,9 @@ export async function recordSpan(span: TraceSpan): Promise<void> {
 }
 
 const DAILY_LIMITS = {
-  /** Max LLM input+output tokens per day (Gemini) */
+  /** Max LLM input+output tokens per day */
   claudeTokens: parseInt(process.env.DAILY_LIMIT_GEMINI_LLM_TOKENS || process.env.DAILY_LIMIT_CLAUDE_TOKENS || '8000000', 10),
-  /** Max Gemini API calls per day (TTS + transcription) */
+  /** Max realtime API calls per day */
   geminiCalls: parseInt(process.env.DAILY_LIMIT_GEMINI_CALLS || '2000', 10),
   /** Max ElevenLabs characters per day */
   elevenLabsChars: parseInt(process.env.DAILY_LIMIT_ELEVENLABS_CHARS || '10000', 10),
@@ -229,7 +229,7 @@ function disableUsageDb(reason: string): void {
 export function toAgentTag(agentLabel: string): string {
   const normalized = String(agentLabel || '').toLowerCase();
   if (normalized.includes('riley')) return 'executive-assistant';
-  if (normalized.includes('ace')) return 'developer';
+  if (normalized.includes('ace')) return 'executive-assistant';
   if (normalized.includes('max')) return 'qa';
   if (normalized.includes('sophie')) return 'ux-reviewer';
   if (normalized.includes('kane')) return 'security-auditor';
@@ -660,7 +660,7 @@ function formatCompactCount(value: number): string {
 export function getPromptAttributionSnapshot(): {
   requests: number;
   anthropicRequests: number;
-  geminiRequests: number;
+  secondaryRequests: number;
   cacheReadTokens: number;
   cacheCreationTokens: number;
   cacheReadRequests: number;
@@ -687,7 +687,7 @@ export function getPromptAttributionSnapshot(): {
   return {
     requests,
     anthropicRequests: usage.anthropicRequests,
-    geminiRequests: usage.geminiTextRequests,
+    secondaryRequests: usage.geminiTextRequests,
     cacheReadTokens: usage.llmCacheReadInputTokens,
     cacheCreationTokens: usage.llmCacheCreationInputTokens,
     cacheReadRequests: usage.llmCacheReadRequests,
@@ -731,7 +731,7 @@ export function getUsageEmbed(): EmbedBuilder {
     .setColor(color)
     .addFields(
       {
-        name: '🧠 LLM Tokens (Claude/Gemini)',
+        name: '🧠 LLM Tokens',
         value:
           `${progressBar(totalClaudeTokens, DAILY_LIMITS.claudeTokens)}\n` +
           `${totalClaudeTokens.toLocaleString()} / ${DAILY_LIMITS.claudeTokens.toLocaleString()} tokens\n` +
@@ -739,7 +739,7 @@ export function getUsageEmbed(): EmbedBuilder {
           `Estimated spend: **$${cost.claude.toFixed(4)}**`,
       },
       {
-        name: '🔊 Gemini Voice APIs',
+        name: '🔊 Realtime API Calls',
         value:
           `${progressBar(usage.geminiCalls, DAILY_LIMITS.geminiCalls)}\n` +
           `${usage.geminiCalls} / ${DAILY_LIMITS.geminiCalls} API calls\n` +
@@ -791,8 +791,8 @@ export function getUsageReport(): string {
   const lines = [
     `📊 ASAP Usage Dashboard | reset ${usage.lastReset}`,
     liveLine,
-    `🧠 Claude/Gemini | ${progressBar(totalClaudeTokens, DAILY_LIMITS.claudeTokens)} | ${formatCompactCount(totalClaudeTokens)}/${formatCompactCount(DAILY_LIMITS.claudeTokens)} tokens | in ${formatCompactCount(usage.claudeInputTokens)} | out ${formatCompactCount(usage.claudeOutputTokens)} | est $${cost.claude.toFixed(4)}`,
-    `🔊 Gemini Voice | ${progressBar(usage.geminiCalls, DAILY_LIMITS.geminiCalls)} | ${formatCompactCount(usage.geminiCalls)}/${formatCompactCount(DAILY_LIMITS.geminiCalls)} calls | est $${cost.gemini.toFixed(4)}`,
+    `🧠 LLM Tokens | ${progressBar(totalClaudeTokens, DAILY_LIMITS.claudeTokens)} | ${formatCompactCount(totalClaudeTokens)}/${formatCompactCount(DAILY_LIMITS.claudeTokens)} tokens | in ${formatCompactCount(usage.claudeInputTokens)} | out ${formatCompactCount(usage.claudeOutputTokens)} | est $${cost.claude.toFixed(4)}`,
+    `🔊 Realtime APIs | ${progressBar(usage.geminiCalls, DAILY_LIMITS.geminiCalls)} | ${formatCompactCount(usage.geminiCalls)}/${formatCompactCount(DAILY_LIMITS.geminiCalls)} calls | est $${cost.gemini.toFixed(4)}`,
     `🗣️ ElevenLabs | ${progressBar(usage.elevenLabsChars, DAILY_LIMITS.elevenLabsChars)} | ${formatCompactCount(usage.elevenLabsChars)}/${formatCompactCount(DAILY_LIMITS.elevenLabsChars)} chars | est $${cost.elevenLabs.toFixed(4)}`,
     `🧮 Prompt | cache r/w ${formatCompactCount(promptStats.cacheReadTokens)}/${formatCompactCount(promptStats.cacheCreationTokens)} | hits ${promptStats.cacheReadRequests}/${promptStats.requests || 0} (${promptStats.cacheHitRatePct}%) | avg chars sys ${formatCompactCount(promptStats.avgPromptChars.system)} tools ${formatCompactCount(promptStats.avgPromptChars.tools)} hist ${formatCompactCount(promptStats.avgPromptChars.history)} user ${formatCompactCount(promptStats.avgPromptChars.user)} tool ${formatCompactCount(promptStats.avgPromptChars.toolResults)}`,
     `💰 Budget gate | spend $${effectiveTotalSpend.toFixed(4)} | limit $${effectiveBudgetLimit().toFixed(2)}${extraBudget > 0 ? ` (base $${DAILY_LIMITS.budgetUsd.toFixed(2)} + approved $${extraBudget.toFixed(2)})` : ''}`,

@@ -21,7 +21,7 @@ const PROGRESSIVE_REVEAL_STEP_CHARS = parseInt(process.env.PROGRESSIVE_REVEAL_ST
 const PROGRESSIVE_REVEAL_STEP_MS = parseInt(process.env.PROGRESSIVE_REVEAL_STEP_MS || '60', 10);
 const TEXT_MAX_TOKENS_SIMPLE = parseInt(process.env.TEXT_MAX_TOKENS_SIMPLE || '700', 10);
 const TEXT_MAX_TOKENS_STANDARD = parseInt(process.env.TEXT_MAX_TOKENS_STANDARD || '1100', 10);
-const TEXT_MAX_TOKENS_DEVELOPER = parseInt(process.env.TEXT_MAX_TOKENS_DEVELOPER || '1700', 10);
+const TEXT_MAX_TOKENS_EXECUTOR = parseInt(process.env.TEXT_MAX_TOKENS_EXECUTOR || process.env.TEXT_MAX_TOKENS_DEVELOPER || '1700', 10);
 const STREAM_EDIT_THROTTLE_MS = parseInt(process.env.STREAM_EDIT_THROTTLE_MS || '80', 10);
 const STREAM_MAX_PREVIEW_CHARS = parseInt(process.env.STREAM_MAX_PREVIEW_CHARS || '1800', 10);
 const STREAM_EDIT_MIN_CHAR_DELTA = parseInt(process.env.STREAM_EDIT_MIN_CHAR_DELTA || '35', 10);
@@ -72,7 +72,7 @@ function classifyAgentError(err: unknown): string {
   const message = String((err as any)?.message || err || '').toLowerCase();
   const status = (err as any)?.status || (err as any)?.statusCode;
   if (status === 429 || message.includes('rate limit')) {
-    return 'Gemini API is busy right now. Please retry in a moment.';
+    return 'Anthropic is busy right now. Please retry in a moment.';
   }
   if (message.includes('timed out') || message.includes('timeout')) {
     return 'The model timed out while responding. Please retry with a shorter or more specific request.';
@@ -83,12 +83,12 @@ function classifyAgentError(err: unknown): string {
     message.includes('billing') ||
     message.includes('credits before continuing')
   ) {
-    return 'Gemini quota is exhausted right now. Riley needs to restore credits before this can continue.';
+    return 'Anthropic quota or billing is exhausted right now. Riley needs to restore credits before this can continue.';
   }
   return 'An internal error interrupted the response.';
 }
 
-function isGeminiFunctionTurnSequenceError(err: unknown): boolean {
+function isToolTurnSequenceError(err: unknown): boolean {
   const message = String((err as any)?.message || err || '').toLowerCase();
   return message.includes('function response turn comes immediately after a function call turn');
 }
@@ -144,7 +144,7 @@ function estimateTextMaxTokens(agent: AgentConfig, userMessage: string): number 
   const trimmed = userMessage.trim();
   const simple = trimmed.length <= 180 && /^(ok|yes|no|status|why|what|how|help|fix|run|test|show|give)\b/i.test(trimmed);
   if (simple) return TEXT_MAX_TOKENS_SIMPLE;
-  if (agent.id === 'developer') return TEXT_MAX_TOKENS_DEVELOPER;
+  if (agent.id === 'executive-assistant') return TEXT_MAX_TOKENS_EXECUTOR;
   return TEXT_MAX_TOKENS_STANDARD;
 }
 
@@ -355,7 +355,7 @@ async function handleAgentMessageInner(
     try {
       response = await runAgent(history, disableToolsForPrompt);
     } catch (err) {
-      if (!isGeminiFunctionTurnSequenceError(err)) {
+      if (!isToolTurnSequenceError(err)) {
         throw err;
       }
       console.warn(`Resetting ${agent.name} text-channel history after function-turn sequencing error`);
@@ -530,7 +530,7 @@ export async function sendAgentMessage(
 ): Promise<void> {
   const normalized = String(response || '').trim();
   const effectiveResponse = (
-    (agent.id === 'developer' || agent.id === 'executive-assistant')
+    agent.id === 'executive-assistant'
     && isLowSignalCompletion(normalized)
   ) ? '✅ Done.' : response;
 
