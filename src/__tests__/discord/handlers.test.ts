@@ -82,7 +82,7 @@ describe('callSession — isVoiceInputAvailable logic', () => {
 
   it('returns ok=true when DEEPGRAM_API_KEY is set', async () => {
     process.env.DEEPGRAM_API_KEY = 'test-key';
-    process.env.GEMINI_API_KEY = 'test-gemini';
+    process.env.ELEVENLABS_API_KEY = 'test-elevenlabs';
     // Minimal mocks so the module can load
     jest.mock('../../discord/voice/deepgram', () => ({
       isDeepgramAvailable: () => true,
@@ -115,6 +115,6 @@ describe('callSession — isVoiceInputAvailable logic', () => {
     expect(isCallActive()).toBe(false);
 
     delete process.env.DEEPGRAM_API_KEY;
-    delete process.env.GEMINI_API_KEY;
+    delete process.env.ELEVENLABS_API_KEY;
   });
 });

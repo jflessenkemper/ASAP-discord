@@ -9,10 +9,9 @@ import { appendToMemory, getMemoryContext } from '../memory';
 import { recordVoiceCallStart, recordVoiceCallEnd } from '../metrics';
 import { postDiagnostic, mirrorAgentResponse, mirrorVoiceTranscript } from '../services/diagnosticsWebhook';
 import { getWebhook } from '../services/webhooks';
-import { isGeminiOverLimit } from '../usage';
 import { listenToAllMembersSmart, VoiceTranscription } from '../voice/connection';
 import { isDeepgramAvailable } from '../voice/deepgram';
-import { primeElevenLabsVoiceCache } from '../voice/elevenlabs';
+import { isElevenLabsAvailable, primeElevenLabsVoiceCache } from '../voice/elevenlabs';
 import { getElevenLabsConvaiReply, isElevenLabsConvaiEnabled } from '../voice/elevenlabsConvai';
 import { isElevenLabsRealtimeAvailable } from '../voice/elevenlabsRealtime';
 import {
@@ -150,11 +149,8 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): 
 function isVoiceInputAvailable(): { ok: boolean; reason?: string } {
   if (isElevenLabsRealtimeAvailable()) return { ok: true };
   if (isDeepgramAvailable()) return { ok: true };
-  if (!process.env.GEMINI_API_KEY) {
-    return { ok: false, reason: 'ElevenLabs realtime STT is not configured and Gemini API key is missing.' };
-  }
-  if (isGeminiOverLimit()) {
-    return { ok: false, reason: 'ElevenLabs realtime STT is not configured and Gemini transcription quota is exhausted.' };
+  if (!isElevenLabsAvailable()) {
+    return { ok: false, reason: 'Neither realtime STT nor ElevenLabs batch STT is configured.' };
   }
   return { ok: true };
 }
@@ -626,7 +622,7 @@ export async function startCall(
       await sendAsAgent(
         groupchat,
         `⚠️ I can't join voice yet because listening is unavailable: ${inputReady.reason} ` +
-        `Configure ElevenLabs realtime STT (preferred) or restore Gemini transcription before joining.`
+        `Configure ElevenLabs realtime STT or ElevenLabs batch STT before joining.`
       );
       return;
     }
@@ -786,7 +782,7 @@ export async function startCall(
     ? '\n🎙️ ElevenLabs realtime STT is active.'
     : isDeepgramAvailable()
       ? '\n⚠️ ElevenLabs realtime STT unavailable — using Deepgram realtime fallback.'
-      : '\n⚠️ Realtime STT unavailable — using Gemini batch mode (~1-2s latency).';
+      : '\n⚠️ Realtime STT unavailable — using ElevenLabs batch mode (~1-2s latency).';
   await sendLifecycleNoticeOnce(
     groupchat,
     `started:${voiceChannel.id}`,

@@ -2,7 +2,7 @@
  * Unit tests for Discord voice pipeline modules:
  *   - deepgram.ts  — live transcription, no recordGeminiUsage side-effect
  *   - elevenlabs.ts — model selection based on detected language
- *   - tts.ts        — language param threaded to ElevenLabs; Gemini TTS fallback
+ *   - tts.ts        — ElevenLabs-only STT/TTS behavior for live voice
  */
 
 // ─── Mocks ──────────────────────────────────────────────────────────────────
@@ -576,67 +576,11 @@ describe('tts.ts — textToSpeech threads language parameter', () => {
     );
   });
 
-  it('falls back to Gemini TTS if ElevenLabs not configured', async () => {
+  it('throws if ElevenLabs is not configured', async () => {
     delete process.env.ELEVENLABS_API_KEY;
-    process.env.GEMINI_API_KEY = 'test-gemini-key';
-
-    // Mock global fetch for Gemini TTS REST call
-    const fakeAudioData = Buffer.from('gemini-audio').toString('base64');
-    global.fetch = jest.fn().mockResolvedValue({
-      ok: true,
-      json: async () => ({
-        candidates: [{
-          content: {
-            parts: [{ inlineData: { mimeType: 'audio/L16', data: fakeAudioData } }],
-          },
-        }],
-      }),
-    }) as any;
 
     const { textToSpeech } = await import('../../discord/voice/tts');
-    const result = await textToSpeech('Hello', 'Kore');
-    expect(result.length).toBeGreaterThan(0);
-    // Verify Gemini TTS request includes role:'user' in contents
-    const body = JSON.parse((global.fetch as jest.Mock).mock.calls[0][1].body);
-    expect(body.contents[0].role).toBe('user');
-
-    delete process.env.GEMINI_API_KEY;
-  });
-});
-
-describe('tts.ts — Gemini TTS request hardening', () => {
-  beforeEach(() => {
-    jest.resetModules();
-    delete process.env.ELEVENLABS_API_KEY;
-    process.env.GEMINI_API_KEY = 'test-gemini-key';
-  });
-
-  afterEach(() => {
-    delete process.env.GEMINI_API_KEY;
-  });
-
-  it('sends role:user in Gemini TTS request body', async () => {
-    const fakeAudioData = Buffer.from('audio').toString('base64');
-    global.fetch = jest.fn().mockResolvedValue({
-      ok: true,
-      json: async () => ({
-        candidates: [{
-          content: {
-            parts: [{ inlineData: { mimeType: 'audio/L16', data: fakeAudioData } }],
-          },
-        }],
-      }),
-    }) as any;
-
-    const { textToSpeech } = await import('../../discord/voice/tts');
-    await textToSpeech('Test phrase', 'Kore');
-
-    const call = (global.fetch as jest.Mock).mock.calls[0];
-    const body = JSON.parse(call[1].body);
-    expect(body.contents).toHaveLength(1);
-    expect(body.contents[0].role).toBe('user');
-    expect(body.contents[0].parts[0].text).toBe('Test phrase');
-    expect(body.generationConfig.responseModalities).toContain('AUDIO');
+    await expect(textToSpeech('Hello', 'Kore')).rejects.toThrow('ELEVENLABS_API_KEY not configured');
   });
 });
 
@@ -649,9 +593,6 @@ describe('tts.ts — transcribeVoiceDetailed', () => {
   afterEach(() => {
     delete process.env.VOICE_STT_PROVIDER;
     delete process.env.ELEVENLABS_API_KEY;
-    delete process.env.GEMINI_API_KEY;
-    delete process.env.GEMINI_USE_VERTEX_AI;
-    delete process.env.VERTEX_PROJECT_ID;
   });
 
   it('uses elevenlabs provider when configured', async () => {
@@ -720,124 +661,21 @@ describe('tts.ts — transcribeVoiceDetailed', () => {
     await expect(transcribeVoiceDetailed(Buffer.alloc(100))).rejects.toThrow('ELEVENLABS_API_KEY not configured');
   });
 
-  it('falls back to gemini provider by default', async () => {
-    process.env.GEMINI_API_KEY = 'test-key';
-
-    const { transcribeVoiceDetailed } = await import('../../discord/voice/tts');
-    // Audio is all zeros → silence → returns empty string
-    const result = await transcribeVoiceDetailed(Buffer.alloc(100));
-    expect(result.provider).toBe('gemini');
-    expect(result.text).toBe('');
-  });
-});
-
-describe('tts.ts — transcribeVoice', () => {
-  beforeEach(() => {
-    jest.resetModules();
-    mockRecordGeminiUsage.mockClear();
-  });
-
-  afterEach(() => {
-    delete process.env.GEMINI_API_KEY;
-    delete process.env.GEMINI_USE_VERTEX_AI;
-    delete process.env.VERTEX_PROJECT_ID;
-  });
-
-  it('throws when no Gemini provider is configured', async () => {
-    delete process.env.GEMINI_API_KEY;
-    const { transcribeVoice } = await import('../../discord/voice/tts');
-    await expect(transcribeVoice(Buffer.alloc(100))).rejects.toThrow('Gemini API key not configured');
-  });
-
-  it('throws when Vertex is enabled but not configured', async () => {
-    process.env.GEMINI_USE_VERTEX_AI = 'true';
-    delete process.env.VERTEX_PROJECT_ID;
-    delete process.env.GOOGLE_CLOUD_PROJECT;
-    const { transcribeVoice } = await import('../../discord/voice/tts');
-    await expect(transcribeVoice(Buffer.alloc(100))).rejects.toThrow('Vertex Gemini is not configured');
-  });
-
-  it('returns empty string for silent audio (all zeros)', async () => {
-    process.env.GEMINI_API_KEY = 'test-key';
-    const { transcribeVoice } = await import('../../discord/voice/tts');
-    const result = await transcribeVoice(Buffer.alloc(4000));
-    expect(result).toBe('');
-    expect(mockRecordGeminiUsage).not.toHaveBeenCalled();
-  });
-
-  it('transcribes using Gemini API key (non-Vertex)', async () => {
-    process.env.GEMINI_API_KEY = 'test-key';
-
-    const { transcribeVoice } = await import('../../discord/voice/tts');
-
-    // Create non-silent audio buffer
-    const buf = Buffer.alloc(4000);
-    for (let i = 0; i < buf.length - 1; i += 2) {
-      buf.writeInt16LE(1000, i);
-    }
-
-    const result = await transcribeVoice(buf);
-    expect(result).toBe('test transcription');
-    expect(mockRecordGeminiUsage).toHaveBeenCalled();
-  });
-
-  it('returns empty for [silence] response', async () => {
-    process.env.GEMINI_API_KEY = 'test-key';
-
-    // Override the mock for this test
-    jest.doMock('@google/generative-ai', () => ({
-      GoogleGenerativeAI: jest.fn().mockImplementation(() => ({
-        getGenerativeModel: jest.fn().mockReturnValue({
-          generateContent: jest.fn().mockResolvedValue({
-            response: { text: jest.fn().mockReturnValue('[silence]') },
-          }),
-        }),
-      })),
-    }));
-
-    const { transcribeVoice } = await import('../../discord/voice/tts');
-    const buf = Buffer.alloc(4000);
-    for (let i = 0; i < buf.length - 1; i += 2) buf.writeInt16LE(1000, i);
-    const result = await transcribeVoice(buf);
-    expect(result).toBe('');
-  });
-
-  it('transcribes via Vertex AI when configured', async () => {
-    process.env.GEMINI_USE_VERTEX_AI = 'true';
-    process.env.VERTEX_PROJECT_ID = 'test-project';
-
+  it('defaults to elevenlabs provider when no provider is specified', async () => {
+    process.env.ELEVENLABS_API_KEY = 'test-key';
     global.fetch = jest.fn().mockResolvedValue({
       ok: true,
-      json: async () => ({
-        candidates: [{
-          content: {
-            parts: [{ text: 'vertex transcription' }],
-          },
-        }],
-      }),
+      json: async () => ({ text: 'default elevenlabs' }),
     }) as any;
 
-    const { transcribeVoice } = await import('../../discord/voice/tts');
-    const buf = Buffer.alloc(4000);
-    for (let i = 0; i < buf.length - 1; i += 2) buf.writeInt16LE(1000, i);
-    const result = await transcribeVoice(buf);
-    expect(result).toBe('vertex transcription');
-    expect(mockRecordGeminiUsage).toHaveBeenCalled();
-  });
-
-  it('throws when Gemini over limit', async () => {
-    process.env.GEMINI_API_KEY = 'test-key';
-    const { isGeminiOverLimit } = require('../../discord/usage');
-    (isGeminiOverLimit as jest.Mock).mockReturnValueOnce(true);
-
-    const { transcribeVoice } = await import('../../discord/voice/tts');
-    const buf = Buffer.alloc(4000);
-    for (let i = 0; i < buf.length - 1; i += 2) buf.writeInt16LE(1000, i);
-    await expect(transcribeVoice(buf)).rejects.toThrow('Daily Gemini API call limit reached');
+    const { transcribeVoiceDetailed } = await import('../../discord/voice/tts');
+    const result = await transcribeVoiceDetailed(Buffer.alloc(100));
+    expect(result.provider).toBe('elevenlabs');
+    expect(result.text).toBe('default elevenlabs');
   });
 });
 
-describe('tts.ts — textToSpeech fallback behavior', () => {
+describe('tts.ts — textToSpeech behavior', () => {
   beforeEach(() => {
     jest.resetModules();
     mockConvert.mockClear();
@@ -846,182 +684,21 @@ describe('tts.ts — textToSpeech fallback behavior', () => {
 
   afterEach(() => {
     delete process.env.ELEVENLABS_API_KEY;
-    delete process.env.GEMINI_API_KEY;
-    delete process.env.GEMINI_USE_VERTEX_AI;
-    delete process.env.VERTEX_PROJECT_ID;
   });
 
-  it('falls back to Gemini when ElevenLabs fails at runtime', async () => {
+  it('surfaces ElevenLabs runtime failures', async () => {
     process.env.ELEVENLABS_API_KEY = 'test-key';
-    process.env.GEMINI_API_KEY = 'test-gemini-key';
 
-    // ElevenLabs throws
     mockConvert.mockRejectedValue(new Error('ElevenLabs service unavailable'));
 
-    const fakeAudioData = Buffer.from('gemini-fallback').toString('base64');
-    global.fetch = jest.fn().mockResolvedValue({
-      ok: true,
-      json: async () => ({
-        candidates: [{
-          content: {
-            parts: [{ inlineData: { mimeType: 'audio/L16', data: fakeAudioData } }],
-          },
-        }],
-      }),
-    }) as any;
-
     const { textToSpeech } = await import('../../discord/voice/tts');
-    const result = await textToSpeech('Test', 'Kore');
-    expect(result.length).toBeGreaterThan(0);
+    await expect(textToSpeech('Test', 'Kore')).rejects.toThrow('ElevenLabs service unavailable');
   });
 
-  it('throws when both ElevenLabs and Gemini fail', async () => {
-    process.env.ELEVENLABS_API_KEY = 'test-key';
-    process.env.GEMINI_API_KEY = 'test-gemini-key';
-
-    mockConvert.mockRejectedValue(new Error('ElevenLabs down'));
-
-    global.fetch = jest.fn().mockResolvedValue({
-      ok: false,
-      status: 500,
-      text: async () => 'Gemini error',
-    }) as any;
-
-    const { textToSpeech } = await import('../../discord/voice/tts');
-    await expect(textToSpeech('Test', 'Kore')).rejects.toThrow('Gemini TTS error');
-  });
-
-  it('throws when Gemini TTS has no audio data in response', async () => {
+  it('throws when ElevenLabs is not configured', async () => {
     delete process.env.ELEVENLABS_API_KEY;
-    process.env.GEMINI_API_KEY = 'test-gemini-key';
-
-    global.fetch = jest.fn().mockResolvedValue({
-      ok: true,
-      json: async () => ({
-        candidates: [{
-          content: {
-            parts: [{ text: 'no audio here' }],
-          },
-        }],
-      }),
-    }) as any;
 
     const { textToSpeech } = await import('../../discord/voice/tts');
-    await expect(textToSpeech('Test', 'Kore')).rejects.toThrow('No audio data in Gemini TTS response');
-  });
-
-  it('throws when Gemini API key is not set and Vertex is not enabled', async () => {
-    delete process.env.ELEVENLABS_API_KEY;
-    delete process.env.GEMINI_API_KEY;
-
-    const { textToSpeech } = await import('../../discord/voice/tts');
-    await expect(textToSpeech('Test', 'Kore')).rejects.toThrow('Gemini API key not configured');
-  });
-
-  it('throws when Vertex is enabled but project ID missing for TTS', async () => {
-    delete process.env.ELEVENLABS_API_KEY;
-    delete process.env.GEMINI_API_KEY;
-    process.env.GEMINI_USE_VERTEX_AI = 'true';
-    delete process.env.VERTEX_PROJECT_ID;
-    delete process.env.GOOGLE_CLOUD_PROJECT;
-
-    const { textToSpeech } = await import('../../discord/voice/tts');
-    await expect(textToSpeech('Test', 'Kore')).rejects.toThrow('Vertex AI is enabled but VERTEX_PROJECT_ID');
-  });
-
-  it('uses Vertex AI for TTS when configured', async () => {
-    delete process.env.ELEVENLABS_API_KEY;
-    process.env.GEMINI_USE_VERTEX_AI = 'true';
-    process.env.VERTEX_PROJECT_ID = 'test-project';
-
-    const fakeAudioData = Buffer.from('audio').toString('base64');
-    global.fetch = jest.fn().mockResolvedValue({
-      ok: true,
-      json: async () => ({
-        candidates: [{
-          content: {
-            parts: [{ inlineData: { mimeType: 'audio/pcm', data: fakeAudioData } }],
-          },
-        }],
-      }),
-    }) as any;
-
-    const { textToSpeech } = await import('../../discord/voice/tts');
-    const result = await textToSpeech('Test', 'Kore');
-    expect(result.length).toBeGreaterThan(0);
-    // Verify it used Vertex endpoint
-    const url = (global.fetch as jest.Mock).mock.calls[0][0];
-    expect(url).toContain('aiplatform.googleapis.com');
-  });
-
-  it('throws when Gemini is over limit for TTS', async () => {
-    delete process.env.ELEVENLABS_API_KEY;
-    process.env.GEMINI_API_KEY = 'test-gemini-key';
-
-    const { isGeminiOverLimit } = require('../../discord/usage');
-    (isGeminiOverLimit as jest.Mock).mockReturnValueOnce(true);
-
-    const { textToSpeech } = await import('../../discord/voice/tts');
-    await expect(textToSpeech('Test', 'Kore')).rejects.toThrow('Daily Gemini API call limit reached');
-  });
-});
-
-describe('tts.ts — Vertex access token flows', () => {
-  beforeEach(() => {
-    jest.resetModules();
-    mockRecordGeminiUsage.mockClear();
-  });
-
-  afterEach(() => {
-    delete process.env.GEMINI_USE_VERTEX_AI;
-    delete process.env.VERTEX_PROJECT_ID;
-    delete process.env.GEMINI_API_KEY;
-  });
-
-  it('callVertexGenerateContent throws when VERTEX_PROJECT_ID is not set', async () => {
-    process.env.GEMINI_USE_VERTEX_AI = 'true';
-    delete process.env.VERTEX_PROJECT_ID;
-    delete process.env.GOOGLE_CLOUD_PROJECT;
-
-    const { transcribeVoice } = await import('../../discord/voice/tts');
-    await expect(transcribeVoice(Buffer.alloc(100))).rejects.toThrow();
-  });
-
-  it('callVertexGenerateContent throws on non-ok response', async () => {
-    process.env.GEMINI_USE_VERTEX_AI = 'true';
-    process.env.VERTEX_PROJECT_ID = 'test-project';
-
-    global.fetch = jest.fn().mockResolvedValue({
-      ok: false,
-      status: 400,
-      text: async () => 'Bad request',
-    }) as any;
-
-    const { transcribeVoice } = await import('../../discord/voice/tts');
-    const buf = Buffer.alloc(4000);
-    for (let i = 0; i < buf.length - 1; i += 2) buf.writeInt16LE(1000, i);
-    await expect(transcribeVoice(buf)).rejects.toThrow('Vertex Gemini error');
-  });
-
-  it('resolves gemini-flash-latest to gemini-2.5-flash in Vertex', async () => {
-    process.env.GEMINI_USE_VERTEX_AI = 'true';
-    process.env.VERTEX_PROJECT_ID = 'test-project';
-
-    global.fetch = jest.fn().mockResolvedValue({
-      ok: true,
-      json: async () => ({
-        candidates: [{
-          content: { parts: [{ text: 'transcribed' }] },
-        }],
-      }),
-    }) as any;
-
-    const { transcribeVoice } = await import('../../discord/voice/tts');
-    const buf = Buffer.alloc(4000);
-    for (let i = 0; i < buf.length - 1; i += 2) buf.writeInt16LE(1000, i);
-    await transcribeVoice(buf);
-
-    const url = (global.fetch as jest.Mock).mock.calls[0][0];
-    expect(url).toContain('gemini-2.5-flash');
+    await expect(textToSpeech('Test', 'Kore')).rejects.toThrow('ELEVENLABS_API_KEY not configured');
   });
 });

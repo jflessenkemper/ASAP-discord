@@ -75,7 +75,7 @@ jest.mock('../../../discord/voice/elevenlabsRealtime', () => ({
   isElevenLabsRealtimeAvailable: jest.fn().mockReturnValue(false),
 }));
 jest.mock('../../../discord/voice/tts', () => ({
-  transcribeVoiceDetailed: jest.fn().mockResolvedValue({ text: 'hello world', provider: 'gemini' }),
+  transcribeVoiceDetailed: jest.fn().mockResolvedValue({ text: 'hello world', provider: 'elevenlabs' }),
 }));
 jest.mock('../../../utils/errors', () => ({
   errMsg: jest.fn((e: any) => (e instanceof Error ? e.message : String(e || 'Unknown'))),
@@ -294,7 +294,7 @@ describe('voice/connection', () => {
   });
 
   // ────────────────────────────────────────
-  // listenToUser (batch Gemini STT)
+  // listenToUser (batch ElevenLabs STT)
   // ────────────────────────────────────────
   describe('listenToUser()', () => {
     it('subscribes to member audio and transcribes', async () => {
@@ -326,7 +326,7 @@ describe('voice/connection', () => {
           userId: '100',
           username: 'Alice',
           text: 'hello world',
-          sttProvider: 'gemini',
+          sttProvider: 'elevenlabs',
         })
       );
 
@@ -421,7 +421,7 @@ describe('voice/connection', () => {
   // listenToAllMembersSmart (STT routing)
   // ────────────────────────────────────────
   describe('listenToAllMembersSmart()', () => {
-    it('uses Gemini batch STT when nothing else is available', () => {
+    it('uses ElevenLabs batch STT when nothing else is available', () => {
       (isDeepgramAvailable as jest.Mock).mockReturnValue(false);
       (isElevenLabsRealtimeAvailable as jest.Mock).mockReturnValue(false);
       process.env.VOICE_REALTIME_MODE = 'false';
@@ -468,11 +468,11 @@ describe('voice/connection', () => {
       unsub();
     });
 
-    it('respects VOICE_STT_PROVIDER=gemini', () => {
+    it('defaults to ElevenLabs batch STT for unsupported provider values', () => {
       (isDeepgramAvailable as jest.Mock).mockReturnValue(false);
       (isElevenLabsRealtimeAvailable as jest.Mock).mockReturnValue(false);
       process.env.VOICE_REALTIME_MODE = 'false';
-      process.env.VOICE_STT_PROVIDER = 'gemini';
+      process.env.VOICE_STT_PROVIDER = 'unsupported';
 
       const channel = makeVoiceChannel([]);
       const subStream = new Readable({ read() {} });

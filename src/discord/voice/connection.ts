@@ -215,7 +215,7 @@ export interface VoiceTranscription {
   sttProvider?: 'deepgram' | 'gemini' | 'elevenlabs';
 }
 
-function getSttProviderPreference(): 'deepgram' | 'elevenlabs' | 'gemini' {
+function getSttProviderPreference(): 'deepgram' | 'elevenlabs' {
   if (VOICE_REALTIME_MODE && isElevenLabsRealtimeAvailable()) {
     return 'elevenlabs';
   }
@@ -224,7 +224,6 @@ function getSttProviderPreference(): 'deepgram' | 'elevenlabs' | 'gemini' {
   }
   const configured = String(process.env.VOICE_STT_PROVIDER || '').trim().toLowerCase();
   if (configured === 'elevenlabs') return 'elevenlabs';
-  if (configured === 'gemini') return 'gemini';
   return 'elevenlabs';
 }
 
@@ -508,7 +507,7 @@ export function listenToAllMembers(
  * this streams raw audio to Deepgram and gets transcripts back in real-time
  * with ~200-400ms latency (vs ~1-2s for batch Gemini).
  *
- * Falls back to Gemini batch STT if Deepgram fails to start within 10s.
+ * Falls back to ElevenLabs batch STT if Deepgram fails to start within 10s.
  */
 export function listenToUserDeepgram(
   connection: VoiceConnection,
@@ -541,9 +540,9 @@ export function listenToUserDeepgram(
     currentDecoder = null;
   }
 
-  function fallbackToGemini(reason: string): void {
+  function fallbackToBatch(reason: string): void {
     if (destroyed || fallbackUnsub) return;
-    console.warn(`Deepgram unavailable for ${member.displayName} — ${reason}. Falling back to Gemini batch STT`);
+    console.warn(`Deepgram unavailable for ${member.displayName} — ${reason}. Falling back to ElevenLabs batch STT`);
     cleanupReceiveChain();
     dgSession?.close();
     dgSession = null;
@@ -554,11 +553,11 @@ export function listenToUserDeepgram(
     if (destroyed || fallbackUnsub) return;
     const normalizedReason = reason.toLowerCase();
     if (normalizedReason.includes('closed unexpectedly') || normalizedReason.includes('unauthorized')) {
-      fallbackToGemini(reason);
+      fallbackToBatch(reason);
       return;
     }
     if (deepgramRetryAttempts >= MAX_DEEPGRAM_SESSION_RETRIES) {
-      fallbackToGemini(reason);
+      fallbackToBatch(reason);
       return;
     }
 
@@ -682,7 +681,7 @@ export function listenToUserDeepgram(
 
   const dgTimeout = setTimeout(() => {
     if (!dgSession && !destroyed && !fallbackUnsub) {
-      fallbackToGemini('session start timed out');
+      fallbackToBatch('session start timed out');
     }
   }, 10_000);
 
@@ -932,7 +931,7 @@ export function listenToAllMembersSmart(
     return listenToAllMembers(connection, voiceChannel, onTranscription, onSpeechStart);
   }
 
-  console.log('Using Gemini batch STT for voice transcription (Deepgram not configured)');
+  console.log('Using ElevenLabs batch STT for voice transcription');
   return listenToAllMembers(connection, voiceChannel, onTranscription, onSpeechStart);
 }
 
