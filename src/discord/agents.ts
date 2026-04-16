@@ -1,6 +1,9 @@
 import fs from 'fs';
 import path from 'path';
 
+import pool from '../db/pool';
+import { errMsg } from '../utils/errors';
+
 export interface AgentConfig {
   id: string;
   name: string;
@@ -97,6 +100,28 @@ export function getRileyPersonality(): string | null {
   return personalityCache;
 }
 
+/** Extract owner_name from riley-personality.md. Falls back to env var or 'Jordan'. */
+export function getOwnerName(): string {
+  if (process.env.OWNER_NAME) return process.env.OWNER_NAME;
+  const personality = getRileyPersonality();
+  if (personality) {
+    const match = personality.match(/^owner_name:\s*(.+)$/m);
+    if (match) return match[1].trim();
+  }
+  return 'Jordan';
+}
+
+/** Extract owner_email from riley-personality.md. Falls back to env var. */
+export function getOwnerEmail(): string {
+  if (process.env.OWNER_EMAIL) return process.env.OWNER_EMAIL;
+  const personality = getRileyPersonality();
+  if (personality) {
+    const match = personality.match(/^owner_email:\s*(.+)$/m);
+    if (match) return match[1].trim();
+  }
+  return 'jordan.flessenkemper@gmail.com';
+}
+
 let memoryCache: string | null | undefined;
 export function getRileyMemory(): string | null {
   if (memoryCache === undefined) {
@@ -107,6 +132,81 @@ export function getRileyMemory(): string | null {
 
 let agentCache: Map<AgentId, AgentConfig> | null = null;
 const agentRoleIds = new Map<AgentId, string>();
+const dynamicAgents = new Map<string, AgentConfig>();
+
+const DYNAMIC_AGENTS_DB_KEY = 'dynamic-agent-registry';
+let dynamicAgentDbDisabled = false;
+
+async function persistDynamicAgents(): Promise<void> {
+  if (dynamicAgentDbDisabled) return;
+  try {
+    const configs = [...dynamicAgents.values()].map(a => ({
+      id: a.id,
+      name: a.name,
+      handle: a.handle,
+      emoji: a.emoji,
+      color: a.color,
+      voice: a.voice,
+      systemPrompt: a.systemPrompt,
+    }));
+    await pool.query(
+      `INSERT INTO agent_memory (file_name, content, updated_at) VALUES ($1, $2, NOW())
+       ON CONFLICT (file_name) DO UPDATE SET content = EXCLUDED.content, updated_at = NOW()`,
+      [DYNAMIC_AGENTS_DB_KEY, JSON.stringify(configs)]
+    );
+  } catch (err) {
+    if (String((err as any)?.code) === '42501') {
+      dynamicAgentDbDisabled = true;
+      console.warn('[agent-lifecycle] DB persistence disabled: permission denied');
+      return;
+    }
+    console.warn('[agent-lifecycle] Failed to persist dynamic agents:', errMsg(err));
+  }
+}
+
+export async function loadDynamicAgentsFromDb(): Promise<number> {
+  if (dynamicAgentDbDisabled) return 0;
+  try {
+    const res = await pool.query(
+      'SELECT content FROM agent_memory WHERE file_name = $1',
+      [DYNAMIC_AGENTS_DB_KEY]
+    );
+    if (!res.rows || res.rows.length === 0) return 0;
+
+    const configs = JSON.parse(res.rows[0].content);
+    if (!Array.isArray(configs)) return 0;
+
+    let loaded = 0;
+    for (const config of configs) {
+      if (dynamicAgents.has(config.id) || AGENT_REGISTRY.some(a => a.id === config.id)) continue;
+      dynamicAgents.set(config.id, {
+        id: config.id,
+        name: config.name,
+        handle: config.handle,
+        roleName: config.name.split(' ')[0],
+        aliases: [config.id, config.handle],
+        channelName: `${config.emoji}-${config.id}`,
+        emoji: config.emoji,
+        color: config.color || 0x888888,
+        voice: config.voice || 'Kore',
+        avatarUrl: `${AVATAR_BASE}/default.png`,
+        systemPrompt: config.systemPrompt,
+      });
+      loaded++;
+    }
+    if (loaded > 0) {
+      agentCache = null;
+      console.log(`[agent-lifecycle] Loaded ${loaded} dynamic agent(s) from DB`);
+    }
+    return loaded;
+  } catch (err) {
+    if (String((err as any)?.code) === '42501') {
+      dynamicAgentDbDisabled = true;
+    }
+    console.warn('[agent-lifecycle] Failed to load dynamic agents:', errMsg(err));
+    return 0;
+  }
+}
 
 export function getAgents(): Map<AgentId, AgentConfig> {
   if (agentCache) return agentCache;
@@ -132,6 +232,9 @@ export function getAgents(): Map<AgentId, AgentConfig> {
   }
   if (loadErrors > 0) {
     console.warn(`⚠️ ${loadErrors}/${AGENT_REGISTRY.length} agent prompts could not be loaded from .agent.md files`);
+  }
+  for (const [id, agent] of dynamicAgents) {
+    agentCache.set(id as AgentId, agent);
   }
   return agentCache;
 }
@@ -208,6 +311,63 @@ export function getAgentByChannelName(channelName: string): AgentConfig | undefi
     if (canonical === normalized || canonicalStripped === stripped || agent.id === normalized || agent.id === stripped) return agent;
   }
   return undefined;
+}
+
+export function createDynamicAgent(config: {
+  id: string;
+  name: string;
+  handle: string;
+  emoji: string;
+  systemPrompt: string;
+  color?: number;
+  voice?: string;
+}): AgentConfig {
+  if (AGENT_REGISTRY.some(a => a.id === config.id)) {
+    throw new Error(`Agent ID "${config.id}" conflicts with a static agent`);
+  }
+  const agent: AgentConfig = {
+    id: config.id,
+    name: config.name,
+    handle: config.handle,
+    roleName: config.name.split(' ')[0],
+    aliases: [config.id, config.handle],
+    channelName: `${config.emoji}-${config.id}`,
+    emoji: config.emoji,
+    color: config.color || 0x888888,
+    voice: config.voice || 'Kore',
+    avatarUrl: `${AVATAR_BASE}/default.png`,
+    systemPrompt: config.systemPrompt,
+  };
+  dynamicAgents.set(config.id, agent);
+  agentCache = null;
+  void persistDynamicAgents();
+  console.log(`[agent-lifecycle] Created dynamic agent: ${config.id} (${config.name})`);
+  return agent;
+}
+
+export function destroyDynamicAgent(id: string): boolean {
+  if (AGENT_REGISTRY.some(a => a.id === id)) {
+    throw new Error(`Cannot destroy static agent "${id}"`);
+  }
+  const removed = dynamicAgents.delete(id);
+  if (removed) {
+    agentCache = null;
+    // Archive memory instead of deleting (rename keys so they're preserved)
+    pool.query(
+      `UPDATE agent_memory SET file_name = 'archived-' || file_name, updated_at = NOW()
+       WHERE file_name IN ($1, $2) AND file_name NOT LIKE 'archived-%'`,
+      [`conv-${id}`, `summary-${id}`]
+    ).catch((err) => {
+      console.warn(`[agent-lifecycle] Failed to archive memory for ${id}:`, errMsg(err));
+    });
+    void persistDynamicAgents();
+    console.log(`[agent-lifecycle] Destroyed dynamic agent: ${id} (memory archived)`);
+  }
+  return removed;
+}
+
+export function listDynamicAgents(): AgentConfig[] {
+  return [...dynamicAgents.values()];
 }
 
 export { AGENT_IDS };

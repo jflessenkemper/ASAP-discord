@@ -18,7 +18,7 @@ const config: Config = {
   ],
   coverageDirectory: 'coverage',
   coverageReporters: ['text', 'text-summary', 'lcov'],
-  coverageThresholds: {
+  coverageThreshold: {
     global: {
       branches: 15,
       functions: 15,

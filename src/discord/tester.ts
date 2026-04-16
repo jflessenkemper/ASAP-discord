@@ -56,9 +56,9 @@ import {
 } from './test-definitions';
 import { errMsg } from '../utils/errors';
 
-type FailureCategory = 'PATTERN_MISMATCH' | 'TOOL_AUDIT_MISSING' | 'TIMEOUT' | 'TOKEN_ECHO_MISSING' | 'BOT_UNAVAILABLE' | 'QUALITY_CHECK_FAILED' | 'SEND_FAILED';
+export type FailureCategory = 'PATTERN_MISMATCH' | 'TOOL_AUDIT_MISSING' | 'TIMEOUT' | 'TOKEN_ECHO_MISSING' | 'BOT_UNAVAILABLE' | 'QUALITY_CHECK_FAILED' | 'SEND_FAILED';
 
-function categorizeFailure(reason?: string): FailureCategory {
+export function categorizeFailure(reason?: string): FailureCategory {
   if (!reason) return 'TIMEOUT';
   // Timeout checks FIRST — a timed-out test may also carry pattern/tool text in reason
   if (reason.includes('idle timeout') || reason.includes('hard ceiling') || reason.includes('timed out')) return 'TIMEOUT';
@@ -72,7 +72,7 @@ function categorizeFailure(reason?: string): FailureCategory {
   return 'PATTERN_MISMATCH';
 }
 
-interface TestResult {
+export interface TestResult {
   agent: string;
   capability: string;
   category: Category;
@@ -93,7 +93,7 @@ interface CleanupStats {
   timedOut: boolean;
 }
 
-interface ExtraCheckResult {
+export interface ExtraCheckResult {
   name: string;
   passed: boolean;
   detail: string;
@@ -214,17 +214,17 @@ function getPollIntervalMs(profile: SmokeProfile): number {
   return Math.min(Math.max(250, Math.floor(value)), 5000);
 }
 
-function makeToken(agentId: string, capability: string): string {
+export function makeToken(agentId: string, capability: string): string {
   const left = agentId.replace(/[^a-z0-9]/gi, '').slice(0, 8).toUpperCase() || 'AGENT';
   const right = capability.replace(/[^a-z0-9]/gi, '').slice(0, 8).toUpperCase() || 'CAP';
   return `SMOKE_${left}_${right}_${Date.now().toString().slice(-6)}`;
 }
 
-function buildPrompt(test: AgentCapabilityTest, mention: string, token: string): string {
+export function buildPrompt(test: AgentCapabilityTest, mention: string, token: string): string {
   return `${mention} [smoke test:${test.capability}] ${test.prompt}\nInclude this exact token in your reply: ${token}`;
 }
 
-function normalizeRoleLabel(value: string): string {
+export function normalizeRoleLabel(value: string): string {
   return String(value || '')
     .toLowerCase()
     .replace(/\(.*?\)/g, '')
@@ -625,7 +625,7 @@ function isBotOrWebhookReply(msg: Message, sent: Message, selfId: string): boole
   return msg.author.bot || !!msg.webhookId;
 }
 
-function validateReplyShape(test: AgentCapabilityTest, replyText: string, token: string): { ok: boolean; reason?: string } {
+export function validateReplyShape(test: AgentCapabilityTest, replyText: string, token: string): { ok: boolean; reason?: string } {
   // Normalize: strip markdown formatting, collapse whitespace
   const normalized = replyText
     .replace(/```[\s\S]*?```/g, ' ')     // remove code blocks
@@ -1200,7 +1200,7 @@ async function runVoiceRoundTripCheck(
   };
 }
 
-function buildReadinessSummary(results: TestResult[], extras: ExtraCheckResult[], profile: SmokeProfile = 'full'): { score: number; criticalPassed: boolean; detail: string } {
+export function buildReadinessSummary(results: TestResult[], extras: ExtraCheckResult[], profile: SmokeProfile = 'full'): { score: number; criticalPassed: boolean; detail: string } {
   const byCategory = new Map<Category, { total: number; passed: number }>();
   for (const r of results) {
     const cur = byCategory.get(r.category) || { total: 0, passed: 0 };
@@ -1436,7 +1436,7 @@ function getFailedKeysFromLastReport(): Set<string> {
 /**
  * Suggest a concrete fix action for each failure category.
  */
-function suggestFix(result: TestResult): string {
+export function suggestFix(result: TestResult): string {
   const cat = result.failureCategory || categorizeFailure(result.reason);
   switch (cat) {
     case 'PATTERN_MISMATCH':
@@ -2175,7 +2175,76 @@ async function run(): Promise<void> {
   process.exit(strictPass || readinessPass ? 0 : 1);
 }
 
-void run().catch((err) => {
-  console.error('Fatal:', errMsg(err));
-  process.exit(1);
-});
+// ─── File-to-Category Mapping (for subset smoke runs) ───
+
+const FILE_CATEGORY_MAP: Array<{ pattern: RegExp; categories: Category[] }> = [
+  { pattern: /discord\/claude\.ts/, categories: ['core', 'self-improvement'] },
+  { pattern: /discord\/tools\.ts/, categories: ['tool-proof', 'core'] },
+  { pattern: /discord\/toolsDb\.ts/, categories: ['tool-proof'] },
+  { pattern: /discord\/toolsGcp\.ts/, categories: ['tool-proof', 'infrastructure'] },
+  { pattern: /discord\/agents\.ts/, categories: ['core', 'specialist'] },
+  { pattern: /discord\/guardrails\.ts/, categories: ['core'] },
+  { pattern: /discord\/memory\.ts/, categories: ['memory'] },
+  { pattern: /discord\/vectorMemory\.ts/, categories: ['memory', 'self-improvement'] },
+  { pattern: /discord\/handoff\.ts/, categories: ['orchestration'] },
+  { pattern: /discord\/handlers\/groupchat\.ts/, categories: ['core', 'orchestration'] },
+  { pattern: /discord\/handlers\/textChannel\.ts/, categories: ['core'] },
+  { pattern: /discord\/setup\.ts/, categories: ['discord-management'] },
+  { pattern: /discord\/bot\.ts/, categories: ['core', 'discord-management'] },
+  { pattern: /discord\/commands\.ts/, categories: ['core'] },
+  { pattern: /discord\/modelHealth\.ts/, categories: ['core'] },
+  { pattern: /discord\/contextCache\.ts/, categories: ['core'] },
+  { pattern: /discord\/usage\.ts/, categories: ['core'] },
+  { pattern: /discord\/tester\.ts/, categories: ['self-improvement'] },
+  { pattern: /discord\/test-definitions\.ts/, categories: ['self-improvement'] },
+  { pattern: /discord\/ui\//, categories: ['ux'] },
+  { pattern: /discord\/voice\//, categories: ['specialist'] },
+  { pattern: /discord\/services\//, categories: ['infrastructure'] },
+  { pattern: /services\/github\.ts/, categories: ['tool-proof', 'infrastructure'] },
+  { pattern: /services\/cloudrun\.ts/, categories: ['infrastructure'] },
+];
+
+/**
+ * Given a list of changed files, return the set of test categories that should be run.
+ */
+export function mapFilesToCategories(changedFiles: string[]): Set<Category> {
+  const categories = new Set<Category>();
+  for (const file of changedFiles) {
+    for (const { pattern, categories: cats } of FILE_CATEGORY_MAP) {
+      if (pattern.test(file)) {
+        for (const cat of cats) categories.add(cat);
+      }
+    }
+  }
+  // If no specific mapping found, run core + tool-proof as baseline
+  if (categories.size === 0 && changedFiles.length > 0) {
+    categories.add('core');
+    categories.add('tool-proof');
+  }
+  return categories;
+}
+
+export interface SmokeSubsetResult {
+  score: number;
+  criticalPassed: boolean;
+  detail: string;
+  categories: string[];
+  testCount: number;
+  passed: number;
+  failed: number;
+  failures: Array<{ agent: string; capability: string; reason?: string }>;
+}
+
+/**
+ * Get tests matching the given categories (for filtering).
+ */
+export function getTestsForCategories(categories: Set<Category>): AgentCapabilityTest[] {
+  return AGENT_CAPABILITY_TESTS.filter((t) => categories.has(t.category));
+}
+
+if (require.main === module) {
+  void run().catch((err) => {
+    console.error('Fatal:', errMsg(err));
+    process.exit(1);
+  });
+}

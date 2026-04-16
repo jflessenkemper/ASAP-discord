@@ -26,6 +26,22 @@ interface CachedContentEntry {
 const cacheRegistry = new Map<string, CachedContentEntry>();
 let vertexAuth: GoogleAuth | null = null;
 
+// ── Cache Hit/Miss Metrics ──
+const cacheMetrics = {
+  hits: 0,
+  misses: 0,
+  creates: 0,
+  errors: 0,
+};
+
+export function getCacheMetrics(): { hits: number; misses: number; creates: number; errors: number; hitRate: number } {
+  const total = cacheMetrics.hits + cacheMetrics.misses;
+  return {
+    ...cacheMetrics,
+    hitRate: total > 0 ? cacheMetrics.hits / total : 0,
+  };
+}
+
 function estimateTokenCount(text: string): number {
   return Math.ceil(text.length / 4);
 }
@@ -171,10 +187,12 @@ export async function getOrCreateContentCache(
   const existing = cacheRegistry.get(cacheKey);
 
   if (existing && existing.expiresAt > Date.now() + 60_000) {
+    cacheMetrics.hits++;
     return existing.cacheId;
   }
 
   // Create new cache
+  cacheMetrics.misses++;
   let cacheId: string | null = null;
 
   if (USE_VERTEX_AI) {
@@ -186,6 +204,7 @@ export async function getOrCreateContentCache(
   }
 
   if (cacheId) {
+    cacheMetrics.creates++;
     cacheRegistry.set(cacheKey, {
       cacheId,
       modelName,
@@ -193,7 +212,9 @@ export async function getOrCreateContentCache(
       createdAt: Date.now(),
       expiresAt: Date.now() + CONTEXT_CACHE_TTL_SECONDS * 1000,
     });
-    logAgentEvent(agentId, 'cache', `Created context cache: ${cacheId.slice(-20)} (~${totalTokens} tokens, TTL ${CONTEXT_CACHE_TTL_SECONDS}s)`);
+    logAgentEvent(agentId, 'cache', `Created context cache: ${cacheId.slice(-20)} (~${totalTokens} tokens, TTL ${CONTEXT_CACHE_TTL_SECONDS}s, hitRate=${(getCacheMetrics().hitRate * 100).toFixed(0)}%)`);
+  } else {
+    cacheMetrics.errors++;
   }
 
   return cacheId;

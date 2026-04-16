@@ -20,7 +20,6 @@
     "visual:baseline": "tsx src/services/visualRegression.ts baseline",
     "visual:check": "tsx src/services/visualRegression.ts check",
     "db:grant-agent-memory": "tsx src/db/checkAndGrantAgentMemoryPerms.ts",
-    "seed": "tsx src/db/seed.ts",
     "test": "jest --verbose",
     "test:watch": "jest --watch",
     "test:coverage": "jest --coverage",

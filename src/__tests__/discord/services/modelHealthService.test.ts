@@ -1,5 +1,5 @@
 /**
- * Tests for src/discord/services/modelHealth.ts (service)
+ * Tests for src/discord/services/modelHealthCheck.ts (service)
  * Model/provider health checks — Anthropic, Gemini, Deepgram, ElevenLabs.
  */
 
@@ -27,10 +27,10 @@ jest.mock('google-auth-library', () => ({
   })),
 }));
 
-import { runModelHealthChecks } from '../../../discord/services/modelHealth';
+import { runModelHealthChecks } from '../../../discord/services/modelHealthCheck';
 import { postDiagnostic } from '../../../discord/services/diagnosticsWebhook';
 
-describe('services/modelHealth', () => {
+describe('services/modelHealthCheck', () => {
   let mockFetch: jest.Mock;
 
   beforeEach(() => {
@@ -607,7 +607,7 @@ describe('services/modelHealth', () => {
         text: jest.fn().mockResolvedValue('ok'),
       });
 
-      const mod = require('../../../discord/services/modelHealth');
+      const mod = require('../../../discord/services/modelHealthCheck');
       const diag = require('../../../discord/services/diagnosticsWebhook');
       await mod.runModelHealthChecks();
       expect(diag.postDiagnostic).toHaveBeenCalled();
@@ -667,7 +667,7 @@ describe('services/modelHealth', () => {
         };
       });
 
-      const mod = require('../../../discord/services/modelHealth');
+      const mod = require('../../../discord/services/modelHealthCheck');
       const diag = require('../../../discord/services/diagnosticsWebhook');
       await mod.runModelHealthChecks();
       expect(diag.postDiagnostic).toHaveBeenCalled();
@@ -713,7 +713,7 @@ describe('services/modelHealth', () => {
         text: jest.fn().mockResolvedValue('ok'),
       });
 
-      const mod = require('../../../discord/services/modelHealth');
+      const mod = require('../../../discord/services/modelHealthCheck');
       const diag = require('../../../discord/services/diagnosticsWebhook');
       await mod.runModelHealthChecks();
       expect(diag.postDiagnostic).toHaveBeenCalled();
@@ -762,7 +762,7 @@ describe('services/modelHealth', () => {
         text: jest.fn().mockResolvedValue('not found'),
       });
 
-      const mod = require('../../../discord/services/modelHealth');
+      const mod = require('../../../discord/services/modelHealthCheck');
       const diag = require('../../../discord/services/diagnosticsWebhook');
       await mod.runModelHealthChecks();
       expect(diag.postDiagnostic).toHaveBeenCalled();

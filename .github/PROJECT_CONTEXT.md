@@ -5,95 +5,73 @@
 
 ## What is ASAP?
 
-ASAP is an Australian service marketplace platform connecting clients who need jobs done (cleaning, handyman, gardening, etc.) with local employees/contractors. It has a React Native mobile app (Expo), a web app, and a Node.js Express backend, all deployed on Google Cloud.
+ASAP-discord is a Discord-operated automation and career-ops system. Riley coordinates a team of specialist agents, Ace implements code changes, and the runtime manages Discord workflows, voice sessions, GitHub/build webhooks, diagnostics, and a job-search pipeline for the owner.
 
 ## Tech Stack
 
-- **Frontend**: React Native (Expo) with TypeScript, web + mobile
-- **Backend**: Node.js + Express + TypeScript
+- **Runtime**: Node.js + Express + TypeScript
 - **Database**: PostgreSQL (Cloud SQL, `australia-southeast1`)
 - **Hosting**: Google Cloud Run (service: `asap`, region: `australia-southeast1`)
 - **CI/CD**: Cloud Build (manual trigger via `gcloud builds submit`)
 - **AI**: Anthropic Claude (Opus for Ace, Sonnet for all others), Gemini (TTS/STT fallback), ElevenLabs (TTS), Deepgram (real-time STT)
 - **Discord**: 13-agent bot system coordinated by Riley
+- **Career Ops**: job scan/evaluation/drafting/submission workflow stored in PostgreSQL
 
 ## Database Tables
 
 | Table | Purpose |
 |-------|---------|
-| `clients` | Client accounts (email, name, phone, password hash, avatar, address) |
-| `employees` | Employee/contractor accounts (email, name, phone, skills, ABN, location) |
-| `jobs` | Job listings (client_id, problem_type, description, address, status, price) |
-| `job_timeline` | Job status history (job_id, status, timestamp, note) |
-| `job_photos` | Photos attached to jobs (job_id, url, type) |
-| `problem_types` | Service categories (name, description, icon) |
-| `sessions` | Auth sessions (user_id, token, expires_at) |
-| `two_factor_codes` | 2FA verification codes (user_id, code, expires_at) |
-| `reviews` | Job reviews (job_id, reviewer_id, rating, comment) |
-| `notifications` | Push notifications (user_id, title, body, read) |
-| `fuel_searches` | Fuel price search history |
-| `price_searches` | Service price comparison searches |
-| `saved_businesses` | User-saved business bookmarks |
-| `saved_items` | Generic saved/favorited items |
-| `employee_availability` | Employee schedule/availability slots |
-| `auth_events` | Login/signup audit trail |
-| `businesses` | Business portal accounts |
-| `quote_requests` | Client quote requests for jobs |
-| `quotes` | Employee quotes/bids on jobs |
 | `agent_memory` | Discord bot agent conversation memory |
 | `agent_activity_log` | Agent event/action audit log |
+| `trace_spans` | Trace spans for request/tool tracing when the table exists |
+| `job_profile` | Owner career profile, target roles, contact details, preferences |
+| `job_portals` | ATS/career portal metadata and submission config |
+| `job_listings` | Scanned/evaluated/approved/drafted/applied listings |
+| `job_scan_history` | Deduplicated history of previously seen listings |
 
-## API Routes
+Legacy marketplace tables were retired and are dropped by `src/db/migrations/020_drop_legacy_app_schema.sql`.
 
-All routes are prefixed with `/api/`:
+## HTTP Surface
+
+The active HTTP surface is intentionally small and lives in `src/index.ts`:
 
 | Route | File | Purpose |
 |-------|------|---------|
-| `/api/auth` | `routes/auth.ts` | Login, signup, 2FA, sessions, Google/Facebook/Apple OAuth |
-| `/api/jobs` | `routes/jobs.ts` | CRUD for jobs, status updates, assignment, photos |
-| `/api/employees` | `routes/employees.ts` | Employee profiles, skills, availability |
-| `/api/location` | `routes/location.ts` | Geocoding, nearby search |
-| `/api/fuel` | `routes/fuel.ts` | Fuel price comparisons (via external API) |
-| `/api/shop` | `routes/shop.ts` | Marketplace/shop listings |
-| `/api/favorites` | `routes/favorites.ts` | Save/unsave items |
-| `/api/public` | `routes/public.ts` | Public-facing pages (no auth) |
-| `/api/search` | `routes/search.ts` | Search across jobs, employees, businesses |
-| `/api/business` | `routes/business.ts` | Business portal (for service providers) |
-| `/api/mapkit` | `routes/mapkit.ts` | Apple MapKit token generation |
 | `/api/health` | `index.ts` | Health check endpoint |
-| `/api/agent-log` | `index.ts` | Agent activity log (debug, requires key) |
+| `/api/metrics` | `index.ts` | Protected Prometheus metrics endpoint |
+| `/api/agent-log` | `index.ts` | Protected structured activity log endpoint |
+| `/api/agent-log/text` | `index.ts` | Protected plain-text activity log view |
+| `/api/webhooks/github` | `index.ts` | Signed GitHub webhook receiver |
+| `/api/webhooks/build-complete` | `index.ts` | Build-complete webhook for post-deploy automation |
+| `/api/twilio/voice` | `index.ts` | Twilio voice webhook |
+| `/api/twilio/status` | `index.ts` | Twilio status callback webhook |
 
 ## Project Structure
 
 ```
-app/                    # Expo app screens (React Native)
-components/             # Shared UI components
-  employee/             # Employee-specific tabs (Earnings, Jobs, Map, Profile)
-constants/theme.ts      # Design tokens, colors
-contexts/AuthContext.tsx # Auth state management
-services/api.ts         # API client for frontend
-server/
-  src/
-    index.ts            # Express server entry point
-    routes/             # API route handlers
-    db/
-      pool.ts           # PostgreSQL connection pool
-      migrate.ts        # Auto-migration runner
-      seed.ts           # Dev seed data
-      migrations/       # SQL migration files (001-015)
-    middleware/auth.ts   # JWT auth middleware
-    services/           # External service integrations (email, fuel, gemini, storage)
-    discord/
-      bot.ts            # Discord bot entry + channel setup
-      agents.ts         # Agent definitions (13 agents)
-      claude.ts         # Anthropic API integration + tool loop
-      tools.ts          # 40+ tools available to agents
-      usage.ts          # Token/cost tracking + daily budget
-      memory.ts         # Agent conversation memory
-      activityLog.ts    # Agent event logger
-      handlers/         # Message handlers (groupchat, goals, github)
-      voice/            # Voice chat (connection, TTS, STT, ElevenLabs, Deepgram)
-      services/         # Discord services (webhooks, screenshots, telephony)
+src/
+  index.ts              # Express entrypoint and webhook/health surface
+  db/
+    pool.ts             # PostgreSQL connection pool
+    migrate.ts          # Migration runner + runtime-table assertions
+    migrations/         # SQL migrations, including job-search and legacy-drop migrations
+  services/
+    jobSearch.ts        # Career-ops scanning, evaluation, drafting, submission
+    email.ts            # Outbound email for job applications
+    github.ts           # GitHub helpers
+    cloudrun.ts         # Cloud Run deploy helpers
+  discord/
+    bot.ts              # Discord bot entry + startup monitors
+    agents.ts           # Static agent registry + dynamic agent persistence
+    claude.ts           # LLM orchestration and tool loop
+    tools.ts            # Repo/GCP/DB/Discord/job-search tools
+    usage.ts            # Token/cost tracking and tracing primitives
+    memory.ts           # Conversation memory helpers
+    vectorMemory.ts     # Semantic recall and memory consolidation
+    activityLog.ts      # Agent activity logging + ops bridge
+    handlers/           # Groupchat, review, voice, docs, GitHub handlers
+    voice/              # Voice channel, STT, TTS, call pipeline
+    services/           # Webhooks, screenshots, telephony, diagnostics, errors
 ```
 
 ## Discord Agent Team

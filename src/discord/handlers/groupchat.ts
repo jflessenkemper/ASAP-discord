@@ -37,6 +37,8 @@ import { goalState, GOAL_THREAD_COUNTER_RE } from './goalState';
 import { LOW_SIGNAL_COMPLETION_RE } from './responseNormalization';
 import { sendAgentMessage, clearHistory } from './textChannel';
 import { errMsg } from '../../utils/errors';
+import { buildLoopHealthCompactSummary, buildLoopHealthDetailedReport, recordLoopHealth } from '../loopHealth';
+import { buildGroupchatDecisionAttention, buildTextStatusSummary } from '../rileyInteraction';
 
 
 type ToolNotificationBatch = {
@@ -554,6 +556,7 @@ function ensureGoalWatchdog(groupchat: TextChannel): void {
     if (!goalState.isStalled()) return;
 
     goalState.recordRecoveryAttempt();
+    recordLoopHealth('goal-watchdog', 'warn', `attempt=${goalState.recoveryAttempts} goal=${goalState.goal?.slice(0, 80) || 'unknown'}`);
 
     sendAutopilotAudit(
       groupchat,
@@ -638,6 +641,8 @@ export async function postThreadStatusSnapshotNow(reason = 'hourly'): Promise<vo
   } else {
     await threadStatusChannel.send(content.slice(0, 1900)).catch(() => {});
   }
+
+  recordLoopHealth('thread-status-reporter', 'ok', `reason=${reason}`);
 
 }
 
@@ -1311,7 +1316,7 @@ async function handleDirectVoiceActionIfRequested(message: Message, content: str
   return true;
 }
 
-function detectDirectOpsAction(text: string): 'status' | 'limits' | 'threads' | 'help' | null {
+function detectDirectOpsAction(text: string): 'status' | 'limits' | 'threads' | 'loops' | 'help' | null {
   const normalized = stripMentionsForIntent(text).toLowerCase();
   if (!normalized) return null;
 
@@ -1322,11 +1327,13 @@ function detectDirectOpsAction(text: string): 'status' | 'limits' | 'threads' | 
   const statusPattern = new RegExp(`${lead}(?:status|what(?:'| i)?s\\s+the\\s+status|update\\s+status|current\\s+goal)\\??$`, 'i');
   const limitsPattern = new RegExp(`${lead}(?:limits|usage|budget|spend|costs|token\\s+usage|show\\s+limits|show\\s+usage)\\??$`, 'i');
   const threadsPattern = new RegExp(`${lead}(?:threads|thread\\s+status|open\\s+threads|workspace\\s+threads)\\??$`, 'i');
+  const loopsPattern = new RegExp(`${lead}(?:loops|loop\\s+health|runtime\\s+loops|monitoring)\\??$`, 'i');
   const helpPattern = new RegExp(`${lead}(?:help|what\\s+can\\s+you\\s+do|commands?)\\??$`, 'i');
 
   if (statusPattern.test(normalized)) return 'status';
   if (limitsPattern.test(normalized)) return 'limits';
   if (threadsPattern.test(normalized)) return 'threads';
+  if (loopsPattern.test(normalized)) return 'loops';
   if (helpPattern.test(normalized)) return 'help';
   return null;
 }
@@ -1347,13 +1354,21 @@ async function handleDirectOpsActionIfRequested(content: string, groupchat: Text
   if (action === 'help') {
     await sendQuickRileyMessage(
       groupchat,
-      '⚡ Quick actions: `status`, `limits`, `threads`, `join voice`, `leave voice`, `cleanup`, `smoke`, `health`.'
+      '⚡ Quick actions: `status`, `loops`, `limits`, `threads`, `join voice`, `leave voice`, `cleanup`, `smoke`, `health`.'
     );
     return true;
   }
 
   if (action === 'status') {
-    await sendQuickRileyMessage(groupchat, getStatusSummary() || '📋 No active tasks.');
+    await sendQuickRileyMessage(
+      groupchat,
+      buildTextStatusSummary(getStatusSummary() || '📋 No active tasks.', buildLoopHealthCompactSummary())
+    );
+    return true;
+  }
+
+  if (action === 'loops') {
+    await sendQuickRileyMessage(groupchat, buildLoopHealthDetailedReport());
     return true;
   }
 
@@ -1848,7 +1863,7 @@ async function handleRileyMessage(
       ? '\n\n[This is a direct tool request. Execute tools yourself directly — especially smoke_test_agents. Do NOT delegate to Ace or any specialist. Do NOT mention or tag any agent roles. Call the smoke_test_agents tool immediately.]'
       : `\n\n[Delegation contract: route execution only via ${aceGuide}. Do not directly delegate to specialists; Ace may invoke them if needed.]`;
     const threadCloseGuide = `\n\n[Keep the workspace thread updated briefly. Include [ACTION:CLOSE_THREAD] only when the task is fully complete.]`;
-    const decisionGuide = '\n\n[Decision policy: only ask the user for MAJOR decisions (prod risk, security/privacy, rollback/no-rollback, schema/data-loss risk, spend increase, legal/compliance impact). For routine implementation choices, decide and proceed.]';
+    const decisionGuide = '\n\n[Decision policy: only ask the user for MAJOR decisions (prod risk, security/privacy, rollback/no-rollback, schema/data-loss risk, spend increase, legal/compliance impact). For routine implementation choices, decide and proceed. In #groupchat, when a major decision is needed, address the user directly and the system will tag them. Use the decisions channel for queued/offline decisions, not for live voice.]';
     const contextMessageWithLang = `${textLangHint ? `${contextMessage}${textLangHint}` : contextMessage}${mentionGuide}${threadCloseGuide}${decisionGuide}`;
 
     const response = await agentRespond(riley, [...rileyMemory, ...groupHistory], contextMessageWithLang, async (toolName, summary) => {
@@ -3376,6 +3391,7 @@ async function postDecisionEmbed(
   if (choiceSet.length === 0) return;
 
   const isDecisionsChannel = decisionsChannel && targetChannel.id === decisionsChannel.id;
+  const attentionLine = buildGroupchatDecisionAttention(targetChannel.id, groupchat.id, process.env.DISCORD_PRIMARY_USER_ID);
 
   const embed = new EmbedBuilder()
     .setTitle('📋 Decision Review (Optional)')
@@ -3397,7 +3413,7 @@ async function postDecisionEmbed(
   );
   const row = new ActionRowBuilder<ButtonBuilder>().addComponents(buttons);
 
-  const decisionMsg = await targetChannel.send({ embeds: [embed], components: [row] });
+  const decisionMsg = await targetChannel.send({ content: attentionLine || undefined, embeds: [embed], components: [row] });
 
   const timeoutMs = isDecisionsChannel ? 12 * 60 * 60 * 1000 : 5 * 60 * 1000;
 
@@ -3461,7 +3477,11 @@ async function postDecisionEmbed(
 /** Persist groupHistory to disk. Called after every interaction. */
 function persistGroupHistory(): void {
   saveMemory('groupchat', groupHistory);
-  if (groupHistory.length >= 60) {
+  // Auto-compress at 50 messages (was 60) + periodic mid-session compression at 30
+  if (groupHistory.length >= 50) {
+    compressMemory('groupchat').catch(() => {});
+  } else if (groupHistory.length >= 30 && groupHistory.length % 10 === 0) {
+    // Periodic light compression every 10 messages once we pass 30
     compressMemory('groupchat').catch(() => {});
   }
 }

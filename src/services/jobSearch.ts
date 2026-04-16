@@ -5,6 +5,7 @@
 import https from 'https';
 import pool from '../db/pool';
 import { errMsg } from '../utils/errors';
+import { getOwnerName } from '../discord/agents';
 
 // ── Types ──────────────────────────────────────────────────────────
 
@@ -444,7 +445,7 @@ export async function draftApplication(listingId: number): Promise<{ coverLetter
   const prompt = `You are an expert career coach drafting a job application for an Australian professional.
 
 **Applicant Profile:**
-- Name: ${profile.first_name || 'Jordan'} ${profile.last_name || 'Flessenkemper'}
+- Name: ${profile.first_name || getOwnerName()} ${profile.last_name || 'Flessenkemper'}
 - Phone: ${profile.phone || 'Not provided'}
 - Email: ${profile.email || 'Not provided'}
 - Target roles: ${(profile.target_roles || []).join(', ')}
@@ -536,7 +537,7 @@ export async function submitToGreenhouse(
   if (!boardMatch) return { success: false, error: 'Cannot extract board token from portal URL' };
   const boardToken = boardMatch[1];
 
-  const firstName = profile.first_name || 'Jordan';
+  const firstName = profile.first_name || getOwnerName();
   const lastName = profile.last_name || 'Flessenkemper';
   const email = profile.email;
   if (!email) return { success: false, error: 'Email not set in profile — update profile with email before submitting' };

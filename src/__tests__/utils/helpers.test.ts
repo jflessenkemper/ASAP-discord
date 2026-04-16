@@ -4,7 +4,6 @@
  *   - upsertMemory()     (src/discord/memory.ts)
  *   - appendMemoryRow()  (src/discord/memory.ts)
  *   - readMemoryRow()    (src/discord/memory.ts)
- *   - addTimelineEntry() (src/routes/jobs.ts — not exported, tested indirectly via route)
  */
 
 // ─── errMsg ─────────────────────────────────────────────────────────────

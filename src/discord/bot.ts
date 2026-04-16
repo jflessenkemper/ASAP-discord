@@ -4,7 +4,6 @@ import {
   Events,
   Partials,
   ChannelType,
-  ChatInputCommandInteraction,
   Message,
   TextChannel,
   EmbedBuilder,
@@ -15,10 +14,10 @@ import {
 } from 'discord.js';
 
 import pool from '../db/pool';
+import { LEGACY_APP_TABLES, LEGACY_DROP_MIGRATION, REQUIRED_RUNTIME_TABLES } from '../db/runtimeSchema';
 
 import { getAgentByChannelName } from './agents';
-import { getAgent } from './agents';
-import { registerCommands } from './commands';
+import { getAgent, loadDynamicAgentsFromDb } from './agents';
 import { setVoiceErrorChannel } from './handlers/callSession';
 import { startCall, endCall, isCallActive, processTesterVoiceTurnForCall } from './handlers/callSession';
 import { setBotChannels } from './handlers/documentation';
@@ -29,19 +28,24 @@ import { getThreadStatusOpsLine } from './handlers/groupchat';
 import { autoReviewPR } from './handlers/review';
 import { handleAgentMessage } from './handlers/textChannel';
 import { flushPendingWrites, initMemory } from './memory';
+import { flushAllOpsDigests, formatToolAuditHuman, postOpsLine } from './activityLog';
 import { setAgentErrorChannel, postAgentErrorLog } from './services/agentErrors';
-import { runModelHealthChecks } from './services/modelHealth';
-import { flushAllOpsDigests, formatToolAuditHuman, postOpsLine } from './services/opsFeed';
+import { runModelHealthChecks } from './services/modelHealthCheck';
 import { setScreenshotsChannel } from './services/screenshots';
 import { setTelephonyChannels, isTelephonyAvailable, initContacts } from './services/telephony';
 import { setupChannels, BotChannels } from './setup';
-import { setCommandAuditCallback, setPRReviewCallback, setDiscordGuild, setToolAuditCallback, setAgentChannelResolver } from './tools';
+import { setCommandAuditCallback, setPRReviewCallback, setSmokeTestCallback, smokeTestAgents, setDiscordGuild, setToolAuditCallback, setAgentChannelResolver } from './tools';
 import { setLimitsChannel, setCostChannel, startDashboardUpdates, stopDashboardUpdates, initUsageCounters, flushUsageCounters, getUsageReport, getCostOpsSummaryLine, refreshUsageDashboard, toAgentTag } from './usage';
 import { formatAge } from '../utils/time';
+import { mapFilesToCategories, getTestsForCategories } from './tester';
+import { recordAgentDecision, consolidateMemoryInsights, recordSmokeInsight } from './vectorMemory';
+import { goalState } from './handlers/goalState';
 import { updateListingByMsgId, draftApplication, getProfile, getPortalByCompany, submitToGreenhouse, getListingById, updateListingStatus, setListingDiscordMsg, guessCompanyEmail, type JobListing } from '../services/jobSearch';
 import { sendJobApplication } from '../services/email';
 import { SYSTEM_COLORS, BUTTON_IDS, jobScoreColor } from './ui/constants';
 import { errMsg } from '../utils/errors';
+import { buildDatabaseAuditSummary } from './databaseAudit';
+import { recordLoopHealth } from './loopHealth';
 
 
 /**
@@ -56,6 +60,8 @@ let client: Client | null = null;
 let botChannels: BotChannels | null = null;
 let channelHeartbeatTimer: ReturnType<typeof setInterval> | null = null;
 let upgradesTriageTimer: ReturnType<typeof setInterval> | null = null;
+let memoryConsolidationTimer: ReturnType<typeof setInterval> | null = null;
+let databaseAuditTimer: ReturnType<typeof setInterval> | null = null;
 const staleAlertDedupe = new Map<string, number>();
 /** Tracks recovery attempts per feed to prevent infinite heal loops. */
 const staleHealAttempts = new Map<string, { count: number; lastAttemptAt: number }>();
@@ -69,6 +75,7 @@ let lastDedupePruneAt = 0;
 const CHANNEL_HEARTBEAT_INTERVAL_MS = Math.max(5 * 60 * 1000, parseInt(process.env.CHANNEL_HEARTBEAT_INTERVAL_MS || '1800000', 10));
 const STALE_ALERT_COOLDOWN_MS = Math.max(10 * 60 * 1000, parseInt(process.env.CHANNEL_STALE_ALERT_COOLDOWN_MS || '7200000', 10));
 const UPGRADES_TRIAGE_INTERVAL_MS = Math.max(30 * 60 * 1000, parseInt(process.env.UPGRADES_TRIAGE_INTERVAL_MS || '21600000', 10));
+const DATABASE_AUDIT_INTERVAL_MS = Math.max(60 * 60 * 1000, parseInt(process.env.DATABASE_AUDIT_INTERVAL_MS || '21600000', 10));
 const NON_TESTER_TRIGGER_NOTICE_COOLDOWN_MS = parseInt(process.env.NON_TESTER_TRIGGER_NOTICE_COOLDOWN_MS || '120000', 10);
 const UPGRADES_TRIAGE_MARKER = '[UPGRADES_TRIAGE_V1]';
 
@@ -96,61 +103,66 @@ async function latestChannelMessageTimestamp(channel: TextChannel): Promise<numb
 }
 
 async function runChannelHeartbeat(channels: BotChannels): Promise<void> {
-  const contracts = getFeedContracts(channels);
-  const now = Date.now();
-  const parts: string[] = [];
-  const healed: string[] = [];
+  try {
+    const contracts = getFeedContracts(channels);
+    const now = Date.now();
+    const parts: string[] = [];
+    const healed: string[] = [];
 
-  for (const contract of contracts) {
-    const ts = await latestChannelMessageTimestamp(contract.channel);
-    const age = ts ? now - ts : Number.POSITIVE_INFINITY;
-    const stale = !ts || age > contract.staleMs;
-    parts.push(`${stale ? '⚠️' : '✅'}${contract.key}:${ts ? formatAge(age) : 'none'}`);
+    for (const contract of contracts) {
+      const ts = await latestChannelMessageTimestamp(contract.channel);
+      const age = ts ? now - ts : Number.POSITIVE_INFINITY;
+      const stale = !ts || age > contract.staleMs;
+      parts.push(`${stale ? '⚠️' : '✅'}${contract.key}:${ts ? formatAge(age) : 'none'}`);
 
-    if (stale) {
-      const lastAlert = staleAlertDedupe.get(contract.key) || 0;
-      if (now - lastAlert >= STALE_ALERT_COOLDOWN_MS) {
-        staleAlertDedupe.set(contract.key, now);
-        await postAgentErrorLog('discord:feed-stale', `Feed stale: ${contract.key}`, {
-          level: 'warn',
-          detail: `channel=#${contract.channel.name} cadence=${contract.cadence} age=${ts ? formatAge(age) : 'no-messages'} threshold=${formatAge(contract.staleMs)}`,
-        });
-      }
-
-      // Self-healing: attempt to restart the feed producer
-      const healState = staleHealAttempts.get(contract.key) || { count: 0, lastAttemptAt: 0 };
-      if (healState.count < HEAL_MAX_ATTEMPTS && now - healState.lastAttemptAt >= HEAL_COOLDOWN_MS) {
-        healState.count++;
-        healState.lastAttemptAt = now;
-        staleHealAttempts.set(contract.key, healState);
-
-        try {
-          if (contract.key === 'limits') {
-            await refreshUsageDashboard();
-            healed.push(`limits(restart-dashboard)`);
-          } else if (contract.key === 'upgrades') {
-            void runUpgradesTriage(channels).catch(() => {});
-            healed.push(`upgrades(trigger-triage)`);
-          }
-        } catch (err) {
-          console.error(`[heartbeat-heal] Failed to heal ${contract.key}:`, errMsg(err));
+      if (stale) {
+        const lastAlert = staleAlertDedupe.get(contract.key) || 0;
+        if (now - lastAlert >= STALE_ALERT_COOLDOWN_MS) {
+          staleAlertDedupe.set(contract.key, now);
+          await postAgentErrorLog('discord:feed-stale', `Feed stale: ${contract.key}`, {
+            level: 'warn',
+            detail: `channel=#${contract.channel.name} cadence=${contract.cadence} age=${ts ? formatAge(age) : 'no-messages'} threshold=${formatAge(contract.staleMs)}`,
+          });
         }
-      }
-    } else {
-      // Feed is healthy — reset heal attempts
-      staleHealAttempts.delete(contract.key);
-    }
-  }
 
-  const healNote = healed.length > 0 ? ` | healed: ${healed.join(', ')}` : '';
-  await postOpsLine(channels.threadStatus, {
-    actor: 'executive-assistant',
-    scope: 'channel-heartbeat',
-    metric: `feeds=${contracts.length}`,
-    delta: parts.join(' | ') + healNote,
-    action: healed.length > 0 ? 'heal' : 'none',
-    severity: parts.some((p) => p.startsWith('⚠️')) ? 'error' : 'info',
-  });
+        const healState = staleHealAttempts.get(contract.key) || { count: 0, lastAttemptAt: 0 };
+        if (healState.count < HEAL_MAX_ATTEMPTS && now - healState.lastAttemptAt >= HEAL_COOLDOWN_MS) {
+          healState.count++;
+          healState.lastAttemptAt = now;
+          staleHealAttempts.set(contract.key, healState);
+
+          try {
+            if (contract.key === 'limits') {
+              await refreshUsageDashboard();
+              healed.push(`limits(restart-dashboard)`);
+            } else if (contract.key === 'upgrades') {
+              void runUpgradesTriage(channels).catch(() => {});
+              healed.push(`upgrades(trigger-triage)`);
+            }
+          } catch (err) {
+            console.error(`[heartbeat-heal] Failed to heal ${contract.key}:`, errMsg(err));
+          }
+        }
+      } else {
+        staleHealAttempts.delete(contract.key);
+      }
+    }
+
+    const healNote = healed.length > 0 ? ` | healed: ${healed.join(', ')}` : '';
+    const severity = parts.some((p) => p.startsWith('⚠️')) ? 'error' : 'info';
+    await postOpsLine(channels.threadStatus, {
+      actor: 'executive-assistant',
+      scope: 'channel-heartbeat',
+      metric: `feeds=${contracts.length}`,
+      delta: parts.join(' | ') + healNote,
+      action: healed.length > 0 ? 'heal' : 'none',
+      severity,
+    });
+    recordLoopHealth('channel-heartbeat', severity === 'error' ? 'warn' : 'ok', `${parts.join(' | ')}${healNote}`);
+  } catch (err) {
+    recordLoopHealth('channel-heartbeat', 'error', errMsg(err));
+    throw err;
+  }
 }
 
 function normalizeUpgradeText(raw: string): string {
@@ -198,72 +210,151 @@ function mergeUpgradeEntry(entries: UpgradeDigestEntry[], candidate: Omit<Upgrad
 }
 
 async function runUpgradesTriage(channels: BotChannels): Promise<void> {
-  const upgrades = channels.upgrades;
-  const messages = await upgrades.messages.fetch({ limit: 100 }).catch(() => null);
-  if (!messages || messages.size === 0) return;
-
-  const botId = upgrades.client.user?.id;
-  let triageMessage: Message | null = null;
-  const entries: UpgradeDigestEntry[] = [];
-
-  for (const msg of messages.values()) {
-    const content = [
-      String(msg.content || ''),
-      ...(msg.embeds || []).map((embed) => `${embed.title || ''} ${embed.description || ''}`),
-    ].join(' ').trim();
-
-    if (!content) continue;
-    if (botId && msg.author.id === botId && content.includes(UPGRADES_TRIAGE_MARKER)) {
-      triageMessage = msg;
-      continue;
+  try {
+    const upgrades = channels.upgrades;
+    const messages = await upgrades.messages.fetch({ limit: 100 }).catch(() => null);
+    if (!messages || messages.size === 0) {
+      recordLoopHealth('upgrades-triage', 'ok', 'no upgrades to triage');
+      return;
     }
 
-    const cleaned = normalizeUpgradeText(content);
-    if (!cleaned) continue;
-    const key = cleaned.toLowerCase().replace(/[^a-z0-9\s-]/g, '').slice(0, 140);
-    const label = classifyUpgrade(cleaned);
-    mergeUpgradeEntry(entries, { key, sample: cleaned.slice(0, 220), label }, msg.createdTimestamp || Date.now());
+    const botId = upgrades.client.user?.id;
+    let triageMessage: Message | null = null;
+    const entries: UpgradeDigestEntry[] = [];
+
+    for (const msg of messages.values()) {
+      const content = [
+        String(msg.content || ''),
+        ...(msg.embeds || []).map((embed) => `${embed.title || ''} ${embed.description || ''}`),
+      ].join(' ').trim();
+
+      if (!content) continue;
+      if (botId && msg.author.id === botId && content.includes(UPGRADES_TRIAGE_MARKER)) {
+        triageMessage = msg;
+        continue;
+      }
+
+      const cleaned = normalizeUpgradeText(content);
+      if (!cleaned) continue;
+      const key = cleaned.toLowerCase().replace(/[^a-z0-9\s-]/g, '').slice(0, 140);
+      const label = classifyUpgrade(cleaned);
+      mergeUpgradeEntry(entries, { key, sample: cleaned.slice(0, 220), label }, msg.createdTimestamp || Date.now());
+    }
+
+    const top = entries
+      .sort((a, b) => b.count - a.count || b.lastTs - a.lastTs)
+      .slice(0, 10);
+
+    const lines = [
+      UPGRADES_TRIAGE_MARKER,
+      '**Upgrades Backlog (auto-triaged)**',
+      `Updated: ${new Date().toISOString()}`,
+      'Labels: accepted | deferred | needs-info | not-actionable',
+      '',
+      ...(top.length > 0
+        ? top.map((entry, idx) => `${idx + 1}. [${entry.label}] (x${entry.count}, ${formatAge(Date.now() - entry.lastTs)} ago) ${entry.sample}`)
+        : ['1. [needs-info] No upgrades captured yet.']),
+    ];
+
+    const payload = lines.join('\n').slice(0, 1900);
+    if (triageMessage) {
+      await triageMessage.edit(payload).catch(() => {});
+    } else {
+      triageMessage = await upgrades.send(payload).catch(() => null);
+    }
+
+    if (triageMessage && !triageMessage.pinned) {
+      await triageMessage.pin().catch(() => {});
+    }
+
+    const actionable = top.find((e) => e.label === 'accepted' && e.count >= 2);
+    if (actionable && channels.groupchat) {
+      await dispatchUpgradeToRiley(actionable.sample, channels.groupchat).catch((err) => {
+        console.warn('Upgrades auto-dispatch failed:', errMsg(err));
+      });
+    }
+    recordLoopHealth('upgrades-triage', 'ok', `items=${top.length}${actionable ? ' dispatched=1' : ' dispatched=0'}`);
+  } catch (err) {
+    recordLoopHealth('upgrades-triage', 'error', errMsg(err));
+    throw err;
   }
+}
 
-  const top = entries
-    .sort((a, b) => b.count - a.count || b.lastTs - a.lastTs)
-    .slice(0, 10);
-
-  const lines = [
-    UPGRADES_TRIAGE_MARKER,
-    '**Upgrades Backlog (auto-triaged)**',
-    `Updated: ${new Date().toISOString()}`,
-    'Labels: accepted | deferred | needs-info | not-actionable',
-    '',
-    ...(top.length > 0
-      ? top.map((entry, idx) => `${idx + 1}. [${entry.label}] (x${entry.count}, ${formatAge(Date.now() - entry.lastTs)} ago) ${entry.sample}`)
-      : ['1. [needs-info] No upgrades captured yet.']),
-  ];
-
-  const payload = lines.join('\n').slice(0, 1900);
-  if (triageMessage) {
-    await triageMessage.edit(payload).catch(() => {});
-  } else {
-    triageMessage = await upgrades.send(payload).catch(() => null);
+async function getExistingTables(tableNames: string[]): Promise<string[]> {
+  const existing: string[] = [];
+  for (const tableName of tableNames) {
+    const res = await pool.query('SELECT to_regclass($1) IS NOT NULL AS exists', [`public.${tableName}`]);
+    if (res.rows?.[0]?.exists) {
+      existing.push(tableName);
+    }
   }
+  return existing;
+}
 
-  if (triageMessage && !triageMessage.pinned) {
-    await triageMessage.pin().catch(() => {});
-  }
+export async function runDatabaseAudit(channels: BotChannels): Promise<void> {
+  try {
+    const appliedResult = await pool.query('SELECT filename FROM applied_migrations ORDER BY filename');
+    const applied = new Set(appliedResult.rows.map((row: { filename: string }) => row.filename));
+    const runtimeTables = await getExistingTables(REQUIRED_RUNTIME_TABLES);
+    const missingRuntimeTables = REQUIRED_RUNTIME_TABLES.filter((table) => !runtimeTables.includes(table));
+    const legacyTables = await getExistingTables(LEGACY_APP_TABLES);
+    const dropApplied = applied.has(LEGACY_DROP_MIGRATION);
 
-  // ── Actionable dispatch: auto-send top accepted upgrade to Riley ──
-  // Rate limit: max 1 per triage cycle, only items with consensus (count >= 2)
-  const actionable = top.find((e) => e.label === 'accepted' && e.count >= 2);
-  if (actionable && channels.groupchat) {
-    await dispatchUpgradeToRiley(actionable.sample, channels.groupchat).catch((err) => {
-      console.warn('Upgrades auto-dispatch failed:', errMsg(err));
+    const summary = buildDatabaseAuditSummary({
+      appliedMigrationCount: applied.size,
+      requiredRuntimeTableCount: REQUIRED_RUNTIME_TABLES.length,
+      runtimeTables,
+      missingRuntimeTables,
+      legacyTables,
+      dropApplied,
     });
+
+    await postOpsLine(channels.threadStatus, {
+      actor: 'executive-assistant',
+      scope: 'database-audit',
+      metric: summary.metric,
+      delta: summary.delta,
+      action: summary.action,
+      severity: summary.severity,
+    });
+
+    if (missingRuntimeTables.length > 0) {
+      await postAgentErrorLog('discord:db-audit', 'Database audit found missing runtime tables', {
+        level: 'warn',
+        detail: `Missing runtime tables: ${missingRuntimeTables.join(', ')}`,
+      });
+    }
+
+    if (dropApplied && legacyTables.length > 0) {
+      await postAgentErrorLog('discord:db-audit', 'Legacy tables remain after drop migration', {
+        level: 'warn',
+        detail: `Drop migration ${LEGACY_DROP_MIGRATION} is marked applied but legacy tables still exist: ${legacyTables.join(', ')}`,
+      });
+    }
+    recordLoopHealth('database-audit', summary.severity === 'error' ? 'error' : summary.severity === 'warn' ? 'warn' : 'ok', summary.delta);
+  } catch (err) {
+    const detail = errMsg(err);
+    await postOpsLine(channels.threadStatus, {
+      actor: 'executive-assistant',
+      scope: 'database-audit',
+      metric: 'query-failed',
+      delta: detail,
+      action: 'none',
+      severity: 'warn',
+    }).catch(() => {});
+    await postAgentErrorLog('discord:db-audit', 'Database audit failed', {
+      level: 'warn',
+      detail,
+    });
+    recordLoopHealth('database-audit', 'error', detail);
   }
 }
 
 function startOpsMonitors(channels: BotChannels): void {
   if (channelHeartbeatTimer) clearInterval(channelHeartbeatTimer);
   if (upgradesTriageTimer) clearInterval(upgradesTriageTimer);
+  if (memoryConsolidationTimer) clearInterval(memoryConsolidationTimer);
+  if (databaseAuditTimer) clearInterval(databaseAuditTimer);
 
   channelHeartbeatTimer = setInterval(() => {
     void runChannelHeartbeat(channels).catch(() => {});
@@ -271,9 +362,30 @@ function startOpsMonitors(channels: BotChannels): void {
   upgradesTriageTimer = setInterval(() => {
     void runUpgradesTriage(channels).catch(() => {});
   }, UPGRADES_TRIAGE_INTERVAL_MS);
+  memoryConsolidationTimer = setInterval(() => {
+    void consolidateMemoryInsights().then((result) => {
+      recordLoopHealth('memory-consolidation', 'ok', result ? result.slice(0, 160) : 'no new insights');
+      if (result) {
+        void postOpsLine(channels.threadStatus, {
+          actor: 'executive-assistant',
+          scope: 'memory-consolidation',
+          metric: 'insights',
+          delta: result.slice(0, 300),
+          action: 'none',
+          severity: 'info',
+        }).catch(() => {});
+      }
+    }).catch((err) => {
+      recordLoopHealth('memory-consolidation', 'error', errMsg(err));
+    });
+  }, 4 * 60 * 60 * 1000);
+  databaseAuditTimer = setInterval(() => {
+    void runDatabaseAudit(channels).catch(() => {});
+  }, DATABASE_AUDIT_INTERVAL_MS);
 
   void runChannelHeartbeat(channels).catch(() => {});
   void runUpgradesTriage(channels).catch(() => {});
+  void runDatabaseAudit(channels).catch(() => {});
 }
 
 function decodeBotIdFromToken(token: string): string | null {
@@ -386,6 +498,7 @@ export async function startBot(): Promise<void> {
 
     try {
       await initMemory();
+      await loadDynamicAgentsFromDb();
       await initUsageCounters();
       botChannels = await setupChannels(guild);
       const configuredChannels = botChannels;
@@ -479,9 +592,47 @@ export async function startBot(): Promise<void> {
       setPRReviewCallback(async (prNumber, prTitle, changedFiles, diffSummary) => {
         await autoReviewPR(prNumber, prTitle, changedFiles, diffSummary, configuredChannels.groupchat);
       });
+
+      // ── Test Engine Loop: auto-smoke after PR merge ──
+      setSmokeTestCallback(async (prNumber, changedFiles) => {
+        try {
+          const categories = mapFilesToCategories(changedFiles);
+          const tests = getTestsForCategories(categories);
+          if (tests.length === 0) {
+            recordLoopHealth('test-engine', 'ok', `pr=${prNumber} no matching tests`);
+            return;
+          }
+
+          const testNames = [...new Set(tests.map((t) => t.capability))].join(',');
+          console.log(`[smoke-auto] PR #${prNumber} merged — running ${tests.length} tests across [${[...categories].join(', ')}]`);
+
+          const result = await smokeTestAgents({ tests: testNames, profile: 'readiness' });
+          const hasFails = result.includes('❌') || result.toLowerCase().includes('fail');
+          const summary = result.slice(-500);
+
+          void recordAgentDecision(
+            'executive-assistant',
+            `PR #${prNumber} post-merge smoke (${[...categories].join(',')}): ${hasFails ? 'FAILURES' : 'PASS'}\n${summary}`,
+            `merge PR #${prNumber}`
+          );
+
+          void recordSmokeInsight([...categories], hasFails, summary);
+
+          if (hasFails && !goalState.isActive()) {
+            const failSummary = `Post-merge smoke test regression from PR #${prNumber}.\nAffected categories: ${[...categories].join(', ')}\n\n${summary}`;
+            void dispatchUpgradeToRiley(failSummary, configuredChannels.groupchat).catch((err) => {
+              console.warn(`[smoke-auto] Riley dispatch failed:`, errMsg(err));
+            });
+          }
+
+          recordLoopHealth('test-engine', hasFails ? 'warn' : 'ok', `pr=${prNumber} tests=${tests.length} categories=${[...categories].join(',')}`);
+        } catch (err) {
+          recordLoopHealth('test-engine', 'error', `pr=${prNumber} ${errMsg(err)}`);
+          throw err;
+        }
+      });
       console.log(`Discord channels configured in "${guild.name}"`);
 
-      await registerCommands(readyClient, guildId);
       startOpsMonitors(configuredChannels);
     } catch (err) {
       const msg = err instanceof Error ? err.stack || err.message : 'Unknown';
@@ -496,6 +647,7 @@ export async function startBot(): Promise<void> {
         await new Promise(resolve => setTimeout(resolve, delayMs));
         try {
           await initMemory();
+          await loadDynamicAgentsFromDb();
           await initUsageCounters();
           botChannels = await setupChannels(guild);
           console.log(`[startup-retry] Attempt ${attempt} succeeded.`);
@@ -625,22 +777,6 @@ export async function startBot(): Promise<void> {
         detail: msg,
         level: isAbortLike ? 'info' : 'error',
       });
-    }
-  });
-
-  client.on(Events.InteractionCreate, async (interaction) => {
-    if (!interaction.isChatInputCommand()) return;
-    if (interaction.commandName !== 'ops') return;
-
-    try {
-      await handleOpsInteraction(interaction);
-    } catch (err) {
-      const detail = errMsg(err);
-      if (interaction.deferred || interaction.replied) {
-        await interaction.followUp({ content: `Ops command failed: ${detail}`, ephemeral: true }).catch(() => {});
-      } else {
-        await interaction.reply({ content: `Ops command failed: ${detail}`, ephemeral: true }).catch(() => {});
-      }
     }
   });
 
@@ -873,10 +1009,19 @@ export async function stopBot(): Promise<void> {
     clearInterval(upgradesTriageTimer);
     upgradesTriageTimer = null;
   }
+  if (memoryConsolidationTimer) {
+    clearInterval(memoryConsolidationTimer);
+    memoryConsolidationTimer = null;
+  }
+  if (databaseAuditTimer) {
+    clearInterval(databaseAuditTimer);
+    databaseAuditTimer = null;
+  }
   stopDashboardUpdates();
   setCommandAuditCallback(() => {});
   setToolAuditCallback(() => {});
   setPRReviewCallback(async () => {});
+  setSmokeTestCallback(null);
   setCostChannel(null);
   setVoiceErrorChannel(null);
   setAgentErrorChannel(null);
@@ -893,70 +1038,4 @@ export async function stopBot(): Promise<void> {
     botChannels = null;
     console.log('Discord bot disconnected');
   }
-}
-
-async function handleOpsInteraction(interaction: ChatInputCommandInteraction): Promise<void> {
-  const view = interaction.options.getSubcommand(true);
-
-  if (view === 'deploy-checklist') {
-    const phase = interaction.options.getString('phase') || 'full';
-    const content = buildDeployChecklist(phase);
-    await interaction.reply({ content: content.slice(0, 1900), ephemeral: true });
-    return;
-  }
-
-  if (view === 'costs') {
-    const embed = new EmbedBuilder()
-      .setTitle('💸 Ops Costs')
-      .setDescription(`${getCostOpsSummaryLine()}\n${getUsageReport().split('\n')[1] || ''}`)
-      .setColor(SYSTEM_COLORS.default)
-      .setTimestamp();
-    await interaction.reply({ embeds: [embed], ephemeral: true });
-    return;
-  }
-
-  if (view === 'threads') {
-    const threadLine = await getThreadStatusOpsLine();
-    const embed = new EmbedBuilder()
-      .setTitle('🧵 Ops Threads')
-      .setDescription(threadLine || 'No active threads.')
-      .setColor(SYSTEM_COLORS.default)
-      .setTimestamp();
-    await interaction.reply({ embeds: [embed], ephemeral: true });
-    return;
-  }
-
-  const threadLine = await getThreadStatusOpsLine();
-  const costLine = getCostOpsSummaryLine();
-  const liveLine = getUsageReport().split('\n')[1] || '';
-  const embed = new EmbedBuilder()
-    .setTitle('📡 Ops Now')
-    .setDescription(`${costLine}\n${liveLine}\n${threadLine}`)
-    .setColor(SYSTEM_COLORS.default)
-    .setTimestamp();
-  await interaction.reply({ embeds: [embed], ephemeral: true });
-}
-
-function buildDeployChecklist(phase: string): string {
-  const pre = [
-    '🧰 PRE-DEPLOY',
-    '1) Build/typecheck: npm run build',
-    '2) Quality: npm run quality:app && (cd server && npm run quality)',
-    '3) Security quick-pass: npm run security:semgrep && (cd server && npm run security:semgrep)',
-    '4) Confirm env/secrets present for deploy target',
-    '5) Commit + push with release notes and rollback commit hash',
-  ];
-
-  const post = [
-    '✅ POST-DEPLOY',
-    '1) Restart process and verify online status',
-    '2) Run full Discord smoke suite (pre-clear enabled)',
-    '3) Check /ops now + /ops threads + /ops costs outputs',
-    '4) Confirm error channels stayed quiet (voice-errors, agent-errors)',
-    '5) If failed: rollback immediately to previous known-good commit',
-  ];
-
-  if (phase === 'pre') return pre.join('\n');
-  if (phase === 'post') return post.join('\n');
-  return [...pre, '', ...post].join('\n');
 }

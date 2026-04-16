@@ -16,7 +16,7 @@ jest.mock('../../services/billing', () => ({
   getLiveBillingSnapshot: jest.fn(() => ({ available: false, dailyCostUsd: null })),
   refreshLiveBillingSnapshot: jest.fn(),
 }));
-jest.mock('../../discord/services/opsFeed', () => ({
+jest.mock('../../discord/activityLog', () => ({
   formatOpsLine: jest.fn(() => ''),
   postOpsLine: jest.fn(),
 }));
@@ -346,7 +346,7 @@ describe('usage', () => {
         modelName: 'gemini-2.5-flash',
         agentLabel: 'Ace',
       });
-      const { postOpsLine } = require('../../discord/services/opsFeed');
+      const { postOpsLine } = require('../../discord/activityLog');
       expect(postOpsLine).toHaveBeenCalled();
       setCostChannel(null);
     });
@@ -488,5 +488,98 @@ describe('usage', () => {
       const result = approveAdditionalBudget(0);
       expect(result.added).toBeGreaterThan(0);
     });
+  });
+});
+
+describe('usage tracing primitives', () => {
+  beforeEach(() => {
+    jest.resetModules();
+    jest.clearAllMocks();
+  });
+
+  function mockUsageDeps(mockQ: jest.Mock) {
+    jest.doMock('../../db/pool', () => ({ default: { query: mockQ }, __esModule: true }));
+    jest.doMock('../../discord/memory', () => ({ upsertMemory: jest.fn() }));
+    jest.doMock('../../services/billing', () => ({
+      getLiveBillingSnapshot: jest.fn(() => null),
+      refreshLiveBillingSnapshot: jest.fn(),
+    }));
+    jest.doMock('../../discord/activityLog', () => ({
+      formatOpsLine: jest.fn(() => ''),
+      postOpsLine: jest.fn(),
+    }));
+    jest.doMock('../../discord/ui/constants', () => ({ statusColor: jest.fn(() => 0x00ff00) }));
+  }
+
+  it('generates trace and span ids with expected format', async () => {
+    mockUsageDeps(jest.fn().mockResolvedValue({ rows: [], rowCount: 0 }));
+    const { newTraceId, newSpanId } = await import('../../discord/usage');
+    expect(newTraceId()).toMatch(/^[0-9a-f]{16}$/);
+    expect(newSpanId()).toMatch(/^[0-9a-f]{8}$/);
+  });
+
+  it('creates child trace contexts with inherited trace id', async () => {
+    mockUsageDeps(jest.fn().mockResolvedValue({ rows: [], rowCount: 0 }));
+    const { createTraceContext } = await import('../../discord/usage');
+    const parent = createTraceContext();
+    const child = createTraceContext(parent);
+    expect(child.traceId).toBe(parent.traceId);
+    expect(child.spanId).not.toBe(parent.spanId);
+  });
+
+  it('records spans to the trace table', async () => {
+    const mockQ = jest.fn().mockResolvedValue({ rows: [], rowCount: 1 });
+    mockUsageDeps(mockQ);
+    const logSpy = jest.spyOn(console, 'log').mockImplementation();
+    const { recordSpan } = await import('../../discord/usage');
+    await recordSpan({
+      traceId: 'trace1234567890',
+      spanId: 'span1234',
+      agentId: 'developer',
+      operation: 'unit-test',
+      status: 'ok',
+      inputTokens: 10,
+      outputTokens: 5,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+    });
+    expect(mockQ).toHaveBeenCalledWith(
+      expect.stringContaining('INSERT INTO trace_spans'),
+      expect.arrayContaining(['trace1234567890', 'span1234', 'developer']),
+    );
+    expect(logSpy).toHaveBeenCalled();
+    logSpy.mockRestore();
+  });
+
+  it('disables trace db persistence when trace_spans is missing', async () => {
+    const mockQ = jest.fn().mockRejectedValue({ message: 'relation "trace_spans" does not exist', code: '42P01' });
+    mockUsageDeps(mockQ);
+    const warnSpy = jest.spyOn(console, 'warn').mockImplementation();
+    const { recordSpan } = await import('../../discord/usage');
+    await recordSpan({
+      traceId: 'trace1234567890',
+      spanId: 'span1234',
+      agentId: 'developer',
+      operation: 'unit-test',
+      status: 'ok',
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+    });
+    await recordSpan({
+      traceId: 'trace1234567891',
+      spanId: 'span1235',
+      agentId: 'developer',
+      operation: 'unit-test',
+      status: 'ok',
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+    });
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('tracing DB persistence disabled'));
+    expect(mockQ).toHaveBeenCalledTimes(1);
+    warnSpy.mockRestore();
   });
 });

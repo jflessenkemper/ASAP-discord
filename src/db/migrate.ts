@@ -3,14 +3,7 @@ import fs from 'fs';
 import path from 'path';
 
 import pool from './pool';
-
-const TABLE_EXPECTATIONS_BY_MIGRATION: Record<string, string[]> = {
-  '001_initial.sql': ['sessions'],
-  '003_agent_memory.sql': ['agent_memory'],
-  '015_agent_activity_log.sql': ['agent_activity_log'],
-};
-
-const REQUIRED_RUNTIME_TABLES = ['sessions', 'agent_memory', 'agent_activity_log'];
+import { REQUIRED_RUNTIME_TABLES, TABLE_EXPECTATIONS_BY_MIGRATION } from './runtimeSchema';
 
 async function getMissingTables(tables: string[]): Promise<string[]> {
   const missing: string[] = [];

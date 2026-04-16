@@ -3,6 +3,8 @@
  * Database permission grants — mock pg pool, child_process, process lifecycle.
  */
 
+export {};
+
 const mockQuery = jest.fn().mockResolvedValue({ rows: [], rowCount: 0 });
 const mockEnd = jest.fn().mockResolvedValue(undefined);
 jest.mock('../../db/pool', () => ({

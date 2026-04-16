@@ -3,14 +3,14 @@
 ```mermaid
 flowchart TB
     %% ── Discord Layer ──
-    User(["👤 Jordan\nsends message in\n#💬-groupchat"])
+    User(["👤 Jordan\ntexts Riley in #💬-groupchat\nor talks to Riley in voice"])
 
     subgraph Discord["🎮 Discord Server"]
         direction LR
         subgraph AgentChannels["Agent Channels"]
             direction TB
-            Riley["📋 Riley\nOrchestrator\nCustom tools"]
-            Ace["💻 Ace\nTool Master\n72 tools"]
+            Riley["📋 Riley\nOrchestrator\nLifecycle control"]
+            Ace["💻 Ace\nTool Master\n77 tools"]
             subgraph FullTools["🟢 Full Access"]
                 Jude["🚀 Jude · DevOps"]
                 Mia["🍎 Mia · iOS"]
@@ -26,40 +26,63 @@ flowchart TB
                 Liv["✍️ Liv · Copy"]
                 Harper["⚖️ Harper · Legal"]
             end
+            DynAgents["🔀 Dynamic Agents\nRiley creates/destroys\nat runtime · DB-persisted"]
         end
-        subgraph OpsChannels["Ops Channels"]
+        subgraph OpsChannels["Ops Channels + Queues"]
             terminal["💻 terminal"]
             limits["📊 limits"]
             cost["💸 cost"]
             github_ch["📦 github"]
             upgrades["🆙 upgrades"]
-            errors["🚨 errors"]
+            decisions["📋 decisions"]
+            agentErrors["🚨 agentErrors"]
+            tools_ch["🔧 tools"]
+            callLog["📞 callLog"]
+            screenshots["📸 screenshots"]
+            url_ch["🔗 url"]
+            voiceErrors["🎙️ voiceErrors"]
         end
     end
 
     %% ── Message Routing ──
-    User --> Riley
+    User -->|"text request or couch-mode build goal"| Riley
     Riley -->|"handoff.ts\ntask + context"| Ace
     Ace -->|"@mention in response"| FullTools
     Ace -->|"@mention for review"| ReviewTools
     ReviewTools -->|"feedback"| Ace
     FullTools -->|"results"| Ace
     Ace -->|"result summary"| Riley
+    Riley -->|"create_agent\nremove_agent\nlist_agents"| DynAgents
+    Riley -->|"suggestions, status, loop health\nin #groupchat"| User
+    Riley -->|"major decision in groupchat\n=> tag Jordan"| User
+    Riley -->|"offline / away decision queue"| decisions
+
+    %% ── Voice System ──
+    subgraph Voice["🎙️ Voice — callSession.ts"]
+        direction LR
+        VoiceIn["ElevenLabs ConvAI\nGemini fallback"]
+        VoiceCmd["Live Riley voice mode\nanswer · suggest next step\nask for major decision directly"]
+        VoiceIn --> VoiceCmd
+    end
+
+    User -->|"voice call"| Voice
+    VoiceCmd -->|"spoken reply, guidance,\nand direct decision asks"| User
 
     %% ── LLM Core ──
     subgraph LLM["🧠 claude.ts — agentRespond()"]
         direction TB
         InputGuard["1. Input Guardrail\nguardrails.ts · Gemini Flash"]
         MemRecall["2. Memory Recall\nvectorMemory.ts · cosine search"]
-        ModelSelect["3. Model Selection\nmodelHealth.ts · fallback chains"]
+        SmokeHealth["2b. Smoke Health\ngetLatestSmokeHealthLine()"]
+        ModelSelect["3. Model Selection\nmodelHealthCheck.ts · fallback chains"]
         CacheCheck["4. Cache Check\ncontextCache.ts · save 50-75% tokens"]
         BudgetCheck["5. Budget Check\nusage.ts · 8M tokens / $250 daily"]
         APICall["6. API Call\nClaude Opus 4.6 / Sonnet 4\nGemini Flash / Pro"]
-        ToolLoop["7. Tool Loop\ntools.ts · up to maxToolRounds"]
+        ToolLoop["7. Tool Loop\ntools.ts · up to maxToolRounds\ncircuit breaker inlined"]
         OutputGuard["8. Output Guardrail\nguardrails.ts"]
-        UsageRecord["9. Record\nusage.ts + tracing.ts"]
+        UsageRecord["9. Record\nusage.ts (includes tracing)"]
 
-        InputGuard --> MemRecall --> ModelSelect --> CacheCheck --> BudgetCheck --> APICall
+        InputGuard --> MemRecall --> SmokeHealth --> ModelSelect --> CacheCheck --> BudgetCheck --> APICall
         APICall --> ToolLoop
         ToolLoop -->|"tool results"| APICall
         ToolLoop --> OutputGuard --> UsageRecord
@@ -69,19 +92,37 @@ flowchart TB
     Ace --> LLM
     FullTools --> LLM
     ReviewTools --> LLM
+    DynAgents --> LLM
+    Voice -->|"handleVoiceInput()"| LLM
     UsageRecord -.->|"dashboards"| OpsChannels
+    Riley -.->|"text quick actions:\nstatus · loops · limits · threads"| User
 
     %% ── Tool System ──
-    subgraph ToolSystem["🔧 72 Tools"]
+    subgraph ToolSystem["🔧 77 Tools"]
         direction LR
         FileOps["📁 File/Code\nread · write · edit\nrun_command\nrun_tests · typecheck"]
         GitOps["🐙 GitHub\nbranch · PR · merge\nreview · search"]
         GCPOps["☁️ GCP\ndeploy · build · rollback\nsecrets · logs"]
         DBOps["🗃️ Database\ndb_query · db_schema\nmemory_read/write"]
         DiscOps["💬 Discord\nsend · read messages\nchannels · threads"]
+        LifecycleOps["🔀 Lifecycle\ncreate_agent\nremove_agent · list_agents\nerror_patterns\nrecover_agent_memory"]
     end
 
     ToolLoop --> ToolSystem
+
+    %% ── Test Engine Loop ──
+    subgraph TestEngine["🧪 Test Engine Loop"]
+        direction LR
+        PRMerge["PR merged\non GitHub"]
+        FileMap["mapFilesToCategories()\n24 regex patterns"]
+        TargetedSmoke["Targeted smoke\ngetTestsForCategories()"]
+        RecordInsight["recordSmokeInsight()\n→ vector memory"]
+
+        PRMerge --> FileMap --> TargetedSmoke --> RecordInsight
+    end
+
+    Ship -->|"setSmokeTestCallback"| TestEngine
+    RecordInsight -->|"failure → auto-goal"| Identify
 
     %% ── Self-Improvement Loop ──
     subgraph SelfImprove["🔄 Self-Improvement Loop"]
@@ -102,22 +143,51 @@ flowchart TB
     CreatePR --> GitOps
     Ship --> GCPOps
 
+    %% ── Memory Loop ──
+    subgraph MemoryLoop["🧠 Memory Loop"]
+        direction LR
+        Consolidate["consolidateMemoryInsights()\nevery 4 hours"]
+        ErrorPatterns["Error Pattern Detection\n3x same error in 1h\n→ auto-learning"]
+        Archive["Memory Archival\ndestroy → archived-conv-*\nrecover_agent_memory tool"]
+
+        Consolidate --> ErrorPatterns --> Archive
+    end
+
+    %% ── Database Audit Loop ──
+    subgraph DatabaseLoop["🗃️ Database Audit Loop"]
+        direction LR
+        SchemaCheck["Check required runtime tables"]
+        MigrationCheck["Read applied_migrations"]
+        LegacyCheck["Detect legacy app tables\nwithout mutating schema"]
+
+        SchemaCheck --> MigrationCheck --> LegacyCheck
+    end
+
+    TestEngine -->|"smoke insights"| MemoryLoop
+    MemoryLoop -->|"learnings feed\nagent prompts"| LLM
+    agentErrors -->|"error feed"| ErrorPatterns
+    DBOps --> DatabaseLoop
+    DatabaseLoop -->|"ops summary + warnings"| OpsChannels
+
     %% ── Persistence Layer ──
     subgraph Storage["💾 Persistence"]
         direction LR
-        PGMemory[("PostgreSQL\nagent_memory\nhistory + usage")]
+        PGMemory[("PostgreSQL\nagent_memory\nhistory + usage\n+ dynamic agent registry")]
         PGVector[("pgvector\nagent_embeddings\n768-dim vectors")]
-        PGTrace[("PostgreSQL\ntrace_spans\n7-day retention")]
+        PGActivity[("PostgreSQL\nagent_activity_log\nerror patterns + events")]
         GitHubStore[("GitHub\nbranches & PRs")]
         GCPStore[("Cloud Run\ndeploy & secrets")]
     end
 
     DBOps --> PGMemory
     DBOps --> PGVector
-    UsageRecord --> PGTrace
+    UsageRecord --> PGActivity
     GitOps --> GitHubStore
     GCPOps --> GCPStore
     MemRecall -.->|"embed & search"| PGVector
+    ErrorPatterns -.->|"query patterns"| PGActivity
+    DynAgents -.->|"persist configs"| PGMemory
+    Consolidate -.->|"store insights"| PGVector
 
     %% ── Styles ──
     style Discord fill:#1a1f36,stroke:#5865F2,stroke-width:2px,color:#fff
@@ -128,19 +198,179 @@ flowchart TB
     style LLM fill:#1f1a00,stroke:#d29922,stroke-width:2px,color:#fff
     style ToolSystem fill:#0d1a1f,stroke:#388bfd,stroke-width:2px,color:#fff
     style SelfImprove fill:#1a1040,stroke:#8957e5,stroke-width:2px,color:#fff
+    style TestEngine fill:#0d2a1a,stroke:#2ea043,stroke-width:2px,color:#fff
+    style MemoryLoop fill:#2a1a0d,stroke:#d29922,stroke-width:2px,color:#fff
+    style DatabaseLoop fill:#0d1f1a,stroke:#2ea043,stroke-width:2px,color:#fff
+    style Voice fill:#1a0d2a,stroke:#a371f7,stroke-width:2px,color:#fff
     style Storage fill:#1a1a1a,stroke:#484f58,stroke-width:2px,color:#fff
 ```
+
+## Main Runtime Loops
+
+There are now 8 notable runtime loops or recurring control cycles:
+
+1. Self-Improvement Loop — Riley identifies work, Ace implements, specialists review, deploy closes the loop.
+2. Test Engine Loop — post-merge file mapping triggers targeted smoke coverage and records the result.
+3. Memory Loop — periodic consolidation plus recurring-error learning feeds future conversations.
+4. Database Audit Loop — read-only schema and migration checks post warnings without applying DDL.
+5. Channel Heartbeat Loop — stale ops feeds are detected and lightly self-healed.
+6. Upgrades Triage Loop — upgrade suggestions are classified, summarized, and top accepted items are dispatched.
+7. Voice Session Loop — live call heartbeat plus turn watchdog keeps voice sessions responsive, lets Riley ask for decisions directly, and avoids the decisions channel during active calls.
+8. Goal/Thread Watchdog Loop — Riley orchestration monitors stalled goals and thread status over time.
+
+## Text And Voice Use
+
+Riley is the primary interface now. You do not need slash commands to operate the system.
+
+1. Text in #groupchat — ask Riley for status, loops, limits, threads, or give her a build goal. She can use the runtime loops to keep the work moving.
+2. Groupchat decisions — if Riley needs a major decision from you in groupchat, the bot tags Jordan directly so the decision is visible immediately.
+3. Decisions channel — this remains the queue for overnight or away-from-keyboard decisions.
+4. Voice calls — Riley stays in voice, suggests next steps out loud, and asks you directly for major decisions instead of routing you to the decisions channel.
 
 ## Key Files
 
 | Layer | File | Purpose |
 |-------|------|---------|
-| **Entry** | `bot.ts`, `setup.ts` | Discord client, channel provisioning |
-| **Routing** | `handlers/groupchat.ts`, `handlers/textChannel.ts` | Message handling, queues, threads |
-| **Core** | `claude.ts`, `agents.ts` | LLM orchestration, 13 agent definitions |
-| **Tools** | `tools.ts`, `toolsDb.ts`, `toolsGcp.ts` | 72 tools, SQL safety, GCP ops |
-| **Safety** | `guardrails.ts`, `circuitBreaker.ts` | I/O classification, resilience |
-| **Memory** | `memory.ts`, `vectorMemory.ts` | Conversation persistence, semantic search |
-| **Infra** | `handoff.ts`, `modelHealth.ts`, `contextCache.ts`, `usage.ts`, `tracing.ts` | Delegation, health, caching, cost, traces |
-| **Testing** | `tester.ts`, `test-definitions.ts` | Smoke tests, test catalog |
+| **Entry** | `bot.ts`, `setup.ts` | Discord client, channel provisioning, startup loops |
+| **Routing** | `handlers/groupchat.ts`, `handlers/textChannel.ts`, `rileyInteraction.ts` | Message handling, Riley-native text/voice interaction rules, queues, threads |
+| **Core** | `claude.ts`, `agents.ts` | LLM orchestration, 13 static + dynamic agents |
+| **Tools** | `tools.ts`, `toolsDb.ts`, `toolsGcp.ts` | 77 tools (includes circuit breaker), SQL safety, GCP ops |
+| **Safety** | `guardrails.ts` | I/O classification via Gemini Flash |
+| **Memory** | `memory.ts`, `vectorMemory.ts` | Conversation persistence, semantic search, consolidation |
+| **Database** | `db/runtimeSchema.ts`, `db/migrate.ts` | Shared schema contract, migrations, read-only DB audits |
+| **Infra** | `handoff.ts`, `modelHealthCheck.ts`, `contextCache.ts`, `usage.ts` | Delegation, health, caching, cost tracking + tracing |
+| **Testing** | `tester.ts`, `test-definitions.ts` | Smoke tests, test catalog, file→category mapping |
+| **Voice** | `handlers/callSession.ts`, `voice/*` | Voice calls, commands, ElevenLabs/Gemini |
+| **Ops** | `activityLog.ts`, `services/agentErrors.ts`, `services/opsFeed.ts` | Activity logging, error pattern detection, ops channel posting |
 | **Services** | `services/github.ts`, `services/cloudrun.ts` | GitHub PRs, GCP deploy |
+| **Config** | `.github/riley-personality.md`, `riley-memory.md`, `discord-server-taste.md` | Agent personality, learned preferences, server recreation guide |
+
+---
+
+## How Riley and the Team Work
+
+This is the non-technical overview diagram.
+
+```mermaid
+flowchart TD
+    %% ── Entry Points ──
+    Jordan(["💬 Jordan texts Riley\nor talks to Riley in voice"])
+
+    subgraph Team["🤖 The AI Team"]
+        direction TB
+        Riley["📋 Riley — The Manager\nReads the request, decides\nwho should handle it"]
+        Ace["💻 Ace — The Builder\nWrites code, runs commands,\nbuilds features"]
+        Specialists["👥 11 Specialist Agents\niOS · Android · DevOps\nQA · UX · Security\nAPI · DBA · Perf\nCopywriter · Legal"]
+        Dynamic["🔀 On-Demand Agents\nRiley can create new\nspecialists as needed"]
+    end
+
+    Jordan -->|"text or voice"| Riley
+    Riley -->|"delegates work"| Ace
+    Riley -->|"creates/removes"| Dynamic
+    Ace -->|"asks for reviews"| Specialists
+    Specialists -->|"feedback"| Ace
+    Ace -->|"done!"| Riley
+    Riley -->|"responds in text or voice"| Jordan
+    Riley -->|"tags Jordan in groupchat\nfor major text decisions"| Jordan
+
+    subgraph InteractionModes["🗣️ How Jordan Uses Riley"]
+        direction LR
+        TextMode["💬 Groupchat\nAsk for build work, status, loops, limits, threads"]
+        VoiceMode["🎙️ Voice\nTalk from the couch while Riley plans and builds"]
+        DecisionsMode["📋 Decisions Queue\nOnly for offline / away decisions"]
+    end
+
+    Jordan --> TextMode --> Riley
+    Jordan --> VoiceMode --> Riley
+    Riley --> DecisionsMode
+
+    %% ── What Ace Can Do ──
+    subgraph Actions["⚡ What Ace Can Do (77 tools)"]
+        direction LR
+        Code["✏️ Write &\nedit code"]
+        GitHub["📦 Create PRs\non GitHub"]
+        Deploy["🚀 Deploy to\nthe cloud"]
+        Database["🗄️ Query the\ndatabase"]
+        Discord["💬 Post to\nDiscord"]
+    end
+
+    Ace --> Actions
+
+    %% ── Core Loops ──
+    subgraph Loops["🔄 Core Runtime Loops"]
+        direction TB
+
+        subgraph Loop1["🔄 Self-Improvement"]
+            L1A["Riley spots a problem"]
+            L1B["Ace fixes it in code"]
+            L1C["Team reviews the fix"]
+            L1D["Auto-deploys to production"]
+            L1A --> L1B --> L1C --> L1D
+            L1D -.->|"learns from result"| L1A
+        end
+
+        subgraph Loop2["🧪 Test Engine"]
+            L2A["Code gets merged"]
+            L2B["Figures out what changed"]
+            L2C["Runs targeted tests"]
+            L2D["Records what it learned"]
+            L2A --> L2B --> L2C --> L2D
+            L2D -.->|"failures trigger fixes"| L1A
+        end
+
+        subgraph Loop3["🧠 Memory"]
+            L3A["Every 4 hours:\nreview all decisions"]
+            L3B["Spot error patterns\n(3+ repeats = lesson)"]
+            L3C["Store insights for\nfuture conversations"]
+            L3A --> L3B --> L3C
+            L3C -.->|"smarter responses"| Riley
+        end
+
+        subgraph Loop4["🗃️ Database Audit"]
+            L4A["Check required tables"]
+            L4B["Check applied migrations"]
+            L4C["Warn if legacy tables remain"]
+            L4A --> L4B --> L4C
+        end
+
+        subgraph Loop5["🎙️ Voice Session"]
+            L5A["Listen to Jordan live"]
+            L5B["Riley answers or suggests next step"]
+            L5C["Ask for major decisions directly in voice"]
+            L5A --> L5B --> L5C
+        end
+    end
+
+    Actions -->|"changes trigger"| Loops
+
+    %% ── Safety ──
+    subgraph Safety["🛡️ Safety & Monitoring"]
+        direction LR
+        Guard["Every message is\nchecked for safety\nbefore & after AI responds"]
+        Budget["Daily spending cap:\n$250 / 8M tokens"]
+        Ops["Monitoring channels and loops\ntrack errors, costs,\ndeployments, and runtime health"]
+    end
+
+    Riley -.-> Safety
+
+    %% ── Memory ──
+    subgraph Memory["💾 The Bot Remembers"]
+        direction LR
+        Conv["📝 Conversations\nsummarised &\nstored"]
+        Learn["🎓 Learnings\nwhat worked,\nwhat didn't"]
+        Agents["🔀 Agent configs\nsurvive restarts,\nmemory archived\nnot deleted"]
+    end
+
+    Loops -.-> Memory
+    Memory -.->|"recalled each\nconversation"| Riley
+
+    %% ── Styles ──
+    style Team fill:#1a1f36,stroke:#5865F2,stroke-width:2px,color:#fff
+    style Actions fill:#0d1a1f,stroke:#388bfd,stroke-width:2px,color:#fff
+    style Loops fill:#1a1040,stroke:#8957e5,stroke-width:2px,color:#fff
+    style Loop1 fill:#1a1040,stroke:#8957e5,stroke-width:1px,color:#fff
+    style Loop2 fill:#0d2a1a,stroke:#2ea043,stroke-width:1px,color:#fff
+    style Loop3 fill:#2a1a0d,stroke:#d29922,stroke-width:1px,color:#fff
+    style Safety fill:#2a0d0d,stroke:#f85149,stroke-width:2px,color:#fff
+    style Memory fill:#1a1a1a,stroke:#484f58,stroke-width:2px,color:#fff
+```

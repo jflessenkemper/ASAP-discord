@@ -24,7 +24,6 @@ const SENSITIVE_PATTERNS: Array<{
   { pattern: /migrations\//i, agents: ['lawyer', 'security-auditor'], reason: 'Database migration' },
 
   { pattern: /\bprivacy|gdpr|consent|personal.?data|user.?data\b/i, agents: ['lawyer'], reason: 'Privacy-related code' },
-  { pattern: /routes\/(auth|employees|upload)/i, agents: ['security-auditor', 'lawyer'], reason: 'User-facing route' },
 
   { pattern: /\bpayment|billing|invoice|stripe|charge\b/i, agents: ['lawyer', 'security-auditor'], reason: 'Payment processing' },
 

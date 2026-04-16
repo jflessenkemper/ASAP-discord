@@ -2,6 +2,8 @@
  * Tests for src/services/googleCredentials.ts
  */
 
+export {};
+
 // --- Mocks --- Define mock fns at top level so factory closures reference the same fns
 const mockExecFileSync = jest.fn();
 jest.mock('child_process', () => ({

@@ -2,6 +2,8 @@
 // Structured context transfer between agents during delegation.
 // Ensures receiving agents get clean, relevant context instead of raw history dumps.
 
+const HANDOFF_MAX_CONTEXT_CHARS = parseInt(process.env.HANDOFF_MAX_CONTEXT_CHARS || '2000', 10);
+
 export interface HandoffContext {
   fromAgent: string;
   toAgent: string;
@@ -110,7 +112,10 @@ export function formatHandoffPrompt(ctx: HandoffContext): string {
 
   lines.push(`Trace: ${ctx.traceId}`);
 
-  return lines.join('\n');
+  const result = lines.join('\n');
+  if (result.length <= HANDOFF_MAX_CONTEXT_CHARS) return result;
+  // Truncate long handoff contexts to save tokens
+  return result.slice(0, HANDOFF_MAX_CONTEXT_CHARS) + '\n[Handoff context truncated for token efficiency]';
 }
 
 /**

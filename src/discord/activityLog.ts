@@ -3,6 +3,11 @@ import pool from '../db/pool';
 import { postAgentErrorLog } from './services/agentErrors';
 import { errMsg } from '../utils/errors';
 
+type OpsFeedModule = typeof import('./services/opsFeed');
+type OpsLineInput = Parameters<OpsFeedModule['formatOpsLine']>[0];
+
+export type OpsSeverity = import('./services/opsFeed').OpsSeverity;
+
 /**
  * Lightweight agent activity logger.
  * Writes structured events to the agent_activity_log table for debugging.
@@ -55,6 +60,30 @@ function isPermissionDeniedError(err: unknown): boolean {
   const code = String((err as any)?.code || '');
   const msg = String((err as any)?.message || err || '').toLowerCase();
   return code === '42501' || msg.includes('permission denied');
+}
+
+function getOpsFeedModule(): OpsFeedModule {
+  // Lazy-load the Discord ops feed to avoid a module-init cycle.
+  // activityLog -> agentErrors -> opsFeed -> activityLog
+  // is valid at runtime as long as this edge stays lazy.
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  return require('./services/opsFeed') as OpsFeedModule;
+}
+
+export function formatOpsLine(input: OpsLineInput): string {
+  return getOpsFeedModule().formatOpsLine(input);
+}
+
+export function formatToolAuditHuman(input: OpsLineInput): string {
+  return getOpsFeedModule().formatToolAuditHuman(input);
+}
+
+export async function postOpsLine(...args: Parameters<OpsFeedModule['postOpsLine']>): Promise<void> {
+  await getOpsFeedModule().postOpsLine(...args);
+}
+
+export async function flushAllOpsDigests(): Promise<void> {
+  await getOpsFeedModule().flushAllOpsDigests();
 }
 
 export function logAgentEvent(

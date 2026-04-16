@@ -3,4 +3,5 @@ dist/
 .env
 .env.*
 *.log
+coverage/
 smoke-reports/

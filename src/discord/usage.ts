@@ -1,12 +1,122 @@
+import { randomUUID } from 'crypto';
 import { TextChannel, EmbedBuilder } from 'discord.js';
 
 import pool from '../db/pool';
 import { getLiveBillingSnapshot, refreshLiveBillingSnapshot } from '../services/billing';
 
-import { formatOpsLine, postOpsLine } from './services/opsFeed';
+import { formatOpsLine, postOpsLine } from './activityLog';
 import { upsertMemory } from './memory';
 import { statusColor } from './ui/constants';
 import { errMsg } from '../utils/errors';
+
+// ─── Tracing Types ───
+
+export interface TraceSpan {
+  traceId: string;
+  spanId: string;
+  parentSpanId?: string;
+  agentId: string;
+  modelName?: string;
+  operation: string;
+  status: 'ok' | 'error' | 'timeout' | 'rate_limited';
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  durationMs?: number;
+  toolName?: string;
+  errorMessage?: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface TraceContext {
+  traceId: string;
+  spanId: string;
+}
+
+// ─── Trace ID Generation ───
+
+export function newTraceId(): string {
+  return randomUUID().replace(/-/g, '').slice(0, 16);
+}
+
+export function newSpanId(): string {
+  return randomUUID().replace(/-/g, '').slice(0, 8);
+}
+
+export function createTraceContext(parentTrace?: TraceContext): TraceContext {
+  return {
+    traceId: parentTrace?.traceId || newTraceId(),
+    spanId: newSpanId(),
+  };
+}
+
+// ─── Span Recording ───
+
+let traceDbDisabled = false;
+
+function logSpanStructured(span: TraceSpan): void {
+  const log = {
+    level: span.status === 'error' ? 'error' : 'info',
+    type: 'trace_span',
+    traceId: span.traceId,
+    spanId: span.spanId,
+    parentSpanId: span.parentSpanId,
+    agent: span.agentId,
+    model: span.modelName,
+    op: span.operation,
+    status: span.status,
+    tokensIn: span.inputTokens,
+    tokensOut: span.outputTokens,
+    cacheRead: span.cacheReadTokens,
+    cacheWrite: span.cacheWriteTokens,
+    durationMs: span.durationMs,
+    tool: span.toolName,
+    error: span.errorMessage?.slice(0, 200),
+  };
+  console.log(JSON.stringify(log));
+}
+
+export async function recordSpan(span: TraceSpan): Promise<void> {
+  logSpanStructured(span);
+
+  if (traceDbDisabled) return;
+
+  try {
+    await pool.query(
+      `INSERT INTO trace_spans
+        (trace_id, span_id, parent_span_id, agent_id, model_name, operation,
+         status, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens,
+         duration_ms, tool_name, error_message, metadata)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`,
+      [
+        span.traceId,
+        span.spanId,
+        span.parentSpanId || null,
+        span.agentId,
+        span.modelName || null,
+        span.operation,
+        span.status,
+        span.inputTokens,
+        span.outputTokens,
+        span.cacheReadTokens,
+        span.cacheWriteTokens,
+        span.durationMs ?? null,
+        span.toolName || null,
+        span.errorMessage?.slice(0, 500) || null,
+        span.metadata ? JSON.stringify(span.metadata) : null,
+      ],
+    );
+  } catch (err: any) {
+    if (
+      String(err?.message || '').includes('does not exist') ||
+      String(err?.code || '') === '42P01'
+    ) {
+      traceDbDisabled = true;
+      console.warn('trace_spans table not found — tracing DB persistence disabled');
+    }
+  }
+}
 
 const DAILY_LIMITS = {
   /** Max LLM input+output tokens per day (Gemini) */
@@ -479,13 +589,14 @@ export function setDailyBudgetLimit(
 }
 
 /** Get Claude token status so agents can self-regulate tool usage */
-export function getClaudeTokenStatus(): { used: number; remaining: number; limit: number } {
+export function getClaudeTokenStatus(): { used: number; remaining: number; limit: number; promptBreakdown: string } {
   resetIfNewDay();
   const used = usage.claudeInputTokens + usage.claudeOutputTokens;
   return {
     used,
     remaining: Math.max(0, DAILY_LIMITS.claudeTokens - used),
     limit: DAILY_LIMITS.claudeTokens,
+    promptBreakdown: getPromptBreakdownSummary(),
   };
 }
 
@@ -817,4 +928,52 @@ async function updateDashboard(): Promise<void> {
 
   const msg = await limitsChannel.send({ embeds: [embed] });
   dashboardMessageId = msg.id;
+}
+
+// ── Per-Conversation Token Tracking ──
+
+const CONVERSATION_TOKEN_WARN = parseInt(process.env.CONVERSATION_TOKEN_WARN || '300000', 10);
+const CONVERSATION_TOKEN_LIMIT = parseInt(process.env.CONVERSATION_TOKEN_LIMIT || '500000', 10);
+
+const conversationTokens = new Map<string, number>();
+
+export function recordConversationTokens(conversationKey: string, tokens: number): void {
+  const current = conversationTokens.get(conversationKey) || 0;
+  conversationTokens.set(conversationKey, current + tokens);
+}
+
+export function getConversationTokenUsage(conversationKey: string): { used: number; warn: number; limit: number; overWarn: boolean; overLimit: boolean } {
+  const used = conversationTokens.get(conversationKey) || 0;
+  return {
+    used,
+    warn: CONVERSATION_TOKEN_WARN,
+    limit: CONVERSATION_TOKEN_LIMIT,
+    overWarn: used >= CONVERSATION_TOKEN_WARN,
+    overLimit: used >= CONVERSATION_TOKEN_LIMIT,
+  };
+}
+
+export function clearConversationTokens(conversationKey: string): void {
+  conversationTokens.delete(conversationKey);
+}
+
+// ── Prompt Breakdown Dashboard ──
+
+export function getPromptBreakdownSummary(): string {
+  const total = usage.promptSystemChars + usage.promptHistoryChars + usage.promptToolsChars + usage.promptUserChars + usage.promptToolResultChars;
+  if (total === 0) return 'No prompt data collected yet.';
+
+  const pct = (val: number) => total > 0 ? `${((val / total) * 100).toFixed(1)}%` : '0%';
+  const fmt = (val: number) => val >= 1000000 ? `${(val / 1000000).toFixed(1)}M` : val >= 1000 ? `${(val / 1000).toFixed(0)}K` : String(val);
+
+  return [
+    `📊 Prompt composition today (${fmt(total)} total chars):`,
+    `  System:       ${fmt(usage.promptSystemChars)} (${pct(usage.promptSystemChars)})`,
+    `  History:      ${fmt(usage.promptHistoryChars)} (${pct(usage.promptHistoryChars)})`,
+    `  Tool schemas: ${fmt(usage.promptToolsChars)} (${pct(usage.promptToolsChars)})`,
+    `  User msgs:    ${fmt(usage.promptUserChars)} (${pct(usage.promptUserChars)})`,
+    `  Tool results: ${fmt(usage.promptToolResultChars)} (${pct(usage.promptToolResultChars)})`,
+    `  LLM requests: ${usage.llmRequests}`,
+    `  Cache reads:  ${usage.llmCacheReadRequests} (${fmt(usage.llmCacheReadInputTokens)} tokens saved)`,
+  ].join('\n');
 }

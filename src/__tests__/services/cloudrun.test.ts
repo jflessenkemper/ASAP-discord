@@ -201,7 +201,8 @@ describe('cloudrun', () => {
     });
 
     it('sends body with Content-Type when body is provided in gcloud fallback', async () => {
-      // GET current service - succeeds normally
+      // GET current service - succeeds normally via primary auth
+      mockGetClient.mockResolvedValueOnce({ request: mockRequest });
       mockRequest.mockResolvedValueOnce({ data: { traffic: [] } });
       // PATCH fails with primary, falls back to gcloud
       mockGetClient.mockRejectedValueOnce(new Error('ADC fail'));

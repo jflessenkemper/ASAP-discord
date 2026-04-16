@@ -3,6 +3,8 @@
  * Vector embedding storage and semantic search.
  */
 
+export {};
+
 const mockQuery = jest.fn().mockResolvedValue({ rows: [], rowCount: 0 });
 jest.mock('../../db/pool', () => ({
   default: { query: mockQuery, on: jest.fn() },

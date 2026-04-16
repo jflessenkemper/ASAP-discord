@@ -1,133 +1,130 @@
 # ASAP Repository Map
 
-Quick-reference for navigating the codebase. One `read_file` to find anything.
+Quick reference for the current bot-first codebase.
 
 ## Directory Structure
 
 ```
 .github/
-  agents/               13 agent system prompts (*.agent.md)
-  riley-personality.md  Riley's voice, taste, and operating style
-  riley-memory.md       Riley's persistent knowledge (channels, preferences, conventions)
-  PROJECT_CONTEXT.md    Product context injected into all agent prompts
+  agents/               Specialist agent system prompts (*.agent.md)
+  riley-personality.md  Riley's voice, owner identity, and operating style
+  riley-memory.md       Riley's persistent guidance and preferences
+  PROJECT_CONTEXT.md    Repo/product context injected into prompts
   REPO_MAP.md           This file
-  HELPER_PATTERNS.md    Registry of extracted helpers (errMsg, upsertMemory, addTimelineEntry) — enforced by smoke tests
+  HELPER_PATTERNS.md    Registry of shared helpers and dedup rules
 
 src/
-  index.ts              Express server entrypoint
-  utils/errors.ts       `errMsg(err)` — universal error message extractor. Use instead of `err instanceof Error ? err.message : 'Unknown'`.
-  db/                   Database layer (pool, migrations, seeds)
-  discord/              Discord bot core (see below)
-  middleware/            Express middleware (auth)
-  routes/               REST API routes (auth, jobs, fuel, shop, etc.). `jobs.ts` has `addTimelineEntry()` helper for job_timeline INSERTs.
-  services/             Shared services (billing, email, GitHub, GCP, etc.)
-  __tests__/            Jest unit tests
+  index.ts              Express entrypoint for health, metrics, logs, and webhooks
+  utils/errors.ts       errMsg(err) shared error formatter
+  db/                   Pool, migration runner, grant helper, SQL migrations
+  discord/              Bot runtime, agents, tools, smoke tests, voice, handlers
+  middleware/           Shared middleware used by the remaining HTTP surface
+  services/             Shared integrations: billing, email, GitHub, GCP, job search
+  __tests__/            Jest unit and lint-style tests
 
-scripts/                One-off scripts (deploy, avatar generation, smoke runner)
+scripts/                One-off deploy, smoke, audit, and Discord helper scripts
 assets/avatars/         Agent avatar source images
-smoke-reports/          Generated smoke test reports (gitignored)
+smoke-reports/          Generated smoke reports (gitignored)
 ```
 
-## Discord Bot — Key Files
+## Current Product Shape
 
-| File | Lines | Purpose |
-|------|-------|---------|
-| `agents.ts` | ~200 | **Agent registry** — single `AGENT_REGISTRY` array with all 13 agents (name, handle, emoji, color, voice, avatar, aliases). Loads system prompts + Riley personality/memory. |
-| `claude.ts` | ~3600 | **LLM core** — system prompt construction, model routing (Sonnet/Opus), Anthropic+Vertex API calls, tool loop, response caching, budget gates. |
-| `tools.ts` | ~4700 | **Tool definitions** — 56 tool schemas + `executeTool()` dispatch + permission sets. |
-| `tester.ts` | ~2200 | **Smoke test runner** — test execution engine, report generation, channel cleanup. |
-| `test-definitions.ts` | ~1500 | **Smoke test definitions** — 155+ test cases in `AGENT_CAPABILITY_TESTS` array + `READINESS_TEST_KEYS`. Edit this file to add/modify tests. |
-| `bot.ts` | — | Bot startup, Discord client setup, event handlers. |
-| `setup.ts` | — | Channel/role/webhook provisioning on startup. |
-| `usage.ts` | — | Token counting, cost estimation, daily budget gates. |
-| `guardrails.ts` | — | Input/output safety classification (regex-based). |
-| `memory.ts` | — | Persistent memory read/write/search via database. Exports `upsertMemory()`, `appendMemoryRow()`, `readMemoryRow()` CRUD helpers — use these instead of raw SQL. |
-| `modelHealth.ts` | — | Model availability tracking, fallback logic. |
-| `contextCache.ts` | — | Conversation context caching. |
-| `handoff.ts` | — | Agent handoff/continuation logic. |
-| `activityLog.ts` | — | Agent activity audit logging. |
-| `metrics.ts` | — | Runtime metrics collection. |
-| `tracing.ts` | — | Request tracing. |
-| `commands.ts` | — | Slash command definitions. |
+ASAP-discord is now primarily a Discord-operated automation system with:
+
+- Discord orchestration and specialist agents
+- a small Express surface for health, metrics, debug logs, GitHub/build webhooks, and Twilio webhooks
+- bot memory, activity logging, tracing, and diagnostics
+- career-ops and job-search tooling for Riley
+
+The old marketplace route tree and legacy marketplace tables are no longer part of the active runtime.
+
+## Core Files
+
+| File | Purpose |
+|------|---------|
+| `src/discord/agents.ts` | Static agent registry, dynamic agent lifecycle, Riley personality/owner metadata |
+| `src/discord/claude.ts` | LLM orchestration, prompt construction, tool loop, budget handling |
+| `src/discord/tools.ts` | Main tool registry and execution dispatch |
+| `src/discord/tester.ts` | Smoke-test runner, readiness scoring, category mapping |
+| `src/discord/test-definitions.ts` | Smoke capability catalog and expectations |
+| `src/discord/bot.ts` | Bot startup, callbacks, monitors, smoke hooks |
+| `src/discord/usage.ts` | Usage accounting, daily budget gates, tracing primitives |
+| `src/discord/memory.ts` | Agent conversation persistence helpers |
+| `src/discord/vectorMemory.ts` | Semantic recall and insight consolidation |
+| `src/discord/activityLog.ts` | Agent activity logging and ops-feed bridge |
+| `src/discord/modelHealth.ts` | Runtime model routing and fallback logic |
+| `src/discord/services/modelHealthCheck.ts` | Startup/provider health checks |
+| `src/index.ts` | HTTP entrypoint for `/api/health`, `/api/metrics`, `/api/agent-log`, GitHub/build/Twilio webhooks |
+| `src/services/jobSearch.ts` | Career-ops profile, scanning, evaluation, draft/submission workflow |
+
+## Database Focus
+
+Important live tables and migrations:
+
+- `agent_memory`: persistent bot memory and dynamic-agent registry state
+- `agent_activity_log`: structured runtime/event log
+- `trace_spans`: trace persistence when enabled
+- `job_profile`, `job_portals`, `job_listings`, `job_scan_history`: career-ops/job-search state
+- `018_job_search.sql`: career-ops base schema
+- `019_job_applications.sql`: draft/submission fields
+- `020_drop_legacy_app_schema.sql`: removes the old marketplace schema from existing DBs
+
+## Discord Runtime Areas
 
 ### Handlers (`src/discord/handlers/`)
+
 | File | Purpose |
 |------|---------|
-| `groupchat.ts` | Main orchestration — continuation loop, agent chain, quality gate |
-| `textChannel.ts` | Per-channel message handling |
-| `goalState.ts` | Goal tracking and state management |
-| `callSession.ts` | Voice call session management |
-| `github.ts` | GitHub webhook/event handling |
-| `review.ts` | PR review coordination |
-| `documentation.ts` | Documentation generation |
-| `designDeliverable.ts` | Design deliverable tracking |
-| `responseNormalization.ts` | Response format normalization |
+| `groupchat.ts` | Main orchestration loop and cross-agent coordination |
+| `textChannel.ts` | Per-agent text channel handling |
+| `goalState.ts` | Goal tracking and lifecycle |
+| `callSession.ts` | Voice sessions and voice-command shortcuts |
+| `github.ts` | GitHub webhook routing and reporting |
+| `review.ts` | PR review routing by sensitivity/risk |
+| `documentation.ts` | Documentation posting helpers |
+| `responseNormalization.ts` | Response normalization and safety shaping |
 
 ### Services (`src/discord/services/`)
-| File | Purpose |
-|------|---------|
-| `webhooks.ts` | Discord webhook management for agent identities |
-| `screenshots.ts` | Screenshot capture service |
-| `mobileHarness.ts` | Interactive mobile testing harness |
-| `browserRuntime.ts` | Headless browser for web verification |
-| `telephony.ts` | Phone call integration |
-| `agentErrors.ts` | Error reporting to #agent-errors |
-| `diagnosticsWebhook.ts` | Diagnostic webhook posting |
-| `modelHealth.ts` | Model health monitoring service |
-| `opsFeed.ts` | Operations feed posting |
 
-### Voice (`src/discord/voice/`)
 | File | Purpose |
 |------|---------|
-| `connection.ts` | Discord voice channel connection |
-| `tts.ts` | Text-to-speech orchestration |
-| `elevenlabs.ts` | ElevenLabs TTS API |
-| `elevenlabsConvai.ts` | ElevenLabs Conversational AI |
-| `elevenlabsRealtime.ts` | ElevenLabs realtime streaming |
-| `deepgram.ts` | Deepgram STT (speech-to-text) |
-| `testerClient.ts` | Voice test harness client |
+| `webhooks.ts` | Discord webhook identity management |
+| `screenshots.ts` | Screenshot capture and posting |
+| `mobileHarness.ts` | Interactive mobile verification sessions |
+| `telephony.ts` | Telephony integration and contacts |
+| `agentErrors.ts` | Runtime error posting and recurring-error aggregation |
+| `diagnosticsWebhook.ts` | Diagnostic event posting |
+| `opsFeed.ts` | Raw ops-feed posting implementation |
 
 ## How To...
 
-### Add a new smoke test
-Edit `src/discord/test-definitions.ts`. Add an entry to `AGENT_CAPABILITY_TESTS`:
-```ts
-{
-  id: 'agent-id',
-  category: 'core',
-  capability: 'descriptive-name',
-  prompt: 'What to ask the agent',
-  expectAny: [/keyword|pattern/i],
-}
-```
-If it should run in the readiness profile, also add to `READINESS_TEST_KEYS`.
+### Add a smoke test
 
-### Add a new agent
-1. Add an entry to `AGENT_REGISTRY` in `src/discord/agents.ts`
-2. Create `.github/agents/<id>.agent.md` with the system prompt
-3. Generate an avatar: `npx tsx scripts/generate-avatars.ts`
-4. Add smoke tests to `src/discord/test-definitions.ts`
+Edit `src/discord/test-definitions.ts` and add an entry to `AGENT_CAPABILITY_TESTS`. Add it to readiness keys only if it should affect readiness scoring.
 
-### Add a new tool
+### Add or update a tool
+
 Edit `src/discord/tools.ts`:
-1. Add the schema to the tool definitions section (~line 175)
-2. Add the handler in `executeTool()` (~line 1611)
-3. Add to appropriate permission sets if restricted
 
-### Modify Riley's personality
-Edit `.github/riley-personality.md`. Changes take effect on next bot restart.
+1. Add or update the tool schema.
+2. Wire the handler in the execution switch.
+3. Update permission/tool subsets if needed.
+4. Add or adjust smoke coverage in `src/discord/test-definitions.ts`.
 
-### Modify Riley's persistent memory
-Edit `.github/riley-memory.md`. Riley can also update this at runtime via memory tools.
+### Add a migration
 
-### Deploy to VM
-```bash
-./scripts/vm-deploy-bot.sh
-```
+Create a new sequential SQL file in `src/db/migrations/`. Do not modify historical migration files.
+
+### Update Riley behavior
+
+- Personality and owner metadata: `.github/riley-personality.md`
+- Shared repo/product guidance: `.github/PROJECT_CONTEXT.md`
+- Specialist prompts: `.github/agents/*.agent.md`
 
 ### Run smoke tests
+
 ```bash
-npm run discord:test:dist                           # full profile
-npm run discord:test:dist -- --agent=developer      # single agent
-npm run discord:test:dist -- --rerun-failed         # retry failures
+npm run discord:test:dist
+npm run discord:test:dist -- --agent=developer
+npm run discord:test:dist -- --rerun-failed
 ```

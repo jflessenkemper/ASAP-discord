@@ -19,15 +19,7 @@ Riley: read this file during `identify-blocker` and `dedup-discipline` checks to
 | `appendMemoryRow(fileName, content)` | `src/discord/memory.ts` | `INSERT INTO agent_memory ... ON CONFLICT DO UPDATE SET content = content \|\| '\n' \|\| $2` |
 | `readMemoryRow(fileName)` | `src/discord/memory.ts` | `SELECT content FROM agent_memory WHERE file_name = $1` |
 
-**Rule:** No raw `INSERT INTO agent_memory` outside of `src/discord/memory.ts` and `src/discord/repoMemoryIndexer.ts` (transactional batch indexer is exempt).
-
-## Job Timeline
-
-| Helper | File | Replaces |
-|--------|------|----------|
-| `addTimelineEntry(jobId, eventType, description, createdByType, createdById, evidenceUrl?)` | `src/routes/jobs.ts` | `INSERT INTO job_timeline (job_id, event_type, description, created_by_type, created_by_id, evidence_url)` |
-
-**Rule:** All new job timeline inserts in `src/routes/jobs.ts` must use `addTimelineEntry()`.
+**Rule:** New memory persistence should normally use the helpers above. The current intentional raw `agent_memory` writes are limited to the helper layer plus a few runtime-specific persistence sites such as tooling and dynamic-agent registry state.
 
 ## General Deduplication Rule
 

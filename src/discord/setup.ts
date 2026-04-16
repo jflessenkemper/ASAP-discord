@@ -407,7 +407,7 @@ export async function setupChannels(guild: Guild): Promise<BotChannels> {
     MAIN_CHANNELS.decisions,
     catMain,
     '📋 Riley queues decisions here while you sleep. Reply to any decision to continue the work.',
-    `📋 **Decisions Queue**\n\nWhen the team hits a decision point overnight, Riley posts it here instead of stopping work.\nReply to any decision with your answer — Riley will pick it up and continue.\nClick a button to choose from listed options.`
+    `📋 **Decisions Queue**\n\nWhen the team hits a decision point overnight or while you are away, Riley posts it here instead of stopping work.\nIn live groupchat, Riley can ask you directly and tag you there. In live voice calls, Riley asks you in voice instead of using this channel.\nReply to any decision with your answer — Riley will pick it up and continue.\nClick a button to choose from listed options.`
   );
 
   let voiceChannel = guild.channels.cache.find(

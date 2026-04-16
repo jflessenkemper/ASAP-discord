@@ -4,7 +4,7 @@ import { verifySignature, setGitHubChannel, handleGitHubEvent } from '../../../d
 
 /* ── mocks ─────────────────────────────────────────────────── */
 
-jest.mock('../../../discord/services/opsFeed', () => ({
+jest.mock('../../../discord/activityLog', () => ({
   formatOpsLine: jest.fn(({ scope, metric }) => `[${scope}] ${metric}`),
 }));
 

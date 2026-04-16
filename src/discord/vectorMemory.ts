@@ -263,6 +263,67 @@ export async function recallRelevantContext(
   return `\n[Relevant past context]\n${formatted}\n`;
 }
 
+// ─── Memory Consolidation Loop ───
+
+export async function consolidateMemoryInsights(): Promise<string> {
+  if (!VECTOR_MEMORY_ENABLED) return '';
+  if (!(await checkVectorSupport())) return '';
+
+  try {
+    const res = await pool.query(
+      `SELECT agent_id, content, metadata
+       FROM agent_embeddings
+       WHERE created_at >= NOW() - INTERVAL '24 hours'
+         AND (metadata->>'type' = 'decision' OR metadata->>'type' = 'learning')
+       ORDER BY agent_id, created_at DESC
+       LIMIT 200`,
+    );
+
+    if (!res.rows || res.rows.length === 0) return '';
+
+    const grouped = new Map<string, string[]>();
+    for (const row of res.rows) {
+      const agentId = row.agent_id || 'unknown';
+      if (!grouped.has(agentId)) grouped.set(agentId, []);
+      grouped.get(agentId)!.push(String(row.content || '').slice(0, 300));
+    }
+
+    const smokePatterns: string[] = [];
+    for (const [agentId, entries] of grouped) {
+      for (const entry of entries) {
+        if (/smoke|test|fail|pass|regression/i.test(entry)) {
+          const failMatch = entry.match(/(?:fail(?:ed|ure)?|error|regression)[:\s]*([^\n]{0,120})/i);
+          const fixMatch = entry.match(/(?:fix(?:ed)?|resolve[d]?|patch(?:ed)?)[:\s]*([^\n]{0,120})/i);
+          if (failMatch) smokePatterns.push(`[${agentId}] failed: ${failMatch[1].trim()}`);
+          if (fixMatch) smokePatterns.push(`[${agentId}] fixed: ${fixMatch[1].trim()}`);
+        }
+      }
+    }
+
+    const parts: string[] = [`Consolidated ${res.rows.length} insights from ${grouped.size} agent(s) (last 24h).`];
+    if (smokePatterns.length > 0) {
+      parts.push(`Smoke/test patterns: ${smokePatterns.slice(0, 10).join('; ')}`);
+    }
+
+    console.log(`[memory-loop] ${parts[0]}`);
+    return parts.join(' ');
+  } catch (err) {
+    console.warn('[memory-loop] consolidation failed:', errMsg(err));
+    return '';
+  }
+}
+
+export async function recordSmokeInsight(
+  categories: string[],
+  hasFails: boolean,
+  summary: string,
+): Promise<void> {
+  const insight = `Smoke test result — categories: [${categories.join(', ')}], outcome: ${hasFails ? 'FAILURES' : 'PASS'}. ${summary.slice(0, 400)}`;
+  await recordAgentLearning('executive-assistant', insight).catch((err) => {
+    console.warn('[memory-loop] recordSmokeInsight failed:', errMsg(err));
+  });
+}
+
 // ─── Cleanup ───
 
 export async function cleanupOldEmbeddings(retentionDays = 90): Promise<number> {

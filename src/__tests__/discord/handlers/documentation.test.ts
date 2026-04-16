@@ -1,4 +1,4 @@
-jest.mock('../../../discord/services/opsFeed', () => ({
+jest.mock('../../../discord/activityLog', () => ({
   postOpsLine: jest.fn().mockResolvedValue(undefined),
 }));
 jest.mock('../../../utils/errors', () => ({
@@ -6,7 +6,7 @@ jest.mock('../../../utils/errors', () => ({
 }));
 
 import { setBotChannels, documentToChannel } from '../../../discord/handlers/documentation';
-import { postOpsLine } from '../../../discord/services/opsFeed';
+import { postOpsLine } from '../../../discord/activityLog';
 
 const mockPostOpsLine = postOpsLine as jest.MockedFunction<typeof postOpsLine>;
 

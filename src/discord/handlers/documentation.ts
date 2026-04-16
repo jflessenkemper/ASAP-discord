@@ -1,4 +1,4 @@
-import { postOpsLine } from '../services/opsFeed';
+import { postOpsLine } from '../activityLog';
 import { BotChannels } from '../setup';
 import { errMsg } from '../../utils/errors';
 

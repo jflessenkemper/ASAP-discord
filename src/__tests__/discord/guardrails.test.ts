@@ -189,11 +189,13 @@ describe('guardrails', () => {
       process.env.GUARDRAILS_INPUT_ENABLED = 'true';
       process.env.GEMINI_USE_VERTEX_AI = 'false';
       process.env.GEMINI_API_KEY = 'test-key';
+      process.env.GUARDRAIL_INPUT_SAMPLE_RATE = '1';
     });
 
     afterEach(() => {
       delete process.env.GEMINI_API_KEY;
       delete process.env.GEMINI_USE_VERTEX_AI;
+      delete process.env.GUARDRAIL_INPUT_SAMPLE_RATE;
     });
 
     it('classifies safe input via Google AI', async () => {
@@ -283,12 +285,14 @@ describe('guardrails', () => {
       process.env.GEMINI_USE_VERTEX_AI = 'true';
       process.env.VERTEX_PROJECT_ID = 'test-project';
       process.env.VERTEX_LOCATION = 'us-central1';
+      process.env.GUARDRAIL_INPUT_SAMPLE_RATE = '1';
     });
 
     afterEach(() => {
       delete process.env.GEMINI_USE_VERTEX_AI;
       delete process.env.VERTEX_PROJECT_ID;
       delete process.env.VERTEX_LOCATION;
+      delete process.env.GUARDRAIL_INPUT_SAMPLE_RATE;
     });
 
     it('classifies via Vertex AI with valid token', async () => {

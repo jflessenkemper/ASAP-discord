@@ -24,6 +24,7 @@ const GUARDRAILS_INPUT_ENABLED = process.env.GUARDRAILS_INPUT_ENABLED !== 'false
 const GUARDRAILS_OUTPUT_ENABLED = process.env.GUARDRAILS_OUTPUT_ENABLED !== 'false';
 const GUARDRAILS_MAX_INPUT_CHARS = parseInt(process.env.GUARDRAILS_MAX_INPUT_CHARS || '2000', 10);
 const GUARDRAILS_TIMEOUT_MS = parseInt(process.env.GUARDRAILS_TIMEOUT_MS || '5000', 10);
+const GUARDRAIL_SAMPLE_RATE = parseFloat(process.env.GUARDRAIL_INPUT_SAMPLE_RATE || '0.2');
 const USE_VERTEX_AI = process.env.GEMINI_USE_VERTEX_AI === 'true';
 const VERTEX_PROJECT_ID = process.env.VERTEX_PROJECT_ID || process.env.GOOGLE_CLOUD_PROJECT || process.env.GCLOUD_PROJECT || '';
 const VERTEX_LOCATION = process.env.VERTEX_LOCATION || 'us-central1';
@@ -165,6 +166,12 @@ export async function classifyInput(userMessage: string, agentId: string): Promi
   if (injectionPatterns.test(truncated)) {
     logAgentEvent(agentId, 'guardrail', `Input blocked by regex pre-check: injection pattern detected`);
     return { verdict: 'block', category: 'injection', confidence: 0.95, reason: 'Prompt injection pattern detected' };
+  }
+
+  // Probabilistic sampling — skip full LLM classification for trusted contexts
+  // Still runs regex pre-checks above. Only the LLM API call is sampled.
+  if (Math.random() > GUARDRAIL_SAMPLE_RATE) {
+    return PASS_RESULT;
   }
 
   try {

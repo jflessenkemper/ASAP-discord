@@ -37,17 +37,11 @@ describe('Code Health Lint', () => {
 
   test('no raw INSERT INTO agent_memory outside allowed files', () => {
     const lines = grepLines('INSERT INTO agent_memory', SRC);
-    // Allowed: memory.ts (helpers), repoMemoryIndexer.ts (batch indexer),
-    // tools.ts repo memory functions (transactional), test files
+    // Allowed: memory.ts (helpers), tools.ts (tool-backed persistence),
+    // agents.ts (dynamic agent persistence), test files
     const filtered = filterLines(lines, [
-      'memory.ts', 'repoMemoryIndexer.ts', 'tools.ts', '__tests__/'
+      'memory.ts', 'tools.ts', 'agents.ts', '__tests__/'
     ]);
-    expect(filtered.length).toBe(0);
-  });
-
-  test('no raw INSERT INTO job_timeline outside jobs.ts', () => {
-    const lines = grepLines('INSERT INTO job_timeline', SRC);
-    const filtered = filterLines(lines, ['jobs.ts', '__tests__/']);
     expect(filtered.length).toBe(0);
   });
 

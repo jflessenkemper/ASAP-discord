@@ -1,4 +1,28 @@
-import { CircuitBreaker, CircuitOpenError, getCircuitBreakerForTool, getCircuitBreaker, getAllCircuitBreakerStats } from '../../discord/circuitBreaker';
+jest.mock('../../db/pool', () => ({ default: { query: jest.fn() }, __esModule: true }));
+jest.mock('../../services/github', () => ({
+  createBranch: jest.fn(), createPR: jest.fn(), mergePR: jest.fn(),
+  addPRComment: jest.fn(), listPRs: jest.fn(), searchCode: jest.fn(),
+}));
+jest.mock('../../services/jobSearch', () => ({ runJobScan: jest.fn() }));
+jest.mock('../../discord/agents', () => ({
+  getAgentConfig: jest.fn(), getAllAgentIds: jest.fn(() => []),
+}));
+jest.mock('../../discord/handlers/review', () => ({ getRequiredReviewers: jest.fn() }));
+jest.mock('../../discord/handlers/groupchat', () => ({ setActiveSmokeTestRunning: jest.fn() }));
+jest.mock('../../discord/services/mobileHarness', () => ({
+  runMobileTest: jest.fn(), discoverDevices: jest.fn(),
+}));
+jest.mock('../../discord/services/screenshots', () => ({ captureAndPostScreenshots: jest.fn() }));
+jest.mock('../../discord/services/webhooks', () => ({ getWebhook: jest.fn() }));
+jest.mock('../../discord/usage', () => ({ setDailyBudgetLimit: jest.fn() }));
+jest.mock('../../discord/memory', () => ({
+  upsertMemory: jest.fn(), getMemory: jest.fn(),
+}));
+jest.mock('../../discord/ui/constants', () => ({
+  SYSTEM_COLORS: {}, BUTTON_IDS: {}, jobScoreColor: jest.fn(),
+}));
+
+import { CircuitBreaker, CircuitOpenError, getCircuitBreakerForTool, getCircuitBreaker, getAllCircuitBreakerStats } from '../../discord/tools';
 
 describe('CircuitBreaker', () => {
   let breaker: CircuitBreaker;
@@ -215,7 +239,7 @@ describe('CircuitBreaker (fresh module)', () => {
   });
 
   test('open circuit rejects with CircuitOpenError before cooldown (fresh)', async () => {
-    const { CircuitBreaker: CB, CircuitOpenError: COE } = await import('../../discord/circuitBreaker');
+    const { CircuitBreaker: CB, CircuitOpenError: COE } = await import('../../discord/tools');
     const b = new CB('fresh-open', 2, 60_000);
     await expect(b.call(async () => { throw new Error('f1'); })).rejects.toThrow('f1');
     await expect(b.call(async () => { throw new Error('f2'); })).rejects.toThrow('f2');
@@ -224,14 +248,14 @@ describe('CircuitBreaker (fresh module)', () => {
   });
 
   test('call catch rethrows after onFailure (fresh)', async () => {
-    const { CircuitBreaker: CB } = await import('../../discord/circuitBreaker');
+    const { CircuitBreaker: CB } = await import('../../discord/tools');
     const b = new CB('fresh-catch', 5, 100);
     await expect(b.call(async () => { throw new Error('oops'); })).rejects.toThrow('oops');
     expect(b.getStats().failures).toBe(1);
   });
 
   test('onFailure in half_open re-opens (fresh)', async () => {
-    const { CircuitBreaker: CB } = await import('../../discord/circuitBreaker');
+    const { CircuitBreaker: CB } = await import('../../discord/tools');
     const b = new CB('fresh-half', 2, 50);
     await expect(b.call(async () => { throw new Error('f1'); })).rejects.toThrow();
     await expect(b.call(async () => { throw new Error('f2'); })).rejects.toThrow();
@@ -241,7 +265,7 @@ describe('CircuitBreaker (fresh module)', () => {
   });
 
   test('decayIfStale recovers open circuit (fresh)', async () => {
-    const { CircuitBreaker: CB } = await import('../../discord/circuitBreaker');
+    const { CircuitBreaker: CB } = await import('../../discord/tools');
     const b = new CB('fresh-decay', 3, 50, 80);
     await expect(b.call(async () => { throw new Error('f1'); })).rejects.toThrow();
     await expect(b.call(async () => { throw new Error('f2'); })).rejects.toThrow();

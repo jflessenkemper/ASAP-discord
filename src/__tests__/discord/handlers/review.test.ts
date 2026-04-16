@@ -79,7 +79,7 @@ describe('getRequiredReviewers', () => {
   it('aggregates multiple reasons per agent', () => {
     const result = getRequiredReviewers([
       'src/middleware/auth.ts',
-      'src/routes/auth/login.ts',
+      '.env.production',
       'src/db/migrations/002.sql',
     ]);
     const secReasons = result.get('security-auditor')!;

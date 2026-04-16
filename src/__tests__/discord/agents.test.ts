@@ -13,6 +13,7 @@ jest.mock('fs', () => {
     existsSync: actual.existsSync,
   };
 });
+jest.mock('../../db/pool', () => ({ default: { query: jest.fn() }, __esModule: true }));
 
 import {
   getAgents,

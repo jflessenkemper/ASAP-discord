@@ -3,10 +3,10 @@ import { TextChannel, VoiceChannel, GuildMember } from 'discord.js';
 
 import { getAgent, AgentId } from '../agents';
 import { agentRespond, ConversationMessage, summarizeCall, ReusableAgentChatSession } from '../claude';
+import { postOpsLine } from '../activityLog';
 import { appendToMemory, getMemoryContext } from '../memory';
 import { recordVoiceCallStart, recordVoiceCallEnd } from '../metrics';
 import { postDiagnostic, mirrorAgentResponse, mirrorVoiceTranscript } from '../services/diagnosticsWebhook';
-import { postOpsLine } from '../services/opsFeed';
 import { getWebhook } from '../services/webhooks';
 import { isGeminiOverLimit } from '../usage';
 import { listenToAllMembersSmart, VoiceTranscription } from '../voice/connection';
@@ -21,6 +21,8 @@ import {
 } from '../voice/testerClient';
 import { textToSpeech } from '../voice/tts';
 import { errMsg } from '../../utils/errors';
+import { recordLoopHealth } from '../loopHealth';
+import { buildVoiceDecisionPolicy } from '../rileyInteraction';
 
 /** Heartbeat interval to detect stale connections (every 2 minutes) */
 const HEARTBEAT_INTERVAL = 20 * 1000;
@@ -29,7 +31,9 @@ const VOICE_PREFLIGHT_TIMEOUT_MS = parseInt(process.env.VOICE_PREFLIGHT_TIMEOUT_
 const VOICE_LOW_LATENCY_MODE = String(process.env.VOICE_LOW_LATENCY_MODE || 'false').toLowerCase() === 'true';
 const VOICE_DISABLE_CALL_LOG = String(process.env.VOICE_DISABLE_CALL_LOG || (VOICE_LOW_LATENCY_MODE ? 'true' : 'false')).toLowerCase() === 'true';
 const VOICE_DISABLE_TRANSCRIPT_SUMMARY = String(process.env.VOICE_DISABLE_TRANSCRIPT_SUMMARY || (VOICE_LOW_LATENCY_MODE ? 'true' : 'false')).toLowerCase() === 'true';
-const VOICE_STARTUP_SELFTEST_ENABLED = String(process.env.VOICE_STARTUP_SELFTEST_ENABLED || 'false').toLowerCase() === 'true';
+function isVoiceStartupSelftestEnabled(): boolean {
+  return String(process.env.VOICE_STARTUP_SELFTEST_ENABLED || 'false').toLowerCase() === 'true';
+}
 const VOICE_MAX_TOKENS_RILEY = parseInt(process.env.VOICE_MAX_TOKENS_RILEY || (VOICE_LOW_LATENCY_MODE ? '120' : '220'), 10);
 const VOICE_STREAM_PARTIAL_MIN_CHARS = parseInt(process.env.VOICE_STREAM_PARTIAL_MIN_CHARS || (VOICE_LOW_LATENCY_MODE ? '10' : '16'), 10);
 const VOICE_STREAM_FORCE_CHARS = parseInt(process.env.VOICE_STREAM_FORCE_CHARS || (VOICE_LOW_LATENCY_MODE ? '36' : '60'), 10);
@@ -246,6 +250,98 @@ function compactVoiceHistoryForPrompt(history: ConversationMessage[]): Conversat
     next.unshift({ ...summaryMsg, content: summary });
   }
   return next;
+}
+
+// ─── Voice Command Detection ───
+
+interface VoiceCommand {
+  type: 'smoke_test' | 'test_health' | 'set_goal' | 'memory_status';
+  args?: string;
+}
+
+function detectVoiceCommand(text: string): VoiceCommand | null {
+  const lower = text.toLowerCase();
+  if (/run\s+(smoke|the)\s+tests?/i.test(lower)) return { type: 'smoke_test' };
+  if (/(?:check|what(?:'s| is))\s+(?:the\s+)?test\s+health/i.test(lower)) return { type: 'test_health' };
+  if (/set\s+(?:a\s+)?goal\s*(?:to|:)?\s*(.+)/i.test(lower)) {
+    const match = lower.match(/set\s+(?:a\s+)?goal\s*(?:to|:)?\s*(.+)/i);
+    return { type: 'set_goal', args: match?.[1]?.trim() };
+  }
+  if (/memory\s+status/i.test(lower)) return { type: 'memory_status' };
+  return null;
+}
+
+async function handleVoiceCommand(
+  session: CallSession,
+  command: VoiceCommand,
+  transcription: VoiceTranscription,
+  userText: string,
+): Promise<void> {
+  const riley = getAgent('executive-assistant' as AgentId);
+  let response: string;
+
+  switch (command.type) {
+    case 'smoke_test':
+      response = 'Starting smoke tests now. I\'ll report results when they finish.';
+      import('../tools').then(({ smokeTestAgents }) => {
+        smokeTestAgents({ profile: 'readiness' }).catch((err: unknown) => {
+          console.warn('[voice-cmd] smoke test error:', err);
+        });
+      }).catch(() => {});
+      break;
+    case 'test_health':
+      try {
+        const fs = await import('fs');
+        const path = await import('path');
+        const dir = path.join(process.cwd(), 'smoke-reports');
+        const files = fs.readdirSync(dir).filter((f: string) => f.endsWith('.json')).sort();
+        if (files.length > 0) {
+          const report = JSON.parse(fs.readFileSync(path.join(dir, files[files.length - 1]), 'utf-8'));
+          const s = report?.summary;
+          response = s
+            ? `Test health: score ${s.score}%, ${s.capabilityPassed} passed, ${s.capabilityFailed} failed. Critical tests ${s.criticalPassed ? 'all passing' : 'have failures'}.`
+            : 'I found a smoke report but couldn\'t parse the summary.';
+        } else {
+          response = 'No smoke test reports found yet.';
+        }
+      } catch {
+        response = 'I couldn\'t read the smoke test reports.';
+      }
+      break;
+    case 'set_goal':
+      if (command.args) {
+        const { goalState } = await import('./goalState');
+        goalState.setGoal(command.args);
+        response = `Goal set: ${command.args}`;
+      } else {
+        response = 'I didn\'t catch the goal. Please say "set a goal to" followed by the goal.';
+      }
+      break;
+    case 'memory_status':
+      try {
+        const { consolidateMemoryInsights } = await import('../vectorMemory');
+        const insights = await consolidateMemoryInsights();
+        response = insights
+          ? `Memory status: ${insights.slice(0, 200)}`
+          : 'No recent memory insights available.';
+      } catch {
+        response = 'Memory system is currently unavailable.';
+      }
+      break;
+    default:
+      response = 'I didn\'t understand that command.';
+  }
+
+  // Log to call log
+  if (!VOICE_DISABLE_CALL_LOG) {
+    session.transcript.push(`[${new Date().toLocaleTimeString()}] ${transcription.username}: ${userText}`);
+    session.transcript.push(`[${new Date().toLocaleTimeString()}] Riley (EA): ${response}`);
+    await session.callLog.send(`🎤 **${transcription.username}**: ${userText}`).catch(() => {});
+    await session.callLog.send(`${riley?.emoji || '📋'} **Riley**: ${response}`).catch(() => {});
+  }
+
+  // Speak the response
+  await speakPipelined(response, session.rileyVoiceName, new AbortController().signal, transcription.language);
 }
 
 function extractVoiceToTextHandoffInstruction(text: string): string | null {
@@ -577,6 +673,7 @@ export async function startCall(
         }
 
         console.warn(`Voice disconnected for ${Math.round(disconnectedForMs / 1000)}s — ending call`);
+        recordLoopHealth('voice-session', 'error', `disconnected_ms=${disconnectedForMs}`);
         void postVoiceStageLog('connection_timeout', `disconnected_ms=${disconnectedForMs}`, 'error');
         endCall().catch((err) => console.error('Heartbeat endCall error:', errMsg(err)));
         return;
@@ -645,7 +742,7 @@ export async function startCall(
       `Speak in **${voiceChannel.name}**. Say "leave" or ask Riley to end the call.${sttNote}`
   );
 
-  if (VOICE_STARTUP_SELFTEST_ENABLED) {
+  if (isVoiceStartupSelftestEnabled()) {
     const preflightStartMs = Date.now();
     void (async () => {
       try {
@@ -676,6 +773,7 @@ export async function startCall(
   }
 
   await postVoiceStageLog('call_started', `channel=${voiceChannel.name} total_startup_ms=${Date.now() - callStartMs}`);
+  recordLoopHealth('voice-session', 'ok', `call started channel=${voiceChannel.name}`);
   primeElevenLabsVoiceCache(selectedRileyVoice, RILEY_WARM_PHRASES).catch(() => {});
   } finally {
     callStartInProgress = false;
@@ -722,6 +820,7 @@ export async function endCall(): Promise<void> {
   );
 
   await postVoiceStageLog('call_ended', `duration_min=${duration}`);
+  recordLoopHealth('voice-session', 'ok', `call ended duration_min=${duration}`);
   if (!VOICE_DISABLE_CALL_LOG) {
     const transcriptText = session.transcript.join('\n');
     await session.callLog.send(
@@ -765,6 +864,13 @@ async function handleVoiceInput(transcription: VoiceTranscription): Promise<void
   const textHandoffInstruction = extractVoiceToTextHandoffInstruction(userText);
   if (textHandoffInstruction) {
     await handoffVoiceInstructionToTextRiley(session, transcription, textHandoffInstruction);
+  }
+
+  // Voice command detection
+  const voiceCommand = detectVoiceCommand(userText);
+  if (voiceCommand) {
+    await handleVoiceCommand(session, voiceCommand, transcription, userText);
+    return;
   }
 
   const fingerprint = userText
@@ -812,6 +918,7 @@ async function handleVoiceInput(transcription: VoiceTranscription): Promise<void
     watchdogTimer = setTimeout(() => {
       if (!activeSession?.active) return;
       if (activeSession.currentTurnId !== turnId) return;
+      recordLoopHealth('voice-session', 'warn', `turn watchdog turn=${turnId} elapsed_ms=${Date.now() - turnStartMs}`);
       void postVoiceStageLog(
         'turn_watchdog',
         `turn=${turnId} elapsed_ms=${Date.now() - turnStartMs} user=${transcription.username}`,
@@ -919,6 +1026,7 @@ You are in a voice call. ${transcription.username} just spoke. Your job:
 3. Keep responses directly actionable for the caller
 
 IMPORTANT: This call is Riley-only. Do not delegate to Ace or any other specialist during live voice.
+${buildVoiceDecisionPolicy()}
 
 Keep your spoken response very brief (normally 1-2 short sentences) — you're in a voice call, not a text chat.
 IMPORTANT: End on a complete sentence, never a fragment.${langHint}`;
@@ -1047,6 +1155,7 @@ IMPORTANT: End on a complete sentence, never a fragment.${langHint}`;
       if (!signal.aborted && session.turnStartedAt > 0) {
         const totalMs = Date.now() - turnStartMs;
         console.log(`[VOICE] turn ${turnId} completed in ${Date.now() - session.turnStartedAt}ms`);
+        recordLoopHealth('voice-session', 'ok', `turn=${turnId} total_ms=${totalMs}`);
         await postVoiceStageLog('turn_total', `turn=${turnId} total_ms=${totalMs}`);
         await postVoiceStageLog(
           'turn_summary',

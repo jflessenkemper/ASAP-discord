@@ -38,23 +38,12 @@ jest.mock('../../discord/usage', () => ({
   getRemainingBudget: jest.fn(() => ({ remaining: 100, spent: 0, limit: 100 })),
   getClaudeTokenStatus: jest.fn(() => ({ used: 0, remaining: 8000000, limit: 8000000 })),
   toAgentTag: jest.fn((label: string) => label),
-}));
-jest.mock('../../discord/guardrails', () => ({
-  classifyInput: jest.fn(() => ({ verdict: 'pass', confidence: 1 })),
-  classifyOutput: jest.fn(() => ({ verdict: 'pass', confidence: 1 })),
-  sanitizeOutputForSecrets: jest.fn((t: string) => t),
-}));
-jest.mock('../../discord/tracing', () => ({
   newTraceId: jest.fn(() => 'abc123'),
   newSpanId: jest.fn(() => 'sp1'),
   createTraceContext: jest.fn(() => ({ traceId: 'abc123', spanId: 'sp1' })),
   recordSpan: jest.fn(),
-  traceOperation: jest.fn(async (_ctx: any, _agent: any, _op: any, fn: () => any) => {
-    const result = await fn();
-    return { result, span: {} };
-  }),
 }));
-jest.mock('../../discord/metrics', () => ({
+jest.mock('../../discord/guardrails', () => ({
   recordAgentResponse: jest.fn(),
   recordRateLimitHit: jest.fn(),
 }));

@@ -57,7 +57,7 @@ jest.mock('../../../discord/services/diagnosticsWebhook', () => ({
   mirrorVoiceTranscript: jest.fn().mockResolvedValue(undefined),
 }));
 
-jest.mock('../../../discord/services/opsFeed', () => ({
+jest.mock('../../../discord/activityLog', () => ({
   postOpsLine: jest.fn().mockResolvedValue(undefined),
 }));
 

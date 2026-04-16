@@ -28,7 +28,7 @@ import {
   searchGitHub,
 } from '../services/github';
 
-import { getAgent, AgentId } from './agents';
+import { getAgent, AgentId, createDynamicAgent, destroyDynamicAgent, listDynamicAgents, getAgents, getOwnerName } from './agents';
 import { getRequiredReviewers } from './handlers/review';
 import { setActiveSmokeTestRunning } from './handlers/groupchat';
 import { mobileHarnessStart, mobileHarnessStep, mobileHarnessSnapshot, mobileHarnessStop } from './services/mobileHarness';
@@ -58,7 +58,167 @@ import { formatAge } from '../utils/time';
 import { gcpDeploy, gcpBuildImage, gcpPreflight, gcpSetEnv, gcpGetEnv, gcpListRevisions, gcpRollback, gcpSecretSet, gcpSecretBind, gcpSecretList, gcpBuildStatus, gcpLogsQuery, gcpRunDescribe, gcpStorageLs, gcpArtifactList, gcpSqlDescribe, gcpVmSsh, gcpProjectInfo } from './toolsGcp';
 import { buildSafeCommandEnv } from './envSandbox';
 import { DDL_PATTERN, sanitizeSql, isReadOnlySql, dbQuery, dbQueryReadonly, dbSchema } from './toolsDb';
-import { getCircuitBreakerForTool } from './circuitBreaker';
+
+// ── Circuit Breaker (inlined) ──────────────────────────────────────
+
+type CircuitState = 'closed' | 'open' | 'half_open';
+
+export class CircuitOpenError extends Error {
+  constructor(public readonly serviceName: string) {
+    super(`Circuit breaker OPEN for "${serviceName}" — service is temporarily unavailable. Will retry after cooldown.`);
+    this.name = 'CircuitOpenError';
+  }
+}
+
+export class CircuitBreaker {
+  private state: CircuitState = 'closed';
+  private failures = 0;
+  private successes = 0;
+  private lastFailureAt = 0;
+  private lastSuccessAt = 0;
+  private openedAt = 0;
+  private halfOpenProbeInFlight = false;
+
+  constructor(
+    public readonly name: string,
+    private readonly failureThreshold: number = 5,
+    private readonly cooldownMs: number = 60_000,
+    private readonly windowMs: number = 120_000,
+  ) {}
+
+  async call<T>(fn: () => Promise<T>): Promise<T> {
+    this.decayIfStale();
+
+    if (this.state === 'open') {
+      if (Date.now() - this.openedAt >= this.cooldownMs) {
+        this.state = 'half_open';
+      } else {
+        throw new CircuitOpenError(this.name);
+      }
+    }
+
+    if (this.state === 'half_open') {
+      if (this.halfOpenProbeInFlight) {
+        throw new CircuitOpenError(this.name);
+      }
+      this.halfOpenProbeInFlight = true;
+    }
+
+    try {
+      const result = await fn();
+      this.onSuccess();
+      return result;
+    } catch (err) {
+      this.onFailure();
+      throw err;
+    }
+  }
+
+  isAvailable(): boolean {
+    this.decayIfStale();
+    if (this.state === 'closed') return true;
+    if (this.state === 'open') {
+      return Date.now() - this.openedAt >= this.cooldownMs;
+    }
+    return !this.halfOpenProbeInFlight;
+  }
+
+  reset(): void {
+    this.state = 'closed';
+    this.failures = 0;
+    this.successes = 0;
+    this.halfOpenProbeInFlight = false;
+  }
+
+  recordSuccess(): void { this.onSuccess(); }
+  recordFailure(): void { this.onFailure(); }
+
+  getStats() {
+    return {
+      name: this.name,
+      state: this.state,
+      failures: this.failures,
+      successes: this.successes,
+      lastFailureAt: this.lastFailureAt,
+      lastSuccessAt: this.lastSuccessAt,
+      openedAt: this.openedAt,
+      halfOpenProbeInFlight: this.halfOpenProbeInFlight,
+    };
+  }
+
+  private onSuccess(): void {
+    this.successes++;
+    this.lastSuccessAt = Date.now();
+    this.halfOpenProbeInFlight = false;
+    if (this.state === 'half_open') {
+      this.state = 'closed';
+      this.failures = 0;
+    }
+  }
+
+  private onFailure(): void {
+    this.failures++;
+    this.lastFailureAt = Date.now();
+    this.halfOpenProbeInFlight = false;
+    if (this.state === 'half_open') {
+      this.state = 'open';
+      this.openedAt = Date.now();
+      return;
+    }
+    if (this.failures >= this.failureThreshold) {
+      this.state = 'open';
+      this.openedAt = Date.now();
+      console.warn(`[circuit-breaker] ${this.name}: OPEN after ${this.failures} failures. Cooldown ${this.cooldownMs / 1000}s.`);
+    }
+  }
+
+  private decayIfStale(): void {
+    const lastEvent = Math.max(this.lastFailureAt, this.lastSuccessAt);
+    if (lastEvent > 0 && Date.now() - lastEvent > this.windowMs) {
+      this.failures = Math.floor(this.failures / 2);
+      this.successes = Math.floor(this.successes / 2);
+      if (this.state === 'open' && this.failures < this.failureThreshold) {
+        this.state = 'closed';
+      }
+    }
+  }
+}
+
+const TOOL_SERVICE_MAP: Record<string, string> = {
+  git_create_branch: 'github', create_pull_request: 'github', merge_pull_request: 'github',
+  add_pr_comment: 'github', list_pull_requests: 'github', github_search: 'github',
+  gcp_preflight: 'gcp', gcp_build_image: 'gcp', gcp_deploy: 'gcp', gcp_set_env: 'gcp',
+  gcp_get_env: 'gcp', gcp_list_revisions: 'gcp', gcp_rollback: 'gcp', gcp_secret_set: 'gcp',
+  gcp_secret_bind: 'gcp', gcp_secret_list: 'gcp', gcp_build_status: 'gcp', gcp_logs_query: 'gcp',
+  gcp_run_describe: 'gcp', gcp_storage_ls: 'gcp', gcp_artifact_list: 'gcp', gcp_sql_describe: 'gcp',
+  gcp_vm_ssh: 'gcp', gcp_project_info: 'gcp',
+  fetch_url: 'fetch', capture_screenshots: 'screenshots', job_scan: 'job_search',
+};
+
+const breakers = new Map<string, CircuitBreaker>();
+
+function getOrCreateBreaker(service: string): CircuitBreaker {
+  let breaker = breakers.get(service);
+  if (!breaker) {
+    breaker = new CircuitBreaker(service);
+    breakers.set(service, breaker);
+  }
+  return breaker;
+}
+
+export function getCircuitBreakerForTool(toolName: string): CircuitBreaker | undefined {
+  const service = TOOL_SERVICE_MAP[toolName];
+  if (!service) return undefined;
+  return getOrCreateBreaker(service);
+}
+
+export function getCircuitBreaker(serviceName: string): CircuitBreaker {
+  return getOrCreateBreaker(serviceName);
+}
+
+export function getAllCircuitBreakerStats() {
+  return Array.from(breakers.values()).map((b) => b.getStats());
+}
 
 
 let discordGuild: Guild | null = null;
@@ -102,6 +262,15 @@ export function setPRReviewCallback(
   cb: (prNumber: number, prTitle: string, changedFiles: string[], diffSummary: string) => Promise<void>
 ): void {
   prReviewCallback = cb;
+}
+
+/** Callback for triggering smoke tests after PR merge — set from bot.ts */
+let smokeTestCallback: ((prNumber: number, changedFiles: string[]) => Promise<void>) | null = null;
+
+export function setSmokeTestCallback(
+  cb: ((prNumber: number, changedFiles: string[]) => Promise<void>) | null
+): void {
+  smokeTestCallback = cb;
 }
 
 /**
@@ -1145,7 +1314,7 @@ export const REPO_TOOLS = [
         },
         reason: {
           type: 'string',
-          description: 'Brief reason for the change, e.g. "Jordan approved $150 limit for today\'s sprint".',
+          description: 'Brief reason for the change, e.g. "Owner approved $150 limit for today\'s sprint".',
         },
       },
       required: ['limit_usd'],
@@ -1490,6 +1659,69 @@ export const REPO_TOOLS = [
       required: ['listing_id'],
     },
   },
+  {
+    name: 'create_agent',
+    description:
+      'Create a dynamic agent at runtime. Only Riley (executive-assistant) can use this tool. The agent exists for the current session only.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        id: { type: 'string', description: 'Unique agent ID (must not conflict with static agents)' },
+        name: { type: 'string', description: 'Display name, e.g. "Alex (Data Analyst)"' },
+        handle: { type: 'string', description: 'Short handle for mentions, e.g. "alex"' },
+        emoji: { type: 'string', description: 'Emoji for the agent channel, e.g. "📊"' },
+        system_prompt: { type: 'string', description: 'System prompt defining the agent personality and capabilities' },
+      },
+      required: ['id', 'name', 'handle', 'emoji', 'system_prompt'],
+    },
+  },
+  {
+    name: 'remove_agent',
+    description:
+      'Remove a dynamic agent created at runtime. Cannot remove static/built-in agents. Only Riley (executive-assistant) can use this tool.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        agent_id: { type: 'string', description: 'ID of the dynamic agent to remove' },
+      },
+      required: ['agent_id'],
+    },
+  },
+  {
+    name: 'list_agents',
+    description:
+      'List all agents (static and dynamic) with their ID, name, emoji, and status.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {},
+      required: [],
+    },
+  },
+  {
+    name: 'error_patterns',
+    description:
+      'Query recent error patterns from the agent activity log. Shows recurring errors grouped by frequency. Useful for diagnosing systemic issues and learning from past failures.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        agent_id: { type: 'string', description: 'Optional agent ID to filter errors for. Leave empty for all agents.' },
+        hours: { type: 'number', description: 'How many hours back to look. Default 24.' },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'recover_agent_memory',
+    description:
+      'Recover archived memory for a previously destroyed dynamic agent. Restores conversation history and learnings. Only works if the agent was previously created and then destroyed.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        agent_id: { type: 'string', description: 'The agent ID to recover memory for.' },
+      },
+      required: ['agent_id'],
+    },
+  },
 ] as const;
 
 /**
@@ -1535,6 +1767,10 @@ const RILEY_TOOL_NAMES = new Set([
   'write_file', 'edit_file', 'batch_edit', 'run_command',
   'git_create_branch', 'create_pull_request', 'merge_pull_request', 'add_pr_comment', 'list_pull_requests',
   'gcp_deploy', 'gcp_rollback',
+  // ── Riley agent lifecycle ──
+  'create_agent', 'remove_agent', 'list_agents',
+  // ── Riley ops & error analysis ──
+  'error_patterns', 'recover_agent_memory',
 ]);
 export const RILEY_TOOLS = REPO_TOOLS.filter((t) => RILEY_TOOL_NAMES.has(t.name));
 
@@ -1847,7 +2083,7 @@ async function executeToolInternal(
           const auditCb = getToolAuditCallback();
           if (auditCb) auditCb(context.agentId, 'gcp_deploy', `Riley self-deployed: ${input.tag || 'latest'}`);
           // Notify groupchat via send_channel_message
-          const notifyMsg = `🚀 **Riley self-deployed** to Cloud Run: ${input.tag || 'latest'}. Tests + typecheck passed. @jordan`;
+          const notifyMsg = `🚀 **Riley self-deployed** to Cloud Run: ${input.tag || 'latest'}. Tests + typecheck passed. @${getOwnerName().toLowerCase()}`;
           await discordSendMessage('groupchat', notifyMsg, undefined, context.agentId).catch(e => console.error('[deploy] groupchat notify failed:', errMsg(e)));
           await discordSendMessage('upgrades', `🚀 Riley self-deployed revision: ${input.tag || 'latest'}`, undefined, context.agentId).catch(e => console.error('[deploy] upgrades notify failed:', errMsg(e)));
           // Post-deploy: kick off readiness smoke tests automatically
@@ -1937,6 +2173,72 @@ async function executeToolInternal(
         return await toolJobDraftApplication(parseInt(input.listing_id, 10));
       case 'job_submit_application':
         return await toolJobSubmitApplication(parseInt(input.listing_id, 10));
+      case 'create_agent': {
+        if (context?.agentId !== 'executive-assistant') {
+          return 'Error: Only Riley (executive-assistant) can create dynamic agents.';
+        }
+        try {
+          const agent = createDynamicAgent({
+            id: String(input.id),
+            name: String(input.name),
+            handle: String(input.handle),
+            emoji: String(input.emoji),
+            systemPrompt: String(input.system_prompt),
+          });
+          return `✅ Dynamic agent created: ${agent.name} (${agent.id}) ${agent.emoji}`;
+        } catch (err) {
+          return `Error: ${errMsg(err)}`;
+        }
+      }
+      case 'remove_agent': {
+        if (context?.agentId !== 'executive-assistant') {
+          return 'Error: Only Riley (executive-assistant) can remove dynamic agents.';
+        }
+        try {
+          const removed = destroyDynamicAgent(String(input.agent_id));
+          return removed
+            ? `✅ Dynamic agent "${input.agent_id}" removed.`
+            : `Agent "${input.agent_id}" not found among dynamic agents.`;
+        } catch (err) {
+          return `Error: ${errMsg(err)}`;
+        }
+      }
+      case 'list_agents': {
+        const allAgents = getAgents();
+        const dynamic = listDynamicAgents();
+        const dynamicIds = new Set(dynamic.map(a => a.id));
+        const lines: string[] = [];
+        for (const [, agent] of allAgents) {
+          const tag = dynamicIds.has(agent.id) ? ' [dynamic]' : ' [static]';
+          lines.push(`${agent.emoji} ${agent.name} (${agent.id})${tag}`);
+        }
+        return lines.join('\n') || 'No agents found.';
+      }
+      case 'error_patterns': {
+        const { getRecentErrorPatterns } = await import('./services/agentErrors');
+        return await getRecentErrorPatterns(input.agent_id, parseInt(input.hours, 10) || 24);
+      }
+      case 'recover_agent_memory': {
+        if (context?.agentId !== 'executive-assistant') {
+          return 'Error: Only Riley can recover agent memory.';
+        }
+        const agentId = String(input.agent_id);
+        try {
+          const pool = (await import('../db/pool')).default;
+          const res = await pool.query(
+            `UPDATE agent_memory SET file_name = REPLACE(file_name, 'archived-', ''), updated_at = NOW()
+             WHERE file_name IN ($1, $2)
+             RETURNING file_name`,
+            [`archived-conv-${agentId}`, `archived-summary-${agentId}`]
+          );
+          if (!res.rows || res.rows.length === 0) {
+            return `No archived memory found for agent "${agentId}".`;
+          }
+          return `✅ Recovered ${res.rows.length} memory record(s) for "${agentId}": ${res.rows.map((r: any) => r.file_name).join(', ')}`;
+        } catch (err) {
+          return `Error recovering memory: ${errMsg(err)}`;
+        }
+      }
       default:
         return `Unknown tool: ${toolName}`;
     }
@@ -2534,6 +2836,24 @@ async function ghMergePR(prNumber: number, commitTitle?: string, agentId?: strin
     if (auditCb && agentId) {
       auditCb(agentId, 'merge_pull_request', `Merged PR #${prNumber} — tests+typecheck passed`);
     }
+
+    // Trigger smoke tests after successful merge
+    if (smokeTestCallback) {
+      try {
+        const diffOut = execSync('git diff --name-only HEAD~1', {
+          cwd: REPO_ROOT, timeout: 10_000, encoding: 'utf-8',
+        }).trim();
+        const changedFiles = diffOut.split('\n').filter(Boolean);
+        if (changedFiles.length > 0) {
+          smokeTestCallback(prNumber, changedFiles).catch((err) => {
+            console.warn(`[smoke-test] callback error after PR #${prNumber} merge:`, errMsg(err));
+          });
+        }
+      } catch {
+        // Non-blocking — don't fail the merge response
+      }
+    }
+
     return `✅ ${result}`;
   } catch (err) {
     return `Error merging PR: ${errMsg(err)}`;
@@ -2634,7 +2954,7 @@ interface SmokeTestOptions {
   timeoutMs?: number;
 }
 
-async function smokeTestAgents(opts: SmokeTestOptions = {}): Promise<string> {
+export async function smokeTestAgents(opts: SmokeTestOptions = {}): Promise<string> {
   if (!process.env.DISCORD_TEST_BOT_TOKEN || !process.env.DISCORD_GUILD_ID) {
     return 'Smoke-test bot is not configured here. Set DISCORD_TEST_BOT_TOKEN and DISCORD_GUILD_ID to enable end-to-end Discord smoke tests.';
   }

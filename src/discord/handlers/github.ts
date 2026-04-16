@@ -2,7 +2,7 @@ import crypto from 'crypto';
 
 import { TextChannel } from 'discord.js';
 
-import { formatOpsLine } from '../services/opsFeed';
+import { formatOpsLine } from '../activityLog';
 import { captureAndPostScreenshots } from '../services/screenshots';
 import { errMsg } from '../../utils/errors';
 

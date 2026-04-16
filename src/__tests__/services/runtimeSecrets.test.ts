@@ -1,3 +1,5 @@
+export {};
+
 const mockGetAccessToken = jest.fn().mockResolvedValue({ token: 'fake-token' });
 jest.mock('google-auth-library', () => ({
   GoogleAuth: jest.fn().mockImplementation(() => ({

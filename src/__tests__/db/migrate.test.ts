@@ -3,6 +3,8 @@
  * Database migration runner — mocks pg pool and filesystem.
  */
 
+export {};
+
 const mockQuery = jest.fn();
 const mockClientQuery = jest.fn();
 const mockClientRelease = jest.fn();
@@ -54,7 +56,6 @@ describe('migrate', () => {
 
     // Default: getMissingTables for assertRuntimeTablesReady — all tables exist
     mockQuery
-      .mockResolvedValueOnce({ rows: [{ exists: true }] }) // sessions
       .mockResolvedValueOnce({ rows: [{ exists: true }] }) // agent_memory
       .mockResolvedValueOnce({ rows: [{ exists: true }] }); // agent_activity_log
   });
@@ -111,16 +112,15 @@ describe('migrate', () => {
     mockQuery
       .mockReset()
       .mockResolvedValueOnce(undefined) // CREATE TABLE
-      .mockResolvedValueOnce({ rows: [{ filename: '001_initial.sql' }] }); // SELECT applied
+      .mockResolvedValueOnce({ rows: [{ filename: '003_agent_memory.sql' }] }); // SELECT applied
 
-    // For assertAppliedMigrationExpectations: 001_initial.sql expects 'sessions'
-    mockQuery.mockResolvedValueOnce({ rows: [{ exists: true }] }); // sessions exists
+    // For assertAppliedMigrationExpectations: 003_agent_memory.sql expects 'agent_memory'
+    mockQuery.mockResolvedValueOnce({ rows: [{ exists: true }] }); // agent_memory exists
 
-    mockReaddirSync.mockReturnValue(['001_initial.sql']);
+    mockReaddirSync.mockReturnValue(['003_agent_memory.sql']);
 
     // assertRuntimeTablesReady
     mockQuery
-      .mockResolvedValueOnce({ rows: [{ exists: true }] })
       .mockResolvedValueOnce({ rows: [{ exists: true }] })
       .mockResolvedValueOnce({ rows: [{ exists: true }] });
 
@@ -163,10 +163,10 @@ describe('migrate', () => {
     mockQuery
       .mockReset()
       .mockResolvedValueOnce(undefined) // CREATE TABLE
-      .mockResolvedValueOnce({ rows: [{ filename: '001_initial.sql' }] }); // SELECT applied
+      .mockResolvedValueOnce({ rows: [{ filename: '003_agent_memory.sql' }] }); // SELECT applied
 
-    // assertAppliedMigrationExpectations: 001_initial.sql expects 'sessions' — missing!
-    mockQuery.mockResolvedValueOnce({ rows: [{ exists: false }] }); // sessions missing
+    // assertAppliedMigrationExpectations: 003_agent_memory.sql expects 'agent_memory' — missing!
+    mockQuery.mockResolvedValueOnce({ rows: [{ exists: false }] }); // agent_memory missing
 
     mockReaddirSync.mockReturnValue([]);
 
@@ -190,9 +190,9 @@ describe('migrate', () => {
 
     mockReaddirSync.mockReturnValue([]);
 
-    // assertRuntimeTablesReady: sessions missing
+    // assertRuntimeTablesReady: agent_memory missing
     mockQuery
-      .mockResolvedValueOnce({ rows: [{ exists: false }] }) // sessions missing
+      .mockResolvedValueOnce({ rows: [{ exists: false }] }) // agent_memory missing
       .mockResolvedValueOnce({ rows: [{ exists: true }] })
       .mockResolvedValueOnce({ rows: [{ exists: true }] });
 
@@ -214,13 +214,12 @@ describe('migrate', () => {
       .mockResolvedValueOnce(undefined)
       .mockResolvedValueOnce({ rows: [] });
 
-    mockReaddirSync.mockReturnValue(['README.md', '001_initial.sql', '.gitkeep']);
+    mockReaddirSync.mockReturnValue(['README.md', '003_agent_memory.sql', '.gitkeep']);
     mockReadFileSync.mockReturnValue('SELECT 1;');
     mockClientQuery.mockResolvedValue(undefined);
 
     // assertRuntimeTablesReady
     mockQuery
-      .mockResolvedValueOnce({ rows: [{ exists: true }] })
       .mockResolvedValueOnce({ rows: [{ exists: true }] })
       .mockResolvedValueOnce({ rows: [{ exists: true }] });
 
@@ -229,8 +228,8 @@ describe('migrate', () => {
       await new Promise((r) => setTimeout(r, 50));
     });
 
-    // Only 001_initial.sql should have been applied
-    expect(mockClientQuery).toHaveBeenCalledWith('INSERT INTO applied_migrations (filename) VALUES ($1)', ['001_initial.sql']);
+    // Only 003_agent_memory.sql should have been applied
+    expect(mockClientQuery).toHaveBeenCalledWith('INSERT INTO applied_migrations (filename) VALUES ($1)', ['003_agent_memory.sql']);
   });
 
   it('checks expectations for multiple migration entries', async () => {
@@ -239,15 +238,13 @@ describe('migrate', () => {
       .mockResolvedValueOnce(undefined) // CREATE TABLE
       .mockResolvedValueOnce({
         rows: [
-          { filename: '001_initial.sql' },
           { filename: '003_agent_memory.sql' },
           { filename: '015_agent_activity_log.sql' },
         ],
       });
 
-    // assertAppliedMigrationExpectations checks: sessions, agent_memory, agent_activity_log
+    // assertAppliedMigrationExpectations checks: agent_memory, agent_activity_log
     mockQuery
-      .mockResolvedValueOnce({ rows: [{ exists: true }] }) // sessions
       .mockResolvedValueOnce({ rows: [{ exists: true }] }) // agent_memory
       .mockResolvedValueOnce({ rows: [{ exists: true }] }); // agent_activity_log
 
@@ -255,7 +252,6 @@ describe('migrate', () => {
 
     // assertRuntimeTablesReady
     mockQuery
-      .mockResolvedValueOnce({ rows: [{ exists: true }] })
       .mockResolvedValueOnce({ rows: [{ exists: true }] })
       .mockResolvedValueOnce({ rows: [{ exists: true }] });
 

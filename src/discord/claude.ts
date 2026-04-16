@@ -7,15 +7,14 @@ import { GoogleAuth } from 'google-auth-library';
 import { ensureGoogleCredentials, getAccessTokenViaGcloud } from '../services/googleCredentials';
 
 import { logAgentEvent } from './activityLog';
-import { AgentConfig, getRileyPersonality, getRileyMemory } from './agents';
+import { AgentConfig, getRileyPersonality, getRileyMemory, getOwnerName } from './agents';
 import { getOrCreateContentCache } from './contextCache';
 import { classifyInput, classifyOutput, sanitizeOutputForSecrets } from './guardrails';
 import { isLowSignalCompletion } from './handlers/responseNormalization';
 import { recordModelSuccess, recordModelFailure, resolveHealthyModel, isModelAvailable } from './modelHealth';
 import { recordAgentResponse, recordRateLimitHit } from './metrics';
 import { REPO_TOOLS, getToolsForAgent, executeTool, getToolAuditCallback } from './tools';
-import { createTraceContext, recordSpan, newSpanId, type TraceContext, type TraceSpan } from './tracing';
-import { recordClaudeUsage, isClaudeOverLimit, isBudgetExceeded, getRemainingBudget, getClaudeTokenStatus, approveAdditionalBudget, type PromptBreakdown } from './usage';
+import { createTraceContext, recordSpan, newSpanId, type TraceContext, type TraceSpan, recordClaudeUsage, isClaudeOverLimit, isBudgetExceeded, getRemainingBudget, getClaudeTokenStatus, approveAdditionalBudget, type PromptBreakdown, recordConversationTokens, getConversationTokenUsage } from './usage';
 import { recallRelevantContext, recordAgentDecision } from './vectorMemory';
 
 
@@ -260,14 +259,81 @@ function toolsForAgent(agentId: string): AnyTool[] {
   return getToolsForAgent(agentId, COMPACT_RUNTIME_TOOL_PROMPTS) as unknown as AnyTool[];
 }
 
+/** Tool categories for intent-based filtering */
+const TOOL_CATEGORIES: Record<string, RegExp> = {
+  file: /\b(?:read|write|edit|create|delete|list|find|search|grep|file|directory|folder|code|source|refactor)\b/i,
+  git: /\b(?:git|branch|pr|pull\s*request|merge|commit|review|diff|push|repo(?:sitory)?|github)\b/i,
+  gcp: /\b(?:deploy|build|rollback|cloud|gcp|secret|log|revision|vm|ssh|artifact|storage|sql)\b/i,
+  db: /\b(?:database|db|query|schema|table|sql|postgres|migration|insert|select|update)\b/i,
+  discord: /\b(?:discord|channel|message|thread|send|embed|webhook|reaction)\b/i,
+  test: /\b(?:test|smoke|jest|spec|coverage|lint|typecheck|check)\b/i,
+  lifecycle: /\b(?:agent|create.agent|remove.agent|list.agent|error.pattern|recover.memory)\b/i,
+  job: /\b(?:job|scan|portal|listing|application|adzuna|greenhouse|tracker)\b/i,
+  mobile: /\b(?:mobile|harness|snapshot|screenshot|capture)\b/i,
+  fetch: /\b(?:fetch|url|http|web|page|browse)\b/i,
+  memory: /\b(?:memory|remember|recall|knowledge|context)\b/i,
+  budget: /\b(?:budget|cost|spend|limit|billing)\b/i,
+};
+
+const TOOL_CATEGORY_NAMES: Record<string, Set<string>> = {
+  file: new Set(['read_file', 'write_file', 'edit_file', 'batch_edit', 'list_directory', 'search_files', 'check_file_exists', 'delete_file', 'move_file', 'create_directory']),
+  git: new Set(['git_create_branch', 'create_pull_request', 'merge_pull_request', 'add_pr_comment', 'list_pull_requests', 'github_search', 'git_file_history']),
+  gcp: new Set(['gcp_deploy', 'gcp_build_image', 'gcp_preflight', 'gcp_set_env', 'gcp_get_env', 'gcp_list_revisions', 'gcp_rollback', 'gcp_secret_set', 'gcp_secret_bind', 'gcp_secret_list', 'gcp_build_status', 'gcp_logs_query', 'gcp_run_describe', 'gcp_storage_ls', 'gcp_artifact_list', 'gcp_sql_describe', 'gcp_vm_ssh', 'gcp_project_info']),
+  db: new Set(['db_query', 'db_query_readonly', 'db_schema']),
+  discord: new Set(['send_channel_message', 'read_channel_messages', 'list_channels', 'list_threads', 'create_channel', 'rename_channel', 'set_channel_topic', 'delete_channel', 'clear_channel_messages', 'delete_category', 'move_channel']),
+  test: new Set(['run_tests', 'typecheck', 'run_command', 'smoke_test_agents', 'read_logs']),
+  lifecycle: new Set(['create_agent', 'remove_agent', 'list_agents', 'error_patterns', 'recover_agent_memory']),
+  job: new Set(['job_scan', 'job_evaluate', 'job_tracker', 'job_profile_update', 'job_post_approvals', 'job_draft_application', 'job_submit_application']),
+  mobile: new Set(['mobile_harness_start', 'mobile_harness_step', 'mobile_harness_snapshot', 'mobile_harness_stop', 'capture_screenshots']),
+  fetch: new Set(['fetch_url', 'capture_screenshots']),
+  memory: new Set(['memory_read', 'memory_write', 'memory_append', 'memory_list', 'repo_memory_index', 'repo_memory_search', 'repo_memory_add_oss']),
+  budget: new Set(['set_daily_budget']),
+};
+
+function classifyToolIntent(userMessage: string): Set<string> {
+  const matched = new Set<string>();
+  const normalized = normalizePromptForHeuristics(userMessage);
+  for (const [category, pattern] of Object.entries(TOOL_CATEGORIES)) {
+    if (pattern.test(normalized)) {
+      matched.add(category);
+    }
+  }
+  // If nothing matched but it's not a direct-answer prompt, include all
+  if (matched.size === 0 && !isDirectAnswerOnlyPrompt(userMessage)) {
+    return new Set(Object.keys(TOOL_CATEGORIES));
+  }
+  // Always include file tools when code-related categories matched (they're commonly needed)
+  if (matched.has('git') || matched.has('test') || matched.has('gcp')) {
+    matched.add('file');
+  }
+  return matched;
+}
+
+function filterToolsByIntent(tools: AnyTool[], userMessage: string): AnyTool[] {
+  const intents = classifyToolIntent(userMessage);
+  if (intents.size >= Object.keys(TOOL_CATEGORIES).length) return tools;
+
+  const allowedNames = new Set<string>();
+  for (const intent of intents) {
+    const names = TOOL_CATEGORY_NAMES[intent];
+    if (names) {
+      for (const name of names) allowedNames.add(name);
+    }
+  }
+  // Always include run_command as a universal escape hatch
+  allowedNames.add('run_command');
+
+  const filtered = tools.filter(t => allowedNames.has(t.name));
+  // If filtering would remove too many tools (less than 5), just return all
+  return filtered.length >= 5 ? filtered : tools;
+}
+
 function toolsForPrompt(agentId: string, userMessage: string): AnyTool[] {
   if (isDirectAnswerOnlyPrompt(userMessage)) {
     return [];
   }
-
-  void agentId;
-
-  return toolsForAgent(agentId);
+  const allTools = toolsForAgent(agentId);
+  return filterToolsByIntent(allTools, userMessage);
 }
 
 /**
@@ -1206,8 +1272,16 @@ function truncateToolResult(result: string, maxChars = DEFAULT_TOOL_RESULT_TRUNC
   );
 }
 
+const OPS_CHANNELS_CONTEXT = `
+Operations channels (available to all agents):
+#📦-github — commits/PRs feed, #🆙-upgrades — improvement proposals, #🧰-tools — agent capabilities,
+#📊-limits — usage/quotas, #💸-cost — spend tracking, #📸-screenshots — visual regression,
+#💻-terminal — command output, #🚨-agent-errors — error logs, #🧯-voice-errors — voice diagnostics.
+Post findings to the relevant ops channel when appropriate.`.trim();
+
 function getProjectContextForAgent(agentId: string): string {
-  return hasFullRepoToolAccess(agentId) ? PROJECT_CONTEXT : PROJECT_CONTEXT_LIGHT;
+  const base = hasFullRepoToolAccess(agentId) ? PROJECT_CONTEXT : PROJECT_CONTEXT_LIGHT;
+  return `${base}\n\n${OPS_CHANNELS_CONTEXT}`;
 }
 
 function isCacheablePrompt(agentId: string, userMessage: string, history: ConversationMessage[]): boolean {
@@ -1536,9 +1610,21 @@ function estimateHistoryChars(history: Content[]): number {
   return history.reduce((sum, entry) => sum + (entry.parts || []).reduce((partSum, part: any) => partSum + String(part?.text || '').length, 0), 0);
 }
 
+/**
+ * Better token estimate than chars÷4. Accounts for code/JSON having lower chars-per-token.
+ * Uses a weighted heuristic: regular text = chars/4, code/JSON = chars/3.
+ */
+function estimateTokens(text: string): number {
+  const codeBlockChars = (text.match(/```[\s\S]*?```/g) || []).reduce((sum, block) => sum + block.length, 0);
+  const jsonLikeChars = (text.match(/\{[\s\S]*?\}/g) || []).reduce((sum, block) => sum + Math.min(block.length, 500), 0);
+  const codeChars = Math.min(text.length, codeBlockChars + jsonLikeChars);
+  const textChars = text.length - codeChars;
+  return Math.ceil(textChars / 4 + codeChars / 3);
+}
+
 function estimateToolSchemaChars(tools: AnyTool[]): number {
   return tools.reduce(
-    (sum, tool) => sum + JSON.stringify({ name: tool.name, description: tool.description, input_schema: tool.input_schema }).length,
+    (sum, tool) => sum + estimateTokens(JSON.stringify({ name: tool.name, description: tool.description, input_schema: tool.input_schema })),
     0,
   );
 }
@@ -1552,6 +1638,24 @@ function estimateToolResultChars(parts: Part[]): number {
 
 function formatPromptBreakdownForLog(breakdown: PromptBreakdown): string {
   return `chars(sys=${breakdown.systemChars || 0},tools=${breakdown.toolsChars || 0},hist=${breakdown.historyChars || 0},user=${breakdown.userChars || 0},tool=${breakdown.toolResultChars || 0})`;
+}
+
+/** Read the latest smoke report and return a compact one-liner for prompts. */
+function getLatestSmokeHealthLine(): string {
+  try {
+    const dir = join(process.cwd(), 'smoke-reports');
+    const files = require('fs').readdirSync(dir) as string[];
+    const jsonFiles = files.filter((f: string) => f.endsWith('.json')).sort();
+    if (jsonFiles.length === 0) return '';
+    const latest = JSON.parse(readFileSync(join(dir, jsonFiles[jsonFiles.length - 1]), 'utf-8'));
+    const s = latest?.summary;
+    if (!s) return '';
+    const age = Date.now() - new Date(latest.endedAt || latest.startedAt).getTime();
+    if (age > 24 * 60 * 60 * 1000) return ''; // stale (>24h)
+    return `[Smoke health] score=${s.score}% critical=${s.criticalPassed ? 'PASS' : 'FAIL'} passed=${s.capabilityPassed} failed=${s.capabilityFailed}`;
+  } catch {
+    return '';
+  }
 }
 
 function buildRuntimeStatusMessage(
@@ -2467,8 +2571,8 @@ export async function agentRespond(
   if (isCreditsExhaustedNow() && !isAnthropicModel(agentModel)) {
     const recoveryTime = formatRecoveryTime(creditsExhaustedUntil);
     return agent.id === 'executive-assistant'
-      ? `⚠️ Gemini quota is exhausted right now. Automatic retries resume at ${recoveryTime}. Pause the team and ask Jordan to check Google Cloud billing before more work continues.`
-      : `⚠️ Gemini quota is exhausted right now. Automatic retries resume at ${recoveryTime}. Ask Riley to request Jordan approval for more credits before continuing.`;
+      ? `⚠️ Gemini quota is exhausted right now. Automatic retries resume at ${recoveryTime}. Pause the team and ask ${getOwnerName()} to check Google Cloud billing before more work continues.`
+      : `⚠️ Gemini quota is exhausted right now. Automatic retries resume at ${recoveryTime}. Ask Riley to request ${getOwnerName()} approval for more credits before continuing.`;
   }
 
   if (isBudgetExceeded()) {
@@ -2487,7 +2591,7 @@ export async function agentRespond(
     const { spent, limit } = getRemainingBudget();
     logAgentEvent(agent.id, 'error', `Budget exceeded: $${spent.toFixed(2)}/$${limit.toFixed(2)}`);
     return agent.id === 'executive-assistant'
-      ? `⚠️ Daily budget of $${limit.toFixed(2)} has been reached ($${spent.toFixed(2)} spent) and runtime auto-approval could not clear it. Pause the team only now and ask Jordan whether he wants more budget before work resumes.`
+      ? `⚠️ Daily budget of $${limit.toFixed(2)} has been reached ($${spent.toFixed(2)} spent) and runtime auto-approval could not clear it. Pause the team only now and ask ${getOwnerName()} whether they want more budget before work resumes.`
       : `⚠️ Daily budget of $${limit.toFixed(2)} has been reached ($${spent.toFixed(2)} spent) and runtime auto-approval could not clear it. Ask Riley to escalate only if she confirms the budget gate is still blocking.`;
   }
 
@@ -2503,7 +2607,7 @@ CRITICAL: Do NOT use send_channel_message — use Discord mentions for agent coo
 
   const budgetGovernance = RILEY_AUTO_APPROVE_BUDGET
     ? `\n- Budget autopilot enabled ($${RILEY_AUTO_APPROVE_BUDGET_INCREMENT.toFixed(2)} increments). Keep working unless hard budget block after auto-approval.\n`
-    : `\n- On budget limit: pause, explain needed increase, wait for Jordan approval.\n`;
+    : `\n- On budget limit: pause, explain needed increase, wait for ${getOwnerName()} approval.\n`;
 
   const workerBudgetGovernance = RILEY_AUTO_APPROVE_BUDGET
     ? `\n- Budget autopilot active. Only stop for budget if Riley confirms hard block.\n`
@@ -2588,7 +2692,8 @@ ${governanceSection}
 ${upgradesChannelRule}
 RUNTIME EFFICIENCY:
 - Each tool call costs tokens. Prefer targeted reads and the narrowest path to finish.
-- Prefer check_file_exists before broad search when validating presence.${outputModePrompt}`;
+- Prefer check_file_exists before broad search when validating presence.${outputModePrompt}
+${getLatestSmokeHealthLine()}`;
 
   let currentModelName = options?.modelOverride || options?.chatSession?.modelName || (isVoiceLane ? VOICE_FAST_MODEL : agentModel);
   let escalatedToPro = currentModelName === GEMINI_PRO;
@@ -3027,6 +3132,19 @@ RUNTIME EFFICIENCY:
           tokensOut: usageTelemetry.outputTokens,
         },
       );
+
+      // ─── Per-conversation token tracking ───
+      const convKey = toolThreadKey;
+      recordConversationTokens(convKey, usageTelemetry.inputTokens + usageTelemetry.outputTokens);
+      const convUsage = getConversationTokenUsage(convKey);
+      if (convUsage.overLimit) {
+        logAgentEvent(agent.id, 'error', `Conversation token limit reached: ${convUsage.used} tokens`);
+        return `⚠️ This conversation has used ${Math.round(convUsage.used / 1000)}K tokens (limit: ${Math.round(convUsage.limit / 1000)}K). Please start a new thread to continue.`;
+      }
+      if (convUsage.overWarn && !convUsage.overLimit) {
+        finalText = `${finalText}\n\n⚠️ _This conversation has used ${Math.round(convUsage.used / 1000)}K of ${Math.round(convUsage.limit / 1000)}K token limit. Consider starting a new thread soon._`;
+      }
+
       return finalText;
     }
 
@@ -3042,6 +3160,9 @@ RUNTIME EFFICIENCY:
         promptBreakdown: pendingPromptBreakdown,
       },
     );
+
+    // Track per-conversation token usage in tool loop
+    recordConversationTokens(toolThreadKey, usageTelemetry.inputTokens + usageTelemetry.outputTokens);
 
     const readCalls = functionCalls.filter((c) => !WRITE_TOOLS.has(c.name));
     const writeCalls = functionCalls.filter((c) => WRITE_TOOLS.has(c.name));

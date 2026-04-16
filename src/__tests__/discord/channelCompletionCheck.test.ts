@@ -6,6 +6,8 @@
  * runs in a controlled environment.
  */
 
+export {};
+
 /* eslint-disable @typescript-eslint/no-explicit-any */
 const mockProcessExit = jest.spyOn(process, 'exit').mockImplementation((() => {}) as any);
 

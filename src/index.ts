@@ -347,7 +347,6 @@ app.use((err: Error, _req: express.Request, res: express.Response, next: express
 });
 
 // Graceful shutdown
-let cleanupInterval: ReturnType<typeof setInterval>;
 const server = app.listen(PORT, () => {
   console.log(`ASAP server running on http://localhost:${PORT}`);
 
@@ -385,22 +384,10 @@ const server = app.listen(PORT, () => {
     }
   })();
 
-  // Clean up expired sessions every hour
-  cleanupInterval = setInterval(async () => {
-    try {
-      const sessions = await pool.query('DELETE FROM sessions WHERE expires_at < NOW()');
-      if ((sessions.rowCount ?? 0) > 0) {
-        console.log(`Cleanup: removed ${sessions.rowCount} expired sessions`);
-      }
-    } catch (err) {
-      console.error('Session cleanup error:', errMsg(err));
-    }
-  }, 60 * 60 * 1000);
 });
 
 function shutdown(signal: string) {
   console.log(`${signal} received, shutting down gracefully`);
-  clearInterval(cleanupInterval);
   server.close(async () => {
     await stopBot().catch(() => {});
     await releaseDiscordBotLock().catch(() => {});
