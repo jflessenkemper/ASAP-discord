@@ -59,8 +59,9 @@ function getClient(): ElevenLabsClient {
  *  Also supports choosing voices by ElevenLabs name directly.
  *  Full catalog: https://elevenlabs.io/voice-library */
 const VOICE_ID_MAP: Record<string, string> = {
-  Achernar: 'lsgXALPNLFUcQfT1dmP1',  // Riley
-  Aoede: 'lsgXALPNLFUcQfT1dmP1',     // legacy alias -> Riley voice
+  RileyEL: 'QrFLfof7YAMeKw5w45nz',   // Riley dedicated voice
+  Achernar: 'lsgXALPNLFUcQfT1dmP1',  // shared/default legacy voice
+  Aoede: 'QrFLfof7YAMeKw5w45nz',     // legacy alias -> Riley voice
 
   sarah: 'EXAVITQu4vr4xnSDxMaL',
   adam: 'pNInz6obpgDQGcFmaJgB',
@@ -98,7 +99,7 @@ const VOICE_ID_MAP: Record<string, string> = {
 };
 
 /** Default voice if agent voice not mapped */
-const DEFAULT_VOICE_ID = 'lsgXALPNLFUcQfT1dmP1'; // user-provided default
+const DEFAULT_VOICE_ID = 'lsgXALPNLFUcQfT1dmP1'; // shared default
 
 /**
  * Select the ElevenLabs model based on the target language.
