@@ -8,7 +8,13 @@
 // ── Static mocks (must come before imports) ──
 
 jest.mock('@discordjs/voice', () => ({
-  VoiceConnectionStatus: { Ready: 'ready', Destroyed: 'destroyed', Disconnected: 'disconnected' },
+  VoiceConnectionStatus: {
+    Ready: 'ready',
+    Destroyed: 'destroyed',
+    Disconnected: 'disconnected',
+    Connecting: 'connecting',
+    Signalling: 'signalling',
+  },
 }));
 
 jest.mock('discord.js', () => ({
@@ -89,6 +95,7 @@ jest.mock('../../../discord/voice/deepgram', () => ({
 }));
 
 jest.mock('../../../discord/voice/elevenlabs', () => ({
+  isElevenLabsAvailable: jest.fn().mockReturnValue(true),
   primeElevenLabsVoiceCache: jest.fn().mockResolvedValue(undefined),
 }));
 
@@ -104,9 +111,17 @@ jest.mock('../../../discord/voice/elevenlabsRealtime', () => ({
 const mockJoinTesterVoiceChannel = jest.fn().mockResolvedValue(undefined);
 const mockLeaveTesterVoiceChannel = jest.fn();
 const mockSpeakAsTesterInVoice = jest.fn().mockResolvedValue(undefined);
-const mockGetTesterVoiceConnection = jest.fn().mockReturnValue({
+const mockConnection = {
   state: { status: 'ready' },
   receiver: { speaking: { on: jest.fn(), off: jest.fn() } },
+  on: jest.fn(),
+  off: jest.fn(),
+};
+const mockGetTesterVoiceConnection = jest.fn().mockReturnValue({
+  state: mockConnection.state,
+  receiver: mockConnection.receiver,
+  on: mockConnection.on,
+  off: mockConnection.off,
 });
 const mockStopTesterVCPlayback = jest.fn();
 const mockSpeakInTesterVC = jest.fn().mockResolvedValue(undefined);
@@ -161,7 +176,21 @@ function makeVoiceChannel(name = 'voice'): any {
   return {
     id: `vc-${name}`,
     name,
-    guild: { id: 'guild-1', voiceAdapterCreator: jest.fn() },
+    guild: {
+      id: 'guild-1',
+      voiceAdapterCreator: jest.fn(),
+      members: {
+        me: {
+          voice: {
+            selfMute: false,
+            selfDeaf: false,
+            serverMute: false,
+            serverDeaf: false,
+            channelId: `vc-${name}`,
+          },
+        },
+      },
+    },
     members: new Map(),
   };
 }
@@ -180,6 +209,12 @@ describe('callSession', () => {
   beforeEach(async () => {
     jest.clearAllMocks();
     process.env = { ...origEnv };
+    mockConnection.state.status = 'ready';
+    mockConnection.receiver.speaking.on = jest.fn();
+    mockConnection.receiver.speaking.off = jest.fn();
+    mockConnection.on = jest.fn();
+    mockConnection.off = jest.fn();
+    mockGetTesterVoiceConnection.mockReturnValue(mockConnection);
     process.env.VOICE_DISABLE_CALL_LOG = 'true';
     process.env.VOICE_DISABLE_TRANSCRIPT_SUMMARY = 'true';
     process.env.VOICE_LOW_LATENCY_MODE = 'false';
@@ -268,6 +303,8 @@ describe('callSession', () => {
       (isElevenLabsRealtimeAvailable as jest.Mock).mockReturnValue(false);
       const { isDeepgramAvailable } = require('../../../discord/voice/deepgram');
       (isDeepgramAvailable as jest.Mock).mockReturnValue(false);
+      const { isElevenLabsAvailable } = require('../../../discord/voice/elevenlabs');
+      (isElevenLabsAvailable as jest.Mock).mockReturnValue(false);
 
       const vc = makeVoiceChannel();
       const gc = makeTextChannel('groupchat');
@@ -276,6 +313,8 @@ describe('callSession', () => {
 
       await startCall(vc, gc, cl, member);
       expect(isCallActive()).toBe(false);
+
+      (isElevenLabsAvailable as jest.Mock).mockReturnValue(true);
     });
 
     it('uses tester voice ID for tester-initiated calls', async () => {
@@ -289,6 +328,26 @@ describe('callSession', () => {
       expect(isCallActive()).toBe(true);
 
       await endCall();
+    });
+
+    it('ends the call when the connection stays in connecting too long', async () => {
+      jest.useFakeTimers();
+      try {
+        const vc = makeVoiceChannel();
+        const gc = makeTextChannel('groupchat');
+        const cl = makeTextChannel('call-log');
+        const member = makeMember('201', 'Grace', false);
+
+        await startCall(vc, gc, cl, member);
+        expect(isCallActive()).toBe(true);
+
+        mockConnection.state.status = 'connecting';
+        await jest.advanceTimersByTimeAsync(85_000);
+
+        expect(isCallActive()).toBe(false);
+      } finally {
+        jest.useRealTimers();
+      }
     });
   });
 

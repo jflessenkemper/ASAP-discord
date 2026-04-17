@@ -535,6 +535,10 @@ export interface CallSession {
 
 let activeSession: CallSession | null = null;
 
+function isTransientConnectionState(status: string): boolean {
+  return status === VoiceConnectionStatus.Disconnected || status === 'signalling' || status === 'connecting';
+}
+
 function isAbortLikeError(err: unknown): boolean {
   if (!err) return false;
   const anyErr = err as { name?: string; code?: string; message?: string };
@@ -691,30 +695,35 @@ export async function startCall(
     if (!activeSession?.active) return;
     try {
       const conn = getTesterVoiceConnection();
-      if (!conn || conn.state.status === VoiceConnectionStatus.Destroyed) {
+      const status = String(conn?.state.status || 'unknown');
+      if (!conn || status === VoiceConnectionStatus.Destroyed) {
         console.warn('Voice connection destroyed — ending call');
         void postVoiceStageLog('connection_destroyed', `channel=${voiceChannel.name}`, 'error');
         endCall().catch((err) => console.error('Heartbeat endCall error:', errMsg(err)));
         return;
       }
 
-      if (conn.state.status === VoiceConnectionStatus.Disconnected) {
+      if (isTransientConnectionState(status)) {
         if (!activeSession.disconnectedSince) {
           activeSession.disconnectedSince = Date.now();
-          console.warn('Voice connection temporarily disconnected — waiting for recovery');
-          void postVoiceStageLog('connection_disconnected', `channel=${voiceChannel.name}`, 'warn');
+          console.warn(`Voice connection entered transient state (${status}) — waiting for recovery`);
+          void postVoiceStageLog(
+            status === VoiceConnectionStatus.Disconnected ? 'connection_disconnected' : 'connection_unstable',
+            `channel=${voiceChannel.name} status=${status}`,
+            'warn'
+          );
           sendLifecycleNoticeOnce(groupchat, `reconnecting:${voiceChannel.id}`, '⚠️ Voice connection interrupted — reconnecting for up to 45 seconds.').catch(() => {});
           return;
         }
 
-        const disconnectedForMs = Date.now() - activeSession.disconnectedSince;
-        if (disconnectedForMs < VOICE_DISCONNECT_GRACE_MS) {
+        const degradedForMs = Date.now() - activeSession.disconnectedSince;
+        if (degradedForMs < VOICE_DISCONNECT_GRACE_MS) {
           return;
         }
 
-        console.warn(`Voice disconnected for ${Math.round(disconnectedForMs / 1000)}s — ending call`);
-        recordLoopHealth('voice-session', 'error', `disconnected_ms=${disconnectedForMs}`);
-        void postVoiceStageLog('connection_timeout', `disconnected_ms=${disconnectedForMs}`, 'error');
+        console.warn(`Voice connection remained ${status} for ${Math.round(degradedForMs / 1000)}s — ending call`);
+        recordLoopHealth('voice-session', 'error', `status=${status} degraded_ms=${degradedForMs}`);
+        void postVoiceStageLog('connection_timeout', `status=${status} degraded_ms=${degradedForMs}`, 'error');
         endCall().catch((err) => console.error('Heartbeat endCall error:', errMsg(err)));
         return;
       }

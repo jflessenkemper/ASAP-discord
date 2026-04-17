@@ -392,17 +392,27 @@ const server = app.listen(PORT, () => {
 });
 
 function shutdown(signal: string) {
+  if (shutdownInProgress) {
+    console.log(`${signal} received, shutdown already in progress`);
+    return;
+  }
+  shutdownInProgress = true;
   console.log(`${signal} received, shutting down gracefully`);
   server.close(async () => {
     await stopBot().catch(() => {});
     await releaseDiscordBotLock().catch(() => {});
-    await pool.end();
+    await pool.end().catch((err) => {
+      if (!String(errMsg(err)).includes('Called end on pool more than once')) {
+        throw err;
+      }
+    });
     console.log('Server shut down');
     process.exit(0);
   });
   // Force exit after 10s if graceful shutdown stalls
   setTimeout(() => process.exit(1), 10_000).unref();
 }
+let shutdownInProgress = false;
 process.on('SIGTERM', () => shutdown('SIGTERM'));
 process.on('SIGINT', () => shutdown('SIGINT'));
 
