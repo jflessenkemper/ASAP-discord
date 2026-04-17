@@ -1,3 +1,1 @@
-Riley smoke test marker — branch riley/smoke-1776405624045
-Created: 2025-01-15
-Purpose: Validate Riley's direct git tooling (create branch, commit, push, open PR)
+Riley smoke test marker
