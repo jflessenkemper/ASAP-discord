@@ -46,7 +46,7 @@ import { sendJobApplication } from '../services/email';
 import { SYSTEM_COLORS, BUTTON_IDS, jobScoreColor } from './ui/constants';
 import { errMsg } from '../utils/errors';
 import { buildDatabaseAuditSummary } from './databaseAudit';
-import { recordLoopHealth } from './loopHealth';
+import { recordLoopHealth, setLoopReportChannel } from './loopHealth';
 
 
 /**
@@ -511,6 +511,7 @@ export async function startBot(): Promise<void> {
       botChannels = await setupChannels(guild);
       const configuredChannels = botChannels;
       setBotChannels(configuredChannels);
+      setLoopReportChannel(configuredChannels.loops);
       setGitHubChannel(configuredChannels.github);
       setLimitsChannel(configuredChannels.limits);
       setCostChannel(configuredChannels.cost);
@@ -673,6 +674,7 @@ export async function startBot(): Promise<void> {
       if (!botChannels) return;
       const configuredChannels = botChannels;
       setBotChannels(configuredChannels);
+      setLoopReportChannel(configuredChannels.loops);
       setGitHubChannel(configuredChannels.github);
       setLimitsChannel(configuredChannels.limits);
       setCostChannel(configuredChannels.cost);
@@ -1050,6 +1052,7 @@ export async function stopBot(): Promise<void> {
     client.destroy();
     client = null;
     botChannels = null;
+    setLoopReportChannel(null);
     console.log('Discord bot disconnected');
   }
 }

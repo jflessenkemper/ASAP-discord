@@ -2,7 +2,7 @@
 
 ASAP Discord is a Discord-based AI workspace.
 
-Instead of opening a dozen tools, tabs, and dashboards, I can talk to Riley in Discord and she coordinates the rest of the team. Riley plans the work, Ace builds it, specialist agents review it, and the system keeps itself healthy with background loops for testing, memory, monitoring, and voice.
+Instead of opening a dozen tools, tabs, and dashboards, I can talk to Riley in Discord and she coordinates the rest of the team. Riley plans the work, routes voice through ElevenLabs, escalates deep execution to Opus when needed, sends work into agent workspaces, and keeps the system visible through independent runtime loops and operations channels.
 
 This repo is the runtime behind that system.
 
@@ -23,9 +23,8 @@ Most AI demos stop at "chat with one assistant".
 This system is closer to an operations room:
 
 - Riley is the front door.
-- Ace is the builder.
-- Review agents check risk, quality, UX, API design, security, and performance.
-- Voice and text both work.
+- Agent work happens in dedicated workspaces.
+- Voice and text both work through Riley as the same control plane.
 - The system monitors itself while it works.
 
 ## Simple Diagram
@@ -33,23 +32,25 @@ This system is closer to an operations room:
 ```mermaid
 flowchart TD
     User[Jordan in Discord]
-    Riley[Riley<br/>manager and main interface]
-    Ace[Ace<br/>builds and ships work]
-    Specialists[Specialist reviewers<br/>QA, UX, Security, API, DBA, DevOps, Legal]
-    Loops[Background loops<br/>testing, logging, memory, voice, monitoring, database audit]
-    Tools[Code, GitHub, Cloud, Discord, database tools]
-    CloudLogs[Cloud Run and GCP logs]
+    Riley[Riley<br/>front door and coordinator]
+    Voice[ElevenLabs<br/>voice relay]
+    Opus[Opus<br/>deep reasoning and execution]
+    Workspaces[Agent workspaces<br/>Riley, Ace, specialists]
+    Loops[Independent loops<br/>run one at a time as needed]
+    LoopOps[Operations loop channel<br/>start, finish, report]
+    Tools[Code, GitHub, cloud, Discord, database tools]
 
     User -->|text or voice| Riley
-    Riley --> Ace
-    Ace --> Specialists
-    Specialists --> Ace
-    Ace --> Tools
-    Tools --> Ace
-    Tools --> CloudLogs
-    CloudLogs --> Loops
+    Riley -->|voice path| Voice
+    Voice --> Opus
+    Opus --> Riley
+    Riley --> Workspaces
+    Workspaces --> Tools
+    Tools --> Workspaces
+    Workspaces --> Riley
     Riley --> Loops
-    Loops --> Riley
+    Loops --> LoopOps
+    LoopOps --> Riley
     Riley -->|answers, updates, decisions| User
 ```
 

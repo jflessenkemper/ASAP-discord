@@ -11,7 +11,7 @@ This pack is designed to exercise or verify:
 1. Riley as the primary text interface in groupchat.
 2. Delegation from Riley to Ace and specialist-review routing.
 3. Tool-backed execution across code, GitHub, database, cloud, Discord, and lifecycle surfaces.
-4. Loop visibility: status, loops, health, and monitoring surfaces.
+4. Loop visibility: status, loops, health, monitoring surfaces, and explicit loop reports in the Operations loop channel.
 5. Decision handling in groupchat and the queued/offline decision path.
 6. Budget, token, and cost awareness.
 7. Memory and database audit visibility.
@@ -33,7 +33,7 @@ That is why this is a prompt pack instead of one oversized message.
 Before using these prompts, make sure:
 
 1. The bot is live in Discord.
-2. Groupchat, decisions, limits, cost, thread-status, agent-errors, and voice-related channels are accessible.
+2. Groupchat, decisions, limits, cost, thread-status, loops, agent-errors, and voice-related channels are accessible.
 3. The database is reachable and migrations are current.
 4. Voice Prompt 2 is only used during an active voice session.
 5. Prompt 3 is run in an environment where ops channels and smoke-test behavior can be observed.
@@ -57,7 +57,7 @@ Your job in this drill:
 2. Route execution through Ace.
 3. Pull in specialist review only if needed and explain why.
 4. Show me current status, loop health, cost or budget awareness, and any relevant risks.
-5. Tell me which architecture surfaces you are exercising as you go.
+5. Tell me which architecture surfaces you are exercising as you go, including whether the Operations loop channel is reflecting the run.
 6. If a major decision is required, ask me directly here in groupchat the way the live system is supposed to.
 7. At the end, give me a concise validation summary with:
    - what was tested directly
@@ -77,15 +77,16 @@ Important constraints:
 2. Riley creates a clear numbered plan.
 3. Riley routes execution through Ace instead of delegating directly to specialists for implementation.
 4. Riley exposes status and loop-health information in plain language.
-5. Riley references cost, budget, limits, or token efficiency where relevant.
-6. Riley distinguishes direct proof from indirect proof.
-7. If a major decision is needed, Riley asks for it directly in groupchat instead of hiding it.
+5. Riley can point to the dedicated Operations loop channel when discussing loop activity.
+6. Riley references cost, budget, limits, or token efficiency where relevant.
+7. Riley distinguishes direct proof from indirect proof.
+8. If a major decision is needed, Riley asks for it directly in groupchat instead of hiding it.
 
 ### Failure Signals
 
 1. Riley only gives a static essay about the architecture.
 2. Riley skips Ace and delegates implementation directly to specialists.
-3. Riley cannot surface status, loops, or ops-aware progress.
+3. Riley cannot surface status, loops, the loop-report channel, or ops-aware progress.
 4. Riley claims to have tested voice or merge-trigger behavior without live evidence.
 5. Riley ignores budget, cost, or runtime risk framing.
 
@@ -115,6 +116,7 @@ After I respond, continue the conversation the same way so we can prove voice gu
 3. If a major decision is needed, Riley asks directly in voice.
 4. Riley does not defer live-call decisions to the decisions channel.
 5. Voice-related logs or call telemetry should be observable in the relevant ops surfaces.
+6. If a loop is triggered during the voice session, the loop report should still be visible in the loop channel rather than disappearing into voice-only state.
 
 ### Failure Signals
 
@@ -122,6 +124,7 @@ After I respond, continue the conversation the same way so we can prove voice gu
 2. Riley pushes the decision into the decisions channel during the call.
 3. Riley does not suggest an actual next action.
 4. The voice session appears disconnected from ops visibility or loop tracking.
+5. Voice work produces no observable loop or ops trace where one should exist.
 
 ---
 
@@ -136,11 +139,12 @@ I want you to verify the parts of the system that depend on monitoring, backgrou
 
 Please do the following:
 1. Show me the current loop-health view and explain which loops are healthy, idle, warning, or blocked.
-2. Show me the current status of cost, limits, and runtime monitoring.
-3. Tell me whether the database audit surface looks healthy and what it is currently proving.
-4. Tell me what evidence exists for smoke-test or test-engine behavior right now.
-5. Tell me what would require a real merge event to validate fully instead of just a status check.
-6. If you find anything stale, risky, or incomplete, say exactly what follow-up check should be run next.
+2. Show me the current state of the dedicated Operations loop channel and whether it reflects recent loop runs clearly.
+3. Show me the current status of cost, limits, and runtime monitoring.
+4. Tell me whether the database audit surface looks healthy and what it is currently proving.
+5. Tell me what evidence exists for smoke-test or test-engine behavior right now.
+6. Tell me what would require a real merge event to validate fully instead of just a status check.
+7. If you find anything stale, risky, or incomplete, say exactly what follow-up check should be run next.
 
 Do not bluff. Separate direct evidence from assumptions.
 ```
@@ -148,17 +152,19 @@ Do not bluff. Separate direct evidence from assumptions.
 ### Expected Success Signals
 
 1. Riley surfaces loop-health information clearly.
-2. Riley can explain cost, limits, and monitoring without losing the operational meaning.
-3. Riley can describe database audit status based on real runtime evidence.
-4. Riley can point to smoke-test or test-engine evidence if it exists.
-5. Riley clearly states what still needs a real merge or live event.
+2. Riley can explain whether the dedicated loop-report channel is producing direct evidence or only configuration-level evidence.
+3. Riley can explain cost, limits, and monitoring without losing the operational meaning.
+4. Riley can describe database audit status based on real runtime evidence.
+5. Riley can point to smoke-test or test-engine evidence if it exists.
+6. Riley clearly states what still needs a real merge or live event.
 
 ### Failure Signals
 
 1. Riley only restates documentation instead of checking live evidence.
 2. Riley claims post-merge behavior was tested when no merge happened.
 3. Riley cannot separate what is healthy from what is merely configured.
-4. Riley cannot identify a next validation step if the evidence is incomplete.
+4. Riley cannot tell whether the loop-report channel is actually reflecting runtime events.
+5. Riley cannot identify a next validation step if the evidence is incomplete.
 
 ---
 

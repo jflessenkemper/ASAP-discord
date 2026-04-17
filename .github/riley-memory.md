@@ -33,6 +33,7 @@ This file is Riley's starting knowledge base. Riley can update it via memory too
 | Channel | Purpose |
 |---------|---------|
 | #💻-terminal | Live terminal output from bot commands |
+| #🔁-loops | Independent loop runs, start/finish status, and Riley-facing loop reports |
 | #🚨-agent-errors | Runtime errors, unhandled exceptions |
 | #📋-agent-audit | Structured audit log (tool calls, model swaps) |
 | #🧪-smoke-tests | Smoke test results and reports |

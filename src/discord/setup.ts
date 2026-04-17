@@ -30,6 +30,7 @@ const MAIN_CHANNELS = {
 
 const OPS_CHANNELS = {
   github: '📦-github',
+  loops: '🔁-loops',
   upgrades: '🆙-upgrades',
   tools: '🧰-tools',
   callLog: '📋-call-log',
@@ -84,6 +85,7 @@ export interface BotChannels {
   threadStatus: TextChannel;
   decisions: TextChannel;
   github: TextChannel;
+  loops: TextChannel;
   upgrades: TextChannel;
   tools: TextChannel;
   callLog: TextChannel;
@@ -311,7 +313,7 @@ async function deduplicateChannel(guild: Guild, name: string): Promise<TextChann
  * Set up all required channels in the guild, organized under categories:
  *   ASAP        — groupchat, voice
  *   Agents      — per-agent work log channels
- *   Operations  — github, upgrades, call-log, limits
+ *   Operations  — github, loops, upgrades, call-log, limits
  *   Personal    — owner-specific channels (for example career ops)
  *
  * Cleans up duplicate channels left from previous runs.
@@ -456,6 +458,14 @@ export async function setupChannels(guild: Guild): Promise<BotChannels> {
     { owner: 'system', cadence: 'on-event', staleAlert: '24h' }
   );
 
+  const loops = await ensureText(
+    OPS_CHANNELS.loops,
+    catOps,
+    '🔁 Independent loop runs, start/finish state, and Riley-readable loop reports',
+    '🔁 Loop health changes and loop run reports post here so Riley can reason over them explicitly.',
+    { owner: 'system', cadence: 'on-loop-run', staleAlert: '24h' }
+  );
+
   const upgrades = await ensureText(
     OPS_CHANNELS.upgrades,
     catOps,
@@ -589,7 +599,7 @@ export async function setupChannels(guild: Guild): Promise<BotChannels> {
     }
   }
 
-  const allTextChannels = [groupchat, threadStatus, decisions, github, upgrades, tools, callLog, limits, cost, screenshots, url, terminal, voiceErrors, agentErrors, careerOps, jobApplications, ...agentChannels.values()];
+  const allTextChannels = [groupchat, threadStatus, decisions, github, loops, upgrades, tools, callLog, limits, cost, screenshots, url, terminal, voiceErrors, agentErrors, careerOps, jobApplications, ...agentChannels.values()];
   console.log('🔗 Pre-creating webhooks for all channels...');
   const webhookResults = await Promise.allSettled(
     allTextChannels.map((channel) => getWebhook(channel))
@@ -600,7 +610,7 @@ export async function setupChannels(guild: Guild): Promise<BotChannels> {
 
   const botId = guild.client.user?.id;
   if (botId) {
-    const opsChannels = [threadStatus, decisions, github, upgrades, tools, callLog, limits, cost, screenshots, url, terminal, voiceErrors, agentErrors, careerOps, jobApplications];
+    const opsChannels = [threadStatus, decisions, github, loops, upgrades, tools, callLog, limits, cost, screenshots, url, terminal, voiceErrors, agentErrors, careerOps, jobApplications];
     const restricted = allTextChannels.filter((channel) => !opsChannels.some((ops) => ops.id === channel.id));
     for (const ch of restricted) {
       try {
@@ -637,7 +647,7 @@ export async function setupChannels(guild: Guild): Promise<BotChannels> {
 
     const hardenSensitive = String(process.env.DISCORD_HARDEN_SENSITIVE_CHANNELS || 'true').toLowerCase() !== 'false';
     if (hardenSensitive) {
-      const sensitiveChannels = [terminal, voiceErrors, agentErrors, limits, cost, callLog, upgrades, careerOps, jobApplications];
+      const sensitiveChannels = [terminal, voiceErrors, agentErrors, limits, cost, callLog, loops, upgrades, careerOps, jobApplications];
       const everyoneRoleId = guild.roles.everyone.id;
       const ownerMember = await guild.fetchOwner().catch(() => null);
       if (!ownerMember) {
@@ -673,5 +683,5 @@ export async function setupChannels(guild: Guild): Promise<BotChannels> {
     }
   }
 
-  return { agentChannels, groupchat, threadStatus, decisions, github, upgrades, tools, callLog, limits, cost, screenshots, url, terminal, voiceErrors, agentErrors, careerOps, jobApplications, voiceChannel };
+  return { agentChannels, groupchat, threadStatus, decisions, github, loops, upgrades, tools, callLog, limits, cost, screenshots, url, terminal, voiceErrors, agentErrors, careerOps, jobApplications, voiceChannel };
 }

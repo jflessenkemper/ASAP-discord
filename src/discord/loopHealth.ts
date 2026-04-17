@@ -1,3 +1,5 @@
+import { TextChannel } from 'discord.js';
+
 export type LoopHealthStatus = 'ok' | 'warn' | 'error';
 
 export type LoopId =
@@ -47,6 +49,9 @@ const LOOP_ORDER: LoopId[] = [
 ];
 
 const loopHealth = new Map<LoopId, MutableLoopHealthEntry>();
+const loopReportSuppression = new Map<LoopId, { key: string; sentAt: number }>();
+const LOOP_REPORT_SUPPRESSION_MS = 30_000;
+let loopReportChannel: TextChannel | null = null;
 
 function ensureLoop(loopId: LoopId): MutableLoopHealthEntry {
   let entry = loopHealth.get(loopId);
@@ -81,12 +86,39 @@ function statusIcon(status: LoopHealthEntry['status']): string {
   return '⚪';
 }
 
+function normalizeLoopDetail(detail: string): string {
+  return String(detail || '').replace(/\s+/g, ' ').trim() || 'no detail';
+}
+
+async function postLoopReport(loopId: LoopId, entry: MutableLoopHealthEntry): Promise<void> {
+  if (!loopReportChannel) return;
+
+  const detail = normalizeLoopDetail(entry.lastDetail);
+  const dedupeKey = `${entry.status}:${detail}`;
+  const previous = loopReportSuppression.get(loopId);
+  const now = Date.now();
+  if (previous && previous.key === dedupeKey && now - previous.sentAt < LOOP_REPORT_SUPPRESSION_MS) {
+    return;
+  }
+  loopReportSuppression.set(loopId, { key: dedupeKey, sentAt: now });
+
+  const label = LOOP_LABELS[loopId];
+  await loopReportChannel.send(
+    `🔁 ${statusIcon(entry.status)} **${label}** (${loopId}) | run ${entry.runCount} | ${detail}`.slice(0, 1900)
+  ).catch(() => {});
+}
+
+export function setLoopReportChannel(channel: TextChannel | null): void {
+  loopReportChannel = channel;
+}
+
 export function recordLoopHealth(loopId: LoopId, status: LoopHealthStatus, detail: string): void {
   const entry = ensureLoop(loopId);
   entry.status = status;
   entry.lastRunAt = Date.now();
-  entry.lastDetail = String(detail || '').trim() || 'no detail';
+  entry.lastDetail = normalizeLoopDetail(detail);
   entry.runCount += 1;
+  void postLoopReport(loopId, entry);
 }
 
 export function getLoopHealthSnapshot(): LoopHealthEntry[] {
@@ -123,4 +155,6 @@ export function buildLoopHealthDetailedReport(): string {
 
 export function resetLoopHealthForTests(): void {
   loopHealth.clear();
+  loopReportSuppression.clear();
+  loopReportChannel = null;
 }
