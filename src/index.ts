@@ -77,7 +77,9 @@ if (IS_CLOUD_RUN) {
 }
 // Discord voice requires UDP. Cloud Run is HTTP-only, so force-disable bot there.
 const DISCORD_BOT_ENABLED = !IS_CLOUD_RUN && process.env.DISCORD_BOT_ENABLED !== 'false';
-const DISCORD_BOT_SKIP_LOCK = process.env.DISCORD_BOT_SKIP_LOCK === 'true';
+const DISCORD_BOT_SKIP_LOCK_REQUESTED = process.env.DISCORD_BOT_SKIP_LOCK === 'true';
+const DISCORD_BOT_ALLOW_SKIP_LOCK = process.env.DISCORD_BOT_ALLOW_SKIP_LOCK === 'true';
+const DISCORD_BOT_SKIP_LOCK = DISCORD_BOT_SKIP_LOCK_REQUESTED && DISCORD_BOT_ALLOW_SKIP_LOCK;
 const DISCORD_BOT_LOCK_KEY = parseInt(process.env.DISCORD_BOT_LOCK_KEY || '842021', 10);
 let botLockClient: { query: (sql: string, params?: unknown[]) => Promise<{ rows: Array<{ locked?: boolean }> }>; release: () => void } | null = null;
 
@@ -362,6 +364,9 @@ const server = app.listen(PORT, () => {
     // Run the Discord bot only on the dedicated voice-capable host.
     if (DISCORD_BOT_ENABLED) {
       try {
+        if (DISCORD_BOT_SKIP_LOCK_REQUESTED && !DISCORD_BOT_ALLOW_SKIP_LOCK) {
+          console.warn('Ignoring DISCORD_BOT_SKIP_LOCK=true because DISCORD_BOT_ALLOW_SKIP_LOCK is not set');
+        }
         const lockAcquired = DISCORD_BOT_SKIP_LOCK ? true : await acquireDiscordBotLock();
         if (!lockAcquired) {
           console.log('Discord bot startup skipped: lock held by another instance');

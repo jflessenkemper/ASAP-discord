@@ -70,6 +70,7 @@ else
   export PORT
   export DISCORD_BOT_ENABLED="true"
   export DISCORD_BOT_SKIP_LOCK="true"
+  export DISCORD_BOT_ALLOW_SKIP_LOCK="true"
   export GEMINI_USE_VERTEX_AI="${GEMINI_USE_VERTEX_AI:-false}"
   export ANTHROPIC_USE_VERTEX_AI="${ANTHROPIC_USE_VERTEX_AI:-false}"
   export OPUS_USE_VERTEX_AI="${OPUS_USE_VERTEX_AI:-false}"
