@@ -393,12 +393,20 @@ class LiveMonitor {
     };
   }
 
+  private matchesFilter(event: LiveEvent, filter?: { channelIds?: Set<string>; botsOnly?: boolean }): boolean {
+    if (filter?.channelIds) {
+      const matchesChannel = filter.channelIds.has(event.channelId)
+        || (!!event.parentChannelId && filter.channelIds.has(event.parentChannelId));
+      if (!matchesChannel) return false;
+    }
+    if (filter?.botsOnly && !event.isBot && !event.isWebhook) return false;
+    return true;
+  }
+
   getEventsSince(sinceTs: number, filter?: { channelIds?: Set<string>; botsOnly?: boolean }): LiveEvent[] {
     return this.events.filter((e) => {
       if (e.ts < sinceTs) return false;
-      if (filter?.channelIds && !filter.channelIds.has(e.channelId)) return false;
-      if (filter?.botsOnly && !e.isBot && !e.isWebhook) return false;
-      return true;
+      return this.matchesFilter(e, filter);
     });
   }
 
@@ -451,8 +459,10 @@ class LiveMonitor {
         }, 2000);
       }
 
-      const unsub = this.onMessage(() => {
-        lastEventTs = Date.now();
+      const unsub = this.onMessage((event) => {
+        if (event.ts >= opts.sinceTs && this.matchesFilter(event, { channelIds: opts.channelIds, botsOnly: opts.botsOnly })) {
+          lastEventTs = Date.now();
+        }
         const events = this.getEventsSince(opts.sinceTs, { channelIds: opts.channelIds, botsOnly: opts.botsOnly });
         if (condition(events)) {
           cleanup();
@@ -521,7 +531,22 @@ async function discordApi(token: string, url: string, options: RequestInit = {},
     ...(options.headers || {}),
   };
 
-  const res = await fetch(url, { ...options, headers });
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 15_000);
+
+  let res: Response;
+  try {
+    res = await fetch(url, { ...options, headers, signal: controller.signal });
+  } catch (error) {
+    if (retry < 3) {
+      await sleep((retry + 1) * 500);
+      return discordApi(token, url, options, retry + 1);
+    }
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
+
   if (res.status === 429) {
     const body = await res.json().catch(() => ({})) as { retry_after?: number };
     const retryMs = Math.ceil((Number(body.retry_after) || 1) * 1000) + 100;
