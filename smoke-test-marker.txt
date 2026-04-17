@@ -1,2 +1,2 @@
-Riley smoke test marker
-timestamp: 2026-04-17T06:22:43Z
+Riley smoke test marker — branch riley/smoke-1776405624045
+Created: 2025-06-15
