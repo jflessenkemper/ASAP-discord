@@ -4,6 +4,38 @@
 
 const HANDOFF_MAX_CONTEXT_CHARS = parseInt(process.env.HANDOFF_MAX_CONTEXT_CHARS || '2000', 10);
 
+export type ExecutionStatus = 'completed' | 'blocked' | 'partial';
+export type ExecutionIssueSeverity = 'info' | 'warn' | 'error';
+
+export interface ExecutionIssue {
+  scope: 'agent' | 'loop' | 'tool' | 'runtime';
+  message: string;
+  severity: ExecutionIssueSeverity;
+  source?: string;
+  suggestedAction?: string;
+}
+
+export interface ExecutionEvidence {
+  kind: 'file' | 'tool' | 'log' | 'test' | 'loop' | 'message';
+  value: string;
+}
+
+export interface ExecutionProgressUpdate {
+  stage: 'planned' | 'executing' | 'waiting' | 'blocked' | 'completed';
+  message: string;
+  percent?: number;
+  source?: string;
+}
+
+export interface LoopExecutionReport {
+  loopId: string;
+  status: ExecutionStatus;
+  summary: string;
+  detail?: string;
+  evidence?: ExecutionEvidence[];
+  issues?: ExecutionIssue[];
+}
+
 export interface HandoffContext {
   fromAgent: string;
   toAgent: string;
@@ -21,11 +53,16 @@ export interface HandoffContext {
 
 export interface HandoffResult {
   agentId: string;
-  status: 'completed' | 'blocked' | 'partial';
+  status: ExecutionStatus;
   summary: string;
   filesModified: string[];
   toolsUsed: string[];
   nextSteps?: string[];
+  progress?: ExecutionProgressUpdate[];
+  issues?: ExecutionIssue[];
+  evidence?: ExecutionEvidence[];
+  recommendedUserUpdate?: string;
+  loopReports?: LoopExecutionReport[];
   durationMs: number;
 }
 
@@ -123,11 +160,16 @@ export function formatHandoffPrompt(ctx: HandoffContext): string {
  */
 export function buildHandoffResult(params: {
   agentId: string;
-  status: 'completed' | 'blocked' | 'partial';
+  status: ExecutionStatus;
   summary: string;
   filesModified?: string[];
   toolsUsed?: string[];
   nextSteps?: string[];
+  progress?: ExecutionProgressUpdate[];
+  issues?: ExecutionIssue[];
+  evidence?: ExecutionEvidence[];
+  recommendedUserUpdate?: string;
+  loopReports?: LoopExecutionReport[];
   durationMs: number;
 }): HandoffResult {
   return {
@@ -137,6 +179,11 @@ export function buildHandoffResult(params: {
     filesModified: params.filesModified || [],
     toolsUsed: params.toolsUsed || [],
     nextSteps: params.nextSteps,
+    progress: params.progress || [],
+    issues: params.issues || [],
+    evidence: params.evidence || [],
+    recommendedUserUpdate: params.recommendedUserUpdate,
+    loopReports: params.loopReports || [],
     durationMs: params.durationMs,
   };
 }
@@ -156,6 +203,14 @@ export function formatHandoffResult(result: HandoffResult): string {
 
   if (result.nextSteps && result.nextSteps.length > 0) {
     lines.push(`Next steps: ${result.nextSteps.join('; ')}`);
+  }
+
+  if (result.issues && result.issues.length > 0) {
+    lines.push(`Issues: ${result.issues.map((issue) => `${issue.severity}:${issue.message}`).join('; ')}`);
+  }
+
+  if (result.evidence && result.evidence.length > 0) {
+    lines.push(`Evidence: ${result.evidence.map((item) => `${item.kind}:${item.value}`).join('; ')}`);
   }
 
   return lines.join('\n');

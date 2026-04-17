@@ -21,14 +21,18 @@ import {
 } from '../agents';
 import { getBotChannels } from '../bot';
 import { agentRespond, clearGeminiQuotaFuse, ConversationMessage, extractAgentResponseEnvelope, getContextRuntimeReport, getGeminiQuotaFuseStatus, setQuotaFuseNotifyCallback, setRateLimitNotifyCallback } from '../claude';
-import { buildHandoffContext, formatHandoffPrompt, formatHandoffResult, buildHandoffResult } from '../handoff';
+import { buildHandoffContext, type HandoffResult, type ExecutionIssue, type ExecutionEvidence, formatHandoffPrompt } from '../handoff';
 import { appendToMemory, getMemoryContext, loadMemory, saveMemory, clearMemory, compressMemory } from '../memory';
 import { getAllModelHealth } from '../modelHealth';
+import { executeLoopAdapters } from '../loopAdapters';
+import { formatOperationsStewardRequests } from '../operationsSteward';
+import { createAgentExecutionReport, executeOpusPlan, type OpusExecutionSummary } from '../opusExecution';
 import { postAgentErrorLog } from '../services/agentErrors';
 import { captureAndPostScreenshots } from '../services/screenshots';
 import { makeOutboundCall, makeAsapTesterCall, startConferenceCall, isTelephonyAvailable } from '../services/telephony';
 import { getWebhook, sendWebhookMessage, WebhookCapableChannel } from '../services/webhooks';
 import { approveAdditionalBudget, getContextEfficiencyReport, getUsageReport, refreshLiveBillingData, refreshUsageDashboard } from '../usage';
+import { logAgentEvent, postOpsLine } from '../activityLog';
 
 import { startCall, endCall, isCallActive, injectVoiceTranscriptForTesting, processTesterVoiceTurnForCall } from './callSession';
 import { SYSTEM_COLORS, BUTTON_IDS } from '../ui/constants';
@@ -40,7 +44,7 @@ import { sendAgentMessage, clearHistory } from './textChannel';
 import { errMsg } from '../../utils/errors';
 import { buildLoopHealthCompactSummary, buildLoopHealthDetailedReport, recordLoopHealth } from '../loopHealth';
 import { buildLoggingEngineReport, runLoggingEngine } from '../loggingEngine';
-import { buildGroupchatDecisionAttention, buildTextStatusSummary } from '../rileyInteraction';
+import { buildGroupchatDecisionAttention, buildGroupchatSingleUserNotice, buildTextStatusSummary } from '../rileyInteraction';
 
 
 type ToolNotificationBatch = {
@@ -147,6 +151,7 @@ let messageQueue: Promise<void> = Promise.resolve();
 // bot follows the newest user intent instead of finishing stale tasks.
 let activeAbortController: AbortController | null = null;
 let activeThinkingMessage: Message | null = null;
+let activeGroupchatOwner: { userId: string; displayName: string } | null = null;
 
 // When true, a smoke_test_agents tool call is in progress. Tester bot messages
 // arriving during this window are subprocess probes and must NOT abort or
@@ -186,7 +191,9 @@ const APP_REPO_ROOT = path.resolve(APP_SERVER_ROOT, '..');
 let lastUrlsActionAt = 0;
 let lastGroupchatTimeoutNoticeAt = 0;
 const GROUPCHAT_TIMEOUT_NOTICE_COOLDOWN_MS = parseInt(process.env.GROUPCHAT_TIMEOUT_NOTICE_COOLDOWN_MS || '120000', 10);
+const GROUPCHAT_SINGLE_USER_NOTICE_COOLDOWN_MS = parseInt(process.env.GROUPCHAT_SINGLE_USER_NOTICE_COOLDOWN_MS || '15000', 10);
 const DEFAULT_TESTER_BOT_ID = '1487426371209789450';
+let lastGroupchatSingleUserNoticeAt = 0;
 
 function decodeBotIdFromToken(token: string): string | null {
   try {
@@ -1391,6 +1398,30 @@ async function sendQuickRileyMessage(groupchat: TextChannel, content: string): P
   await groupchat.send(content).catch(() => {});
 }
 
+async function postWorkspaceProgressUpdate(
+  workspaceChannel: WebhookCapableChannel,
+  agentId: AgentId,
+  content: string,
+): Promise<void> {
+  const trimmed = String(content || '').trim();
+  if (!trimmed) return;
+  const agent = getAgent(agentId);
+  if (agent) {
+    await sendAgentMessage(workspaceChannel, agent, trimmed.slice(0, 1800));
+    return;
+  }
+  if ('send' in workspaceChannel) {
+    await workspaceChannel.send(trimmed.slice(0, 1800)).catch(() => {});
+  }
+}
+
+async function maybeSendGroupchatSingleUserNotice(groupchat: TextChannel): Promise<void> {
+  const now = Date.now();
+  if (now - lastGroupchatSingleUserNoticeAt < GROUPCHAT_SINGLE_USER_NOTICE_COOLDOWN_MS) return;
+  lastGroupchatSingleUserNoticeAt = now;
+  await sendQuickRileyMessage(groupchat, buildGroupchatSingleUserNotice(activeGroupchatOwner?.displayName));
+}
+
 async function handleDirectOpsActionIfRequested(content: string, groupchat: TextChannel): Promise<boolean> {
   const action = detectDirectOpsAction(content);
   if (!action) return false;
@@ -1553,6 +1584,11 @@ export async function handleGroupchatMessage(
     return;
   }
 
+  if (activeAbortController && activeGroupchatOwner && message.author.id !== activeGroupchatOwner.userId) {
+    await maybeSendGroupchatSingleUserNotice(groupchat);
+    return;
+  }
+
   // Fast-path direct commands before queue orchestration to avoid abort races
   // between back-to-back control messages (e.g. join then inject test voice).
   if (await handleDirectOpsActionIfRequested(content, groupchat)) {
@@ -1580,6 +1616,10 @@ export async function handleGroupchatMessage(
 
   const controller = new AbortController();
   activeAbortController = controller;
+  activeGroupchatOwner = {
+    userId: message.author.id,
+    displayName: message.member?.displayName || message.author.username,
+  };
 
   messageQueue = messageQueue.then(async () => {
     if (controller.signal.aborted) return;
@@ -1613,7 +1653,10 @@ export async function handleGroupchatMessage(
         }
       }
     } finally {
-      if (activeAbortController === controller) activeAbortController = null;
+      if (activeAbortController === controller) {
+        activeAbortController = null;
+        activeGroupchatOwner = null;
+      }
     }
   }).catch((err) => {
     console.error('Groupchat queue error:', errMsg(err));
@@ -3204,13 +3247,13 @@ async function handleSubAgents(
   groupchat: TextChannel,
   workspaceChannel: WebhookCapableChannel,
   signal?: AbortSignal
-): Promise<{ findings: string[]; errors: string[] }> {
+): Promise<{ findings: string[]; errors: string[]; opusSummary: OpusExecutionSummary | null; reports: HandoffResult[] }> {
   const validAgents = agentIds
     .filter((id) => id !== 'executive-assistant')
     .map((id) => ({ id, agent: getAgent(id as AgentId) }))
     .filter((a): a is { id: string; agent: AgentConfig } => a.agent !== null && a.agent !== undefined);
 
-  if (validAgents.length === 0) return { findings: [], errors: [] };
+  if (validAgents.length === 0) return { findings: [], errors: [], opusSummary: null, reports: [] };
   markGoalProgress('🛠️ Sub-agents running...');
 
   const tiers = new Map<number, typeof validAgents>();
@@ -3223,6 +3266,7 @@ async function handleSubAgents(
   const sortedTiers = [...tiers.keys()].sort((a, b) => a - b);
   const priorFindings: string[] = [];
   const errorLines: string[] = [];
+  const reports: HandoffResult[] = [];
 
   for (const tierNum of sortedTiers) {
     const tierAgents = tiers.get(tierNum)!;
@@ -3238,6 +3282,7 @@ async function handleSubAgents(
     const tierResults = await runLimited(
       tierAgents.map(({ id }) => async () => {
         if (signal?.aborted) return;
+        const startedAt = Date.now();
         documentToChannel(id, `📥 Received task from groupchat. Working...`).catch(() => {});
 
         const handoffCtx = buildHandoffContext({
@@ -3263,7 +3308,18 @@ async function handleSubAgents(
         });
 
         if (signal?.aborted) return;
-        return `${getAgentMention(id as AgentId)}: ${agentResponse.slice(0, 500)}`;
+        const trimmed = agentResponse.slice(0, 500);
+        const report = createAgentExecutionReport({
+          agentId: id,
+          summary: trimmed || 'No visible specialist response.',
+          status: trimmed ? 'completed' : 'partial',
+          durationMs: Date.now() - startedAt,
+          evidence: [{ kind: 'message', value: trimmed || 'empty-response' }],
+        });
+        return {
+          finding: `${getAgentMention(id as AgentId)}: ${trimmed}`,
+          report,
+        };
       }),
       MAX_PARALLEL_SUBAGENTS
     );
@@ -3271,8 +3327,11 @@ async function handleSubAgents(
     for (let i = 0; i < tierResults.length; i++) {
       const result = tierResults[i];
       if (result.status === 'fulfilled') {
-        if (typeof result.value === 'string' && result.value.length > 0) {
-          priorFindings.push(result.value);
+        if (result.value && typeof result.value.finding === 'string' && result.value.finding.length > 0) {
+          priorFindings.push(result.value.finding);
+        }
+        if (result.value?.report) {
+          reports.push(result.value.report);
         }
       } else {
         console.error('Sub-agent tier error:', result.reason);
@@ -3287,6 +3346,25 @@ async function handleSubAgents(
       if (tierResults[i].status === 'rejected') {
         const { agent } = tierAgents[i];
         errorLines.push(`${getAgentMention(tierAgents[i].id as AgentId)}: error`);
+        const issue: ExecutionIssue = {
+          scope: 'agent',
+          severity: 'error',
+          source: tierAgents[i].id,
+          message: resultReasonToMessage(tierResults[i]),
+          suggestedAction: 'Retry the specialist task or escalate to Opus recovery.',
+        };
+        const errorEvidence: ExecutionEvidence = {
+          kind: 'log',
+          value: issue.message,
+        };
+        reports.push(createAgentExecutionReport({
+          agentId: tierAgents[i].id,
+          summary: 'Specialist execution failed.',
+          status: 'blocked',
+          durationMs: 0,
+          issues: [issue],
+          evidence: [errorEvidence],
+        }));
         try {
           const wh = await getWebhook(getAgentWorkChannel(tierAgents[i].id, groupchat));
           await wh.send({ content: `⚠️ ${agent.name.split(' ')[0]} had an error.`, username: `${agent.emoji} ${agent.name}`, avatarURL: agent.avatarUrl });
@@ -3297,8 +3375,150 @@ async function handleSubAgents(
     }
   }
   persistGroupHistory();
+  let opusSummary = await executeOpusPlan({
+    executionId: `subagents:${Date.now()}`,
+    goal: directiveContext.replace(/\s+/g, ' ').trim().slice(0, 200) || 'specialist follow-up',
+    requestedBy: 'riley',
+    specialistReports: reports,
+  }, {
+    onMilestone: (milestone) => {
+      if (milestone.stage === 'blocked') {
+        markGoalProgress(`⚠️ ${milestone.message}`);
+      }
+    },
+  });
+
+  if (opusSummary.stewardRequests.length > 0 && !signal?.aborted) {
+    const channels = getBotChannels();
+    const stewardKinds = [...new Set(opusSummary.stewardRequests.map((request) => request.kind))].join(',');
+    logAgentEvent('operations-manager', 'invoke', `steward-requests:${stewardKinds}:${directiveContext.slice(0, 240)}`);
+    if (channels?.threadStatus) {
+      await postOpsLine(channels.threadStatus, {
+        actor: 'operations-manager',
+        scope: 'opus-stewardship',
+        metric: `requests=${opusSummary.stewardRequests.length}`,
+        delta: `kinds=${stewardKinds || 'none'}`,
+        action: 'run loop adapters and stewardship handoff',
+        severity: opusSummary.status === 'completed' ? 'info' : 'warn',
+      }).catch(() => {});
+    }
+    await postWorkspaceProgressUpdate(
+      workspaceChannel,
+      'operations-manager',
+      `Stewardship queue received from Opus: ${opusSummary.stewardRequests.map((request) => `[${request.kind}] ${request.summary}`).slice(0, 4).join(' | ')}`
+    );
+    markGoalProgress('🛰️ Operations steward maintaining self-improvement and loops...');
+    const loopReports = await executeLoopAdapters(
+      opusSummary.stewardRequests.flatMap((request) => request.recommendedLoopIds || [])
+    );
+    if (loopReports.length > 0) {
+      const loopSummary = loopReports.map((report) => `${report.loopId}=${report.status}`).join(', ');
+      logAgentEvent('operations-manager', 'response', `loop-adapter-summary:${loopSummary}`);
+      if (channels?.threadStatus) {
+        await postOpsLine(channels.threadStatus, {
+          actor: 'operations-manager',
+          scope: 'loop-adapter',
+          metric: `loops=${loopReports.length}`,
+          delta: loopSummary,
+          action: loopReports.some((report) => report.status === 'blocked' || report.status === 'partial')
+            ? 'inspect loop adapter results'
+            : 'none',
+          severity: loopReports.some((report) => report.status === 'blocked')
+            ? 'error'
+            : loopReports.some((report) => report.status === 'partial')
+              ? 'warn'
+              : 'info',
+        }).catch(() => {});
+      }
+      await postWorkspaceProgressUpdate(
+        workspaceChannel,
+        'operations-manager',
+        `Loop maintenance results: ${loopReports.map((report) => `${report.loopId}=${report.status}`).slice(0, 6).join(', ')}`
+      );
+    }
+
+    const opsAgentId = 'operations-manager' as AgentId;
+    const opsStartedAt = Date.now();
+    const opsChannel = getAgentWorkChannel(opsAgentId, groupchat);
+    const stewardshipGoal = directiveContext.replace(/\s+/g, ' ').trim().slice(0, 200) || 'operations stewardship';
+    const opsHandoffCtx = buildHandoffContext({
+      fromAgent: 'opus',
+      toAgent: opsAgentId,
+      traceId: `opus-ops-${Date.now()}`,
+      task: `Maintain self-improvement, loop health, and ops-channel hygiene for: ${stewardshipGoal}`,
+      conversationSummary: opusSummary.summary,
+      constraints: [
+        'Focus on memory, logging, regression coverage, loop reporting, and ops-channel hygiene only.',
+        'Be concise and operational.',
+        'Return what you changed, what you observed, and what still needs follow-up.',
+      ],
+      expectedOutput: 'Operational stewardship summary with actions taken and remaining risk',
+      parentGoal: stewardshipGoal,
+    });
+    const loopEvidenceBlock = loopReports.length > 0
+      ? `\n\nLoop adapter reports:\n${loopReports.map((report) => `- ${report.loopId}: ${report.summary}`).join('\n')}`
+      : '';
+    const opsContext = `${formatHandoffPrompt(opsHandoffCtx)}\n\nOperations steward requests:\n${formatOperationsStewardRequests(opusSummary.stewardRequests)}${loopEvidenceBlock}`;
+    const opsResponse = await dispatchToAgent(opsAgentId, opsContext, opsChannel, {
+      maxTokens: SUBAGENT_MAX_TOKENS,
+      memoryWindow: 6,
+      signal,
+      persistUserContent: `[Opus stewardship request]: ${opsContext.slice(0, 900)}`,
+      documentLine: '🛰️ {response}',
+      workspaceChannel,
+    });
+
+    if (!signal?.aborted) {
+      const loopIssues = loopReports.flatMap((report) => report.issues || []);
+      const loopEvidence = loopReports.flatMap((report) => report.evidence || []);
+      const opsReport = createAgentExecutionReport({
+        agentId: opsAgentId,
+        summary: opsResponse.slice(0, 500) || 'Operations steward completed a maintenance pass.',
+        status: loopIssues.some((issue) => issue.severity === 'error') ? 'partial' : 'completed',
+        durationMs: Date.now() - opsStartedAt,
+        issues: loopIssues,
+        evidence: [{ kind: 'message', value: opsResponse.slice(0, 500) || 'operations-steward:no-visible-response' }, ...loopEvidence],
+      });
+      reports.push(opsReport);
+      logAgentEvent(opsAgentId, 'response', `steward-handoff:${opsReport.status}:${opsReport.summary}`);
+      if (channels?.threadStatus) {
+        await postOpsLine(channels.threadStatus, {
+          actor: opsAgentId,
+          scope: 'opus-stewardship',
+          metric: `status=${opsReport.status}`,
+          delta: opsReport.summary,
+          action: opsReport.status === 'completed' ? 'none' : 'review steward follow-up',
+          severity: opsReport.status === 'completed' ? 'info' : 'warn',
+        }).catch(() => {});
+      }
+      if (opsResponse.trim()) {
+        priorFindings.push(`${getAgentMention(opsAgentId)}: ${opsResponse.slice(0, 500)}`);
+        await postWorkspaceProgressUpdate(
+          workspaceChannel,
+          opsAgentId,
+          `Operations steward update: ${opsResponse.slice(0, 700)}`
+        );
+      }
+      if (loopIssues.some((issue) => issue.severity === 'error')) {
+        errorLines.push(`${getAgentMention(opsAgentId)}: loop maintenance encountered errors`);
+      }
+      opusSummary = await executeOpusPlan({
+        executionId: `subagents:${Date.now()}`,
+        goal: stewardshipGoal,
+        requestedBy: 'riley',
+        specialistReports: reports,
+        loopReports,
+      });
+    }
+  }
   markGoalProgress('📝 Sub-agent cycle completed');
-  return { findings: priorFindings, errors: errorLines };
+  return { findings: priorFindings, errors: errorLines, opusSummary, reports };
+}
+
+function resultReasonToMessage(result: PromiseSettledResult<unknown>): string {
+  if (result.status !== 'rejected') return 'Unknown specialist error';
+  const reason = result.reason;
+  return reason instanceof Error ? reason.stack || reason.message : String(reason);
 }
 
 /**

@@ -8,6 +8,7 @@ import { ensureGoogleCredentials, getAccessTokenViaGcloud } from '../services/go
 import {
   DEFAULT_CODING_MODEL,
   DEFAULT_FAST_MODEL,
+  RILEY_PLANNING_MODEL,
   VOICE_FAST_MODEL,
   USE_VERTEX_ANTHROPIC,
   VERTEX_PROJECT_ID,
@@ -65,7 +66,7 @@ const VERTEX_OPUS_ONLY_MODE = process.env.VERTEX_OPUS_ONLY_MODE === 'true';
 const FORCE_OPUS_FOR_CODE_WORK = process.env.FORCE_OPUS_FOR_CODE_WORK === 'true';
 const DEVELOPER_ALWAYS_OPUS = process.env.DEVELOPER_ALWAYS_OPUS === 'true';
 const COMPACT_RUNTIME_TOOL_PROMPTS = process.env.COMPACT_RUNTIME_TOOL_PROMPTS !== 'false';
-const CODE_HEAVY_AGENT_IDS = new Set(['executive-assistant', 'developer', 'devops', 'ios-engineer', 'android-engineer']);
+const CODE_HEAVY_AGENT_IDS = new Set(['executive-assistant', 'operations-manager', 'developer', 'devops', 'ios-engineer', 'android-engineer']);
 const CODE_WORK_RE = /\b(?:code|coding|implement(?:ation)?|fix(?:ing)?\s+(?:bug|error|crash|issue)|bug(?:fix)?|debug(?:ging)?|refactor(?:ing)?|build(?:ing)?\s+(?:the|a|this)|compile|lint(?:ing)?|typecheck(?:ing)?|deploy(?:ing|ment)?|migration|schema\s+(?:change|update|migration)|pull\s*request|merge\s+(?:pr|branch)|tsx|jsx|react\s+(?:native|component)|expo\s+(?:build|update))\b/i;
 const TOOL_ACTION_RE = /\b(?:run|read|search|grep|inspect|check|verify|edit|change|update|deploy|build|test|commit|push|rollback|migrate|open)\b/i;
 const SIMPLE_FAST_PATH_RE = /^(?:ok(?:ay)?|yes|no|thanks?|thank you|status|summary|summari[sz]e|what happened|why|how|help|ping|continue|proceed|looks good|sounds good)\b/i;
@@ -136,7 +137,7 @@ function ensureSmokeTokenEcho(userMessage: string, replyText: string): string {
 function normalizeLowSignalFinalText(agentId: string, text: string, totalToolCalls: number): string {
   const normalized = String(text || '').trim();
   if (!normalized) return '';
-  if ((agentId === 'developer' || agentId === 'executive-assistant') && totalToolCalls > 0 && isLowSignalCompletion(normalized)) {
+  if ((agentId === 'developer' || agentId === 'executive-assistant' || agentId === 'operations-manager') && totalToolCalls > 0 && isLowSignalCompletion(normalized)) {
     return '✅ Done.';
   }
   return normalized;
@@ -163,7 +164,7 @@ function hasToolFailureSignal(toolName: string, result: string): boolean {
 function resolveInitialToolBudget(agentId: string, maxToolRounds: number): number {
   const raw = agentId === 'developer'
     ? Number(process.env.MAX_TOOL_CALLS_FIRST_PASS_DEVELOPER || '14')
-    : agentId === 'executive-assistant'
+    : agentId === 'executive-assistant' || agentId === 'operations-manager'
       ? Number(process.env.MAX_TOOL_CALLS_FIRST_PASS_EXECUTIVE || '8')
       : Number(process.env.MAX_TOOL_CALLS_FIRST_PASS || '10');
   if (!Number.isFinite(raw) || raw <= 0) return Math.max(4, Math.floor(maxToolRounds));
@@ -198,15 +199,16 @@ function resolveToolThreadKey(
 /**
  * Returns the hard-locked model for an agent, or null if the agent is not locked.
  * Locked agents NEVER fall back to another model — they retry with backoff instead.
- * Riley and Ace are always locked to Opus for delegation quality.
+ * Riley is locked to the planning model, while code-heavy implementation can
+ * still be locked to Opus where configured.
  */
 function isAgentModelLocked(agentId: string): string | null {
   // Per-agent override is a hard lock (bypass health routing)
   const overrideKey = `AGENT_MODEL_OVERRIDE_${agentId.replace(/-/g, '_')}`;
   const override = process.env[overrideKey];
   if (override) return override;
-  // Riley is always locked to Opus for orchestration quality
-  if (agentId === 'executive-assistant') return DEFAULT_CODING_MODEL;
+  // Riley stays on the planning model so execution can route through Opus separately.
+  if (agentId === 'executive-assistant' || agentId === 'operations-manager') return RILEY_PLANNING_MODEL;
   // Ace can be locked to Opus via env var (default: off, uses Sonnet)
   if (agentId === 'developer' && DEVELOPER_ALWAYS_OPUS) return DEFAULT_CODING_MODEL;
   return null;
@@ -228,9 +230,9 @@ function modelForAgent(agentId: string, userMessage: string): string {
   if (agentId === 'developer' && DEVELOPER_ALWAYS_OPUS) {
     return DEFAULT_CODING_MODEL;
   }
-  // Riley (EA) gets Opus for best orchestration quality
-  if (agentId === 'executive-assistant') {
-    return DEFAULT_CODING_MODEL;
+  // Riley (EA) is locked above; keep this branch aligned with the planning model.
+  if (agentId === 'executive-assistant' || agentId === 'operations-manager') {
+    return RILEY_PLANNING_MODEL;
   }
   if (isSimpleFastPathPrompt(userMessage)) {
     return resolveHealthyModel(DEFAULT_FAST_MODEL);
@@ -2634,7 +2636,7 @@ UPGRADES CHANNEL:
 - Flag token waste or Discord UX friction when noticed.
 `;
 
-  const rileyContext = agent.id === 'executive-assistant'
+  const rileyContext = agent.id === 'executive-assistant' || agent.id === 'operations-manager'
     ? (() => {
         const parts: string[] = [];
         const personality = getRileyPersonality();

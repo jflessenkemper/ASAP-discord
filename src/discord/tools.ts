@@ -1833,7 +1833,7 @@ export const PROMPT_RILEY_TOOLS: PromptTool[] = PROMPT_REPO_TOOLS;
 
 const STRICT_AGENT_TOOL_ACCESS = String(process.env.STRICT_AGENT_TOOL_ACCESS ?? 'true').toLowerCase() !== 'false';
 const RILEY_AGENT_ID = 'executive-assistant';
-const FULL_TOOL_ACCESS_AGENT_IDS = new Set(['executive-assistant', 'devops', 'ios-engineer', 'android-engineer']);
+const FULL_TOOL_ACCESS_AGENT_IDS = new Set(['executive-assistant', 'operations-manager', 'devops', 'ios-engineer', 'android-engineer']);
 const REVIEW_TOOL_ACCESS_AGENT_IDS = new Set([
   'qa',
   'ux-reviewer',

@@ -8,6 +8,8 @@ import { postOpsLine } from './activityLog';
 import { recordLoopHealth } from './loopHealth';
 import type { BotChannels } from './setup';
 
+const OPS_STEWARD_AGENT_ID = 'operations-manager';
+
 type ActivityEvent = 'invoke' | 'tool' | 'response' | 'error' | 'rate_limit' | 'guardrail' | 'cache' | 'memory';
 
 type ActivityLogRow = {
@@ -199,7 +201,7 @@ export async function runLoggingEngine(channels: BotChannels): Promise<void> {
 
     recordLoopHealth('logging-engine', severity === 'warn' ? 'warn' : 'ok', detail);
     await postOpsLine(channels.threadStatus, {
-      actor: 'executive-assistant',
+      actor: OPS_STEWARD_AGENT_ID,
       scope: 'logging-engine',
       metric: `channels=${latestSnapshot.channels.length}`,
       delta: detail,

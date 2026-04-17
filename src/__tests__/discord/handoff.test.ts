@@ -9,6 +9,8 @@ import {
   buildHandoffResult,
   formatHandoffResult,
   canRunInParallel,
+  type ExecutionEvidence,
+  type ExecutionIssue,
 } from '../../discord/handoff';
 
 describe('handoff', () => {
@@ -204,6 +206,29 @@ describe('handoff', () => {
       expect(result.toolsUsed).toEqual(['write_file']);
       expect(result.nextSteps).toEqual(['Run tests']);
     });
+
+    it('includes progress, issues, evidence, and recommended update', () => {
+      const issues: ExecutionIssue[] = [
+        { scope: 'agent', message: 'test failure', severity: 'warn', source: 'qa' },
+      ];
+      const evidence: ExecutionEvidence[] = [
+        { kind: 'test', value: 'npm test' },
+      ];
+      const result = buildHandoffResult({
+        agentId: 'ace',
+        status: 'partial',
+        summary: 'Tests still running',
+        progress: [{ stage: 'executing', message: 'Running tests', percent: 60, source: 'ace' }],
+        issues,
+        evidence,
+        recommendedUserUpdate: 'Ace is still running tests.',
+        durationMs: 2500,
+      });
+      expect(result.progress).toEqual([{ stage: 'executing', message: 'Running tests', percent: 60, source: 'ace' }]);
+      expect(result.issues).toEqual(issues);
+      expect(result.evidence).toEqual(evidence);
+      expect(result.recommendedUserUpdate).toBe('Ace is still running tests.');
+    });
   });
 
   describe('formatHandoffResult()', () => {
@@ -232,6 +257,20 @@ describe('handoff', () => {
       const text = formatHandoffResult(result);
       expect(text).toContain('Files touched: auth.ts');
       expect(text).toContain('Next steps: Review edge cases; Run integration tests');
+    });
+
+    it('includes issues and evidence when present', () => {
+      const result = buildHandoffResult({
+        agentId: 'qa',
+        status: 'blocked',
+        summary: 'Regression detected',
+        issues: [{ scope: 'agent', severity: 'error', message: 'Checkout test failed', source: 'qa' }],
+        evidence: [{ kind: 'test', value: 'checkout.e2e.ts' }],
+        durationMs: 900,
+      });
+      const text = formatHandoffResult(result);
+      expect(text).toContain('Issues: error:Checkout test failed');
+      expect(text).toContain('Evidence: test:checkout.e2e.ts');
     });
   });
 

@@ -568,6 +568,47 @@ describe('callSession', () => {
   // Voice input handling (via injection)
   // ────────────────────────────────────────
   describe('voice input processing', () => {
+    it('tells a second speaker to wait while the active speaker turn is still running', async () => {
+      const vc = makeVoiceChannel();
+      const gc = makeTextChannel('groupchat');
+      const cl = makeTextChannel('call-log');
+      const member = makeMember('119', 'Starter', false);
+      const webhookSend = jest.fn().mockResolvedValue({ id: 'wh-msg-2' });
+      mockGetWebhook.mockResolvedValue({ send: webhookSend });
+
+      let resolveFirstTurn: ((value: string | PromiseLike<string>) => void) | undefined;
+      mockAgentRespond.mockImplementationOnce(() => new Promise((resolve) => {
+        resolveFirstTurn = resolve;
+      }));
+
+      await startCall(vc, gc, cl, member);
+
+      const firstTurn = injectVoiceTranscriptForTesting({
+        userId: '119',
+        username: 'Starter',
+        text: 'Please walk me through the deployment status in detail',
+      });
+      await Promise.resolve();
+
+      const secondTurn = await injectVoiceTranscriptForTesting({
+        userId: '120',
+        username: 'Other User',
+        text: 'Can you answer me instead right now?',
+      });
+
+      expect(secondTurn.ok).toBe(true);
+      expect(mockAgentRespond).toHaveBeenCalledTimes(1);
+      expect(webhookSend).toHaveBeenCalledWith(
+        expect.objectContaining({
+          content: expect.stringContaining('One speaker at a time please'),
+        })
+      );
+
+      if (resolveFirstTurn) resolveFirstTurn('Hello from Riley');
+      await firstTurn;
+      await endCall();
+    });
+
     it('skips filler-only input', async () => {
       const vc = makeVoiceChannel();
       const gc = makeTextChannel('groupchat');

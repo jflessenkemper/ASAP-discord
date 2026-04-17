@@ -88,7 +88,7 @@ export async function recordSmokeInsight(
   summary: string,
 ): Promise<void> {
   const insight = `Smoke test result — categories: [${categories.join(', ')}], outcome: ${hasFails ? 'FAILURES' : 'PASS'}. ${summary.slice(0, 400)}`;
-  await recordAgentLearning('executive-assistant', insight).catch(() => {});
+  await recordAgentLearning('operations-manager', insight).catch(() => {});
 }
 
 // ─── Cleanup ───

@@ -402,7 +402,7 @@ export async function setupChannels(guild: Guild): Promise<BotChannels> {
     catOps,
     '🧵 Automated hourly summary of open workspace threads and close-ready items.',
     '🧵 Thread status snapshots post here.',
-    { owner: 'system', cadence: 'hourly', staleAlert: '2h' }
+    { owner: 'operations-manager', cadence: 'hourly', staleAlert: '2h' }
   );
 
   const decisions = await ensureText(
@@ -463,7 +463,7 @@ export async function setupChannels(guild: Guild): Promise<BotChannels> {
     catOps,
     '🔁 Independent loop runs, start/finish state, and Riley-readable loop reports',
     '🔁 Loop health changes and loop run reports post here so Riley can reason over them explicitly.',
-    { owner: 'system', cadence: 'on-loop-run', staleAlert: '24h' }
+    { owner: 'operations-manager', cadence: 'on-loop-run', staleAlert: '24h' }
   );
 
   const upgrades = await ensureText(
@@ -471,7 +471,7 @@ export async function setupChannels(guild: Guild): Promise<BotChannels> {
     catOps,
     '🆙 Agent-proposed upgrades: better ways of working, blockers to remove, and worthwhile capability enhancements',
     '🆙 Agents can post upgrade ideas, blockers to remove, and automation/tooling enhancements here for Jordan to approve.',
-    { owner: 'system', cadence: 'daily-triage', staleAlert: '48h' }
+    { owner: 'operations-manager', cadence: 'daily-triage', staleAlert: '48h' }
   );
 
   const tools = await ensureText(
@@ -479,7 +479,7 @@ export async function setupChannels(guild: Guild): Promise<BotChannels> {
     catOps,
     '🧰 Agent capabilities and runtime tool access summary',
     buildToolsChannelSummary(),
-    { owner: 'ace', cadence: 'on-change', staleAlert: '7d' }
+    { owner: 'operations-manager', cadence: 'on-change', staleAlert: '7d' }
   );
   await refreshToolsChannelPost(tools);
 
@@ -496,7 +496,7 @@ export async function setupChannels(guild: Guild): Promise<BotChannels> {
     catOps,
     '📊 Gemini/GCP usage, quotas, and estimated spend — refreshed every 5 minutes',
     undefined,
-    { owner: 'jude', cadence: '5m', staleAlert: '20m' }
+    { owner: 'operations-manager', cadence: '5m', staleAlert: '20m' }
   );
 
   const cost = await ensureText(
@@ -504,7 +504,7 @@ export async function setupChannels(guild: Guild): Promise<BotChannels> {
     catOps,
     '💸 Per-action spend feed by agent (model, tokens, estimated USD)',
     '💸 One-line agent cost feed posts here.',
-    { owner: 'jude', cadence: 'on-request', staleAlert: '24h' }
+    { owner: 'operations-manager', cadence: 'on-request', staleAlert: '24h' }
   );
 
   const screenshots = await ensureText(

@@ -70,6 +70,7 @@ const staleHealAttempts = new Map<string, { count: number; lastAttemptAt: number
 const HEAL_MAX_ATTEMPTS = 3;
 const HEAL_COOLDOWN_MS = 15 * 60 * 1000; // 15 min between heal attempts
 const DEFAULT_TESTER_BOT_ID = '1487426371209789450';
+const OPS_STEWARD_AGENT_ID = 'operations-manager';
 const RUNTIME_INSTANCE_TAG = (process.env.RUNTIME_INSTANCE_TAG || process.env.HOSTNAME || `pid-${process.pid}`).slice(0, 80);
 const nonTesterTriggerNoticeAt = new Map<string, number>();
 let dedupeTableReady = false;
@@ -105,7 +106,7 @@ async function latestChannelMessageTimestamp(channel: TextChannel): Promise<numb
   return latest?.createdTimestamp || null;
 }
 
-async function runChannelHeartbeat(channels: BotChannels): Promise<void> {
+export async function runChannelHeartbeat(channels: BotChannels): Promise<void> {
   try {
     const contracts = getFeedContracts(channels);
     const now = Date.now();
@@ -154,7 +155,7 @@ async function runChannelHeartbeat(channels: BotChannels): Promise<void> {
     const healNote = healed.length > 0 ? ` | healed: ${healed.join(', ')}` : '';
     const severity = parts.some((p) => p.startsWith('⚠️')) ? 'error' : 'info';
     await postOpsLine(channels.threadStatus, {
-      actor: 'executive-assistant',
+      actor: OPS_STEWARD_AGENT_ID,
       scope: 'channel-heartbeat',
       metric: `feeds=${contracts.length}`,
       delta: parts.join(' | ') + healNote,
@@ -212,7 +213,7 @@ function mergeUpgradeEntry(entries: UpgradeDigestEntry[], candidate: Omit<Upgrad
   entries.push({ ...candidate, count: 1, lastTs: ts });
 }
 
-async function runUpgradesTriage(channels: BotChannels): Promise<void> {
+export async function runUpgradesTriage(channels: BotChannels): Promise<void> {
   try {
     const upgrades = channels.upgrades;
     const messages = await upgrades.messages.fetch({ limit: 100 }).catch(() => null);
@@ -313,7 +314,7 @@ export async function runDatabaseAudit(channels: BotChannels): Promise<void> {
     });
 
     await postOpsLine(channels.threadStatus, {
-      actor: 'executive-assistant',
+      actor: OPS_STEWARD_AGENT_ID,
       scope: 'database-audit',
       metric: summary.metric,
       delta: summary.delta,
@@ -338,7 +339,7 @@ export async function runDatabaseAudit(channels: BotChannels): Promise<void> {
   } catch (err) {
     const detail = errMsg(err);
     await postOpsLine(channels.threadStatus, {
-      actor: 'executive-assistant',
+      actor: OPS_STEWARD_AGENT_ID,
       scope: 'database-audit',
       metric: 'query-failed',
       delta: detail,
@@ -371,7 +372,7 @@ function startOpsMonitors(channels: BotChannels): void {
       recordLoopHealth('memory-consolidation', 'ok', result ? result.slice(0, 160) : 'no new insights');
       if (result) {
         void postOpsLine(channels.threadStatus, {
-          actor: 'executive-assistant',
+          actor: OPS_STEWARD_AGENT_ID,
           scope: 'memory-consolidation',
           metric: 'insights',
           delta: result.slice(0, 300),

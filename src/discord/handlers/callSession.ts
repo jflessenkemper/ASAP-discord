@@ -22,7 +22,7 @@ import {
 import { textToSpeech } from '../voice/tts';
 import { errMsg } from '../../utils/errors';
 import { recordLoopHealth } from '../loopHealth';
-import { buildVoiceDecisionPolicy } from '../rileyInteraction';
+import { buildVoiceDecisionPolicy, buildVoiceSingleSpeakerNotice } from '../rileyInteraction';
 
 /** Heartbeat interval to detect stale connections (every 2 minutes) */
 const HEARTBEAT_INTERVAL = 20 * 1000;
@@ -49,6 +49,7 @@ const VOICE_CONTEXT_SUMMARY_MAX_CHARS = parseInt(process.env.VOICE_CONTEXT_SUMMA
 const VOICE_FILLER_ONLY_RE = /^(?:uh+|um+|hmm+|mm+|ah+|er+|uh huh|huh|hmm okay|okay|ok|yeah|yep|nah|nope)[.!?\s]*$/i;
 const RILEY_WARM_PHRASES = ['One moment.', 'Let me check.', 'I am on it.', 'Here is what I found.', 'Done.'];
 const VOICE_TURN_WATCHDOG_MS = parseInt(process.env.VOICE_TURN_WATCHDOG_MS || '20000', 10);
+const VOICE_SINGLE_SPEAKER_NOTICE_COOLDOWN_MS = parseInt(process.env.VOICE_SINGLE_SPEAKER_NOTICE_COOLDOWN_MS || '15000', 10);
 const DEFAULT_TESTER_BOT_ID = '1487426371209789450';
 const RUNTIME_INSTANCE_TAG = (process.env.RUNTIME_INSTANCE_TAG || process.env.HOSTNAME || `pid-${process.pid}`).slice(0, 80);
 const VOICE_LIFECYCLE_DEDUPE_MS = parseInt(process.env.VOICE_LIFECYCLE_DEDUPE_MS || '15000', 10);
@@ -529,6 +530,9 @@ export interface CallSession {
   lastDuplicateNoticeAt: number;
   pendingBargeIn: boolean;
   turnStartedAt: number;
+  activeSpeakerUserId: string | null;
+  activeSpeakerName: string | null;
+  lastSpeakerPolicyNoticeAt: number;
   rileyVoiceName: string;
   previousBotNickname: string | null;
 }
@@ -596,6 +600,13 @@ async function sendLifecycleNoticeOnce(channel: TextChannel, key: string, conten
   if (now - prev < VOICE_LIFECYCLE_DEDUPE_MS) return;
   lifecycleNoticeLastSentAt.set(dedupeKey, now);
   await sendAsAgent(channel, content);
+}
+
+async function maybeSendVoiceSingleSpeakerNotice(session: CallSession): Promise<void> {
+  const now = Date.now();
+  if (now - session.lastSpeakerPolicyNoticeAt < VOICE_SINGLE_SPEAKER_NOTICE_COOLDOWN_MS) return;
+  session.lastSpeakerPolicyNoticeAt = now;
+  await sendAsAgent(session.groupchat, buildVoiceSingleSpeakerNotice(session.activeSpeakerName || undefined));
 }
 
 /**
@@ -687,6 +698,9 @@ export async function startCall(
     lastDuplicateNoticeAt: 0,
     pendingBargeIn: false,
     turnStartedAt: 0,
+    activeSpeakerUserId: null,
+    activeSpeakerName: null,
+    lastSpeakerPolicyNoticeAt: 0,
     rileyVoiceName: selectedRileyVoice,
     previousBotNickname,
   };
@@ -769,6 +783,10 @@ export async function startCall(
     const member = voiceChannel.members.get(userId);
     if (!member || member.user.bot) return;
     console.log(`[VOICE_DEBUG] receiver_speaking_start user=${member.displayName}`);
+    if (activeSession.currentAbortController && activeSession.activeSpeakerUserId && userId !== activeSession.activeSpeakerUserId) {
+      void maybeSendVoiceSingleSpeakerNotice(activeSession);
+      return;
+    }
     if (!activeSession.outputActive) return;
     if (activeSession.outputStartedAt > 0) {
       const activeForMs = Date.now() - activeSession.outputStartedAt;
@@ -852,6 +870,8 @@ export async function endCall(): Promise<void> {
   session.currentAbortController = null;
   session.outputActive = false;
   session.outputStartedAt = 0;
+  session.activeSpeakerUserId = null;
+  session.activeSpeakerName = null;
   stopTesterVCPlayback();
 
   if (session.heartbeatTimer) {
@@ -949,6 +969,16 @@ async function handleVoiceInput(transcription: VoiceTranscription): Promise<void
   session.lastInputAt = Date.now();
   session.pendingBargeIn = false;
 
+  if (
+    session.currentAbortController &&
+    session.activeSpeakerUserId &&
+    transcription.userId &&
+    transcription.userId !== session.activeSpeakerUserId
+  ) {
+    await maybeSendVoiceSingleSpeakerNotice(session);
+    return;
+  }
+
   const turnId = session.currentTurnId + 1;
   const abortController = new AbortController();
   const { signal } = abortController;
@@ -959,6 +989,8 @@ async function handleVoiceInput(transcription: VoiceTranscription): Promise<void
   session.outputActive = false;
   session.outputStartedAt = 0;
   session.turnStartedAt = Date.now();
+  session.activeSpeakerUserId = transcription.userId || null;
+  session.activeSpeakerName = transcription.username || null;
   const turnStartMs = session.turnStartedAt;
 
   const isCurrentTurn = () =>
@@ -1226,6 +1258,8 @@ IMPORTANT: End on a complete sentence, never a fragment.${langHint}`;
       session.outputActive = false;
       session.outputStartedAt = 0;
       session.turnStartedAt = 0;
+      session.activeSpeakerUserId = null;
+      session.activeSpeakerName = null;
     }
   }
 }

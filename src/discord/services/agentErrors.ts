@@ -10,6 +10,14 @@ interface AgentErrorExtra {
   level?: 'info' | 'warn' | 'error';
 }
 
+const OPS_STEWARD_AGENT_ID = 'operations-manager';
+
+function resolveLearningAgentId(extra?: AgentErrorExtra): string {
+  const agentId = String(extra?.agentId || '').trim();
+  if (!agentId || agentId === 'system') return OPS_STEWARD_AGENT_ID;
+  return agentId;
+}
+
 let agentErrorChannel: TextChannel | null = null;
 const RUNTIME_INSTANCE_TAG = (process.env.RUNTIME_INSTANCE_TAG || process.env.HOSTNAME || `pid-${process.pid}`).slice(0, 80);
 
@@ -56,7 +64,7 @@ export async function postAgentErrorLog(
     if (occ.count === ERROR_LEARNING_THRESHOLD) {
       import('../vectorMemory').then(({ recordAgentLearning }) => {
         recordAgentLearning(
-          extra?.agentId || 'system',
+          resolveLearningAgentId(extra),
           `Recurring error pattern (${occ.count}x in <1h): source=${source}, message=${message}. ${extra?.detail || ''}`
         ).catch(() => {});
       }).catch(() => {});

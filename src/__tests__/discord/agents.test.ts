@@ -33,12 +33,13 @@ import {
 
 describe('agents', () => {
   describe('AGENT_IDS', () => {
-    it('contains all 12 static agent IDs', () => {
-      expect(AGENT_IDS.length).toBe(12);
+    it('contains all 13 static agent IDs', () => {
+      expect(AGENT_IDS.length).toBe(13);
     });
 
     it('includes known agent IDs', () => {
       expect(AGENT_IDS).toContain('executive-assistant');
+      expect(AGENT_IDS).toContain('operations-manager');
       expect(AGENT_IDS).toContain('qa');
       expect(AGENT_IDS).toContain('security-auditor');
     });
@@ -48,7 +49,7 @@ describe('agents', () => {
     it('returns a Map of all agents', () => {
       const agents = getAgents();
       expect(agents).toBeInstanceOf(Map);
-      expect(agents.size).toBe(12);
+      expect(agents.size).toBe(13);
     });
 
     it('each agent has required properties', () => {
@@ -182,7 +183,7 @@ describe('agents', () => {
     it('builds guide for all agents', () => {
       const guide = buildAgentMentionGuide();
       expect(guide).toContain('Riley');
-      expect(guide.split(', ').length).toBe(12);
+      expect(guide.split(', ').length).toBe(13);
     });
 
     it('builds guide for specified agents', () => {
@@ -204,6 +205,11 @@ describe('agents', () => {
     it('resolves by channel name', () => {
       const agent = getAgentByChannelName('📋-executive-assistant');
       expect(agent?.id).toBe('executive-assistant');
+    });
+
+    it('resolves the operations manager channel name', () => {
+      const agent = getAgentByChannelName('🛰️-operations-manager');
+      expect(agent?.id).toBe('operations-manager');
     });
 
     it('resolves by agent ID as channel name', () => {

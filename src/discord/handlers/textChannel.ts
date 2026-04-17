@@ -144,7 +144,7 @@ function estimateTextMaxTokens(agent: AgentConfig, userMessage: string): number 
   const trimmed = userMessage.trim();
   const simple = trimmed.length <= 180 && /^(ok|yes|no|status|why|what|how|help|fix|run|test|show|give)\b/i.test(trimmed);
   if (simple) return TEXT_MAX_TOKENS_SIMPLE;
-  if (agent.id === 'executive-assistant') return TEXT_MAX_TOKENS_EXECUTOR;
+  if (agent.id === 'executive-assistant' || agent.id === 'operations-manager') return TEXT_MAX_TOKENS_EXECUTOR;
   return TEXT_MAX_TOKENS_STANDARD;
 }
 
