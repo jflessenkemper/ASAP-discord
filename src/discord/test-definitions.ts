@@ -12,6 +12,7 @@ export interface AgentCapabilityTest {
   category: Category;
   capability: string;
   prompt: string;
+  watchChannelNames?: string[];
   expectAny?: CheckPattern[];
   expectAll?: CheckPattern[];
   expectNone?: CheckPattern[];
@@ -78,8 +79,10 @@ export const AGENT_CAPABILITY_TESTS: AgentCapabilityTest[] = [
     id: 'developer',
     category: 'core',
     capability: 'evidence-format-contract',
-    prompt: 'Return ONLY this exact plain-text structure (no markdown headers):\nResult: <one sentence outcome>\nEvidence: <files changed or tests run>\nRisk/Follow-up: <caveats or next checks>',
+    prompt: 'Return ONLY this exact plain-text structure and include all 3 labels exactly once (no markdown headers, and do not omit the final line even if the risk is low):\nResult: <one sentence outcome>\nEvidence: <files changed or tests run>\nRisk/Follow-up: <caveats or next checks>',
     expectAll: [/\bresults?\s*:/i, /\bevidence\s*:/i, /\brisk|follow.?up/i],
+    timeoutMs: 180_000,
+    attempts: 3,
   },
   {
     id: 'developer',
@@ -234,6 +237,7 @@ export const AGENT_CAPABILITY_TESTS: AgentCapabilityTest[] = [
     category: 'core',
     capability: 'action-urls',
     prompt: 'Show me the app URLs and Cloud Build console links.',
+    watchChannelNames: ['url'],
     expectAny: [/\[ACTION:URLS\]|url|console|cloud build|http/i],
     timeoutMs: 150_000,
   },
@@ -1746,9 +1750,12 @@ export const AGENT_CAPABILITY_TESTS: AgentCapabilityTest[] = [
 
 export const READINESS_TEST_KEYS = new Set([
   'executive-assistant:routing-and-next-step',
+  'executive-assistant:action-health',
   'executive-assistant:repo-memory-tool-awareness',
   'executive-assistant:ace-only-delegation',
-  'developer:evidence-format-contract',
+  'executive-assistant:thread-name-quality',
+  'executive-assistant:list-channels',
+  'developer:tool-retry-awareness',
   'developer:upgrades-post',
   'qa:regression-test-design',
   'qa:upgrades-post',
@@ -1759,6 +1766,7 @@ export const READINESS_TEST_KEYS = new Set([
   'dba:postgres-safety',
   'performance:measurement',
   'devops:tool-audit-proof',
+  'devops:gcp-preflight',
   'copywriter:microcopy-tone',
   'lawyer:au-contractor-distinction',
   'ios-engineer:ios-stack',

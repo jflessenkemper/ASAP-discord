@@ -266,6 +266,7 @@ interface LiveEvent {
   ts: number;
   channel: string;
   channelId: string;
+  parentChannelId?: string;
   author: string;
   authorId: string;
   isBot: boolean;
@@ -341,6 +342,7 @@ class LiveMonitor {
     const isThread = msg.channel?.isThread?.() ?? false;
     const threadName = isThread ? (msg.channel as ThreadChannel).name : undefined;
     const threadId = isThread ? msg.channel.id : undefined;
+    const parentChannelId = isThread ? (msg.channel as ThreadChannel).parentId || undefined : undefined;
     if (isThread && !this.channelNames.has(msg.channelId)) {
       this.channelNames.set(msg.channelId, threadName || msg.channelId);
     }
@@ -349,6 +351,7 @@ class LiveMonitor {
       ts: msg.createdTimestamp,
       channel: channelName,
       channelId: msg.channelId,
+      parentChannelId,
       author: msg.author.username || msg.author.id,
       authorId: msg.author.id,
       isBot: msg.author.bot,
@@ -536,7 +539,17 @@ async function preClearGuildChannels(token: string, guildId: string): Promise<Cl
   if (!channelRes.ok) throw new Error(`Failed to list guild channels: ${channelRes.status}`);
 
   const channels = await channelRes.json() as Array<{ id: string; name: string; type: number }>;
-  const messageChannels = channels.filter((channel) => [0, 5, 10, 11, 12].includes(channel.type));
+  const cleanupPriority = ['groupchat', 'terminal', 'upgrades', 'executive-assistant', 'tools', 'url', 'limits'];
+  const messageChannels = channels
+    .filter((channel) => [0, 5, 10, 11, 12].includes(channel.type))
+    .sort((left, right) => {
+      const leftIndex = cleanupPriority.findIndex((name) => left.name.toLowerCase().includes(name));
+      const rightIndex = cleanupPriority.findIndex((name) => right.name.toLowerCase().includes(name));
+      const normalizedLeft = leftIndex === -1 ? cleanupPriority.length : leftIndex;
+      const normalizedRight = rightIndex === -1 ? cleanupPriority.length : rightIndex;
+      if (normalizedLeft !== normalizedRight) return normalizedLeft - normalizedRight;
+      return left.name.localeCompare(right.name);
+    });
   const results: CleanupStats[] = [];
 
   for (const channel of messageChannels) {
@@ -665,30 +678,7 @@ export function validateReplyShape(test: AgentCapabilityTest, replyText: string,
 async function hasToolAuditEvidence(channels: TextChannel[], toolNames: string[], sinceTs: number): Promise<boolean> {
   if (toolNames.length === 0) return true;
 
-  // Collect messages from channels AND their active threads
-  const batches = await Promise.all(
-    channels.map(async (ch) => {
-      const msgs: Message[] = [];
-      try {
-        const channelMsgs = await ch.messages.fetch({ limit: 120 });
-        msgs.push(...channelMsgs.values());
-      } catch { /* ignore fetch errors */ }
-      try {
-        const threads = await ch.threads.fetchActive();
-        const threadFetches = [...threads.threads.values()].map(async (thread) => {
-          try {
-            const threadMsgs = await thread.messages.fetch({ limit: 40 });
-            return [...threadMsgs.values()];
-          } catch {
-            return [] as Message[];
-          }
-        });
-        const threadResults = await Promise.all(threadFetches);
-        msgs.push(...threadResults.flat());
-      } catch { /* threads not available */ }
-      return msgs;
-    })
-  );
+  const batches = await Promise.all(channels.map((ch) => fetchChannelAndThreadMessages(ch)));
   const textBlob = batches
     .flat()
     .filter((m) => (m.createdTimestamp || 0) >= sinceTs)
@@ -700,6 +690,28 @@ async function hasToolAuditEvidence(channels: TextChannel[], toolNames: string[]
     // Match raw tool name, backtick-wrapped, or structured [TOOL:name] tag
     return textBlob.includes(t) || textBlob.includes(`\`${t}\``) || textBlob.includes(`[tool:${t}]`);
   });
+}
+
+async function fetchChannelAndThreadMessages(channel: TextChannel): Promise<Message[]> {
+  const msgs: Message[] = [];
+  try {
+    const channelMsgs = await channel.messages.fetch({ limit: 120 });
+    msgs.push(...channelMsgs.values());
+  } catch { /* ignore fetch errors */ }
+  try {
+    const threads = await channel.threads.fetchActive();
+    const threadFetches = [...threads.threads.values()].map(async (thread) => {
+      try {
+        const threadMsgs = await thread.messages.fetch({ limit: 40 });
+        return [...threadMsgs.values()];
+      } catch {
+        return [] as Message[];
+      }
+    });
+    const threadResults = await Promise.all(threadFetches);
+    msgs.push(...threadResults.flat());
+  } catch { /* threads not available */ }
+  return msgs;
 }
 
 async function hasUpgradesPostEvidence(upgrades: TextChannel | undefined, token: string, sinceTs: number): Promise<boolean> {
@@ -746,6 +758,10 @@ async function runCapabilityTest(
 
   // Build channel ID sets for monitor queries
   const responseChannelIds = new Set(responseChannels.map((ch) => ch.id));
+  const isObservedResponseEvent = (event: LiveEvent): boolean => (
+    responseChannelIds.has(event.channelId)
+    || (!!event.parentChannelId && responseChannelIds.has(event.parentChannelId))
+  );
   const toolChannelIds = new Set<string>();
   if (terminal) toolChannelIds.add(terminal.id);
   for (const ch of responseChannels) toolChannelIds.add(ch.id);
@@ -760,7 +776,7 @@ async function runCapabilityTest(
       (events) => {
         condEvalCount++;
         const botEvents = events.filter((e) =>
-          (e.isBot || e.isWebhook) && e.ts >= sinceTs && responseChannelIds.has(e.channelId)
+          (e.isBot || e.isWebhook) && e.ts >= sinceTs && isObservedResponseEvent(e)
         );
 
         // Diagnostic: log first few condition evaluations to debug first-attempt failures
@@ -806,7 +822,7 @@ async function runCapabilityTest(
 
     // Gather final state
     const botEvents = monitor.getEventsSince(sinceTs, { botsOnly: true })
-      .filter((e) => responseChannelIds.has(e.channelId));
+      .filter((e) => isObservedResponseEvent(e));
 
     // Log condition breakdown for diagnostics
     {
@@ -893,14 +909,7 @@ async function runCapabilityTest(
     if (elapsed >= timeoutMs && seenMessageIds.size === 0) break;
 
     const channelBatches = await Promise.all(
-      responseChannels.map(async (channel) => {
-        try {
-          const msgs = await channel.messages.fetch({ limit: 120 });
-          return [...msgs.values()];
-        } catch {
-          return [] as Message[];
-        }
-      })
+      responseChannels.map((channel) => fetchChannelAndThreadMessages(channel))
     );
     const ordered = channelBatches.flat().sort((a, b) => a.createdTimestamp - b.createdTimestamp);
     const replies = ordered.filter((m) => isBotOrWebhookReply(m, sent, selfId));
@@ -1214,10 +1223,15 @@ export function buildReadinessSummary(results: TestResult[], extras: ExtraCheckR
     : { core: 0.16, specialist: 0.12, 'tool-proof': 0.16, orchestration: 0.10, upgrades: 0.07, memory: 0.07, ux: 0.08, 'self-improvement': 0.10, infrastructure: 0.08, 'discord-management': 0.06 };
 
   let score = 0;
+  let activeWeight = 0;
   for (const key of Object.keys(weights) as Category[]) {
     const row = byCategory.get(key);
     if (!row || row.total === 0) continue;
+    activeWeight += weights[key];
     score += (row.passed / row.total) * weights[key] * 100;
+  }
+  if (activeWeight > 0) {
+    score /= activeWeight;
   }
 
   const isCritical = (r: TestResult) => r.critical !== false;
@@ -1614,9 +1628,19 @@ async function executeSingleTest(
     : undefined;
 
   const effectiveSendChannel = sendToChannel || groupchat;
-  const responseChannels = sendToChannel
+  const baseResponseChannels = sendToChannel
     ? [sendToChannel]
     : agentChannel ? [groupchat, agentChannel] : [groupchat];
+  const extraResponseChannels = (test.watchChannelNames || [])
+    .map((hint) => {
+      const normalizedHint = hint.trim().toLowerCase();
+      return candidateChannels.find((channel) => channel.name.toLowerCase() === normalizedHint)
+        || candidateChannels.find((channel) => channel.name.toLowerCase().includes(normalizedHint));
+    })
+    .filter((channel): channel is TextChannel => !!channel);
+  const responseChannels = [...new Map(
+    [...baseResponseChannels, ...extraResponseChannels].map((channel) => [channel.id, channel])
+  ).values()];
 
   if (!roleMentions.get(test.id)) {
     console.warn(`Role mention not found for ${test.id}; falling back to handle ${mention}`);
