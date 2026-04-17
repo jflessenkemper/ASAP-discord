@@ -1,93 +1,58 @@
 # ASAP Bot - Riley-Centric Architecture
 
+## System Context
+
 ```mermaid
-flowchart TB
-    User(["Jordan\ninteracts with Riley\nby text or voice"])
+flowchart LR
+    User[Jordan]
+    Riley[Riley\nfront door and coordinator]
+    Voice[ElevenLabs\nvoice layer]
+    Opus[Opus\ndeep reasoning when needed]
+    Workspaces[Agent workspaces]
+    Ops[Operations channels]
 
-    subgraph Discord["Discord Runtime"]
-        direction LR
+    User -->|text or voice| Riley
+    Riley -->|voice path| Voice
+    Riley -->|deep reasoning when needed| Opus
+    Riley -->|delegates execution| Workspaces
+    Workspaces -->|results and evidence| Riley
+    Riley -->|status and loop reports| Ops
+    Riley -->|final answer| User
+```
 
-        subgraph FrontDoor["Front Door"]
-            Groupchat["#groupchat\nprimary text interface"]
-            VoiceCall["voice call\nprimary voice interface"]
-            Riley["Riley\nprimary operator\nand human-facing coordinator"]
-        end
+## Voice Path
 
-        subgraph Ops["Operations Category"]
-            LoopChannel["#loops\nloop start/finish\nindependent run reports"]
-            Terminal["#terminal"]
-            AgentErrors["#agent-errors"]
-            VoiceErrors["#voice-errors"]
-            Limits["#limits / #cost / #health"]
-        end
+```mermaid
+flowchart LR
+    UserVoice[Jordan speaks in Discord]
+    ElevenLabs[ElevenLabs\nvoice relay]
+    Riley[Riley receives request]
+    Opus[Opus\nused only for deeper work]
+    UserHears[Jordan hears Riley's response]
 
-        subgraph Workspaces["ASAP Workspaces"]
-            RileySpace["Riley workspace\nplanning, synthesis, scratchpad"]
-            AceSpace["Ace workspace\nimplementation"]
-            SpecialistSpaces["Specialist workspaces\nQA, UX, Security, API, DBA, Perf, DevOps, Legal, Copy, iOS, Android"]
-        end
-    end
+    UserVoice --> ElevenLabs --> Riley
+    Riley -->|simple answer| ElevenLabs
+    Riley -->|deeper reasoning| Opus --> Riley
+    ElevenLabs --> UserHears
+```
 
-    subgraph VoiceRelay["Voice Relay"]
-        direction TB
-        ElevenVoice["ElevenLabs\nSTT/TTS / relay layer"]
-        OpusVoice["Opus\nreasoning / execution brain\nwhen Riley needs deep work"]
-        ElevenVoice --> OpusVoice
-    end
+## Execution Path
 
-    subgraph Orchestration["Riley Orchestration"]
-        direction TB
-        Intake["1. Intake\nRiley receives text or voice"]
-        Decide["2. Decide\nanswer directly, delegate, or run a loop"]
-        Coordinate["3. Coordinate\npost status to ops / asap categories\nand assign workspace work"]
-        Synthesize["4. Synthesize\ncombine loop output, agent work, and tool results"]
-        Respond["5. Respond\nreturn result to Jordan\nvia text or voice"]
+```mermaid
+flowchart LR
+    Request[Request reaches Riley]
+    Decide[Riley decides]
+    Workspace[Agent workspace]
+    Tools[Tools and integrations]
+    Report[Result back to Riley]
+    Loop[Optional independent loop]
+    LoopChannel[#loops report channel]
 
-        Intake --> Decide --> Coordinate --> Synthesize --> Respond
-    end
-
-    subgraph AgentExecution["Workspace Execution"]
-        direction LR
-        RileyToAce["Riley briefs Ace or a specialist\nin the appropriate workspace"]
-        AgentWork["Agent does work in its own channel\nusing tools and evidence"]
-        AgentReturn["Agent reports back to Riley\nin the workspace thread/channel"]
-
-        RileyToAce --> AgentWork --> AgentReturn
-    end
-
-    subgraph IndependentLoops["Independent Runtime Loops"]
-        direction TB
-        LoopTrigger["Riley triggers one loop at a time\nas needed, not all loops together"]
-        LoopRun["Selected loop runs independently\nand records progress in #loops"]
-        LoopReport["Loop returns a report to Riley\nfor decisions, follow-up, or self-improvement"]
-
-        LoopTrigger --> LoopRun --> LoopReport
-    end
-
-    User --> Groupchat --> Riley
-    User --> VoiceCall --> ElevenVoice
-    OpusVoice --> Riley
-    VoiceCall -. spoken context .-> Riley
-
-    Riley --> Orchestration
-    Respond --> Groupchat
-    Respond --> VoiceCall
-
-    Coordinate --> Ops
-    Coordinate --> RileySpace
-    RileySpace --> RileyToAce
-    RileyToAce --> AceSpace
-    RileyToAce --> SpecialistSpaces
-    AgentReturn --> Riley
-
-    Decide --> LoopTrigger
-    LoopRun --> LoopChannel
-    LoopReport --> Riley
-
-    Riley --> Terminal
-    Riley --> Limits
-    Riley --> AgentErrors
-    Riley --> VoiceErrors
+    Request --> Decide
+    Decide -->|delegate work| Workspace
+    Workspace --> Tools --> Workspace
+    Workspace --> Report
+    Decide -->|run one loop if needed| Loop --> LoopChannel --> Report
 ```
 
 ## Core Idea

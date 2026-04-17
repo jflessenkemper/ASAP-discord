@@ -32,26 +32,17 @@ This system is closer to an operations room:
 ```mermaid
 flowchart TD
     User[Jordan in Discord]
-    Riley[Riley<br/>front door and coordinator]
-    Voice[ElevenLabs<br/>voice relay]
-    Opus[Opus<br/>deep reasoning and execution]
-    Workspaces[Agent workspaces<br/>Riley, Ace, specialists]
-    Loops[Independent loops<br/>run one at a time as needed]
-    LoopOps[Operations loop channel<br/>start, finish, report]
-    Tools[Code, GitHub, cloud, Discord, database tools]
+    Riley[Riley<br/>front door]
+    Voice[ElevenLabs<br/>voice layer]
+    Workspaces[Agent workspaces<br/>execution]
+    Ops[Operations channels<br/>status and loop reports]
 
     User -->|text or voice| Riley
-    Riley -->|voice path| Voice
-    Voice --> Opus
-    Opus --> Riley
-    Riley --> Workspaces
-    Workspaces --> Tools
-    Tools --> Workspaces
-    Workspaces --> Riley
-    Riley --> Loops
-    Loops --> LoopOps
-    LoopOps --> Riley
-    Riley -->|answers, updates, decisions| User
+    Riley -->|voice only when needed| Voice
+    Riley -->|delegates work| Workspaces
+    Workspaces -->|results| Riley
+    Riley -->|status updates| Ops
+    Riley -->|answers and decisions| User
 ```
 
 The full architecture diagram is in [.github/ARCHITECTURE.md](.github/ARCHITECTURE.md).
