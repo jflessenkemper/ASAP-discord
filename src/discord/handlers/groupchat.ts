@@ -36,7 +36,7 @@ import { logAgentEvent, postOpsLine } from '../activityLog';
 
 import { startCall, endCall, isCallActive, injectVoiceTranscriptForTesting, processTesterVoiceTurnForCall } from './callSession';
 import { SYSTEM_COLORS, BUTTON_IDS } from '../ui/constants';
-import { isDesignDeliverableDetailed, shouldSkipContractEnforcement, buildAceDesignContext, buildAceStandardContext } from './designDeliverable';
+import { shouldSkipContractEnforcement } from './designDeliverable';
 import { documentToChannel } from './documentation';
 import { goalState, GOAL_THREAD_COUNTER_RE } from './goalState';
 import { LOW_SIGNAL_COMPLETION_RE } from './responseNormalization';
@@ -1692,8 +1692,8 @@ async function handleSmokeTestPrompt(content: string, groupchat: TextChannel): P
   const mentionedIds = parseMentionedAgentIds(content);
   const targetAgentId: AgentId = mentionedIds.length > 0 ? mentionedIds[0] : 'executive-assistant' as AgentId;
 
-  // For specialist mentions, Riley routes through Ace — but for smoke tests
-  // we respond directly as Riley to keep things simple and fast.
+  // Smoke tests always run through Riley directly so the tester sees one
+  // stable execution path and doesn't depend on internal delegation.
   const riley = getAgent('executive-assistant' as AgentId);
   if (!riley) return;
 
@@ -1821,9 +1821,6 @@ async function processGroupchatMessage(
         groupchat,
         handleRileyMessage(content, senderName, message.member || undefined, groupchat, signal, workspaceChannel),
       );
-    } else if (uniqueMentions.length === 1 && uniqueMentions[0] === 'developer') {
-      // Legacy @ace/@developer mentions route to Riley.
-      await handleDirectedMessage(content, senderName, uniqueMentions, groupchat, workspaceChannel, signal);
     } else {
       const normalized = `${content}\n\n[System: Riley should execute directly when possible and involve specialists only when needed.]`;
       goalState.setGoal(normalized);
@@ -2612,25 +2609,12 @@ function shouldFanOutAllAgents(rileyResponse: string): boolean {
   return true;
 }
 
-const ACE_FIRST_TASK_RE = /\b(?:fix|inspect|investigate|check|review|test|debug|look at|look into|trace|implement|update|change|patch|deploy|smoke|regression|audit|compare|why)\b/i;
 const FILE_PATH_EVIDENCE_RE = /\b(?:[a-zA-Z0-9_.-]+\/)+[a-zA-Z0-9_.-]+\.[a-zA-Z0-9]+\b/;
 const CHECK_EVIDENCE_RE = /\b(?:npm\s+run|pnpm\s+|yarn\s+|typecheck|lint|test|build|smoke|harness|playwright|jest|tsc)\b/i;
 
-function isAceSelfDelegationResponse(text: string): boolean {
-  const normalized = String(text || '').toLowerCase();
-  if (!normalized) return false;
-  const selfMention = getAgentMention('developer' as AgentId).toLowerCase();
-  return normalized.includes('coordinate with ace')
-    || normalized.includes('investigate the `client` codebase')
-    || normalized.includes('@ace')
-    || normalized.includes(selfMention);
-}
-
-function hasAceCompletionContract(text: string): boolean {
+function hasExecutionCompletionContract(text: string): boolean {
   const content = String(text || '');
   if (!content.trim()) return false;
-  // Design/spec deliverables with substantial HTML/CSS content satisfy the contract
-  // without requiring the Result/Evidence/Risk format.
   if (isSubstantialDesignDeliverable(content)) return true;
   if (!/\bresult\s*:/i.test(content)) return false;
   if (!/\bevidence\s*:/i.test(content)) return false;
@@ -2647,9 +2631,9 @@ function isSubstantialDesignDeliverable(text: string): boolean {
   return htmlIndicators >= 3;
 }
 
-function summarizeAceCompletionForRiley(text: string): string {
+function summarizeExecutionForRiley(text: string): string {
   const content = String(text || '').trim();
-  if (!content) return 'Execution completed; evidence is available in the developer channel.';
+  if (!content) return 'Execution completed; evidence is available in the workspace thread.';
 
   const result = content.match(/\bresult\s*:\s*([^\n]+)/i)?.[1]?.trim();
   const evidence = content.match(/\bevidence\s*:\s*([^\n]+)/i)?.[1]?.trim();
@@ -2666,14 +2650,6 @@ function summarizeAceCompletionForRiley(text: string): string {
   }
 
   return content.replace(/\s+/g, ' ').slice(0, 480);
-}
-
-function shouldSuppressAceVisibleOutput(text: string): boolean {
-  const content = String(text || '');
-  return content.trim().length < 90
-    || LOW_SIGNAL_COMPLETION_RE.test(content)
-    || isAceSelfDelegationResponse(content)
-    || !hasAceCompletionContract(content);
 }
 
 function inferSpecialistsForContext(text: string): string[] {
@@ -2693,15 +2669,6 @@ function inferSpecialistsForContext(text: string): string[] {
   if (!isCodeTask && /\b(copy|wording|empty state)\b/.test(normalized)) picks.add('copywriter');
 
   return [...picks].slice(0, 3);
-}
-
-function shouldAutoDelegateToAce(userMessage: string, rileyResponse: string): boolean {
-  return false;
-}
-
-function ensureAceFirstDelegation(rileyResponse: string, userMessage: string): string {
-  if (!shouldAutoDelegateToAce(userMessage, rileyResponse)) return rileyResponse;
-  return `${rileyResponse}\n\n${getAgentMention('developer' as AgentId)} please take the lead on this task and involve other specialists only if needed.`;
 }
 
 function appendDefaultNextSteps(text: string): string {
@@ -2828,8 +2795,7 @@ function shouldMirrorCompletionToGroupchat(text: string, workspaceChannel: Webho
   if (!normalized.trim()) return false;
   if (/decision\s+required|\bblocked\b|waiting\s+for\s+(?:approval|input)|need\s+approval/.test(normalized)) return false;
   if (/\breceived\b|\bstarting\b|\bworking\b|\bplan\b|\bwill\b|\bin progress\b|\bongoing\b/.test(normalized)) return false;
-  // Don't mirror delegation-to-Ace as a completion — the chain hasn't run yet.
-  if (/please\s+create|@ace|<@&\d+>.*(?:create|build|implement|take the lead)/.test(normalized)) return false;
+  if (/please\s+create|<@&\d+>.*(?:create|build|implement|review|validate|help)/.test(normalized)) return false;
   return isCompletionClaim(normalized);
 }
 
@@ -2892,24 +2858,24 @@ function hasBlockingVerificationFinding(findings: string[]): boolean {
   return findings.some((line) => /\bverification\s+is\s+blocked\b|\bblocked\b|\bunable\s+to\s+find\b|\bapp\s+.*not\s+loading\b|\bno\s+elements\b/i.test(String(line || '')));
 }
 
-async function recoverFromAgentErrors(
+async function recoverFromExecutionErrors(
   rileyResponse: string,
   errorLines: string[],
   groupchat: TextChannel,
   workspaceChannel: WebhookCapableChannel,
   signal?: AbortSignal
 ): Promise<{ findings: string[]; errors: string[] }> {
-  const ace = getAgent('developer' as AgentId);
-  if (!ace) return { findings: [], errors: ['Ace: unavailable for recovery'] };
+  const riley = getAgent('executive-assistant' as AgentId);
+  if (!riley) return { findings: [], errors: ['Riley: unavailable for recovery'] };
 
   try {
     if (signal?.aborted) return { findings: [], errors: [] };
-    markGoalProgress('🧯 Ace recovering agent errors...');
-    const aceChannel = getAgentWorkChannel('developer', groupchat);
-    aceChannel.sendTyping().catch(() => {});
+    markGoalProgress('🧯 Riley recovering execution errors...');
+    const rileyChannel = getAgentWorkChannel('executive-assistant', groupchat);
+    rileyChannel.sendTyping().catch(() => {});
 
     const recoveryContext = [
-      '[System escalation from Riley]: One or more specialist agents errored during execution.',
+      '[System execution recovery]: One or more specialist agents errored during execution.',
       '',
       'Original Riley plan:',
       rileyResponse,
@@ -2925,10 +2891,10 @@ async function recoverFromAgentErrors(
       '4) End with a short status: fixed, partially fixed, or blocked.',
     ].join('\n');
 
-    const aceRecovery = await dispatchToAgent('developer', recoveryContext, aceChannel, {
+    const recoveryResponse = await dispatchToAgent('executive-assistant', recoveryContext, rileyChannel, {
       signal,
       maxTokens: Math.max(SUBAGENT_MAX_TOKENS, 2200),
-      persistUserContent: `[Riley recovery escalation]: ${errorLines.join('; ').slice(0, 1200)}`,
+      persistUserContent: `[Riley execution recovery]: ${errorLines.join('; ').slice(0, 1200)}`,
       documentLine: '🧯 {response}',
       workspaceChannel,
     });
@@ -2936,13 +2902,13 @@ async function recoverFromAgentErrors(
     if (signal?.aborted) return { findings: [], errors: [] };
 
     const findings: string[] = [];
-    if (aceRecovery.trim()) {
-      findings.push(`${getAgentMention('developer' as AgentId)}: ${aceRecovery.slice(0, 500)}`);
+    if (recoveryResponse.trim()) {
+      findings.push(`${getAgentMention('executive-assistant' as AgentId)}: ${recoveryResponse.slice(0, 500)}`);
     }
 
-    const recoverySubDirectives = parseDirectives(aceRecovery);
+    const recoverySubDirectives = parseDirectives(recoveryResponse);
     if (recoverySubDirectives.length > 0) {
-      const delegated = await handleSubAgents(recoverySubDirectives, aceRecovery, groupchat, workspaceChannel, signal);
+      const delegated = await handleSubAgents(recoverySubDirectives, recoveryResponse, groupchat, workspaceChannel, signal);
       findings.push(...delegated.findings);
       return { findings, errors: delegated.errors };
     }
@@ -2950,114 +2916,28 @@ async function recoverFromAgentErrors(
     return { findings, errors: [] };
   } catch (err) {
     const msg = err instanceof Error ? err.stack || err.message : 'Unknown';
-    console.error('Ace recovery error:', errMsg(err));
-    void postAgentErrorLog('ace:recovery', 'Ace recovery error', { agentId: 'developer', detail: msg });
+    console.error('Riley recovery error:', errMsg(err));
+    void postAgentErrorLog('riley:recovery', 'Riley recovery error', { agentId: 'executive-assistant', detail: msg });
     try {
       const wh = await getWebhook(workspaceChannel);
-      await wh.send({ content: '⚠️ Ace had an error while recovering specialist failures.', username: `${ace.emoji} ${ace.name}`, avatarURL: ace.avatarUrl });
+      await wh.send({ content: '⚠️ Riley had an error while recovering specialist failures.', username: `${riley.emoji} ${riley.name}`, avatarURL: riley.avatarUrl });
     } catch {
     }
-    return { findings: [], errors: ['Ace: recovery error'] };
+    return { findings: [], errors: ['Riley: recovery error'] };
   }
 }
-
-interface AceDispatchResult {
-  response: string;
-  qualityFailed: boolean;
-  designTask: boolean;
-  fileChanges: string[];
-}
-
-async function dispatchAceWithQualityGate(
-  rileyResponse: string,
-  aceChannel: WebhookCapableChannel,
-  workspaceChannel: WebhookCapableChannel,
-  signal?: AbortSignal,
-): Promise<AceDispatchResult> {
-  const designCheck = isDesignDeliverableDetailed(rileyResponse, goalState.goal);
-  const designTask = designCheck.match;
-  console.log(`AGENT_CHAIN isDesignDeliverable=${designTask} rileyMatch=${designCheck.rileyMatch} goalMatch=${designCheck.goalMatch} goal="${(goalState.goal || '').slice(0, 80)}" rileySnippet="${rileyResponse.slice(0, 120)}"`);
-
-  const aceContext = designTask
-    ? buildAceDesignContext(rileyResponse)
-    : buildAceStandardContext(rileyResponse);
-
-  // Track mutating tool calls to inform the quality gate.
-  // If Ace used edit_file/write_file/run_command/etc., real work was done
-  // regardless of how short or formulaic the text response is.
-  const MUTATING_TOOLS = new Set(['edit_file', 'write_file', 'batch_edit', 'run_command', 'git_create_branch', 'create_pull_request']);
-  const FILE_TOOLS = new Set(['edit_file', 'write_file', 'batch_edit']);
-  const toolsUsed = new Set<string>();
-  let mutatingToolCount = 0;
-  const fileChanges: string[] = [];
-
-  let aceResponse = await dispatchToAgent('developer', aceContext, aceChannel, {
-    signal,
-    maxTokens: designTask ? 4000 : undefined,
-    persistUserContent: `[Riley directed]: ${rileyResponse.slice(0, 1000)}`,
-    documentLine: '✅ {response}',
-    workspaceChannel,
-    suppressVisibleOutput: shouldSuppressAceVisibleOutput,
-    onToolUse: (toolName, summary) => {
-      toolsUsed.add(toolName);
-      if (MUTATING_TOOLS.has(toolName)) mutatingToolCount++;
-      if (FILE_TOOLS.has(toolName) && summary) fileChanges.push(summary);
-    },
-  });
-
-  const needsQualityRetry = () => {
-    // If Ace used mutating tools, real work was done — skip text-based quality checks
-    if (mutatingToolCount > 0) return false;
-    return (
-      aceResponse.trim().length < 90
-      || LOW_SIGNAL_COMPLETION_RE.test(aceResponse)
-      || isAceSelfDelegationResponse(aceResponse)
-      || !hasAceCompletionContract(aceResponse)
-    );
-  };
-
-  // Design deliverables: Ace's file creation via tools IS the deliverable.
-  // The quality gate (Result/Evidence/Risk) is irrelevant — skip retries.
-  if (!designTask) {
-    if (!signal?.aborted && needsQualityRetry()) {
-      aceResponse = await dispatchToAgent(
-        'developer',
-        '[System quality check] Execute directly and provide a concrete completion summary: Result (one sentence), Evidence (file paths + validation), Risk/Follow-up (one sentence). No delegation, no placeholders.',
-        aceChannel,
-        {
-          signal,
-          maxTokens: Math.max(SUBAGENT_MAX_TOKENS, 500),
-          persistUserContent: '[System quality check for Ace response detail]',
-          documentLine: '✅ {response}',
-          workspaceChannel,
-          suppressVisibleOutput: shouldSuppressAceVisibleOutput,
-        }
-      );
-    }
-  }
-
-  const qualityFailed = !designTask && !signal?.aborted && needsQualityRetry();
-  console.log(`AGENT_CHAIN aceQualityFailed=${qualityFailed} designTask=${designTask} needsRetry=${needsQualityRetry()} mutatingTools=${mutatingToolCount} toolsUsed=${[...toolsUsed].join(',')} aceLen=${aceResponse.trim().length} aceSnippet="${aceResponse.slice(0, 120)}"`);
-  return { response: aceResponse, qualityFailed, designTask, fileChanges };
-}
-
 async function runSpecialistFallback(
   rileyResponse: string,
-  aceResponse: string,
-  aceQualityFailed: boolean,
   groupchat: TextChannel,
   workspaceChannel: WebhookCapableChannel,
   signal?: AbortSignal,
 ): Promise<{ findings: string[]; errors: string[] }> {
   const findings: string[] = [];
   const errors: string[] = [];
-  const inferredSpecialists = inferSpecialistsForContext(`${rileyResponse}\n${aceResponse}`)
-    .filter((id) => id !== 'developer');
-  // Don't force QA fallback when Ace quality fails — it wastes tokens routing code tasks
-  // to agents that can't write code. Only run genuinely inferred specialists.
+  const inferredSpecialists = inferSpecialistsForContext(rileyResponse);
   const fallbackAgents = [...new Set(inferredSpecialists)].slice(0, 2);
   if (fallbackAgents.length > 0) {
-    const autoSpecialistRun = await handleSubAgents(fallbackAgents, aceResponse, groupchat, workspaceChannel, signal);
+    const autoSpecialistRun = await handleSubAgents(fallbackAgents, rileyResponse, groupchat, workspaceChannel, signal);
     findings.push(...autoSpecialistRun.findings);
     errors.push(...autoSpecialistRun.errors);
   }
@@ -3065,7 +2945,7 @@ async function runSpecialistFallback(
 }
 
 /**
- * Handle the chain: Riley → Ace → sub-agents → report back.
+ * Handle the chain: Riley executes directly, then optionally fans out to specialists.
  * Returns a summary of the chain outcome for use in continuation loops.
  */
 async function handleAgentChain(
@@ -3083,77 +2963,23 @@ async function handleAgentChain(
   if (effectiveAgents.length === 0) return result;
   markGoalProgress('🧩 Coordinating specialist agents...');
 
-  const aceDirected = effectiveAgents.length > 0;
-  const otherDirected = RILEY_DIRECT_SPECIALISTS
-    ? effectiveAgents.filter((id) => id !== 'developer')
-    : [];
+  const otherDirected = RILEY_DIRECT_SPECIALISTS ? effectiveAgents : [];
   const consolidatedFindings: string[] = [];
   const consolidatedErrors: string[] = [];
   const rileyAlreadyCompletion = /(done|completed|complete|fixed|resolved|implemented|deployed|shipped|finished|ready)/i.test(rileyResponse);
   const needsRuntimeEvidence = goalNeedsRuntimeVerification(`${goalState.goal || ''}\n${rileyResponse}`);
-  if (aceDirected) {
-    const ace = getAgent('developer' as AgentId);
-    if (ace) {
-      try {
-        if (signal?.aborted) return result;
-        const aceChannel = getAgentWorkChannel('developer', groupchat);
-        aceChannel.sendTyping().catch(() => {});
-
-        const { response: aceResponse, qualityFailed: aceQualityFailed, designTask, fileChanges } =
-          await dispatchAceWithQualityGate(rileyResponse, aceChannel, workspaceChannel, signal);
-
-        if (aceQualityFailed) {
-          consolidatedErrors.push('Ace completion quality check failed after retries.');
-        }
-
-        // Post a compact diff preview if files were changed
-        if (fileChanges.length > 0 && !signal?.aborted) {
-          result.hadFileChanges = true;
-          const diffLines = fileChanges.slice(0, 15).map(s => `\`${s.slice(0, 100)}\``).join('\n');
-          const diffEmbed = new EmbedBuilder()
-            .setTitle(`📝 Files Changed (${fileChanges.length})`)
-            .setDescription(diffLines)
-            .setColor(SYSTEM_COLORS.info)
-            .setTimestamp();
-          await workspaceChannel.send({ embeds: [diffEmbed] }).catch(() => {});
-        }
-
-        if (!signal?.aborted && hasAceCompletionContract(aceResponse)) {
-          consolidatedFindings.push(`${getAgentMention('developer' as AgentId)}: ${summarizeAceCompletionForRiley(aceResponse)}`);
-          result.summary = summarizeAceCompletionForRiley(aceResponse);
-        }
-
-        if (signal?.aborted) return result;
-        markGoalProgress('💻 Ace implementing...');
-
-        const aceSubDirectives = parseDirectives(aceResponse);
-        if (aceSubDirectives.length > 0) {
-          const fromAce = await handleSubAgents(aceSubDirectives, aceResponse, groupchat, workspaceChannel, signal);
-          consolidatedFindings.push(...fromAce.findings);
-          consolidatedErrors.push(...fromAce.errors);
-        } else if (!designTask) {
-          const fallbackResult = await runSpecialistFallback(rileyResponse, aceResponse, aceQualityFailed, groupchat, workspaceChannel, signal);
-          consolidatedFindings.push(...fallbackResult.findings);
-          consolidatedErrors.push(...fallbackResult.errors);
-        }
-      } catch (err) {
-        const msg = err instanceof Error ? err.stack || err.message : 'Unknown';
-        console.error('Ace error:', errMsg(err));
-        void postAgentErrorLog('ace:groupchat', 'Ace error', { agentId: 'developer', detail: msg });
-        try {
-          const wh = await getWebhook(workspaceChannel);
-          await wh.send({ content: `⚠️ Ace had an error.`, username: `${ace.emoji} ${ace.name}`, avatarURL: ace.avatarUrl });
-        } catch (webhookErr) {
-          console.warn('Webhook error notification failed for Ace:', webhookErr instanceof Error ? webhookErr.message : 'Unknown');
-        }
-      }
-    }
+  if (hasExecutionCompletionContract(rileyResponse)) {
+    result.summary = summarizeExecutionForRiley(rileyResponse);
   }
 
   if (otherDirected.length > 0) {
     const direct = await handleSubAgents(otherDirected, rileyResponse, groupchat, workspaceChannel, signal);
     consolidatedFindings.push(...direct.findings);
     consolidatedErrors.push(...direct.errors);
+  } else if (!signal?.aborted) {
+    const fallbackResult = await runSpecialistFallback(rileyResponse, groupchat, workspaceChannel, signal);
+    consolidatedFindings.push(...fallbackResult.findings);
+    consolidatedErrors.push(...fallbackResult.errors);
   }
 
   if (!signal?.aborted && hasBlockingVerificationFinding(consolidatedFindings)) {
@@ -3161,14 +2987,14 @@ async function handleAgentChain(
   }
 
   if (RILEY_ACE_ERROR_RECOVERY && !signal?.aborted && consolidatedErrors.length > 0) {
-    const recovered = await recoverFromAgentErrors(rileyResponse, consolidatedErrors, groupchat, workspaceChannel, signal);
+    const recovered = await recoverFromExecutionErrors(rileyResponse, consolidatedErrors, groupchat, workspaceChannel, signal);
     consolidatedFindings.push(...recovered.findings);
     consolidatedErrors.push(...recovered.errors);
   }
 
   if (!signal?.aborted && needsRuntimeEvidence) {
-    // Auto-capture web harness screenshots when Ace made file changes,
-    // so verification evidence is produced without manual intervention.
+    // Auto-capture web harness screenshots so verification evidence is produced
+    // without waiting for a separate manual check.
     const evidenceSince = Math.max(Date.now() - 2 * 60 * 60 * 1000, goalState.startedAt - 60_000);
     let hasEvidence = await hasRecentRuntimeVerificationEvidence(groupchat, workspaceChannel, evidenceSince);
     if (!hasEvidence) {
@@ -3230,7 +3056,6 @@ const AGENT_TIER: Record<string, number> = {
   'ux-reviewer': 0,      // Sophie — design first
   'dba': 0,              // Elena — schema design (parallel with Sophie)
   'api-reviewer': 0,     // Raj — API design (parallel with Sophie/Elena)
-  'developer': 1,        // Ace — implementation (after design)
   'security-auditor': 2, // Kane — review (parallel with other reviewers)
   'lawyer': 2,           // Harper — compliance review
   'qa': 2,               // Max — testing review

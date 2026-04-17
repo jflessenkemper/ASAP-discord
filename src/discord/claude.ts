@@ -66,7 +66,7 @@ const VERTEX_OPUS_ONLY_MODE = process.env.VERTEX_OPUS_ONLY_MODE === 'true';
 const FORCE_OPUS_FOR_CODE_WORK = process.env.FORCE_OPUS_FOR_CODE_WORK === 'true';
 const DEVELOPER_ALWAYS_OPUS = process.env.DEVELOPER_ALWAYS_OPUS === 'true';
 const COMPACT_RUNTIME_TOOL_PROMPTS = process.env.COMPACT_RUNTIME_TOOL_PROMPTS !== 'false';
-const CODE_HEAVY_AGENT_IDS = new Set(['executive-assistant', 'operations-manager', 'developer', 'devops', 'ios-engineer', 'android-engineer']);
+const CODE_HEAVY_AGENT_IDS = new Set(['executive-assistant', 'operations-manager', 'devops', 'ios-engineer', 'android-engineer']);
 const CODE_WORK_RE = /\b(?:code|coding|implement(?:ation)?|fix(?:ing)?\s+(?:bug|error|crash|issue)|bug(?:fix)?|debug(?:ging)?|refactor(?:ing)?|build(?:ing)?\s+(?:the|a|this)|compile|lint(?:ing)?|typecheck(?:ing)?|deploy(?:ing|ment)?|migration|schema\s+(?:change|update|migration)|pull\s*request|merge\s+(?:pr|branch)|tsx|jsx|react\s+(?:native|component)|expo\s+(?:build|update))\b/i;
 const TOOL_ACTION_RE = /\b(?:run|read|search|grep|inspect|check|verify|edit|change|update|deploy|build|test|commit|push|rollback|migrate|open)\b/i;
 const SIMPLE_FAST_PATH_RE = /^(?:ok(?:ay)?|yes|no|thanks?|thank you|status|summary|summari[sz]e|what happened|why|how|help|ping|continue|proceed|looks good|sounds good)\b/i;
@@ -83,7 +83,7 @@ function normalizePromptForHeuristics(userMessage: string): string {
 }
 
 /**
- * High-stakes prompts for Ace where Pro quality is worth the cost.
+ * High-stakes execution prompts where Pro quality is worth the cost.
  * Everything else defaults to Flash for cost efficiency.
  */
 const HIGH_STAKES_RE = /(high[-\s]?stakes|critical|prod(?:uction)?|hotfix|incident|security|auth|migration|rollback|data\s+loss|schema|deploy)/i;
@@ -137,7 +137,7 @@ function ensureSmokeTokenEcho(userMessage: string, replyText: string): string {
 function normalizeLowSignalFinalText(agentId: string, text: string, totalToolCalls: number): string {
   const normalized = String(text || '').trim();
   if (!normalized) return '';
-  if ((agentId === 'developer' || agentId === 'executive-assistant' || agentId === 'operations-manager') && totalToolCalls > 0 && isLowSignalCompletion(normalized)) {
+  if ((agentId === 'executive-assistant' || agentId === 'operations-manager') && totalToolCalls > 0 && isLowSignalCompletion(normalized)) {
     return '✅ Done.';
   }
   return normalized;
@@ -162,11 +162,9 @@ function hasToolFailureSignal(toolName: string, result: string): boolean {
 }
 
 function resolveInitialToolBudget(agentId: string, maxToolRounds: number): number {
-  const raw = agentId === 'developer'
-    ? Number(process.env.MAX_TOOL_CALLS_FIRST_PASS_DEVELOPER || '14')
-    : agentId === 'executive-assistant' || agentId === 'operations-manager'
-      ? Number(process.env.MAX_TOOL_CALLS_FIRST_PASS_EXECUTIVE || '8')
-      : Number(process.env.MAX_TOOL_CALLS_FIRST_PASS || '10');
+  const raw = agentId === 'executive-assistant' || agentId === 'operations-manager'
+    ? Number(process.env.MAX_TOOL_CALLS_FIRST_PASS_EXECUTIVE || '8')
+    : Number(process.env.MAX_TOOL_CALLS_FIRST_PASS || '10');
   if (!Number.isFinite(raw) || raw <= 0) return Math.max(4, Math.floor(maxToolRounds));
   return Math.max(3, Math.min(Math.floor(raw), Math.max(4, maxToolRounds * 2)));
 }
@@ -209,8 +207,6 @@ function isAgentModelLocked(agentId: string): string | null {
   if (override) return override;
   // Riley stays on the planning model so execution can route through Opus separately.
   if (agentId === 'executive-assistant' || agentId === 'operations-manager') return RILEY_PLANNING_MODEL;
-  // Ace can be locked to Opus via env var (default: off, uses Sonnet)
-  if (agentId === 'developer' && DEVELOPER_ALWAYS_OPUS) return DEFAULT_CODING_MODEL;
   return null;
 }
 
@@ -226,9 +222,6 @@ function modelForAgent(agentId: string, userMessage: string): string {
   const override = process.env[overrideKey];
   if (override) {
     return resolveHealthyModel(override);
-  }
-  if (agentId === 'developer' && DEVELOPER_ALWAYS_OPUS) {
-    return DEFAULT_CODING_MODEL;
   }
   // Riley (EA) is locked above; keep this branch aligned with the planning model.
   if (agentId === 'executive-assistant' || agentId === 'operations-manager') {
@@ -2346,9 +2339,7 @@ async function withConcurrencyLimit<T>(
 function estimateMaxOutputTokens(agentId: string, userMessage: string, explicit?: number): number {
   if (explicit && explicit > 0) return explicit;
 
-  const base = agentId === 'developer'
-    ? DEFAULT_MAX_OUTPUT_TOKENS_DEVELOPER
-    : DEFAULT_MAX_OUTPUT_TOKENS;
+  const base = DEFAULT_MAX_OUTPUT_TOKENS;
 
   const shortPrompt = userMessage.length <= 180;
   const appearsSimple = /^(ok|yes|no|status|ping|why|what|how|help|fix|run|test)\b/i.test(userMessage.trim());
@@ -2521,11 +2512,9 @@ export async function agentRespond(
     }
   }
 
-  const baseToolRounds = agent.id === 'developer'
-    ? MAX_TOOL_ROUNDS_DEVELOPER
-    : agent.id === 'executive-assistant'
-      ? MAX_TOOL_ROUNDS_EXECUTIVE
-      : MAX_TOOL_ROUNDS;
+  const baseToolRounds = agent.id === 'executive-assistant'
+    ? MAX_TOOL_ROUNDS_EXECUTIVE
+    : MAX_TOOL_ROUNDS;
   // Direct tool requests (e.g. "run smoke tests") should NOT be capped as verification tasks.
   // The verification cap is for lightweight checks, not tool-heavy execution requests.
   const isDirectToolExecution = /smoke_test_agents|run\s+(all\s+)?(smoke|test)|test\s+engine/i.test(userMessage);
@@ -2574,9 +2563,9 @@ export async function agentRespond(
 
   const rileyCoordination = agent.id === 'executive-assistant' ? `
 AGENT COORDINATION: Coordinate agents via Discord mentions in your response text. The system parses and routes automatically.
-Prefer exact role mentions supplied in the live conversation context. If no exact mention tokens are provided, use canonical handles like @ace, @max, @sophie, @kane, @raj, @elena, @kai, @jude, @liv, @harper, @mia, and @leo.
+Prefer exact role mentions supplied in the live conversation context. If no exact mention tokens are provided, use canonical handles like @max, @sophie, @kane, @raj, @elena, @kai, @jude, @liv, @harper, @mia, and @leo.
 CRITICAL: Do NOT use send_channel_message — use Discord mentions for agent coordination.
-    DEFAULT: When work needs execution, start with @ace only. Ace is the tool master and should bring in other specialists only if they are actually needed.
+    DEFAULT: Execute directly whenever possible. Mention specialists only for focused review, verification, or domain-specific help.
 ` : '';
 
   const budgetGovernance = RILEY_AUTO_APPROVE_BUDGET
@@ -2590,7 +2579,7 @@ CRITICAL: Do NOT use send_channel_message — use Discord mentions for agent coo
   const governanceSection = agent.id === 'executive-assistant' ? `
 GOVERNANCE:
 - Token master. Budget increases go through you. Escalate to Jordan only after auto-approval fails.
-- Ace is Tool Master. Direct @ace for missing/stale tools.
+- You are the execution owner. Use tools directly and bring in specialists only when needed.
 - Safety cap hit → tighter prompt or delegate to best specialist.
 - Include action tags: [ACTION:DEPLOY], [ACTION:SCREENSHOTS], [ACTION:URLS], [ACTION:CLEANUP:<count>].
 ${budgetGovernance}
@@ -2598,14 +2587,9 @@ SELF-IMPROVEMENT:
 - Full code/PR/deploy tools available. Tests+typecheck enforced before merge.
 - Self-modify: branch → changes → test → PR → merge → deploy → notify @jordan.
 - No access to: gcp_secret_set, db_query (write), Discord channel create/delete.
-` : agent.id === 'developer' ? `
-GOVERNANCE:
-- Tool Master. Own tool readiness, keep AGENT_TOOLING_STATUS.md current.
-- Riley is token master for budget needs.
-${workerBudgetGovernance}
 ` : `
 GOVERNANCE:
-- Riley=token master, Ace=tool master.
+- Riley is token master and execution owner.
 ${workerBudgetGovernance}
 `;
 
@@ -2619,7 +2603,7 @@ OUTPUT MODE:
   {
     "human": "normal human-readable reply text",
     "machine": {
-      "delegateAgents": ["developer", "qa"],
+      "delegateAgents": ["qa"],
       "actionTags": ["[ACTION:DEPLOY]"],
       "notes": "optional short machine note"
     }
@@ -3190,7 +3174,7 @@ ${getLatestSmokeHealthLine()}`;
         agentId: agent.id,
         threadKey: toolThreadKey,
       });
-      if (agent.id === 'developer' && !options?.modelOverride && hasValidationFailure(call.name, result)) {
+      if (agent.id === 'executive-assistant' && !options?.modelOverride && hasValidationFailure(call.name, result)) {
         sawValidationFailure = true;
       }
       if (hasToolFailureSignal(call.name, result)) {
@@ -3225,7 +3209,7 @@ ${getLatestSmokeHealthLine()}`;
     }
 
     if (
-      agent.id === 'developer' &&
+      agent.id === 'executive-assistant' &&
       !options?.modelOverride &&
       !escalatedToPro &&
       currentModelName === GEMINI_FLASH &&

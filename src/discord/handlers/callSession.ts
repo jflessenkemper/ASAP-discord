@@ -1117,7 +1117,7 @@ You are in a voice call. ${transcription.username} just spoke. Your job:
 2. If it's a question you can answer directly, answer it
 3. Keep responses directly actionable for the caller
 
-IMPORTANT: This call is Riley-only. Do not delegate to Ace or any other specialist during live voice.
+IMPORTANT: This call is Riley-only. Do not delegate to any specialist during live voice.
 ${buildVoiceDecisionPolicy()}
 
 Keep your spoken response very brief (normally 1-2 short sentences) — you're in a voice call, not a text chat.

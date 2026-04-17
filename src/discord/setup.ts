@@ -391,10 +391,10 @@ export async function setupChannels(guild: Guild): Promise<BotChannels> {
     '💬 Talk to Riley naturally. She coordinates everything.',
     `**ASAP Command Center**\n\n` +
       `📋 **Riley (Executive Assistant)** is your point of contact.\n` +
-      `💻 **Ace (Developer)** implements what Riley plans.\n\n` +
+      `🛠️ **Riley executes directly** and brings in specialists only when needed.\n\n` +
       `Just type naturally — Riley handles everything.\n` +
       `She can join voice calls, deploy, take screenshots, and coordinate the whole team.\n\n` +
-        `You can also mention any agent role directly (for example Ace, Kane, or Elena). Plain-text handles still work as a fallback.`
+        `You can also mention any specialist directly (for example Kane, Elena, or Max). Legacy plain-text handles still work as a fallback.`
   );
 
   const threadStatus = await ensureText(
@@ -512,7 +512,7 @@ export async function setupChannels(guild: Guild): Promise<BotChannels> {
     catMain,
     '📸 Automated screenshots of every app screen after each build (iPhone 17 Pro Max)',
     '📸 Build screenshot updates post here as one-line entries.',
-    { owner: 'ace', cadence: 'on-deploy', staleAlert: '7d' }
+    { owner: 'riley', cadence: 'on-deploy', staleAlert: '7d' }
   );
 
   const appUrl = resolvePublicAppUrl();
@@ -530,7 +530,7 @@ export async function setupChannels(guild: Guild): Promise<BotChannels> {
     catOps,
     '💻 Live feed of all tool calls made by agents — file ops, git, commands, searches',
     '💻 One-line tool activity feed posts here.',
-    { owner: 'ace', cadence: 'on-tool-call', staleAlert: '2h' }
+    { owner: 'riley', cadence: 'on-tool-call', staleAlert: '2h' }
   );
 
   const voiceErrors = await ensureText(

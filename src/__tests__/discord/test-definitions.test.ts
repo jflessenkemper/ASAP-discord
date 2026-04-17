@@ -15,7 +15,6 @@ import {
 // Known agent IDs that must exist in the test suite
 const EXPECTED_AGENT_IDS = [
   'executive-assistant',
-  'developer',
   'qa',
   'security-auditor',
   'ux-reviewer',
@@ -150,16 +149,13 @@ describe('test-definitions', () => {
       }
     });
 
-    it('executive-assistant and developer have significant test counts', () => {
+    it('executive-assistant has substantial execution coverage', () => {
       const countByAgent = new Map<string, number>();
       for (const t of AGENT_CAPABILITY_TESTS) {
         countByAgent.set(t.id, (countByAgent.get(t.id) || 0) + 1);
       }
       const rileyCount = countByAgent.get('executive-assistant') || 0;
-      const aceCount = countByAgent.get('developer') || 0;
-      // Both primary agents should have substantial coverage
       expect(rileyCount).toBeGreaterThan(20);
-      expect(aceCount).toBeGreaterThan(20);
     });
   });
 
@@ -263,7 +259,7 @@ describe('test-definitions', () => {
     });
 
     it('includes at least one test per core agent', () => {
-      const coreAgents = ['executive-assistant', 'developer', 'qa', 'security-auditor'];
+      const coreAgents = ['executive-assistant', 'qa', 'security-auditor'];
       for (const agentId of coreAgents) {
         const hasReadiness = [...READINESS_TEST_KEYS].some((k) => k.startsWith(`${agentId}:`));
         expect(hasReadiness).toBe(true);
@@ -283,13 +279,13 @@ describe('test-definitions', () => {
   describe('testKey()', () => {
     it('formats as id:capability', () => {
       const test: AgentCapabilityTest = {
-        id: 'developer',
+        id: 'executive-assistant',
         category: 'core',
         capability: 'evidence-format-contract',
         prompt: 'Test prompt',
         expectAny: [/test/i],
       };
-      expect(testKey(test)).toBe('developer:evidence-format-contract');
+      expect(testKey(test)).toBe('executive-assistant:evidence-format-contract');
     });
 
     it('handles special characters in id', () => {

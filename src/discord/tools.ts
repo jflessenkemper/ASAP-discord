@@ -1763,7 +1763,7 @@ export const REVIEW_TOOLS = REPO_TOOLS.filter((t) => REVIEW_TOOL_NAMES.has(t.nam
  * are delegated to the specialist agents.
  *
  * As EA she also has code mutation, PR workflow, and deploy tools so she can
- * self-improve, approve Ace's PRs, and implement upgrades autonomously.
+ * self-improve, review open PRs, and implement upgrades autonomously.
  * Deploy and merge are gated by tests+typecheck enforcement at the tool level.
  */
 const RILEY_TOOL_NAMES = new Set([

@@ -30,7 +30,7 @@ export interface AgentCapabilityTest {
   flaky?: boolean;
 }
 
-export const AGENT_CAPABILITY_TESTS: AgentCapabilityTest[] = [
+const RAW_AGENT_CAPABILITY_TESTS: AgentCapabilityTest[] = [
   {
     id: 'executive-assistant',
     category: 'core',
@@ -49,18 +49,18 @@ export const AGENT_CAPABILITY_TESTS: AgentCapabilityTest[] = [
   {
     id: 'executive-assistant',
     category: 'orchestration',
-    capability: 'delegate-ace-qa',
-    prompt: 'In a single reply, mention delegating a code task to Ace and a validation task to QA.',
-    expectAny: [/ace|developer/i, /qa|max/i],
+    capability: 'delegate-riley-qa',
+    prompt: 'In a single reply, explain that Riley will execute the code work directly and involve QA for validation.',
+    expectAny: [/riley|execut|direct/i, /qa|max/i],
     requireTokenEcho: false,
     critical: false,
   },
   {
     id: 'executive-assistant',
     category: 'orchestration',
-    capability: 'ace-only-delegation',
-    prompt: 'You need security and QA help. Under your delegation policy you must route ALL execution through Ace only. Explain how you would delegate this through Ace in one short reply.',
-    expectAny: [/ace|developer|delegat/i],
+    capability: 'direct-execution-routing',
+    prompt: 'You need security and QA help. Explain in one short reply that Riley will execute directly and involve only the needed specialists for review and validation.',
+    expectAny: [/riley|direct|execut|specialist|delegat/i],
     expectNone: [/@kane|@max|@raj|@elena|@kai|@jude|@liv|@harper|@mia|@leo/i],
     requireTokenEcho: false,
     timeoutMs: 240_000,
@@ -222,7 +222,7 @@ export const AGENT_CAPABILITY_TESTS: AgentCapabilityTest[] = [
     category: 'core',
     capability: 'action-agents',
     prompt: 'List all available agents on this team.',
-    expectAny: [/\[ACTION:AGENTS\]|ace|riley|kane|max|developer|qa/i],
+    expectAny: [/\[ACTION:AGENTS\]|riley|kane|max|qa|specialist|agent/i],
   },
   {
     id: 'executive-assistant',
@@ -258,7 +258,7 @@ export const AGENT_CAPABILITY_TESTS: AgentCapabilityTest[] = [
     timeoutMs: 150_000,
   },
 
-  // Ace developer: tool-proof tests
+  // Riley execution: tool-proof tests
   {
     id: 'developer',
     category: 'tool-proof',
@@ -411,8 +411,8 @@ export const AGENT_CAPABILITY_TESTS: AgentCapabilityTest[] = [
     id: 'executive-assistant',
     category: 'orchestration',
     capability: 'delegate-single-specialist',
-    prompt: 'Ask Ace to review the auth route for security concerns.',
-    expectAny: [/ace|developer|security|auth|review/i],
+    prompt: 'Say that Riley will review the auth route directly and pull in the security specialist if needed.',
+    expectAny: [/riley|security|auth|review|specialist/i],
     minBotRepliesAfterPrompt: 1,
     requireTokenEcho: false,
   },
@@ -436,7 +436,7 @@ export const AGENT_CAPABILITY_TESTS: AgentCapabilityTest[] = [
     timeoutMs: 150_000,
     critical: false,
   },
-  // Orchestration: specialist chain via Ace
+  // Orchestration: specialist chain via Riley
   {
     id: 'developer',
     category: 'orchestration',
@@ -663,8 +663,8 @@ export const AGENT_CAPABILITY_TESTS: AgentCapabilityTest[] = [
     id: 'executive-assistant',
     category: 'orchestration',
     capability: 'upgrades-act-on-top',
-    prompt: 'Pick the highest-priority accepted upgrade from #upgrades and delegate its implementation to Ace.',
-    expectAny: [/ace|delegate|implement|assign|@ace/i],
+    prompt: 'Pick the highest-priority accepted upgrade from #upgrades and say Riley will implement it directly.',
+    expectAny: [/riley|implement|direct|upgrade/i],
     timeoutMs: 180_000,
   },
 
@@ -685,7 +685,7 @@ export const AGENT_CAPABILITY_TESTS: AgentCapabilityTest[] = [
     id: 'executive-assistant',
     category: 'tool-proof',
     capability: 'self-edit-file',
-    prompt: 'Use your edit_file tool directly (do NOT delegate to Ace) to add a comment "// Riley was here" at the top of the file src/discord/tester.ts. Then use read_file to verify the change.',
+    prompt: 'Use your edit_file tool directly to add a comment "// Riley was here" at the top of the file src/discord/tester.ts. Then use read_file to verify the change.',
     expectToolAudit: ['edit_file', 'read_file'],
     timeoutMs: 180_000,
     attempts: 1,
@@ -695,7 +695,7 @@ export const AGENT_CAPABILITY_TESTS: AgentCapabilityTest[] = [
     id: 'executive-assistant',
     category: 'tool-proof',
     capability: 'create-branch-pr',
-    prompt: `Use your git_create_branch tool directly (do NOT delegate to Ace) to create a branch called "riley/smoke-${Date.now()}". Then use edit_file to make a trivial change, run_command to commit and push, and create_pull_request to open a PR. Report the result.`,
+    prompt: `Use your git_create_branch tool directly to create a branch called "riley/smoke-${Date.now()}". Then use edit_file to make a trivial change, run_command to commit and push, and create_pull_request to open a PR. Report the result.`,
     expectToolAudit: ['git_create_branch'],
     expectAny: [/branch|created|pull request|PR|pushed/i],
     timeoutMs: 240_000,
@@ -706,7 +706,7 @@ export const AGENT_CAPABILITY_TESTS: AgentCapabilityTest[] = [
   {
     id: 'executive-assistant',
     category: 'orchestration',
-    capability: 'review-ace-pr',
+    capability: 'review-open-pr',
     prompt: 'Use your list_pull_requests tool directly to check for open PRs and report what you find. Do NOT delegate this task.',
     expectToolAudit: ['list_pull_requests'],
     timeoutMs: 180_000,
@@ -742,7 +742,7 @@ export const AGENT_CAPABILITY_TESTS: AgentCapabilityTest[] = [
     id: 'executive-assistant',
     category: 'core',
     capability: 'verification-gate-awareness',
-    prompt: 'When Ace claims a UI fix is done, what happens automatically before the thread can close? Describe the verification gate process.',
+    prompt: 'When Riley claims a UI fix is done, what happens automatically before the thread can close? Describe the verification gate process.',
     expectAny: [/harness|screenshot|capture|evidence|verification|auto/i],
     timeoutMs: 120_000,
   },
@@ -1525,8 +1525,8 @@ export const AGENT_CAPABILITY_TESTS: AgentCapabilityTest[] = [
     id: 'executive-assistant',
     category: 'orchestration',
     capability: 'multi-agent-chain',
-    prompt: 'I need a security review of the auth routes. Delegate to Ace to read the auth code, then have him share findings with the security specialist (via you). Report back the chain of actions taken.',
-    expectAny: [/ace|delegate|security|auth|review|finding|chain|specialist/i],
+    prompt: 'I need a security review of the auth routes. Explain that Riley will inspect the auth code directly, then involve the security specialist for review, and report back the chain of actions taken.',
+    expectAny: [/riley|security|auth|review|finding|chain|specialist/i],
     minBotRepliesAfterPrompt: 2,
     timeoutMs: 240_000,
     critical: false,
@@ -1535,7 +1535,7 @@ export const AGENT_CAPABILITY_TESTS: AgentCapabilityTest[] = [
     id: 'executive-assistant',
     category: 'orchestration',
     capability: 'error-recovery',
-    prompt: 'Delegate a task to Ace to read a file that does not exist: "nonexistent-smoke-test-file-xyz.ts". When Ace reports the error, explain how you handle the failure and what your next step would be.',
+    prompt: 'Attempt to read a file that does not exist: "nonexistent-smoke-test-file-xyz.ts". When the read fails, explain how Riley handles the failure and what the next step would be.',
     expectAny: [/error|not found|fail|recover|retry|alternative|handle|does not exist/i],
     minBotRepliesAfterPrompt: 1,
     timeoutMs: 180_000,
@@ -1748,15 +1748,38 @@ export const AGENT_CAPABILITY_TESTS: AgentCapabilityTest[] = [
   },
 ];
 
+const LEGACY_CAPABILITY_RENAMES = new Map<string, string>();
+
+function normalizeLegacySmokePrompt(prompt: string): string {
+  return String(prompt || '')
+    .replace(/\bAce \(Developer\)\b/g, 'Riley')
+    .replace(/\bAce\b/g, 'Riley')
+    .replace(/@ace/gi, '@riley')
+    .replace(/through Riley only only/gi, 'through Riley only');
+}
+
+function normalizeLegacySmokeTest(test: AgentCapabilityTest): AgentCapabilityTest {
+  const nextId = test.id === 'developer' ? 'executive-assistant' : test.id;
+  const nextCapability = LEGACY_CAPABILITY_RENAMES.get(test.capability) || test.capability;
+  return {
+    ...test,
+    id: nextId,
+    capability: nextCapability,
+    prompt: normalizeLegacySmokePrompt(test.prompt),
+  };
+}
+
+export const AGENT_CAPABILITY_TESTS: AgentCapabilityTest[] = RAW_AGENT_CAPABILITY_TESTS.map(normalizeLegacySmokeTest);
+
 export const READINESS_TEST_KEYS = new Set([
   'executive-assistant:routing-and-next-step',
   'executive-assistant:action-health',
   'executive-assistant:repo-memory-tool-awareness',
-  'executive-assistant:ace-only-delegation',
+  'executive-assistant:direct-execution-routing',
   'executive-assistant:thread-name-quality',
   'executive-assistant:list-channels',
-  'developer:tool-retry-awareness',
-  'developer:upgrades-post',
+  'executive-assistant:tool-retry-awareness',
+  'executive-assistant:upgrades-post',
   'qa:regression-test-design',
   'qa:upgrades-post',
   'security-auditor:auth-risk-and-mitigation',
