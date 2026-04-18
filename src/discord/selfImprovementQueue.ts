@@ -24,6 +24,20 @@ const CLAIM_STALE_MS = Math.max(60_000, parseInt(process.env.SELF_IMPROVEMENT_CL
 const RETRY_BASE_DELAY_MS = Math.max(1_000, parseInt(process.env.SELF_IMPROVEMENT_RETRY_BASE_DELAY_MS || '10000', 10));
 const RETRY_MAX_DELAY_MS = Math.max(RETRY_BASE_DELAY_MS, parseInt(process.env.SELF_IMPROVEMENT_RETRY_MAX_DELAY_MS || '300000', 10));
 
+function isNonRetryableSelfImprovementError(errorDetail: string): boolean {
+  const normalized = String(errorDetail || '').toLowerCase();
+  if (!normalized) return false;
+
+  return normalized.includes('your credit balance is too low')
+    || normalized.includes('plans & billing')
+    || normalized.includes('invalid x-api-key')
+    || normalized.includes('authentication_error')
+    || normalized.includes('unauthorized')
+    || normalized.includes('invalid api key')
+    || normalized.includes('api key') && normalized.includes('invalid')
+    || normalized.includes('daily anthropic token limit reached');
+}
+
 function coercePayload(value: unknown): SelfImprovementQueuePayload {
   const payload = value as Partial<SelfImprovementQueuePayload> | undefined;
   return {
@@ -100,7 +114,7 @@ export async function markSelfImprovementJobCompleted(jobId: number): Promise<vo
 }
 
 export async function markSelfImprovementJobFailed(jobId: number, attempts: number, maxAttempts: number, errorDetail: string): Promise<void> {
-  const exhausted = attempts >= maxAttempts;
+  const exhausted = attempts >= maxAttempts || isNonRetryableSelfImprovementError(errorDetail);
   const retryDelayMs = Math.min(RETRY_MAX_DELAY_MS, RETRY_BASE_DELAY_MS * Math.pow(2, Math.max(0, attempts - 1)));
   const retryDelaySeconds = Math.max(1, Math.ceil(retryDelayMs / 1000));
   await pool.query(

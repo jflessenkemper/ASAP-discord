@@ -86,4 +86,21 @@ describe('selfImprovementQueue', () => {
     await markSelfImprovementJobFailed(11, 2, 5, 'temporary failure');
     expect(mockQuery).toHaveBeenCalledWith(expect.stringContaining('SET status = $2'), [11, 'retry', 'temporary failure', expect.any(Number)]);
   });
+
+  it('marks low-credit Anthropic failures as terminal immediately', async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [] });
+    await markSelfImprovementJobFailed(
+      12,
+      1,
+      5,
+      'Anthropic API error: HTTP 400 {"type":"error","error":{"type":"invalid_request_error","message":"Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits."}}',
+    );
+    expect(mockQuery).toHaveBeenCalledWith(expect.stringContaining('SET status = $2'), [12, 'failed', expect.stringContaining('Your credit balance is too low'), expect.any(Number)]);
+  });
+
+  it('marks invalid-api-key failures as terminal immediately', async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [] });
+    await markSelfImprovementJobFailed(13, 1, 5, 'Anthropic API error: HTTP 401 invalid x-api-key');
+    expect(mockQuery).toHaveBeenCalledWith(expect.stringContaining('SET status = $2'), [13, 'failed', 'Anthropic API error: HTTP 401 invalid x-api-key', expect.any(Number)]);
+  });
 });
