@@ -35,7 +35,7 @@ flowchart LR
     User[User]
     Opus["Riley (Opus)<br/>execution and completion"]
     Groupchat[Groupchat channel]
-    SelfImproveEngine[Self improvement engine]
+    SelfImproveEngine["Self improvement engine<br/>managed by Riley Sonnet"]
     AgentManager["Riley (Sonnet)<br/>agent manager"]
     QAAgent[QA]
     UXAgent[UX Reviewer]
@@ -94,6 +94,7 @@ flowchart LR
     Voice --> Riley
     Riley -->|execute| Opus
     Opus <--> AgentManager
+    AgentManager <--> SelfImproveEngine
     AgentManager <--> QAAgent
     AgentManager <--> UXAgent
     AgentManager <--> SecurityAgent
@@ -116,17 +117,18 @@ flowchart LR
     LawyerAgent --> LawyerChan
     IOSAgent --> IOSChan
     AndroidAgent --> AndroidChan
-    SelfImproveEngine <--> Opus
-    TestEngine <--> SelfImproveEngine
-    LoggingEngine <--> SelfImproveEngine
-    MemoryLoop <--> SelfImproveEngine
-    DatabaseAudit <--> SelfImproveEngine
-    ChannelHeartbeat <--> SelfImproveEngine
-    UpgradesTriage <--> SelfImproveEngine
-    VoiceSession <--> SelfImproveEngine
-    GoalWatchdog <--> SelfImproveEngine
+    SelfImproveEngine -->|self-improvement data| Opus
+    Opus -->|requests and evidence needs| SelfImproveEngine
+    TestEngine --> SelfImproveEngine
+    LoggingEngine --> SelfImproveEngine
+    MemoryLoop --> SelfImproveEngine
+    DatabaseAudit --> SelfImproveEngine
+    ChannelHeartbeat --> SelfImproveEngine
+    UpgradesTriage --> SelfImproveEngine
+    VoiceSession --> SelfImproveEngine
+    GoalWatchdog --> SelfImproveEngine
+    SelfImproveEngine -->|ops updates| OpsHub
     Opus -->|done| Riley
-    Opus -->|ops status| OpsHub
     Riley -->|if in voice| Voice
     Voice -->|spoken update| User
     Riley -->|otherwise| Groupchat
@@ -148,7 +150,7 @@ flowchart LR
     class OpsHub hidden;
 ```
 
-This diagram shows the target architecture. Riley's Sonnet agent manager sends work to sub-agents and receives structured reports back, while Opus can use the self-improvement engine bidirectionally with the independent loops to improve Riley and the agent layer over time. In the current runtime, Opus also emits structured stewardship requests that Riley (Operations Manager) uses to run loop adapters, post ops status, and keep workspace threads updated.
+This diagram shows the target architecture. Riley's Sonnet agent manager sends work to sub-agents and also manages the self-improvement engine. The loops feed their evidence into that engine, the engine feeds whatever Riley Opus needs back into execution, and the same engine output is used to keep the ops channels current.
 
 The full architecture diagram is in [.github/ARCHITECTURE.md](.github/ARCHITECTURE.md).
 
@@ -178,7 +180,7 @@ These loops are the part I would usually show an employer because they explain w
 8. Goal and thread watchdog loop: the system watches long-running tasks so work does not silently stall.
 9. Voice session loop: live voice calls stay responsive and Riley asks for decisions in voice.
 
-Self-improvement still exists, but it is now stewarded through Riley (Operations Manager) and structured stewardship requests instead of being exposed as a standalone runtime loop ID.
+Self-improvement still exists, but it is now managed by Riley Sonnet as a packet-driven engine. Riley (Operations Manager) is the stewardship worker inside that path, while Riley Opus consumes the resulting data and evidence.
 
 ## Token And Cost Optimisation
 

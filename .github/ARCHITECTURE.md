@@ -17,7 +17,7 @@ flowchart LR
     end
 
     Opus["Riley (Opus) execution and completion"]
-    SelfImproveEngine[Self improvement engine]
+    SelfImproveEngine[Self improvement engine managed by Riley Sonnet]
     AgentManager["Riley (Sonnet) agent manager"]
     QAAgent[QA]
     UXAgent[UX Reviewer]
@@ -71,6 +71,7 @@ flowchart LR
     Voice --> Riley
     Riley -->|execute| Opus
     Opus <--> AgentManager
+    AgentManager <--> SelfImproveEngine
     AgentManager <--> QAAgent
     AgentManager <--> UXAgent
     AgentManager <--> SecurityAgent
@@ -93,17 +94,18 @@ flowchart LR
     LawyerAgent --> LawyerChan
     IOSAgent --> IOSChan
     AndroidAgent --> AndroidChan
-    SelfImproveEngine <--> Opus
-    TestEngine <--> SelfImproveEngine
-    LoggingEngine <--> SelfImproveEngine
-    MemoryLoop <--> SelfImproveEngine
-    DatabaseAudit <--> SelfImproveEngine
-    ChannelHeartbeat <--> SelfImproveEngine
-    UpgradesTriage <--> SelfImproveEngine
-    VoiceSession <--> SelfImproveEngine
-    GoalWatchdog <--> SelfImproveEngine
+    SelfImproveEngine -->|self-improvement data| Opus
+    Opus -->|requests and evidence needs| SelfImproveEngine
+    TestEngine --> SelfImproveEngine
+    LoggingEngine --> SelfImproveEngine
+    MemoryLoop --> SelfImproveEngine
+    DatabaseAudit --> SelfImproveEngine
+    ChannelHeartbeat --> SelfImproveEngine
+    UpgradesTriage --> SelfImproveEngine
+    VoiceSession --> SelfImproveEngine
+    GoalWatchdog --> SelfImproveEngine
+    SelfImproveEngine -->|ops updates| OpsHub
     Opus -->|done| Riley
-    Opus -->|ops status| OpsHub
     Riley -->|if in voice| Voice
     Voice -->|spoken update| User
     Riley -->|otherwise| Groupchat
@@ -136,7 +138,8 @@ flowchart LR
     Riley[Riley with Sonnet plans, tracks, and responds]
     Workspace[Workspace thread]
     ExecutionFabric[Specialists, tools, and loop adapters]
-    OpsSteward["Riley (Operations Manager)\nops stewardship"]
+    SelfImproveEngine[Self-improvement engine]
+    OpsSteward["Riley (Operations Manager)\nstewardship worker"]
     Opus["Riley (Opus) executes and checks completion"]
     UserHears[User hears Riley's response]
 
@@ -146,9 +149,12 @@ flowchart LR
     Workspace --> Opus
     Opus --> ExecutionFabric
     ExecutionFabric --> Opus
-    Opus -->|steward requests| OpsSteward
+    Riley -->|manage self-improvement path| SelfImproveEngine
+    Opus -->|requests and evidence needs| SelfImproveEngine
+    SelfImproveEngine -->|stewardship work| OpsSteward
     OpsSteward -->|workspace updates and ops logs| Workspace
-    OpsSteward -->|steward report and loop evidence| Opus
+    OpsSteward -->|stewardship report| SelfImproveEngine
+    SelfImproveEngine -->|loop evidence and ops data| Opus
     Opus -->|completed result| Riley
     Riley -->|short spoken reply| SpeechIO --> VoiceSession --> UserHears
 
@@ -162,7 +168,7 @@ flowchart LR
     class Riley riley;
     class VoiceSession,SpeechIO,SpeakerGate voice;
     class Opus opus;
-    class Workspace,ExecutionFabric surface;
+    class Workspace,ExecutionFabric,SelfImproveEngine surface;
     class OpsSteward riley;
 ```
 
@@ -176,10 +182,12 @@ flowchart TB
     Opus["Riley (Opus) executes the plan and checks completion"]
     Specialists[Agent manager and specialist reports]
     Tools[Tools and integrations]
-    StewardRequests[Structured stewardship requests]
-    OpsSteward["Riley (Operations Manager)\nops stewardship"]
+    SelfImproveEngine[Self-improvement engine]
+    StewardRequests[Structured self-improvement requests]
+    OpsSteward["Riley (Operations Manager)\nstewardship worker"]
     LoopAdapters[Callable loop adapters]
     LoopReports[Loop reports, ops lines, and evidence]
+    OpsChannels[Ops channels]
     WorkspaceUpdates[Workspace-first progress updates]
     OpusReturn["Opus execution summary and completion decision"]
     FinalAnswer[Riley gives final answer]
@@ -192,8 +200,12 @@ flowchart TB
     Workspace --> Specialists
     Specialists --> Opus
     Opus --> Tools --> Opus
-    Opus --> StewardRequests --> OpsSteward
-    OpsSteward --> LoopAdapters --> LoopReports --> Opus
+    Riley -->|manage engine| SelfImproveEngine
+    Opus --> StewardRequests --> SelfImproveEngine
+    SelfImproveEngine --> OpsSteward
+    OpsSteward --> LoopAdapters --> LoopReports --> SelfImproveEngine
+    SelfImproveEngine -->|data needed for execution| Opus
+    SelfImproveEngine --> OpsChannels
     OpsSteward --> WorkspaceUpdates --> Workspace
     Opus --> OpusReturn
     OpusReturn --> FinalAnswer
@@ -206,7 +218,7 @@ flowchart TB
     class Request,FinalAnswer user;
     class Riley riley;
     class Opus,OpusReturn opus;
-    class Workspace,Specialists,Tools,StewardRequests,LoopAdapters,LoopReports,WorkspaceUpdates surface;
+    class Workspace,Specialists,Tools,SelfImproveEngine,StewardRequests,LoopAdapters,LoopReports,OpsChannels,WorkspaceUpdates surface;
     class OpsSteward riley;
 ```
 
@@ -340,8 +352,8 @@ From there, Riley decides what should happen next with Sonnet, tracks the goal i
 6. When execution is needed and any required decision has been received, Riley passes the plan into Opus and keeps the workspace thread active.
 7. Opus performs implementation work by calling Riley's Sonnet agent manager, tools, or the loop adapter layer.
 8. The agent manager delegates to sub-agents and receives structured JSON reports back from them, including any issues they encountered while doing the work.
-9. Opus derives stewardship requests when logging, memory, regression coverage, or ops reporting follow-up is needed.
-10. Riley (Operations Manager) runs those stewardship requests, invokes callable loops, posts ops lines, and mirrors useful progress back into the workspace thread.
+9. Opus derives self-improvement requests when logging, memory, regression coverage, or ops reporting follow-up is needed.
+10. Riley's Sonnet-side self-improvement manager curates that packet, invokes callable loops, feeds the resulting stewardship data back to Opus, and uses the same engine output to update the ops channels.
 11. Agent channels, tools, and loops feed evidence and outcomes back into Opus, and Opus assesses whether the requested work was completed successfully.
 12. Opus returns the completed result to Riley.
 13. Riley combines that result with user context and chooses the best way to tell the user about completion: voice if they are still in voice, otherwise Riley tags the user in groupchat.

@@ -62,6 +62,9 @@ describe('opusExecution', () => {
     expect(summary.summary).toContain('developer: Implemented the checkout fix');
     expect(summary.summary).toContain('qa: Regression checks still running');
     expect(summary.recommendedUserUpdate).toContain('made progress');
+    expect(summary.selfImprovement.managerAgentId).toBe('executive-assistant');
+    expect(summary.selfImprovement.consumerAgentId).toBe('opus');
+    expect(summary.stewardRequests).toEqual(summary.selfImprovement.requests);
     expect(summary.progress.some((item) => item.message.includes('Running regression tests'))).toBe(true);
     expect(summary.evidence).toEqual(
       expect.arrayContaining([
