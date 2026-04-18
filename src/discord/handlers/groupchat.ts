@@ -44,7 +44,17 @@ import { postAgentErrorLog } from '../services/agentErrors';
 import { captureAndPostScreenshots } from '../services/screenshots';
 import { makeOutboundCall, makeAsapTesterCall, startConferenceCall, isTelephonyAvailable } from '../services/telephony';
 import { getWebhook, sendWebhookMessage, WebhookCapableChannel } from '../services/webhooks';
-import { approveAdditionalBudget, getContextEfficiencyReport, getUsageReport, refreshLiveBillingData, refreshUsageDashboard } from '../usage';
+import {
+  approveAdditionalBudget,
+  getClaudeTokenStatus,
+  getContextEfficiencyReport,
+  getRemainingBudget,
+  getUsageReport,
+  isBudgetExceeded,
+  isClaudeOverLimit,
+  refreshLiveBillingData,
+  refreshUsageDashboard,
+} from '../usage';
 import { logAgentEvent, postOpsLine } from '../activityLog';
 
 import { startCall, endCall, isCallActive, injectVoiceTranscriptForTesting, processTesterVoiceTurnForCall } from './callSession';
@@ -582,34 +592,167 @@ function ensureGoalWatchdog(groupchat: TextChannel): void {
   if (goalWatchdog) return;
 
   goalWatchdog = setInterval(() => {
-    if (!goalState.goal) return;
-
-    maybeReviewThreadForClosure(groupchat).catch((err) => {
-      console.error('Thread close review error:', errMsg(err));
-    });
-
-    if (activeAbortController) return;
-    if (!goalState.isStalled()) return;
-
-    goalState.recordRecoveryAttempt();
-    recordLoopHealth('goal-watchdog', 'warn', `attempt=${goalState.recoveryAttempts} goal=${goalState.goal?.slice(0, 80) || 'unknown'}`);
-
-    sendAutopilotAudit(
-      groupchat,
-      'watchdog_recovery',
-      'Goal was stalled; sending system nudge to Riley for continuation and pending actions.',
-      { attempt: goalState.recoveryAttempts }
-    ).catch(() => {});
-
-    handleRileyMessage(
-      `[System auto-recovery] This goal appears stalled: "${goalState.goal}". Summarize current state in one short paragraph, execute any pending deploy/screenshots/urls actions now using explicit [ACTION:...] tags, and continue without waiting for user follow-up. If the work is actually complete, post a short wrap-up in the workspace thread and include [ACTION:CLOSE_THREAD].`,
-      'System',
-      undefined,
-      groupchat
-    ).catch((err) => {
-      console.error('Goal watchdog recovery error:', errMsg(err));
-    });
+    void runGoalWatchdogTick(groupchat);
   }, GOAL_STALL_CHECK_INTERVAL_MS);
+}
+
+type GoalWatchdogBlocker = {
+  kind: 'budget' | 'token' | 'recovery';
+  status: string;
+  detail: string;
+  workspaceMessage: string;
+  action: string;
+};
+
+function getGoalWatchdogBlocker(): GoalWatchdogBlocker | null {
+  if (isBudgetExceeded()) {
+    const { spent, limit, remaining } = getRemainingBudget();
+    return {
+      kind: 'budget',
+      status: '⏸️ Parked: waiting for budget approval',
+      detail: `Budget gate active at $${spent.toFixed(2)}/$${limit.toFixed(2)}. Auto-recovery is paused until budget is approved.`,
+      workspaceMessage: `⏸️ I parked this goal because the daily budget gate is active at $${spent.toFixed(2)}/$${limit.toFixed(2)} with $${remaining.toFixed(2)} remaining. I will stop watchdog retries until budget is approved or the gate clears.`,
+      action: 'await budget approval',
+    };
+  }
+
+  if (isClaudeOverLimit()) {
+    const { used, limit, remaining } = getClaudeTokenStatus();
+    return {
+      kind: 'token',
+      status: '⏸️ Parked: daily Anthropic token limit reached',
+      detail: `Token gate active at ${used}/${limit} Claude tokens. Auto-recovery is paused until capacity returns.`,
+      workspaceMessage: `⏸️ I parked this goal because the daily Anthropic token limit is active at ${used}/${limit} tokens with ${remaining} remaining. I will stop watchdog retries until the limit resets or the runtime cap is raised.`,
+      action: 'await token capacity',
+    };
+  }
+
+  if (goalState.shouldParkForRecovery()) {
+    return {
+      kind: 'recovery',
+      status: '⏸️ Parked: stalled after repeated recovery attempts',
+      detail: `Goal stalled after ${goalState.recoveryAttempts} recovery attempts. Auto-recovery is parked until an operator intervenes or a new input arrives.`,
+      workspaceMessage: `⏸️ I parked this goal after ${goalState.recoveryAttempts} failed recovery attempts to avoid a retry loop. I need an operator nudge or a fresh instruction before I resume.`,
+      action: 'await operator review',
+    };
+  }
+
+  return null;
+}
+
+async function resolveGoalWorkspaceChannel(groupchat: TextChannel): Promise<WebhookCapableChannel | null> {
+  if (!goalState.threadId) return groupchat;
+  return groupchat.threads.cache.get(goalState.threadId)
+    || await groupchat.threads.fetch(goalState.threadId).catch(() => groupchat);
+}
+
+async function parkGoalWatchdog(groupchat: TextChannel, blocker: GoalWatchdogBlocker): Promise<void> {
+  if (!goalState.goal || goalState.isPaused()) return;
+
+  goalState.pause(blocker.kind, blocker.status, blocker.detail);
+  recordLoopHealth('goal-watchdog', 'warn', `parked=${blocker.kind} goal=${goalState.goal.slice(0, 80)}`);
+
+  await sendAutopilotAudit(
+    groupchat,
+    'watchdog_parked',
+    blocker.detail,
+    { action: blocker.action },
+  ).catch(() => {});
+
+  const channels = getBotChannels();
+  if (channels?.threadStatus) {
+    await postOpsLine(channels.threadStatus, {
+      actor: 'operations-manager',
+      scope: 'goal-watchdog',
+      metric: `parked=${blocker.kind}`,
+      delta: blocker.detail,
+      action: blocker.action,
+      severity: 'warn',
+    }).catch(() => {});
+  }
+
+  const workspaceChannel = await resolveGoalWorkspaceChannel(groupchat);
+  if (workspaceChannel) {
+    const riley = getAgent('executive-assistant' as AgentId);
+    if (riley) {
+      await sendAgentMessage(workspaceChannel, riley, blocker.workspaceMessage).catch(() => {});
+    }
+  }
+}
+
+async function autoResumeParkedGoal(groupchat: TextChannel): Promise<void> {
+  if (!goalState.goal || !goalState.isPaused()) return;
+  const pausedReason = goalState.pausedReason;
+  const pauseDetail = goalState.pauseDetail || 'runtime gate cleared';
+
+  goalState.resume(
+    pausedReason === 'budget'
+      ? '▶️ Auto-resuming after budget gate cleared'
+      : pausedReason === 'token'
+        ? '▶️ Auto-resuming after token capacity returned'
+        : '▶️ Auto-resuming after stalled goal was unparked'
+  );
+
+  recordLoopHealth('goal-watchdog', 'ok', `resumed=${pausedReason || 'unknown'} goal=${goalState.goal.slice(0, 80)}`);
+  await sendAutopilotAudit(
+    groupchat,
+    'watchdog_resume',
+    `${pauseDetail} Gate cleared; resuming goal automatically.`,
+    { action: 'resume' },
+  ).catch(() => {});
+
+  handleRileyMessage(
+    `[System auto-resume] The previous blocker has cleared for this goal: "${goalState.goal}". Previous pause note: ${pauseDetail}. Summarize current state in one short paragraph, then continue from the next unfinished step without repeating completed work.`,
+    'System',
+    undefined,
+    groupchat,
+  ).catch((err) => {
+    console.error('Goal watchdog auto-resume error:', errMsg(err));
+  });
+}
+
+async function runGoalWatchdogTick(groupchat: TextChannel): Promise<void> {
+  if (!goalState.goal) return;
+
+  await maybeReviewThreadForClosure(groupchat).catch((err) => {
+    console.error('Thread close review error:', errMsg(err));
+  });
+
+  if (activeAbortController) return;
+
+  const blocker = getGoalWatchdogBlocker();
+  if (goalState.isPaused()) {
+    if (!blocker) {
+      await autoResumeParkedGoal(groupchat);
+    }
+    return;
+  }
+
+  if (blocker) {
+    await parkGoalWatchdog(groupchat, blocker);
+    return;
+  }
+
+  if (!goalState.isStalled()) return;
+
+  goalState.recordRecoveryAttempt();
+  recordLoopHealth('goal-watchdog', 'warn', `attempt=${goalState.recoveryAttempts} goal=${goalState.goal?.slice(0, 80) || 'unknown'}`);
+
+  await sendAutopilotAudit(
+    groupchat,
+    'watchdog_recovery',
+    'Goal was stalled; sending system nudge to Riley for continuation and pending actions.',
+    { attempt: goalState.recoveryAttempts }
+  ).catch(() => {});
+
+  handleRileyMessage(
+    `[System auto-recovery] This goal appears stalled: "${goalState.goal}". Summarize current state in one short paragraph, execute any pending deploy/screenshots/urls actions now using explicit [ACTION:...] tags, and continue without waiting for user follow-up. If the work is actually complete, post a short wrap-up in the workspace thread and include [ACTION:CLOSE_THREAD].`,
+    'System',
+    undefined,
+    groupchat
+  ).catch((err) => {
+    console.error('Goal watchdog recovery error:', errMsg(err));
+  });
 }
 
 let decisionsChannel: TextChannel | null = null;
@@ -2020,7 +2163,11 @@ async function processGroupchatMessage(
     }
 
     if (goalState.goal) {
-      markGoalProgress('▶️ Resuming after budget approval');
+      if (goalState.isPaused()) {
+        goalState.resume('▶️ Resuming after budget approval');
+      } else {
+        markGoalProgress('▶️ Resuming after budget approval');
+      }
       await withRileyResponseWatchdog(
         workspaceChannel,
         groupchat,

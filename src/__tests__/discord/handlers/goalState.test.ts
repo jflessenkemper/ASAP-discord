@@ -61,9 +61,11 @@ describe('GoalStateManager', () => {
   it('clear resets goal and sets completed status', () => {
     gsm.setGoal('task');
     gsm.threadId = '123';
+    gsm.pause('budget', '⏸️ Parked: waiting for budget approval', 'Waiting for budget approval');
     gsm.clear();
     expect(gsm.goal).toBeNull();
     expect(gsm.threadId).toBeNull();
+    expect(gsm.isPaused()).toBe(false);
     expect(gsm.status).toBe('✅ Completed');
     expect(gsm.isActive()).toBe(false);
   });
@@ -87,11 +89,25 @@ describe('GoalStateManager', () => {
     expect(gsm.isStalled()).toBe(true);
   });
 
+  it('is not stalled while paused', () => {
+    gsm.setGoal('work');
+    gsm.lastProgressAt = Date.now() - 999_999;
+    gsm.pause('token', '⏸️ Parked: daily token limit reached', 'Waiting for token limit reset');
+    expect(gsm.isStalled()).toBe(false);
+  });
+
   it('is not stalled when recovery budget exhausted', () => {
     gsm.setGoal('work');
     gsm.lastProgressAt = Date.now() - 999_999;
-    gsm.recoveryAttempts = 5;     // default max
+    gsm.recoveryAttempts = 3;     // default max
     expect(gsm.isStalled()).toBe(false);
+  });
+
+  it('parks once recovery budget is exhausted and the goal is still stalled', () => {
+    gsm.setGoal('work');
+    gsm.lastProgressAt = Date.now() - 999_999;
+    gsm.recoveryAttempts = 3;
+    expect(gsm.shouldParkForRecovery()).toBe(true);
   });
 
   /* ── recordRecoveryAttempt ───────────────────────────── */
@@ -100,6 +116,17 @@ describe('GoalStateManager', () => {
     gsm.recordRecoveryAttempt();
     expect(gsm.recoveryAttempts).toBe(1);
     expect(gsm.status).toContain('Auto-recovery nudge 1/');
+  });
+
+  it('pause records a blocker detail and resume clears it', () => {
+    gsm.setGoal('Ship it');
+    gsm.pause('budget', '⏸️ Parked: waiting for budget approval', 'Waiting for owner budget approval');
+    expect(gsm.isPaused()).toBe(true);
+    expect(gsm.getSummary()).toContain('Waiting for owner budget approval');
+
+    gsm.resume('▶️ Resuming after budget approval');
+    expect(gsm.isPaused()).toBe(false);
+    expect(gsm.status).toBe('▶️ Resuming after budget approval');
   });
 
   /* ── getSummary ──────────────────────────────────────── */

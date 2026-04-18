@@ -1,6 +1,7 @@
 const GOAL_STALL_TIMEOUT_MS = parseInt(process.env.GOAL_STALL_TIMEOUT_MS || '420000', 10);
-const GOAL_STALL_MAX_RECOVERY_ATTEMPTS = parseInt(process.env.GOAL_STALL_MAX_RECOVERY_ATTEMPTS || '5', 10);
+const GOAL_STALL_MAX_RECOVERY_ATTEMPTS = parseInt(process.env.GOAL_STALL_MAX_RECOVERY_ATTEMPTS || '3', 10);
 export const GOAL_THREAD_COUNTER_RE = /\bgoal[-\s]?(\d{4})\b/i;
+export type GoalPauseReason = 'budget' | 'token' | 'recovery';
 
 function extractGoalSequence(name: string): number {
   const match = GOAL_THREAD_COUNTER_RE.exec(name);
@@ -16,8 +17,15 @@ export class GoalStateManager {
   lastProgressAt = Date.now();
   recoveryAttempts = 0;
   threadId: string | null = null;
+  pausedReason: GoalPauseReason | null = null;
+  pauseDetail: string | null = null;
   sequence = 0;
   sequenceInitialized = false;
+
+  private clearPause(): void {
+    this.pausedReason = null;
+    this.pauseDetail = null;
+  }
 
   markProgress(status?: string): void {
     this.lastProgressAt = Date.now();
@@ -28,12 +36,15 @@ export class GoalStateManager {
   setGoal(goal: string): void {
     this.goal = goal;
     this.startedAt = Date.now();
+    this.clearPause();
     this.markProgress('⏳ Riley planning...');
   }
 
   clear(): void {
     this.threadId = null;
     this.goal = null;
+    this.recoveryAttempts = 0;
+    this.clearPause();
     this.status = '✅ Completed';
     this.startedAt = Date.now();
   }
@@ -42,11 +53,39 @@ export class GoalStateManager {
     return this.goal !== null;
   }
 
+  isPaused(): boolean {
+    return this.pausedReason !== null;
+  }
+
+  pause(reason: GoalPauseReason, status: string, detail?: string): void {
+    if (!this.goal) return;
+    this.pausedReason = reason;
+    this.pauseDetail = detail || null;
+    this.recoveryAttempts = 0;
+    this.lastProgressAt = Date.now();
+    this.status = status;
+  }
+
+  resume(status?: string): void {
+    this.clearPause();
+    this.recoveryAttempts = 0;
+    this.lastProgressAt = Date.now();
+    if (status) this.status = status;
+  }
+
   isStalled(): boolean {
     if (!this.goal) return false;
+    if (this.isPaused()) return false;
     if (Date.now() - this.lastProgressAt < GOAL_STALL_TIMEOUT_MS) return false;
     if (this.recoveryAttempts >= GOAL_STALL_MAX_RECOVERY_ATTEMPTS) return false;
     return true;
+  }
+
+  shouldParkForRecovery(): boolean {
+    if (!this.goal) return false;
+    if (this.isPaused()) return false;
+    if (Date.now() - this.lastProgressAt < GOAL_STALL_TIMEOUT_MS) return false;
+    return this.recoveryAttempts >= GOAL_STALL_MAX_RECOVERY_ATTEMPTS;
   }
 
   recordRecoveryAttempt(): void {
@@ -57,7 +96,8 @@ export class GoalStateManager {
 
   getSummary(): string | null {
     if (!this.goal) return null;
-    return `📋 **Current Goal:** ${this.goal}\n**Status:** ${this.status || 'In progress...'}`;
+    const pauseLine = this.pauseDetail ? `\n**Paused:** ${this.pauseDetail}` : '';
+    return `📋 **Current Goal:** ${this.goal}\n**Status:** ${this.status || 'In progress...'}${pauseLine}`;
   }
 
   getCompactGoalLine(goalMaxLen = 72, statusMaxLen = 48): string | null {
