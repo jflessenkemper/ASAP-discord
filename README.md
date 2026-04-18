@@ -56,7 +56,9 @@ flowchart LR
         direction TB
         AgentManagerCore[Agent manager core]
         SelfImproveEngine[Self improvement engine]
+        StewardQueue[Background stewardship queue]
         AgentManagerCore --> SelfImproveEngine
+        SelfImproveEngine --> StewardQueue
     end
 
     subgraph AgentChannels[Agent channels]
@@ -121,8 +123,7 @@ flowchart LR
     LawyerAgent --> LawyerChan
     IOSAgent --> IOSChan
     AndroidAgent --> AndroidChan
-    SelfImproveEngine -->|self-improvement data| Opus
-    Opus -->|requests and evidence needs| SelfImproveEngine
+    Opus -->|execution outcome| AgentManagerCore
     TestEngine --> SelfImproveEngine
     LoggingEngine --> SelfImproveEngine
     MemoryLoop --> SelfImproveEngine
@@ -131,6 +132,7 @@ flowchart LR
     UpgradesTriage --> SelfImproveEngine
     VoiceSession --> SelfImproveEngine
     GoalWatchdog --> SelfImproveEngine
+    StewardQueue -->|background stewardship| OpsHub
     SelfImproveEngine -->|ops updates| OpsHub
     Opus -->|done| Riley
     Riley -->|if in voice| Voice
@@ -154,7 +156,7 @@ flowchart LR
     class OpsHub hidden;
 ```
 
-This diagram shows the target architecture. Riley's Sonnet agent manager sends work to sub-agents and manages the self-improvement engine as a separate manager-owned layer. The loops feed their evidence into that engine, the engine feeds whatever Riley Opus needs back into execution, and the same engine output is used to keep the ops channels current.
+This diagram shows the target architecture. Riley's Sonnet agent manager sends work to sub-agents and manages the self-improvement engine as a separate manager-owned layer. Opus emits execution outcomes back to the manager, the manager queues stewardship in the background, and the loops feed evidence into that manager-owned path without holding the user turn open.
 
 The full architecture diagram is in [.github/ARCHITECTURE.md](.github/ARCHITECTURE.md).
 
@@ -184,7 +186,7 @@ These loops are the part I would usually show an employer because they explain w
 8. Goal and thread watchdog loop: the system watches long-running tasks so work does not silently stall.
 9. Voice session loop: live voice calls stay responsive and Riley asks for decisions in voice.
 
-Self-improvement still exists, but it is now managed by Riley the agent manager as a packet-driven engine. Riley (Operations Manager) is the stewardship worker inside that path, while Riley Opus consumes the resulting data and evidence.
+Self-improvement still exists, but it is now managed by Riley the agent manager as a packet-driven engine. Riley (Operations Manager) is the background stewardship worker inside that path. The current runtime now queues that work off the main user request path; a durable outbox is the next hardening step.
 
 ## Token And Cost Optimisation
 

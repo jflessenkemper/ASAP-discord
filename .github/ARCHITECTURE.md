@@ -22,7 +22,9 @@ flowchart LR
         direction TB
         AgentManagerCore[Agent manager core]
         SelfImproveEngine[Self improvement engine]
+        StewardQueue[Background stewardship queue]
         AgentManagerCore --> SelfImproveEngine
+        SelfImproveEngine --> StewardQueue
     end
 
     QAAgent[QA]
@@ -99,8 +101,7 @@ flowchart LR
     LawyerAgent --> LawyerChan
     IOSAgent --> IOSChan
     AndroidAgent --> AndroidChan
-    SelfImproveEngine -->|self-improvement data| Opus
-    Opus -->|requests and evidence needs| SelfImproveEngine
+    Opus -->|execution outcome| AgentManagerCore
     TestEngine --> SelfImproveEngine
     LoggingEngine --> SelfImproveEngine
     MemoryLoop --> SelfImproveEngine
@@ -109,6 +110,7 @@ flowchart LR
     UpgradesTriage --> SelfImproveEngine
     VoiceSession --> SelfImproveEngine
     GoalWatchdog --> SelfImproveEngine
+    StewardQueue -->|background stewardship| OpsHub
     SelfImproveEngine -->|ops updates| OpsHub
     Opus -->|done| Riley
     Riley -->|if in voice| Voice
@@ -143,6 +145,7 @@ flowchart LR
     Riley[Riley with Sonnet plans, tracks, and responds]
     Workspace[Workspace thread]
     ExecutionFabric[Specialists, tools, and loop adapters]
+    StewardQueue[Background stewardship queue]
     OpsSteward["Riley (Operations Manager)\nstewardship worker"]
     Opus["Riley (Opus) executes and checks completion"]
     UserHears[User hears Riley's response]
@@ -161,12 +164,12 @@ flowchart LR
     Workspace --> Opus
     Opus --> ExecutionFabric
     ExecutionFabric --> Opus
+    Opus -->|execution outcome| AgentManagerCore
     AgentManagerCore -->|manage self-improvement path| SelfImproveEngine
-    Opus -->|requests and evidence needs| SelfImproveEngine
-    SelfImproveEngine -->|stewardship work| OpsSteward
+    SelfImproveEngine -->|enqueue stewardship| StewardQueue
+    StewardQueue -->|background work| OpsSteward
     OpsSteward -->|workspace updates and ops logs| Workspace
     OpsSteward -->|stewardship report| SelfImproveEngine
-    SelfImproveEngine -->|loop evidence and ops data| Opus
     Opus -->|completed result| Riley
     Riley -->|short spoken reply| SpeechIO --> VoiceSession --> UserHears
 
@@ -180,7 +183,7 @@ flowchart LR
     class Riley riley;
     class VoiceSession,SpeechIO,SpeakerGate voice;
     class Opus opus;
-    class Workspace,ExecutionFabric,SelfImproveEngine surface;
+    class Workspace,ExecutionFabric,SelfImproveEngine,StewardQueue surface;
     class AgentManagerCore riley;
     class OpsSteward riley;
 ```
@@ -195,7 +198,8 @@ flowchart TB
     Opus["Riley (Opus) executes the plan and checks completion"]
     Specialists[Agent manager and specialist reports]
     Tools[Tools and integrations]
-    StewardRequests[Structured self-improvement requests]
+    ExecutionOutcome[Execution outcome summary]
+    StewardQueue[Background stewardship queue]
     OpsSteward["Riley (Operations Manager)\nstewardship worker"]
     LoopAdapters[Callable loop adapters]
     LoopReports[Loop reports, ops lines, and evidence]
@@ -220,11 +224,10 @@ flowchart TB
     Workspace --> Specialists
     Specialists --> Opus
     Opus --> Tools --> Opus
+    Opus --> ExecutionOutcome --> AgentManagerCore
     AgentManagerCore -->|manage engine| SelfImproveEngine
-    Opus --> StewardRequests --> SelfImproveEngine
-    SelfImproveEngine --> OpsSteward
+    SelfImproveEngine --> StewardQueue --> OpsSteward
     OpsSteward --> LoopAdapters --> LoopReports --> SelfImproveEngine
-    SelfImproveEngine -->|data needed for execution| Opus
     SelfImproveEngine --> OpsChannels
     OpsSteward --> WorkspaceUpdates --> Workspace
     Opus --> OpusReturn
@@ -238,9 +241,13 @@ flowchart TB
     class Request,FinalAnswer user;
     class Riley,AgentManagerCore riley;
     class Opus,OpusReturn opus;
-    class Workspace,Specialists,Tools,SelfImproveEngine,StewardRequests,LoopAdapters,LoopReports,OpsChannels,WorkspaceUpdates surface;
+    class Workspace,Specialists,Tools,SelfImproveEngine,ExecutionOutcome,StewardQueue,LoopAdapters,LoopReports,OpsChannels,WorkspaceUpdates surface;
     class OpsSteward riley;
 ```
+
+## Runtime Note
+
+The current runtime now queues self-improvement work off the main groupchat execution path with an in-memory background worker. That removes loop adapters and operations stewardship from the user-facing critical path. A durable outbox is still the next hardening step if process restarts and retries need stronger guarantees.
 
 ## Loop Internals
 

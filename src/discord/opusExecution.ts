@@ -7,11 +7,6 @@ import {
   type HandoffResult,
   type LoopExecutionReport,
 } from './handoff';
-import {
-  buildSelfImprovementPacket,
-  type OperationsStewardRequest,
-  type SelfImprovementPacket,
-} from './operationsSteward';
 
 export interface OpusExecutionPlan {
   executionId: string;
@@ -33,8 +28,6 @@ export interface OpusExecutionSummary {
   evidence: ExecutionEvidence[];
   specialistReports: HandoffResult[];
   loopReports: LoopExecutionReport[];
-  selfImprovement: SelfImprovementPacket;
-  stewardRequests: OperationsStewardRequest[];
   durationMs: number;
 }
 
@@ -150,13 +143,6 @@ export async function executeOpusPlan(
   ];
 
   const status = aggregateStatus(specialistReports, loopReports, issues);
-  const selfImprovement = buildSelfImprovementPacket({
-    goal: plan.goal,
-    status,
-    summary: buildExecutionSummary(plan.goal, specialistReports, loopReports, status),
-    issues,
-  });
-  const stewardRequests = selfImprovement.requests;
   progress.push(
     createExecutionMilestone(
       status === 'blocked' ? 'blocked' : status === 'partial' ? 'executing' : 'completed',
@@ -185,8 +171,6 @@ export async function executeOpusPlan(
     evidence,
     specialistReports,
     loopReports,
-    selfImprovement,
-    stewardRequests,
     durationMs: Date.now() - startedAt,
   };
 }

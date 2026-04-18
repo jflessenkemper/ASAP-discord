@@ -25,7 +25,13 @@ import { buildHandoffContext, type HandoffResult, type ExecutionIssue, type Exec
 import { appendToMemory, getMemoryContext, loadMemory, saveMemory, clearMemory, compressMemory } from '../memory';
 import { getAllModelHealth } from '../modelHealth';
 import { executeLoopAdapters } from '../loopAdapters';
-import { buildSelfImprovementOpsUpdates, formatOperationsStewardRequests } from '../operationsSteward';
+import {
+  buildSelfImprovementOpsUpdates,
+  buildSelfImprovementPacket,
+  formatOperationsStewardRequests,
+  type OperationsStewardRequest,
+  type SelfImprovementPacket,
+} from '../operationsSteward';
 import { createAgentExecutionReport, executeOpusPlan, type OpusExecutionSummary } from '../opusExecution';
 import { postAgentErrorLog } from '../services/agentErrors';
 import { captureAndPostScreenshots } from '../services/screenshots';
@@ -52,6 +58,17 @@ type ToolNotificationBatch = {
   agent: AgentConfig;
   items: string[];
   timer: NodeJS.Timeout | null;
+};
+
+type SelfImprovementBackgroundJob = {
+  packet: SelfImprovementPacket;
+  stewardRequests: OperationsStewardRequest[];
+  goal: string;
+  conversationSummary: string;
+  status: OpusExecutionSummary['status'];
+  directiveContext: string;
+  groupchat: TextChannel;
+  workspaceChannel: WebhookCapableChannel;
 };
 
 const TOOL_NOTIFICATION_FLUSH_MS = parseInt(process.env.TOOL_NOTIFICATION_FLUSH_MS || '2500', 10);
@@ -152,6 +169,8 @@ let messageQueue: Promise<void> = Promise.resolve();
 let activeAbortController: AbortController | null = null;
 let activeThinkingMessage: Message | null = null;
 let activeGroupchatOwner: { userId: string; displayName: string } | null = null;
+const selfImprovementJobQueue: SelfImprovementBackgroundJob[] = [];
+let selfImprovementWorkerRunning = false;
 
 // When true, a smoke_test_agents tool call is in progress. Tester bot messages
 // arriving during this window are subprocess probes and must NOT abort or
@@ -1443,6 +1462,150 @@ async function postSelfImprovementOpsUpdates(
   }
 }
 
+async function processSelfImprovementBackgroundJob(job: SelfImprovementBackgroundJob): Promise<void> {
+  const { packet, stewardRequests, goal, conversationSummary, status, directiveContext, groupchat, workspaceChannel } = job;
+  const channels = getBotChannels();
+  const stewardKinds = [...new Set(stewardRequests.map((request) => request.kind))].join(',');
+
+  logAgentEvent(packet.managerAgentId, 'invoke', `self-improvement:${stewardKinds}:${directiveContext.slice(0, 240)}`);
+  if (channels?.threadStatus) {
+    await postOpsLine(channels.threadStatus, {
+      actor: packet.managerAgentId,
+      scope: 'self-improvement-engine',
+      metric: `requests=${stewardRequests.length}`,
+      delta: `kinds=${stewardKinds || 'none'}`,
+      action: 'run background stewardship worker',
+      severity: status === 'completed' ? 'info' : 'warn',
+    }).catch(() => {});
+  }
+
+  await postWorkspaceProgressUpdate(
+    workspaceChannel,
+    packet.managerAgentId as AgentId,
+    `Background self-improvement started for Riley Opus: ${stewardRequests.map((request) => `[${request.kind}] ${request.summary}`).slice(0, 4).join(' | ')}`
+  );
+
+  const loopReports = await executeLoopAdapters(packet.recommendedLoopIds);
+  if (loopReports.length > 0) {
+    const loopSummary = loopReports.map((report) => `${report.loopId}=${report.status}`).join(', ');
+    logAgentEvent(packet.managerAgentId, 'response', `loop-adapter-summary:${loopSummary}`);
+    if (channels?.threadStatus) {
+      await postOpsLine(channels.threadStatus, {
+        actor: packet.managerAgentId,
+        scope: 'loop-adapter',
+        metric: `loops=${loopReports.length}`,
+        delta: loopSummary,
+        action: loopReports.some((report) => report.status === 'blocked' || report.status === 'partial')
+          ? 'inspect loop adapter results'
+          : 'none',
+        severity: loopReports.some((report) => report.status === 'blocked')
+          ? 'error'
+          : loopReports.some((report) => report.status === 'partial')
+            ? 'warn'
+            : 'info',
+      }).catch(() => {});
+    }
+    await postWorkspaceProgressUpdate(
+      workspaceChannel,
+      packet.managerAgentId as AgentId,
+      `Background loop maintenance results: ${loopReports.map((report) => `${report.loopId}=${report.status}`).slice(0, 6).join(', ')}`
+    );
+  }
+
+  const opsAgentId = packet.stewardAgentId as AgentId;
+  const opsStartedAt = Date.now();
+  const opsChannel = getAgentWorkChannel(opsAgentId, groupchat);
+  const stewardshipGoal = goal.replace(/\s+/g, ' ').trim().slice(0, 200) || 'operations stewardship';
+  const opsHandoffCtx = buildHandoffContext({
+    fromAgent: packet.consumerAgentId,
+    toAgent: opsAgentId,
+    traceId: `opus-ops-${Date.now()}`,
+    task: `Maintain self-improvement, loop health, and ops-channel hygiene for: ${stewardshipGoal}`,
+    conversationSummary,
+    constraints: [
+      'Focus on memory, logging, regression coverage, loop reporting, and ops-channel hygiene only.',
+      'Be concise and operational.',
+      'Return what you changed, what you observed, and what still needs follow-up.',
+    ],
+    expectedOutput: 'Operational stewardship summary with actions taken and remaining risk',
+    parentGoal: stewardshipGoal,
+  });
+  const loopEvidenceBlock = loopReports.length > 0
+    ? `\n\nLoop adapter reports:\n${loopReports.map((report) => `- ${report.loopId}: ${report.summary}`).join('\n')}`
+    : '';
+  const opsContext = `${formatHandoffPrompt(opsHandoffCtx)}\n\nOperations steward requests:\n${formatOperationsStewardRequests(stewardRequests)}${loopEvidenceBlock}`;
+  const opsResponse = await dispatchToAgent(opsAgentId, opsContext, opsChannel, {
+    maxTokens: SUBAGENT_MAX_TOKENS,
+    memoryWindow: 6,
+    priority: 'background',
+    persistUserContent: `[Opus stewardship request]: ${opsContext.slice(0, 900)}`,
+    documentLine: '🛰️ {response}',
+    workspaceChannel,
+  });
+
+  const loopIssues = loopReports.flatMap((report) => report.issues || []);
+  const loopEvidence = loopReports.flatMap((report) => report.evidence || []);
+  const opsReport = createAgentExecutionReport({
+    agentId: opsAgentId,
+    summary: opsResponse.slice(0, 500) || 'Operations steward completed a maintenance pass.',
+    status: loopIssues.some((issue) => issue.severity === 'error') ? 'partial' : 'completed',
+    durationMs: Date.now() - opsStartedAt,
+    issues: loopIssues,
+    evidence: [{ kind: 'message', value: opsResponse.slice(0, 500) || 'operations-steward:no-visible-response' }, ...loopEvidence],
+  });
+
+  logAgentEvent(opsAgentId, 'response', `steward-handoff:${opsReport.status}:${opsReport.summary}`);
+  if (channels?.threadStatus) {
+    await postOpsLine(channels.threadStatus, {
+      actor: opsAgentId,
+      scope: 'opus-stewardship',
+      metric: `status=${opsReport.status}`,
+      delta: opsReport.summary,
+      action: opsReport.status === 'completed' ? 'none' : 'review steward follow-up',
+      severity: opsReport.status === 'completed' ? 'info' : 'warn',
+    }).catch(() => {});
+  }
+  if (opsResponse.trim()) {
+    await postWorkspaceProgressUpdate(
+      workspaceChannel,
+      opsAgentId,
+      `Operations steward update: ${opsResponse.slice(0, 700)}`
+    );
+  }
+
+  await postSelfImprovementOpsUpdates(
+    channels,
+    packet.managerAgentId,
+    buildSelfImprovementOpsUpdates(packet, loopReports, opsResponse.slice(0, 500)),
+  );
+}
+
+async function drainSelfImprovementQueue(): Promise<void> {
+  if (selfImprovementWorkerRunning) return;
+  selfImprovementWorkerRunning = true;
+  try {
+    while (selfImprovementJobQueue.length > 0) {
+      const nextJob = selfImprovementJobQueue.shift();
+      if (!nextJob) continue;
+      try {
+        await processSelfImprovementBackgroundJob(nextJob);
+      } catch (err) {
+        logAgentEvent(nextJob.packet.stewardAgentId, 'error', `steward-handoff:blocked:${errMsg(err)}`);
+      }
+    }
+  } finally {
+    selfImprovementWorkerRunning = false;
+    if (selfImprovementJobQueue.length > 0) {
+      void drainSelfImprovementQueue();
+    }
+  }
+}
+
+function enqueueSelfImprovementJob(job: SelfImprovementBackgroundJob): void {
+  selfImprovementJobQueue.push(job);
+  void drainSelfImprovementQueue();
+}
+
 async function maybeSendGroupchatSingleUserNotice(groupchat: TextChannel): Promise<void> {
   const now = Date.now();
   if (now - lastGroupchatSingleUserNoticeAt < GROUPCHAT_SINGLE_USER_NOTICE_COOLDOWN_MS) return;
@@ -1505,6 +1668,7 @@ interface AgentDispatchOptions {
   signal?: AbortSignal;
   maxTokens?: number;
   memoryWindow?: number;
+  priority?: 'normal' | 'voice' | 'background';
   documentLine?: string;
   persistUserContent?: string;
   workspaceChannel?: WebhookCapableChannel;
@@ -1536,6 +1700,7 @@ async function dispatchToAgent(
     {
       maxTokens: options.maxTokens,
       signal: options.signal,
+      priority: options.priority,
       threadKey: `groupchat:${outputChannel.id}`,
     }
   );
@@ -3241,134 +3406,29 @@ async function handleSubAgents(
     },
   });
 
-  if (opusSummary.stewardRequests.length > 0 && !signal?.aborted) {
-    const selfImprovement = opusSummary.selfImprovement;
-    const channels = getBotChannels();
-    const stewardKinds = [...new Set(opusSummary.stewardRequests.map((request) => request.kind))].join(',');
-    logAgentEvent(selfImprovement.managerAgentId, 'invoke', `self-improvement:${stewardKinds}:${directiveContext.slice(0, 240)}`);
-    if (channels?.threadStatus) {
-      await postOpsLine(channels.threadStatus, {
-        actor: selfImprovement.managerAgentId,
-        scope: 'self-improvement-engine',
-        metric: `requests=${opusSummary.stewardRequests.length}`,
-        delta: `kinds=${stewardKinds || 'none'}`,
-        action: 'run loop adapters and stewardship handoff',
-        severity: opusSummary.status === 'completed' ? 'info' : 'warn',
-      }).catch(() => {});
-    }
+  const selfImprovement = buildSelfImprovementPacket({
+    goal: opusSummary.goal,
+    status: opusSummary.status,
+    summary: opusSummary.summary,
+    issues: opusSummary.issues,
+  });
+
+  if (selfImprovement.requests.length > 0 && !signal?.aborted) {
+    enqueueSelfImprovementJob({
+      packet: selfImprovement,
+      stewardRequests: selfImprovement.requests,
+      goal: opusSummary.goal,
+      conversationSummary: opusSummary.summary,
+      status: opusSummary.status,
+      directiveContext,
+      groupchat,
+      workspaceChannel,
+    });
     await postWorkspaceProgressUpdate(
       workspaceChannel,
       selfImprovement.managerAgentId as AgentId,
-      `Self-improvement queue received for Riley Opus: ${opusSummary.stewardRequests.map((request) => `[${request.kind}] ${request.summary}`).slice(0, 4).join(' | ')}`
+      `Self-improvement queued in the background for Riley Opus: ${selfImprovement.requests.map((request) => `[${request.kind}] ${request.summary}`).slice(0, 4).join(' | ')}`
     );
-    markGoalProgress('🛰️ Riley Sonnet maintaining the self-improvement engine and loops...');
-    const loopReports = await executeLoopAdapters(
-      selfImprovement.recommendedLoopIds
-    );
-    if (loopReports.length > 0) {
-      const loopSummary = loopReports.map((report) => `${report.loopId}=${report.status}`).join(', ');
-      logAgentEvent(selfImprovement.managerAgentId, 'response', `loop-adapter-summary:${loopSummary}`);
-      if (channels?.threadStatus) {
-        await postOpsLine(channels.threadStatus, {
-          actor: selfImprovement.managerAgentId,
-          scope: 'loop-adapter',
-          metric: `loops=${loopReports.length}`,
-          delta: loopSummary,
-          action: loopReports.some((report) => report.status === 'blocked' || report.status === 'partial')
-            ? 'inspect loop adapter results'
-            : 'none',
-          severity: loopReports.some((report) => report.status === 'blocked')
-            ? 'error'
-            : loopReports.some((report) => report.status === 'partial')
-              ? 'warn'
-              : 'info',
-        }).catch(() => {});
-      }
-      await postWorkspaceProgressUpdate(
-        workspaceChannel,
-        selfImprovement.managerAgentId as AgentId,
-        `Loop maintenance results: ${loopReports.map((report) => `${report.loopId}=${report.status}`).slice(0, 6).join(', ')}`
-      );
-    }
-
-    const opsAgentId = selfImprovement.stewardAgentId as AgentId;
-    const opsStartedAt = Date.now();
-    const opsChannel = getAgentWorkChannel(opsAgentId, groupchat);
-    const stewardshipGoal = directiveContext.replace(/\s+/g, ' ').trim().slice(0, 200) || 'operations stewardship';
-    const opsHandoffCtx = buildHandoffContext({
-      fromAgent: 'opus',
-      toAgent: opsAgentId,
-      traceId: `opus-ops-${Date.now()}`,
-      task: `Maintain self-improvement, loop health, and ops-channel hygiene for: ${stewardshipGoal}`,
-      conversationSummary: opusSummary.summary,
-      constraints: [
-        'Focus on memory, logging, regression coverage, loop reporting, and ops-channel hygiene only.',
-        'Be concise and operational.',
-        'Return what you changed, what you observed, and what still needs follow-up.',
-      ],
-      expectedOutput: 'Operational stewardship summary with actions taken and remaining risk',
-      parentGoal: stewardshipGoal,
-    });
-    const loopEvidenceBlock = loopReports.length > 0
-      ? `\n\nLoop adapter reports:\n${loopReports.map((report) => `- ${report.loopId}: ${report.summary}`).join('\n')}`
-      : '';
-    const opsContext = `${formatHandoffPrompt(opsHandoffCtx)}\n\nOperations steward requests:\n${formatOperationsStewardRequests(opusSummary.stewardRequests)}${loopEvidenceBlock}`;
-    const opsResponse = await dispatchToAgent(opsAgentId, opsContext, opsChannel, {
-      maxTokens: SUBAGENT_MAX_TOKENS,
-      memoryWindow: 6,
-      signal,
-      persistUserContent: `[Opus stewardship request]: ${opsContext.slice(0, 900)}`,
-      documentLine: '🛰️ {response}',
-      workspaceChannel,
-    });
-
-    if (!signal?.aborted) {
-      const loopIssues = loopReports.flatMap((report) => report.issues || []);
-      const loopEvidence = loopReports.flatMap((report) => report.evidence || []);
-      const opsReport = createAgentExecutionReport({
-        agentId: opsAgentId,
-        summary: opsResponse.slice(0, 500) || 'Operations steward completed a maintenance pass.',
-        status: loopIssues.some((issue) => issue.severity === 'error') ? 'partial' : 'completed',
-        durationMs: Date.now() - opsStartedAt,
-        issues: loopIssues,
-        evidence: [{ kind: 'message', value: opsResponse.slice(0, 500) || 'operations-steward:no-visible-response' }, ...loopEvidence],
-      });
-      reports.push(opsReport);
-      logAgentEvent(opsAgentId, 'response', `steward-handoff:${opsReport.status}:${opsReport.summary}`);
-      if (channels?.threadStatus) {
-        await postOpsLine(channels.threadStatus, {
-          actor: opsAgentId,
-          scope: 'opus-stewardship',
-          metric: `status=${opsReport.status}`,
-          delta: opsReport.summary,
-          action: opsReport.status === 'completed' ? 'none' : 'review steward follow-up',
-          severity: opsReport.status === 'completed' ? 'info' : 'warn',
-        }).catch(() => {});
-      }
-      if (opsResponse.trim()) {
-        priorFindings.push(`${getAgentMention(opsAgentId)}: ${opsResponse.slice(0, 500)}`);
-        await postWorkspaceProgressUpdate(
-          workspaceChannel,
-          opsAgentId,
-          `Operations steward update: ${opsResponse.slice(0, 700)}`
-        );
-      }
-      if (loopIssues.some((issue) => issue.severity === 'error')) {
-        errorLines.push(`${getAgentMention(opsAgentId)}: loop maintenance encountered errors`);
-      }
-      await postSelfImprovementOpsUpdates(
-        channels,
-        selfImprovement.managerAgentId,
-        buildSelfImprovementOpsUpdates(selfImprovement, loopReports, opsResponse.slice(0, 500)),
-      );
-      opusSummary = await executeOpusPlan({
-        executionId: `subagents:${Date.now()}`,
-        goal: stewardshipGoal,
-        requestedBy: 'riley',
-        specialistReports: reports,
-        loopReports,
-      });
-    }
   }
   markGoalProgress('📝 Sub-agent cycle completed');
   return { findings: priorFindings, errors: errorLines, opusSummary, reports };
