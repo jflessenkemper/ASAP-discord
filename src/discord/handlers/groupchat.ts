@@ -6,7 +6,7 @@ import fs from 'fs';
 import path from 'path';
 import pool from '../../db/pool';
 
-import { Message, TextChannel, GuildMember, EmbedBuilder, ThreadAutoArchiveDuration, ButtonBuilder, ActionRowBuilder, ButtonStyle, ComponentType } from 'discord.js';
+import { Message, TextChannel, GuildMember, EmbedBuilder, ThreadAutoArchiveDuration, ButtonBuilder, ActionRowBuilder, ButtonStyle, ComponentType, ChannelType } from 'discord.js';
 
 import { triggerCloudBuild, listRevisions, getCurrentRevision, rollbackToRevision } from '../../services/cloudrun';
 import {
@@ -33,6 +33,13 @@ import {
   type SelfImprovementPacket,
 } from '../operationsSteward';
 import { createAgentExecutionReport, executeOpusPlan, type OpusExecutionSummary } from '../opusExecution';
+import {
+  claimNextSelfImprovementJob,
+  enqueueSelfImprovementJob,
+  markSelfImprovementJobCompleted,
+  markSelfImprovementJobFailed,
+  type SelfImprovementQueuePayload,
+} from '../selfImprovementQueue';
 import { postAgentErrorLog } from '../services/agentErrors';
 import { captureAndPostScreenshots } from '../services/screenshots';
 import { makeOutboundCall, makeAsapTesterCall, startConferenceCall, isTelephonyAvailable } from '../services/telephony';
@@ -58,17 +65,6 @@ type ToolNotificationBatch = {
   agent: AgentConfig;
   items: string[];
   timer: NodeJS.Timeout | null;
-};
-
-type SelfImprovementBackgroundJob = {
-  packet: SelfImprovementPacket;
-  stewardRequests: OperationsStewardRequest[];
-  goal: string;
-  conversationSummary: string;
-  status: OpusExecutionSummary['status'];
-  directiveContext: string;
-  groupchat: TextChannel;
-  workspaceChannel: WebhookCapableChannel;
 };
 
 const TOOL_NOTIFICATION_FLUSH_MS = parseInt(process.env.TOOL_NOTIFICATION_FLUSH_MS || '2500', 10);
@@ -169,8 +165,8 @@ let messageQueue: Promise<void> = Promise.resolve();
 let activeAbortController: AbortController | null = null;
 let activeThinkingMessage: Message | null = null;
 let activeGroupchatOwner: { userId: string; displayName: string } | null = null;
-const selfImprovementJobQueue: SelfImprovementBackgroundJob[] = [];
 let selfImprovementWorkerRunning = false;
+let selfImprovementWorkerTimer: ReturnType<typeof setInterval> | null = null;
 
 // When true, a smoke_test_agents tool call is in progress. Tester bot messages
 // arriving during this window are subprocess probes and must NOT abort or
@@ -187,6 +183,7 @@ const RILEY_PROGRESS_PING_MS = parseInt(
   process.env.RILEY_PROGRESS_PING_MS || String(Math.max(20_000, Math.floor(RILEY_NO_RESPONSE_TIMEOUT_MS * 0.6))),
   10,
 );
+const SELF_IMPROVEMENT_WORKER_POLL_MS = Math.max(2_000, parseInt(process.env.SELF_IMPROVEMENT_WORKER_POLL_MS || '5000', 10));
 const DIRECT_GROUPCHAT_SHORT_PROMPT_MAX_WORDS = parseInt(process.env.DIRECT_GROUPCHAT_SHORT_PROMPT_MAX_WORDS || '18', 10);
 
 const GOAL_STALL_TIMEOUT_MS = parseInt(process.env.GOAL_STALL_TIMEOUT_MS || '420000', 10);
@@ -1462,8 +1459,29 @@ async function postSelfImprovementOpsUpdates(
   }
 }
 
-async function processSelfImprovementBackgroundJob(job: SelfImprovementBackgroundJob): Promise<void> {
-  const { packet, stewardRequests, goal, conversationSummary, status, directiveContext, groupchat, workspaceChannel } = job;
+async function resolveWebhookCapableChannelById(channelId: string): Promise<WebhookCapableChannel | null> {
+  const channels = getBotChannels();
+  const client = channels?.groupchat?.client;
+  if (!client || !channelId) return null;
+  const resolved = await client.channels.fetch(channelId).catch(() => null);
+  if (!resolved) return null;
+  if (resolved.type === ChannelType.GuildText || resolved.type === ChannelType.PublicThread || resolved.type === ChannelType.PrivateThread || resolved.type === ChannelType.AnnouncementThread) {
+    return resolved as WebhookCapableChannel;
+  }
+  return null;
+}
+
+async function processSelfImprovementBackgroundJob(job: SelfImprovementQueuePayload): Promise<void> {
+  const { packet, goal, conversationSummary, status, directiveContext } = job;
+  const stewardRequests = packet.requests;
+  const groupchat = await resolveWebhookCapableChannelById(job.groupchatChannelId);
+  const workspaceChannel = await resolveWebhookCapableChannelById(job.workspaceChannelId);
+  if (!groupchat || groupchat.type !== ChannelType.GuildText) {
+    throw new Error(`Could not resolve groupchat channel ${job.groupchatChannelId}`);
+  }
+  if (!workspaceChannel) {
+    throw new Error(`Could not resolve workspace channel ${job.workspaceChannelId}`);
+  }
   const channels = getBotChannels();
   const stewardKinds = [...new Set(stewardRequests.map((request) => request.kind))].join(',');
 
@@ -1580,30 +1598,45 @@ async function processSelfImprovementBackgroundJob(job: SelfImprovementBackgroun
   );
 }
 
-async function drainSelfImprovementQueue(): Promise<void> {
+export async function runSelfImprovementQueueTick(): Promise<void> {
   if (selfImprovementWorkerRunning) return;
   selfImprovementWorkerRunning = true;
   try {
-    while (selfImprovementJobQueue.length > 0) {
-      const nextJob = selfImprovementJobQueue.shift();
-      if (!nextJob) continue;
+    while (true) {
+      const claimed = await claimNextSelfImprovementJob(process.env.RUNTIME_INSTANCE_TAG || process.env.HOSTNAME || `pid-${process.pid}`);
+      if (!claimed) break;
       try {
-        await processSelfImprovementBackgroundJob(nextJob);
+        await processSelfImprovementBackgroundJob(claimed.payload);
+        await markSelfImprovementJobCompleted(claimed.id);
       } catch (err) {
-        logAgentEvent(nextJob.packet.stewardAgentId, 'error', `steward-handoff:blocked:${errMsg(err)}`);
+        const detail = errMsg(err);
+        logAgentEvent(claimed.payload.packet.stewardAgentId, 'error', `steward-handoff:blocked:${detail}`);
+        void postAgentErrorLog('self-improvement:worker', 'Background stewardship worker failed', {
+          level: claimed.attempts >= claimed.maxAttempts ? 'error' : 'warn',
+          detail,
+          agentId: claimed.payload.packet.stewardAgentId,
+        });
+        await markSelfImprovementJobFailed(claimed.id, claimed.attempts, claimed.maxAttempts, detail);
       }
     }
   } finally {
     selfImprovementWorkerRunning = false;
-    if (selfImprovementJobQueue.length > 0) {
-      void drainSelfImprovementQueue();
-    }
   }
 }
 
-function enqueueSelfImprovementJob(job: SelfImprovementBackgroundJob): void {
-  selfImprovementJobQueue.push(job);
-  void drainSelfImprovementQueue();
+export function startSelfImprovementQueueWorker(): void {
+  if (selfImprovementWorkerTimer) return;
+  selfImprovementWorkerTimer = setInterval(() => {
+    void runSelfImprovementQueueTick();
+  }, SELF_IMPROVEMENT_WORKER_POLL_MS);
+  void runSelfImprovementQueueTick();
+}
+
+export function stopSelfImprovementQueueWorker(): void {
+  if (selfImprovementWorkerTimer) {
+    clearInterval(selfImprovementWorkerTimer);
+    selfImprovementWorkerTimer = null;
+  }
 }
 
 async function maybeSendGroupchatSingleUserNotice(groupchat: TextChannel): Promise<void> {
@@ -3414,15 +3447,14 @@ async function handleSubAgents(
   });
 
   if (selfImprovement.requests.length > 0 && !signal?.aborted) {
-    enqueueSelfImprovementJob({
+    await enqueueSelfImprovementJob({
       packet: selfImprovement,
-      stewardRequests: selfImprovement.requests,
       goal: opusSummary.goal,
       conversationSummary: opusSummary.summary,
       status: opusSummary.status,
       directiveContext,
-      groupchat,
-      workspaceChannel,
+      groupchatChannelId: groupchat.id,
+      workspaceChannelId: workspaceChannel.id,
     });
     await postWorkspaceProgressUpdate(
       workspaceChannel,

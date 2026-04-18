@@ -57,7 +57,8 @@ describe('migrate', () => {
     // Default: getMissingTables for assertRuntimeTablesReady — all tables exist
     mockQuery
       .mockResolvedValueOnce({ rows: [{ exists: true }] }) // agent_memory
-      .mockResolvedValueOnce({ rows: [{ exists: true }] }); // agent_activity_log
+      .mockResolvedValueOnce({ rows: [{ exists: true }] }) // agent_activity_log
+      .mockResolvedValueOnce({ rows: [{ exists: true }] }); // self_improvement_jobs
   });
 
   afterAll(() => {
@@ -121,6 +122,7 @@ describe('migrate', () => {
 
     // assertRuntimeTablesReady
     mockQuery
+      .mockResolvedValueOnce({ rows: [{ exists: true }] })
       .mockResolvedValueOnce({ rows: [{ exists: true }] })
       .mockResolvedValueOnce({ rows: [{ exists: true }] });
 
@@ -221,6 +223,7 @@ describe('migrate', () => {
     // assertRuntimeTablesReady
     mockQuery
       .mockResolvedValueOnce({ rows: [{ exists: true }] })
+      .mockResolvedValueOnce({ rows: [{ exists: true }] })
       .mockResolvedValueOnce({ rows: [{ exists: true }] });
 
     await jest.isolateModulesAsync(async () => {
@@ -246,12 +249,14 @@ describe('migrate', () => {
     // assertAppliedMigrationExpectations checks: agent_memory, agent_activity_log
     mockQuery
       .mockResolvedValueOnce({ rows: [{ exists: true }] }) // agent_memory
-      .mockResolvedValueOnce({ rows: [{ exists: true }] }); // agent_activity_log
+      .mockResolvedValueOnce({ rows: [{ exists: true }] }) // agent_activity_log
+      .mockResolvedValueOnce({ rows: [{ exists: true }] }); // self_improvement_jobs
 
     mockReaddirSync.mockReturnValue([]);
 
     // assertRuntimeTablesReady
     mockQuery
+      .mockResolvedValueOnce({ rows: [{ exists: true }] })
       .mockResolvedValueOnce({ rows: [{ exists: true }] })
       .mockResolvedValueOnce({ rows: [{ exists: true }] });
 

@@ -40,7 +40,6 @@ jest.mock('../../discord/agents', () => ({
   getAgent: jest.fn(),
   loadDynamicAgentsFromDb: jest.fn(),
 }));
-jest.mock('../../discord/commands', () => ({ registerCommands: jest.fn() }));
 jest.mock('../../discord/handlers/callSession', () => ({
   setVoiceErrorChannel: jest.fn(),
   startCall: jest.fn(),
@@ -57,6 +56,8 @@ jest.mock('../../discord/handlers/groupchat', () => ({
   handleGroupchatMessage: jest.fn(),
   dispatchUpgradeToRiley: jest.fn(),
   getThreadStatusOpsLine: jest.fn(),
+  startSelfImprovementQueueWorker: jest.fn(),
+  stopSelfImprovementQueueWorker: jest.fn(),
 }));
 jest.mock('../../discord/handlers/review', () => ({ autoReviewPR: jest.fn() }));
 jest.mock('../../discord/handlers/textChannel', () => ({ handleAgentMessage: jest.fn() }));
@@ -153,13 +154,13 @@ describe('bot runDatabaseAudit', () => {
   it('posts a warn summary when legacy tables remain and drop migration is pending', async () => {
     installDatabaseQueryMock({
       appliedMigrations: ['003_agent_memory.sql', '015_agent_activity_log.sql'],
-      existingTables: ['agent_memory', 'agent_activity_log', 'employees', 'clients'],
+      existingTables: ['agent_memory', 'agent_activity_log', 'self_improvement_jobs', 'employees', 'clients'],
     });
 
     await runDatabaseAudit(channels);
 
     expect(mockPostOpsLine).toHaveBeenCalledWith(threadStatus, expect.objectContaining({
-      actor: 'executive-assistant',
+      actor: 'operations-manager',
       scope: 'database-audit',
       severity: 'warn',
       action: 'review legacy-drop migration status',

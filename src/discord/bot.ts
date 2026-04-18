@@ -22,9 +22,16 @@ import { setVoiceErrorChannel } from './handlers/callSession';
 import { startCall, endCall, isCallActive, processTesterVoiceTurnForCall } from './handlers/callSession';
 import { setBotChannels } from './handlers/documentation';
 import { setGitHubChannel } from './handlers/github';
-import { setDecisionsChannel, setThreadStatusChannel, handleDecisionReply } from './handlers/groupchat';
-import { handleGroupchatMessage, dispatchUpgradeToRiley } from './handlers/groupchat';
-import { getThreadStatusOpsLine } from './handlers/groupchat';
+import {
+  setDecisionsChannel,
+  setThreadStatusChannel,
+  handleDecisionReply,
+  handleGroupchatMessage,
+  dispatchUpgradeToRiley,
+  getThreadStatusOpsLine,
+  startSelfImprovementQueueWorker,
+  stopSelfImprovementQueueWorker,
+} from './handlers/groupchat';
 import { autoReviewPR } from './handlers/review';
 import { handleAgentMessage } from './handlers/textChannel';
 import { runLoggingEngine } from './loggingEngine';
@@ -644,6 +651,7 @@ export async function startBot(): Promise<void> {
       console.log(`Discord channels configured in "${guild.name}"`);
 
       startOpsMonitors(configuredChannels);
+      startSelfImprovementQueueWorker();
     } catch (err) {
       const msg = err instanceof Error ? err.stack || err.message : 'Unknown';
       console.error('Channel setup error:', errMsg(err));
@@ -1034,6 +1042,7 @@ export async function stopBot(): Promise<void> {
     clearInterval(databaseAuditTimer);
     databaseAuditTimer = null;
   }
+  stopSelfImprovementQueueWorker();
   stopDashboardUpdates();
   setCommandAuditCallback(() => {});
   setToolAuditCallback(() => {});

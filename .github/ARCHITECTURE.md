@@ -22,7 +22,7 @@ flowchart LR
         direction TB
         AgentManagerCore[Agent manager core]
         SelfImproveEngine[Self improvement engine]
-        StewardQueue[Background stewardship queue]
+        StewardQueue[Durable stewardship outbox]
         AgentManagerCore --> SelfImproveEngine
         SelfImproveEngine --> StewardQueue
     end
@@ -145,7 +145,7 @@ flowchart LR
     Riley[Riley with Sonnet plans, tracks, and responds]
     Workspace[Workspace thread]
     ExecutionFabric[Specialists, tools, and loop adapters]
-    StewardQueue[Background stewardship queue]
+    StewardQueue[Durable stewardship outbox]
     OpsSteward["Riley (Operations Manager)\nstewardship worker"]
     Opus["Riley (Opus) executes and checks completion"]
     UserHears[User hears Riley's response]
@@ -166,7 +166,7 @@ flowchart LR
     ExecutionFabric --> Opus
     Opus -->|execution outcome| AgentManagerCore
     AgentManagerCore -->|manage self-improvement path| SelfImproveEngine
-    SelfImproveEngine -->|enqueue stewardship| StewardQueue
+    SelfImproveEngine -->|write stewardship job| StewardQueue
     StewardQueue -->|background work| OpsSteward
     OpsSteward -->|workspace updates and ops logs| Workspace
     OpsSteward -->|stewardship report| SelfImproveEngine
@@ -199,7 +199,7 @@ flowchart TB
     Specialists[Agent manager and specialist reports]
     Tools[Tools and integrations]
     ExecutionOutcome[Execution outcome summary]
-    StewardQueue[Background stewardship queue]
+    StewardQueue[Durable stewardship outbox]
     OpsSteward["Riley (Operations Manager)\nstewardship worker"]
     LoopAdapters[Callable loop adapters]
     LoopReports[Loop reports, ops lines, and evidence]
@@ -226,7 +226,7 @@ flowchart TB
     Opus --> Tools --> Opus
     Opus --> ExecutionOutcome --> AgentManagerCore
     AgentManagerCore -->|manage engine| SelfImproveEngine
-    SelfImproveEngine --> StewardQueue --> OpsSteward
+    SelfImproveEngine -->|persist job| StewardQueue --> OpsSteward
     OpsSteward --> LoopAdapters --> LoopReports --> SelfImproveEngine
     SelfImproveEngine --> OpsChannels
     OpsSteward --> WorkspaceUpdates --> Workspace
@@ -247,7 +247,7 @@ flowchart TB
 
 ## Runtime Note
 
-The current runtime now queues self-improvement work off the main groupchat execution path with an in-memory background worker. That removes loop adapters and operations stewardship from the user-facing critical path. A durable outbox is still the next hardening step if process restarts and retries need stronger guarantees.
+The current runtime now persists self-improvement work off the main groupchat execution path in a Postgres-backed outbox and drains it with a background worker. That removes loop adapters and operations stewardship from the user-facing critical path while surviving process restarts. Retry policy and stale-claim recovery are now part of that worker path.
 
 ## Loop Internals
 

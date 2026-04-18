@@ -56,7 +56,7 @@ flowchart LR
         direction TB
         AgentManagerCore[Agent manager core]
         SelfImproveEngine[Self improvement engine]
-        StewardQueue[Background stewardship queue]
+        StewardQueue[Durable stewardship outbox]
         AgentManagerCore --> SelfImproveEngine
         SelfImproveEngine --> StewardQueue
     end
@@ -156,7 +156,7 @@ flowchart LR
     class OpsHub hidden;
 ```
 
-This diagram shows the target architecture. Riley's Sonnet agent manager sends work to sub-agents and manages the self-improvement engine as a separate manager-owned layer. Opus emits execution outcomes back to the manager, the manager queues stewardship in the background, and the loops feed evidence into that manager-owned path without holding the user turn open.
+This diagram shows the target architecture. Riley's Sonnet agent manager sends work to sub-agents and manages the self-improvement engine as a separate manager-owned layer. Opus emits execution outcomes back to the manager, the manager writes stewardship work to a durable outbox, and a background worker runs that path without holding the user turn open.
 
 The full architecture diagram is in [.github/ARCHITECTURE.md](.github/ARCHITECTURE.md).
 
@@ -186,7 +186,7 @@ These loops are the part I would usually show an employer because they explain w
 8. Goal and thread watchdog loop: the system watches long-running tasks so work does not silently stall.
 9. Voice session loop: live voice calls stay responsive and Riley asks for decisions in voice.
 
-Self-improvement still exists, but it is now managed by Riley the agent manager as a packet-driven engine. Riley (Operations Manager) is the background stewardship worker inside that path. The current runtime now queues that work off the main user request path; a durable outbox is the next hardening step.
+Self-improvement still exists, but it is now managed by Riley the agent manager as a packet-driven engine. Riley (Operations Manager) is the background stewardship worker inside that path. The current runtime now persists that work in Postgres and drains it through a background worker off the main user request path.
 
 ## Token And Cost Optimisation
 
