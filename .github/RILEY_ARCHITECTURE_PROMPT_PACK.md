@@ -9,7 +9,7 @@ This is not a synthetic unit test. It is an operator-level validation pack desig
 This pack is designed to exercise or verify:
 
 1. Riley as the primary text interface in groupchat.
-2. Delegation from Riley to Ace and specialist-review routing.
+2. Riley-direct execution plus specialist-review routing.
 3. Tool-backed execution across code, GitHub, database, cloud, Discord, and lifecycle surfaces.
 4. Loop visibility: status, loops, health, monitoring surfaces, and explicit loop reports in the Operations loop channel.
 5. Decision handling in groupchat and the queued/offline decision path.
@@ -50,11 +50,11 @@ Riley, run a full architecture validation drill for the current ASAP Discord run
 Treat this as a real operator request, not a theoretical explanation.
 
 Goal:
-Plan and begin a small but realistic improvement to the ASAP system: improve the public-facing README and architecture guidance for a new operator so it is easier to understand what Riley, Ace, the specialists, the loops, and the voice mode actually do.
+Plan and begin a small but realistic improvement to the ASAP system: improve the public-facing README and architecture guidance for a new operator so it is easier to understand what Riley, Riley Ops, the specialists, the loops, and the voice mode actually do.
 
 Your job in this drill:
 1. Break the work into numbered steps.
-2. Route execution through Ace.
+2. Execute directly unless a specialist is materially useful.
 3. Pull in specialist review only if needed and explain why.
 4. Show me current status, loop health, cost or budget awareness, and any relevant risks.
 5. Tell me which architecture surfaces you are exercising as you go, including whether the Operations loop channel is reflecting the run.
@@ -75,7 +75,7 @@ Important constraints:
 
 1. Riley behaves as the front door and does not answer only as a passive explainer.
 2. Riley creates a clear numbered plan.
-3. Riley routes execution through Ace instead of delegating directly to specialists for implementation.
+3. Riley executes directly and only brings in specialists where their domain expertise is actually needed.
 4. Riley exposes status and loop-health information in plain language.
 5. Riley can point to the dedicated Operations loop channel when discussing loop activity.
 6. Riley references cost, budget, limits, or token efficiency where relevant.
@@ -85,7 +85,7 @@ Important constraints:
 ### Failure Signals
 
 1. Riley only gives a static essay about the architecture.
-2. Riley skips Ace and delegates implementation directly to specialists.
+2. Riley punts routine implementation entirely to specialists instead of owning execution directly.
 3. Riley cannot surface status, loops, the loop-report channel, or ops-aware progress.
 4. Riley claims to have tested voice or merge-trigger behavior without live evidence.
 5. Riley ignores budget, cost, or runtime risk framing.
@@ -254,7 +254,7 @@ npm run anthropic:usage:report -- --before reports/anthropic-usage/<before-file>
 If the architecture is behaving correctly, you should see:
 
 1. Riley acting as the operator surface.
-2. Ace being used for execution.
+2. Riley being used as the primary execution owner.
 3. Specialist involvement only when justified.
 4. Status, loop, and ops visibility available on request.
 5. Decisions handled in the right place for the context.

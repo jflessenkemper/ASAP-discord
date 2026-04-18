@@ -21,7 +21,7 @@ The personal category name is dynamic: `👤-{DISCORD_OWNER_NAME}-personal` (env
 
 | Channel | Topic | Welcome Message |
 |---------|-------|-----------------|
-| `💬-groupchat` | 💬 Talk to Riley naturally. She coordinates everything. | **ASAP Command Center** — Riley is your point of contact, Ace implements. Type naturally. She can join voice, deploy, screenshot, and coordinate the team. You can also @mention any agent role directly. |
+| `💬-groupchat` | 💬 Talk to Riley naturally. She coordinates everything. | **ASAP Command Center** — Riley is your point of contact. She executes directly, brings in specialists when needed, and can join voice, deploy, screenshot, and coordinate the team. You can also @mention any specialist role directly. |
 | `📋-decisions` | 📋 Riley queues decisions here while you sleep. Reply to any decision to continue the work. | **Decisions Queue** — When the team hits a decision point overnight, Riley posts here. Reply with your answer — Riley picks it up. Click a button to choose from listed options. |
 | `📋-call-log` | 📋 Automatic transcripts and summaries of voice calls | Voice call transcripts and summaries post here. |
 | `📸-screenshots` | 📸 Automated screenshots of every app screen after each build (iPhone 17 Pro Max) | Build screenshot updates post here as one-line entries. |
@@ -46,10 +46,10 @@ All ops channels live under the **Operations** category and have a **channel con
 | `🧵-thread-status` | 🧵 Automated hourly summary of open workspace threads and close-ready items. | owner=system; cadence=hourly; stale=2h | Thread status snapshots post here. |
 | `📦-github` | 📦 Live GitHub activity feed — commits, PRs, issues, releases | owner=system; cadence=on-event; stale=24h | GitHub activity feed posts here as one-line updates. |
 | `🆙-upgrades` | 🆙 Agent-proposed upgrades: better ways of working, blockers to remove, and worthwhile capability enhancements | owner=system; cadence=daily-triage; stale=48h | Agents can post upgrade ideas, blockers to remove, and automation/tooling enhancements here for Jordan to approve. |
-| `🧰-tools` | 🧰 Agent capabilities and runtime tool access summary | owner=ace; cadence=on-change; stale=7d | Auto-generated tools summary (refreshed on startup). |
+| `🧰-tools` | 🧰 Agent capabilities and runtime tool access summary | owner=operations-manager; cadence=on-change; stale=7d | Auto-generated tools summary (refreshed on startup). |
 | `📊-limits` | 📊 Gemini/GCP usage, quotas, and estimated spend — refreshed every 5 minutes | owner=jude; cadence=5m; stale=20m | _(no welcome message)_ |
 | `💸-cost` | 💸 Per-action spend feed by agent (model, tokens, estimated USD) | owner=jude; cadence=on-request; stale=24h | One-line agent cost feed posts here. |
-| `💻-terminal` | 💻 Live feed of all tool calls made by agents — file ops, git, commands, searches | owner=ace; cadence=on-tool-call; stale=2h | One-line tool activity feed posts here. |
+| `💻-terminal` | 💻 Live feed of all tool calls made by agents — file ops, git, commands, searches | owner=riley; cadence=on-tool-call; stale=2h | One-line tool activity feed posts here. |
 | `🧯-voice-errors` | 🧯 Voice runtime errors and per-stage latency logs (ms) for live debugging | owner=system; cadence=on-error; stale=7d | **Voice Runtime Logs** — Live voice pipeline telemetry and failures. Stages: STT, Riley LLM, TTS/playback, sub-agent fan-out, total turn latency. |
 | `🚨-agent-errors` | 🚨 Central runtime and agent error feed for postmortems and rapid fixes | owner=system; cadence=on-error; stale=7d | **Agent Runtime Errors** — Centralized Riley, sub-agent, tooling, and automation failures for later diagnosis and cleanup. |
 
@@ -78,9 +78,9 @@ Each agent gets one text channel named `{emoji}-{agent-id}`. The topic is `{emoj
 | `⚡-performance` | Kai (Performance) | ⚡ | #0EA5E9 | Orus | Kai |
 | `🚀-devops` | Jude (DevOps) | 🚀 | #4338CA | Vale | Jude |
 | `✍️-copywriter` | Liv (Copywriter) | ✍️ | #0F766E | Zephyr | Liv |
-| `💻-developer` | Ace (Developer) | 💻 | #4682B4 | Achernar | Ace |
+| `📋-executive-assistant` | Riley (Executive Assistant) | 📋 | #1D4ED8 | RileyEL | Riley |
+| `🛰️-operations-manager` | Riley (Operations Manager) | 🛰️ | #2F7A49 | RileyEL | Riley Ops |
 | `⚖️-lawyer` | Harper (Lawyer) | ⚖️ | #14532D | Sulafat | Harper |
-| `📋-executive-assistant` | Riley (Executive Assistant) | 📋 | #1D4ED8 | Achernar | Riley |
 | `🍎-ios-engineer` | Mia (iOS Engineer) | 🍎 | #F97316 | Enceladus | Mia |
 | `🤖-android-engineer` | Leo (Android Engineer) | 🤖 | #16A34A | Iapetus | Leo |
 
@@ -132,7 +132,7 @@ This is controlled by `DISCORD_HARDEN_SENSITIVE_CHANNELS` (defaults to `true`).
 ## Naming Conventions
 
 - **Every channel has an emoji prefix.** No exceptions.
-- Agent channels: `{emoji}-{agent-id}` (e.g. `🧪-qa`, `💻-developer`)
+- Agent channels: `{emoji}-{agent-id}` (e.g. `🧪-qa`, `📋-executive-assistant`)
 - Ops channels: `{emoji}-{kebab-name}` (e.g. `📦-github`, `💸-cost`)
 - Main channels: `{emoji}-{name}` (e.g. `💬-groupchat`, `📋-decisions`)
 - Personal channels: `{emoji}-{kebab-name}` under the `👤-{owner}` category

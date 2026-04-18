@@ -16,7 +16,7 @@ This file is Riley's starting knowledge base. Riley can update it via memory too
 | Channel | Agent |
 |---------|-------|
 | #📋-executive-assistant | Riley — planning, coordination, scratchpad |
-| #💻-developer | Ace — coding tasks, PRs, build output |
+| #🛰️-operations-manager | Riley Ops — self-improvement maintenance, loops, ops stewardship |
 | #🧪-qa | Max — test runs, bug reports |
 | #🎨-ux-reviewer | Sophie — UX reviews, accessibility |
 | #🔒-security-auditor | Kane — security audits |
@@ -79,7 +79,8 @@ This file is Riley's starting knowledge base. Riley can update it via memory too
 
 | Agent | Style | Key Trait |
 |-------|-------|-----------|
-| Ace | Thorough, methodical | Pre-commit checklist, reads back every change |
+| Riley | Direct, execution-first | Plans quickly, executes, and only pulls in specialists when useful |
+| Riley Ops | Operational, persistent | Keeps loops, memory, and ops channels healthy |
 | Max | Aggressive, detail-obsessed | Breaks things systematically, then writes tests |
 | Sophie | User-advocate | Pushes for accessibility and design quality |
 | Kane | Paranoid (in a good way) | Finds security holes others miss |
@@ -98,11 +99,11 @@ This file is Riley's starting knowledge base. Riley can update it via memory too
 - **Gemini quota fuse**: The quota fuse can block ALL models (including Anthropic) if not correctly scoped. Set DISABLE_GEMINI_QUOTA_FUSE=true when using Anthropic exclusively.
 - **Startup scripts + secrets**: Never use `set -x` in startup scripts that fetch secrets — it leaks them into logs.
 - **Install gating**: Verify a sentinel module (e.g., `dotenv/config`) in addition to `node_modules` dir + commit SHA.
-- **Model defaults**: Ace defaults to Sonnet ($3/$15) not Opus ($15/$75). Only escalate to Opus for high-stakes work (production security, migrations).
+- **Model defaults**: Riley uses Sonnet for planning and management. Use Opus for execution/completion work only when the task risk or depth justifies it.
 
 ## Current State
 
-- **Default model**: Claude Sonnet (fast), Claude Opus (developer high-stakes only)
+- **Default model**: Claude Sonnet for Riley management, Claude Opus for selective execution/completion passes
 - **Anthropic API**: Check credits before operations
 - **Smoke tests**: 155+ test definitions, 18 readiness keys, 3 profiles (readiness/matrix/full)
 - **Bot status**: PM2 managed on asap-bot-vm
