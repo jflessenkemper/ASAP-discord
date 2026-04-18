@@ -17,8 +17,14 @@ flowchart LR
     end
 
     Opus["Riley (Opus) execution and completion"]
-    SelfImproveEngine[Self improvement engine managed by Riley Sonnet]
-    AgentManager["Riley (Sonnet) agent manager"]
+
+    subgraph AgentManager["Riley (Sonnet) agent manager"]
+        direction TB
+        AgentManagerCore[Agent manager core]
+        SelfImproveEngine[Self improvement engine]
+        AgentManagerCore --> SelfImproveEngine
+    end
+
     QAAgent[QA]
     UXAgent[UX Reviewer]
     SecurityAgent[Security Auditor]
@@ -70,19 +76,18 @@ flowchart LR
     User -->|voice| Voice
     Voice --> Riley
     Riley -->|execute| Opus
-    Opus <--> AgentManager
-    AgentManager <--> SelfImproveEngine
-    AgentManager <--> QAAgent
-    AgentManager <--> UXAgent
-    AgentManager <--> SecurityAgent
-    AgentManager <--> APIAgent
-    AgentManager <--> DBAAgent
-    AgentManager <--> PerformanceAgent
-    AgentManager <--> DevOpsAgent
-    AgentManager <--> CopywriterAgent
-    AgentManager <--> LawyerAgent
-    AgentManager <--> IOSAgent
-    AgentManager <--> AndroidAgent
+    Opus <--> AgentManagerCore
+    AgentManagerCore <--> QAAgent
+    AgentManagerCore <--> UXAgent
+    AgentManagerCore <--> SecurityAgent
+    AgentManagerCore <--> APIAgent
+    AgentManagerCore <--> DBAAgent
+    AgentManagerCore <--> PerformanceAgent
+    AgentManagerCore <--> DevOpsAgent
+    AgentManagerCore <--> CopywriterAgent
+    AgentManagerCore <--> LawyerAgent
+    AgentManagerCore <--> IOSAgent
+    AgentManagerCore <--> AndroidAgent
     QAAgent --> QAChan
     UXAgent --> UXChan
     SecurityAgent --> SecurityChan
@@ -123,7 +128,7 @@ flowchart LR
     class Groupchat,SelfImproveEngine,QAAgent,UXAgent,SecurityAgent,APIAgent,DBAAgent,PerformanceAgent,DevOpsAgent,CopywriterAgent,LawyerAgent,IOSAgent,AndroidAgent,QAChan,UXChan,SecurityChan,APIChan,DBAChan,PerformanceChan,DevOpsChan,CopywriterChan,LawyerChan,IOSChan,AndroidChan,TestEngine,LoggingEngine,MemoryLoop,DatabaseAudit,ChannelHeartbeat,UpgradesTriage,VoiceSession,GoalWatchdog,TerminalCh,ErrorsCh,LimitsCh,HealthCh,VoiceCh,LoopsCh surface;
     class Voice voice;
     class Opus opus;
-    class AgentManager riley;
+    class AgentManagerCore riley;
     class OpsHub hidden;
 ```
 
@@ -138,18 +143,25 @@ flowchart LR
     Riley[Riley with Sonnet plans, tracks, and responds]
     Workspace[Workspace thread]
     ExecutionFabric[Specialists, tools, and loop adapters]
-    SelfImproveEngine[Self-improvement engine]
     OpsSteward["Riley (Operations Manager)\nstewardship worker"]
     Opus["Riley (Opus) executes and checks completion"]
     UserHears[User hears Riley's response]
 
+    subgraph AgentManager[Agent manager]
+        direction TB
+        AgentManagerCore[Agent manager core]
+        SelfImproveEngine[Self-improvement engine]
+        AgentManagerCore --> SelfImproveEngine
+    end
+
     UserVoice --> VoiceSession --> SpeakerGate --> SpeechIO --> Riley
     Riley -->|ask for decision while call is live| VoiceSession
     Riley -->|execution needed| Workspace
+    Riley -->|manager handoff| AgentManager
     Workspace --> Opus
     Opus --> ExecutionFabric
     ExecutionFabric --> Opus
-    Riley -->|manage self-improvement path| SelfImproveEngine
+    AgentManagerCore -->|manage self-improvement path| SelfImproveEngine
     Opus -->|requests and evidence needs| SelfImproveEngine
     SelfImproveEngine -->|stewardship work| OpsSteward
     OpsSteward -->|workspace updates and ops logs| Workspace
@@ -169,6 +181,7 @@ flowchart LR
     class VoiceSession,SpeechIO,SpeakerGate voice;
     class Opus opus;
     class Workspace,ExecutionFabric,SelfImproveEngine surface;
+    class AgentManagerCore riley;
     class OpsSteward riley;
 ```
 
@@ -182,7 +195,6 @@ flowchart TB
     Opus["Riley (Opus) executes the plan and checks completion"]
     Specialists[Agent manager and specialist reports]
     Tools[Tools and integrations]
-    SelfImproveEngine[Self-improvement engine]
     StewardRequests[Structured self-improvement requests]
     OpsSteward["Riley (Operations Manager)\nstewardship worker"]
     LoopAdapters[Callable loop adapters]
@@ -192,15 +204,23 @@ flowchart TB
     OpusReturn["Opus execution summary and completion decision"]
     FinalAnswer[Riley gives final answer]
 
+    subgraph AgentManager[Agent manager]
+        direction TB
+        AgentManagerCore[Agent manager core]
+        SelfImproveEngine[Self-improvement engine]
+        AgentManagerCore --> SelfImproveEngine
+    end
+
     Request --> Riley
     Riley --> Workspace
     Riley -->|execution plan after any decision gate| Opus
+    Riley -->|manager handoff| AgentManager
     Opus --> Specialists
     Specialists --> Workspace
     Workspace --> Specialists
     Specialists --> Opus
     Opus --> Tools --> Opus
-    Riley -->|manage engine| SelfImproveEngine
+    AgentManagerCore -->|manage engine| SelfImproveEngine
     Opus --> StewardRequests --> SelfImproveEngine
     SelfImproveEngine --> OpsSteward
     OpsSteward --> LoopAdapters --> LoopReports --> SelfImproveEngine
@@ -216,7 +236,7 @@ flowchart TB
     classDef surface fill:#7b8794,stroke:#56616d,color:#ffffff,stroke-width:2px;
 
     class Request,FinalAnswer user;
-    class Riley riley;
+    class Riley,AgentManagerCore riley;
     class Opus,OpusReturn opus;
     class Workspace,Specialists,Tools,SelfImproveEngine,StewardRequests,LoopAdapters,LoopReports,OpsChannels,WorkspaceUpdates surface;
     class OpsSteward riley;

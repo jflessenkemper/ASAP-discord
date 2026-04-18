@@ -35,8 +35,6 @@ flowchart LR
     User[User]
     Opus["Riley (Opus)<br/>execution and completion"]
     Groupchat[Groupchat channel]
-    SelfImproveEngine["Self improvement engine<br/>managed by Riley Sonnet"]
-    AgentManager["Riley (Sonnet)<br/>agent manager"]
     QAAgent[QA]
     UXAgent[UX Reviewer]
     SecurityAgent[Security Auditor]
@@ -52,6 +50,13 @@ flowchart LR
     subgraph FrontDoor[Front Door]
         Riley["Riley (Sonnet)<br/>plans, decides, synthesizes"]
         Voice[ElevenLabs voice relay]
+    end
+
+    subgraph AgentManager["Riley (Sonnet)<br/>agent manager"]
+        direction TB
+        AgentManagerCore[Agent manager core]
+        SelfImproveEngine[Self improvement engine]
+        AgentManagerCore --> SelfImproveEngine
     end
 
     subgraph AgentChannels[Agent channels]
@@ -93,19 +98,18 @@ flowchart LR
     User -->|voice| Voice
     Voice --> Riley
     Riley -->|execute| Opus
-    Opus <--> AgentManager
-    AgentManager <--> SelfImproveEngine
-    AgentManager <--> QAAgent
-    AgentManager <--> UXAgent
-    AgentManager <--> SecurityAgent
-    AgentManager <--> APIAgent
-    AgentManager <--> DBAAgent
-    AgentManager <--> PerformanceAgent
-    AgentManager <--> DevOpsAgent
-    AgentManager <--> CopywriterAgent
-    AgentManager <--> LawyerAgent
-    AgentManager <--> IOSAgent
-    AgentManager <--> AndroidAgent
+    Opus <--> AgentManagerCore
+    AgentManagerCore <--> QAAgent
+    AgentManagerCore <--> UXAgent
+    AgentManagerCore <--> SecurityAgent
+    AgentManagerCore <--> APIAgent
+    AgentManagerCore <--> DBAAgent
+    AgentManagerCore <--> PerformanceAgent
+    AgentManagerCore <--> DevOpsAgent
+    AgentManagerCore <--> CopywriterAgent
+    AgentManagerCore <--> LawyerAgent
+    AgentManagerCore <--> IOSAgent
+    AgentManagerCore <--> AndroidAgent
     QAAgent --> QAChan
     UXAgent --> UXChan
     SecurityAgent --> SecurityChan
@@ -146,11 +150,11 @@ flowchart LR
     class Groupchat,SelfImproveEngine,QAAgent,UXAgent,SecurityAgent,APIAgent,DBAAgent,PerformanceAgent,DevOpsAgent,CopywriterAgent,LawyerAgent,IOSAgent,AndroidAgent,QAChan,UXChan,SecurityChan,APIChan,DBAChan,PerformanceChan,DevOpsChan,CopywriterChan,LawyerChan,IOSChan,AndroidChan,TestEngine,LoggingEngine,MemoryLoop,DatabaseAudit,ChannelHeartbeat,UpgradesTriage,VoiceSession,GoalWatchdog,TerminalCh,ErrorsCh,LimitsCh,HealthCh,VoiceCh,LoopsCh surface;
     class Voice voice;
     class Opus opus;
-    class AgentManager riley;
+    class AgentManagerCore riley;
     class OpsHub hidden;
 ```
 
-This diagram shows the target architecture. Riley's Sonnet agent manager sends work to sub-agents and also manages the self-improvement engine. The loops feed their evidence into that engine, the engine feeds whatever Riley Opus needs back into execution, and the same engine output is used to keep the ops channels current.
+This diagram shows the target architecture. Riley's Sonnet agent manager sends work to sub-agents and manages the self-improvement engine as a separate manager-owned layer. The loops feed their evidence into that engine, the engine feeds whatever Riley Opus needs back into execution, and the same engine output is used to keep the ops channels current.
 
 The full architecture diagram is in [.github/ARCHITECTURE.md](.github/ARCHITECTURE.md).
 
@@ -180,7 +184,7 @@ These loops are the part I would usually show an employer because they explain w
 8. Goal and thread watchdog loop: the system watches long-running tasks so work does not silently stall.
 9. Voice session loop: live voice calls stay responsive and Riley asks for decisions in voice.
 
-Self-improvement still exists, but it is now managed by Riley Sonnet as a packet-driven engine. Riley (Operations Manager) is the stewardship worker inside that path, while Riley Opus consumes the resulting data and evidence.
+Self-improvement still exists, but it is now managed by Riley the agent manager as a packet-driven engine. Riley (Operations Manager) is the stewardship worker inside that path, while Riley Opus consumes the resulting data and evidence.
 
 ## Token And Cost Optimisation
 
