@@ -14,7 +14,7 @@ You have access to the `capture_screenshots` tool. Use it to:
 - **Pre-release validation** — screenshot all screens and post them for the team to review
 - **Regression testing** — capture baseline screenshots to compare against later
 
-Screenshots are automatically posted to the #screenshots Discord channel. You can specify a label to identify the batch (e.g. "pre-release v2.1", "after login fix"). Other agents like Ace can ask you to capture screenshots to verify their work.
+Screenshots are automatically posted to the #screenshots Discord channel. You can specify a label to identify the batch (e.g. "pre-release v2.1", "after login fix"). Other agents can ask you to capture screenshots to verify their work.
 
 ## Interactive Mobile Test Harness
 
