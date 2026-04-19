@@ -36,7 +36,6 @@ flowchart LR
     Opus["Riley (Opus)<br/>execution and completion"]
     Groupchat[Groupchat channel<br/>direct reply or compact completion]
     Workspace[Workspace thread<br/>task work]
-    OutputSanitizer["Anthropic-fast Discord<br/>output sanitizer"]
     ToolLogs["Agent channel<br/>one-line tool logs"]
     QAAgent[QA]
     UXAgent[UX Reviewer]
@@ -51,7 +50,8 @@ flowchart LR
     AndroidAgent[Android Engineer]
 
     subgraph FrontDoor[Front Door]
-        Riley["Riley (Sonnet)<br/>plans, decides, synthesizes"]
+        RileyHaiku["Riley (Haiku)<br/>user-facing rules, restructure, voice reasoning"]
+        Riley["Riley (Sonnet)<br/>plans, decides, escalates work"]
         Voice[ElevenLabs voice relay]
     end
 
@@ -99,9 +99,10 @@ flowchart LR
         LoopsCh[Loops]
     end
 
-    User -->|text| Riley
+    User -->|text| RileyHaiku
     User -->|voice| Voice
-    Voice --> Riley
+    Voice --> RileyHaiku
+    RileyHaiku -->|needs real work| Riley
     Riley -->|execute| Opus
     Opus <--> AgentManagerCore
     AgentManagerCore <--> QAAgent
@@ -138,9 +139,10 @@ flowchart LR
     StewardQueue -->|background stewardship| OpsHub
     SelfImproveEngine -->|ops updates| OpsHub
     Opus -->|done| Riley
-    Riley -->|visible reply| OutputSanitizer
-    OutputSanitizer -->|short direct reply| Groupchat
-    OutputSanitizer -->|task reply| Workspace
+    Riley -->|handoff final answer| RileyHaiku
+    RileyHaiku -->|short direct reply| Groupchat
+    RileyHaiku -->|task reply| Workspace
+    RileyHaiku -->|spoken reply| Voice
     Workspace -->|optional compact completion| Groupchat
     AgentManagerCore -->|tool summaries| ToolLogs
     QAAgent -->|tool summaries| ToolLogs
@@ -154,9 +156,7 @@ flowchart LR
     LawyerAgent -->|tool summaries| ToolLogs
     IOSAgent -->|tool summaries| ToolLogs
     AndroidAgent -->|tool summaries| ToolLogs
-    Riley -->|if in voice| Voice
     Voice -->|spoken update| User
-    Riley -->|if in text| Workspace
     Groupchat -->|tag user| User
 
     classDef user fill:#4f8fcb,stroke:#2f6ea3,color:#ffffff,stroke-width:2px;
@@ -167,15 +167,15 @@ flowchart LR
     classDef hidden fill:transparent,stroke:transparent,color:transparent;
 
     class User user;
-    class Riley riley;
-    class Groupchat,Workspace,OutputSanitizer,ToolLogs,SelfImproveEngine,QAAgent,UXAgent,SecurityAgent,APIAgent,DBAAgent,PerformanceAgent,DevOpsAgent,CopywriterAgent,LawyerAgent,IOSAgent,AndroidAgent,QAChan,UXChan,SecurityChan,APIChan,DBAChan,PerformanceChan,DevOpsChan,CopywriterChan,LawyerChan,IOSChan,AndroidChan,TestEngine,LoggingEngine,MemoryLoop,DatabaseAudit,ChannelHeartbeat,UpgradesTriage,VoiceSession,GoalWatchdog,TerminalCh,ErrorsCh,LimitsCh,HealthCh,VoiceCh,LoopsCh surface;
+    class RileyHaiku,Riley riley;
+    class Groupchat,Workspace,ToolLogs,SelfImproveEngine,QAAgent,UXAgent,SecurityAgent,APIAgent,DBAAgent,PerformanceAgent,DevOpsAgent,CopywriterAgent,LawyerAgent,IOSAgent,AndroidAgent,QAChan,UXChan,SecurityChan,APIChan,DBAChan,PerformanceChan,DevOpsChan,CopywriterChan,LawyerChan,IOSChan,AndroidChan,TestEngine,LoggingEngine,MemoryLoop,DatabaseAudit,ChannelHeartbeat,UpgradesTriage,VoiceSession,GoalWatchdog,TerminalCh,ErrorsCh,LimitsCh,HealthCh,VoiceCh,LoopsCh surface;
     class Voice voice;
     class Opus opus;
     class AgentManagerCore riley;
     class OpsHub hidden;
 ```
 
-This diagram shows the target architecture. Riley's Sonnet agent manager sends work to sub-agents and manages the self-improvement engine as a separate manager-owned layer. Opus emits execution outcomes back to the manager, the manager writes stewardship work to a durable outbox, and a background worker runs that path without holding the user turn open. Discord-bound text now passes through a valid Anthropic-fast sanitizer, short Riley-directed replies can stay in groupchat, task work lands in the workspace thread, and tool use stays as one-line logs in the acting agent's own channel.
+This diagram shows the target architecture. Riley Haiku is the user-facing layer: she restructures replies to match your rules, handles voice-call reasoning, and only escalates to Riley Sonnet when real work needs to be done. Riley's Sonnet agent manager sends work to sub-agents and manages the self-improvement engine as a separate manager-owned layer. Opus emits execution outcomes back to the manager, the manager writes stewardship work to a durable outbox, and a background worker runs that path without holding the user turn open. User-facing text and voice replies now route back through Riley Haiku, while tool use stays as one-line logs in the acting agent's own channel.
 
 The full architecture diagram is in [.github/ARCHITECTURE.md](.github/ARCHITECTURE.md).
 

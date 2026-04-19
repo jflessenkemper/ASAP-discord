@@ -361,7 +361,7 @@
     import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
 
     const liveRun = {
-      prompt: 'Fix the Discord output sanitizer model setup, keep short Riley-directed replies in groupchat, keep real task work in workspace threads, and preserve one-line tool logs in the acting agent channel.',
+      prompt: 'Route all user-facing replies and voice-call reasoning through Riley Haiku, let Riley Sonnet plan and escalate only when real work is needed, and keep tool logs in the acting agent channel.',
       note: ''
     };
 
@@ -371,7 +371,6 @@
   Opus["Riley (Opus)<br/>do work"]
   Groupchat["Groupchat<br/>direct reply or compact completion"]
   Workspace["Workspace thread<br/>task work"]
-  OutputSanitizer["Anthropic-fast sanitizer<br/>Discord output"]
   ToolLogs["Agent channel<br/>one-line tool logs"]
   QAAgent["QA"]
   UXAgent["UX"]
@@ -387,7 +386,8 @@
 
     subgraph FrontDoor["Front Door"]
       direction LR
-      Riley["Riley (Sonnet)<br/>plan route"]
+      RileyHaiku["Riley (Haiku)<br/>user-facing reasoning"]
+      Riley["Riley (Sonnet)<br/>plan work"]
         Voice["ElevenLabs<br/>voice relay"]
     end
 
@@ -438,9 +438,10 @@
         LoopsCh["Loops"]
     end
 
-    User -->|text| Riley
+    User -->|text| RileyHaiku
     User -->|voice| Voice
-    Voice --> Riley
+    Voice --> RileyHaiku
+    RileyHaiku -->|needs real work| Riley
     Riley -->|execute| Opus
     Opus <--> AgentManagerCore
     AgentManagerCore <--> QAAgent
@@ -477,9 +478,10 @@
     StewardQueue -->|background stewardship| OpsHub
     SelfImproveEngine -->|ops updates| OpsHub
     Opus -->|done| Riley
-    Riley -->|visible text reply| OutputSanitizer
-    OutputSanitizer -->|short direct reply| Groupchat
-    OutputSanitizer -->|task reply| Workspace
+    Riley -->|handoff final answer| RileyHaiku
+    RileyHaiku -->|short direct reply| Groupchat
+    RileyHaiku -->|task reply| Workspace
+    RileyHaiku -->|spoken reply| Voice
     Workspace -->|optional compact status| Groupchat
     AgentManagerCore -->|tool summaries| ToolLogs
     QAAgent -->|tool summaries| ToolLogs
@@ -495,7 +497,6 @@
     AndroidAgent -->|tool summaries| ToolLogs
     Riley -->|if in voice| Voice
     Voice -->|spoken update| User
-    Riley -->|if in text| Workspace
     Groupchat -->|tag user| User
 
     classDef user fill:#4f8fcb,stroke:#2f6ea3,color:#ffffff,stroke-width:2px;
@@ -506,8 +507,8 @@
     classDef hidden fill:transparent,stroke:transparent,color:transparent;
 
     class User user;
-    class Riley riley;
-    class Groupchat,Workspace,OutputSanitizer,ToolLogs,SelfImproveEngine,QAAgent,UXAgent,SecurityAgent,APIAgent,DBAAgent,PerformanceAgent,DevOpsAgent,CopywriterAgent,LawyerAgent,IOSAgent,AndroidAgent,QAChan,UXChan,SecurityChan,APIChan,DBAChan,PerformanceChan,DevOpsChan,CopywriterChan,LawyerChan,IOSChan,AndroidChan,TestEngine,LoggingEngine,MemoryLoop,DatabaseAudit,ChannelHeartbeat,UpgradesTriage,VoiceSession,GoalWatchdog,TerminalCh,ErrorsCh,LimitsCh,HealthCh,VoiceCh,LoopsCh surface;
+    class RileyHaiku,Riley riley;
+    class Groupchat,Workspace,ToolLogs,SelfImproveEngine,QAAgent,UXAgent,SecurityAgent,APIAgent,DBAAgent,PerformanceAgent,DevOpsAgent,CopywriterAgent,LawyerAgent,IOSAgent,AndroidAgent,QAChan,UXChan,SecurityChan,APIChan,DBAChan,PerformanceChan,DevOpsChan,CopywriterChan,LawyerChan,IOSChan,AndroidChan,TestEngine,LoggingEngine,MemoryLoop,DatabaseAudit,ChannelHeartbeat,UpgradesTriage,VoiceSession,GoalWatchdog,TerminalCh,ErrorsCh,LimitsCh,HealthCh,VoiceCh,LoopsCh surface;
     class Voice voice;
     class Opus opus;
     class AgentManagerCore riley;
@@ -537,33 +538,53 @@
       },
       {
         label: 'Step 2 of 10',
-        title: 'Riley (Sonnet) plans the route',
-        copy: 'Riley decides whether the request is a short direct reply that can stay in groupchat or real task work that needs a workspace, then chooses Opus, specialists, or voice handling only when needed.',
-        simpleCopy: 'Riley first decides whether to answer directly in groupchat or open a task workspace, then picks the deeper execution path if needed.',
-        chips: ['Direct reply vs task routing', 'Lazy workspace creation', 'Debugger focus: front door'],
-        simpleChips: ['Riley plans the route', 'Direct or task path', 'Workspace only when needed'],
-        active: 'plan route',
-        packet: ['User', 'plan route'],
+        title: 'Riley Haiku handles the front-door conversation',
+        copy: 'Riley Haiku is the user-facing layer. She reasons with the user in text or voice, applies the communication rules, and decides whether the request can be handled directly or should escalate behind the scenes.',
+        simpleCopy: 'Riley Haiku talks to the user first, follows the reply rules, and decides whether the request needs deeper work.',
+        chips: ['User-facing Haiku layer', 'Voice-call reasoning', 'Direct reply vs escalation'],
+        simpleChips: ['Haiku talks first', 'Applies the rules', 'Escalates only if needed'],
+        active: 'user-facing reasoning',
+        packet: ['User', 'user-facing reasoning'],
         badge: {
-          target: 'plan route',
-          title: 'Planning step',
-          note: 'Token trace not persisted for this planner step in ARCHSIM.'
+          target: 'user-facing reasoning',
+          title: 'Front-door reasoning',
+          note: 'This is the user-facing Haiku layer that can answer directly or escalate to Sonnet.'
         },
         simpleBadge: {
-          target: 'plan route',
-          title: 'Planner',
-          note: 'Riley is deciding how to tackle the request.'
+          target: 'user-facing reasoning',
+          title: 'Haiku front door',
+          note: 'This is who the user talks to first.'
         }
       },
       {
         label: 'Step 3 of 10',
+        title: 'Riley Sonnet plans work only when Haiku escalates',
+        copy: 'When the request needs real work, Riley Haiku hands it to Riley Sonnet. Sonnet turns that conversational request into a work plan and only then sends it into the deeper execution path.',
+        simpleCopy: 'If the job needs real work, Haiku escalates to Sonnet, and Sonnet plans the execution path.',
+        chips: ['Escalated from Haiku', 'Planning before execution', 'Work path only when needed'],
+        simpleChips: ['Haiku escalates', 'Sonnet plans', 'Work begins'],
+        active: 'plan work',
+        packet: ['user-facing reasoning', 'plan work'],
+        badge: {
+          target: 'plan work',
+          title: 'Work planner',
+          note: 'Sonnet sits behind Haiku and only engages once the request becomes real work.'
+        },
+        simpleBadge: {
+          target: 'plan work',
+          title: 'Sonnet planner',
+          note: 'Sonnet turns the request into a work plan.'
+        }
+      },
+      {
+        label: 'Step 4 of 10',
         title: 'Opus runs the main execution pass',
         copy: 'This is the expensive implementation pass. The latest live probe has already recorded its first visible cost event here, even though the response span has not landed yet.',
-        simpleCopy: 'For heavier work, Riley hands the task to Opus, which does the deeper reasoning and execution.',
+        simpleCopy: 'For heavier work, Sonnet hands the task to Opus, which does the deeper reasoning and execution.',
         chips: ['Latest visible cost: $0.2552', 'Tokens: 16.1k in / 190 out', 'Model: claude-opus-4-6'],
         simpleChips: ['Heavy thinking step', 'Main worker is active', 'Deep execution'],
         active: 'do work',
-        packet: ['plan route', 'do work'],
+        packet: ['plan work', 'do work'],
         badge: {
           target: 'do work',
           title: 'Model usage',
@@ -578,7 +599,7 @@
         }
       },
       {
-        label: 'Step 4 of 10',
+        label: 'Step 5 of 10',
         title: 'The agent manager fans out tool work',
         copy: 'The manager coordinates evidence collection, tool calls, and specialist routing. Tool updates now stay in the acting agent channel as single-line logs instead of leaking into the user-facing thread.',
         simpleCopy: 'Riley can split work across tools and helper roles, but the tool chatter stays out of the user-facing workspace thread.',
@@ -601,7 +622,7 @@
         }
       },
       {
-        label: 'Step 5 of 10',
+        label: 'Step 6 of 10',
         title: 'UX Reviewer runs a traced specialist pass',
         copy: 'This step is based on the last fully completed audit, not the new live probe. The current ARCHSIM_2 run has not yet reached a persisted specialist response.',
         simpleCopy: 'If needed, Riley can ask a specialist to review one aspect of the work, like user experience.',
@@ -624,7 +645,7 @@
         }
       },
       {
-        label: 'Step 6 of 10',
+        label: 'Step 7 of 10',
         title: 'QA responds, but without token trace coverage',
         copy: 'QA did participate in the last completed end-to-end audit, but without a persisted token span. The current ARCHSIM_2 run has not yet reached QA delegation.',
         simpleCopy: 'Another example is QA, where Riley asks for testing and validation support.',
@@ -645,7 +666,7 @@
         }
       },
       {
-        label: 'Step 7 of 10',
+        label: 'Step 8 of 10',
         title: 'Self-improvement work is queued off the user path',
         copy: 'Once the live answer is nearly complete, Riley derives background stewardship work and queues it so the user path stays responsive. This is still represented by the last completed audit.',
         simpleCopy: 'After the main answer is nearly ready, Riley can spin off follow-up improvement work in the background.',
@@ -666,7 +687,7 @@
         }
       },
       {
-        label: 'Step 8 of 10',
+        label: 'Step 9 of 10',
         title: 'The durable outbox takes over',
         copy: 'Stewardship is persisted and can survive restarts. This handoff is shown from the completed baseline audit until the fresh live probe reaches the same phase.',
         simpleCopy: 'That background work is stored safely so it can keep going even if the app restarts.',
@@ -687,45 +708,24 @@
         }
       },
       {
-        label: 'Step 9 of 10',
-        title: 'The Anthropic-fast sanitizer cleans the visible answer before Discord sees it',
-        copy: 'Before a text reply is posted, the Discord-bound message runs through a valid Anthropic-fast sanitizer so leaked tool markers and formatting noise are cleaned up without changing the meaning.',
-        simpleCopy: 'A lightweight sanitizer cleans the final Discord text before it is posted.',
-        chips: ['Anthropic-fast sanitizer', 'Discord output contract', 'Visible text cleanup'],
-        simpleChips: ['Clean final text', 'Same meaning', 'Discord-safe output'],
-        active: 'Anthropic-fast sanitizer Discord output',
-        packet: ['do work', 'plan route', 'Anthropic-fast sanitizer Discord output', 'Workspace thread task work'],
-        badge: {
-          target: 'Anthropic-fast sanitizer Discord output',
-          title: 'Output cleanup',
-          duration: 'lightweight',
-          note: 'The sanitizer rewrites Discord-bound text only when needed and keeps the meaning intact.'
-        },
-        simpleBadge: {
-          target: 'Anthropic-fast sanitizer Discord output',
-          title: 'Clean text pass',
-          note: 'The final Discord text is cleaned before posting.'
-        }
-      },
-      {
         label: 'Step 10 of 10',
-        title: 'Direct answers can stay in groupchat while task work lands in the workspace',
-        copy: 'Short Riley-directed replies can stay in groupchat, real task work lands in the workspace thread, and one-line tool logs stay in the acting agent channel. The redundant workspace-created bot post is gone.',
-        simpleCopy: 'Small direct answers can stay in groupchat, while real task work goes to the workspace and tool logs stay separate.',
-        chips: ['Short direct groupchat replies', 'Workspace for task execution', 'No redundant workspace-created post'],
-        simpleChips: ['Groupchat for quick replies', 'Workspace for task work', 'No duplicate creation chatter'],
-        active: 'Workspace thread task work',
-        packet: ['Anthropic-fast sanitizer Discord output', 'Workspace thread task work', 'Groupchat direct reply or compact completion'],
+        title: 'Riley Haiku restructures every user-facing answer before delivery',
+        copy: 'When work finishes, Riley Sonnet hands the answer back to Riley Haiku. Haiku reshapes the reply to fit the user rules, reasons directly in voice calls, and then delivers the final text or speech back through the front door.',
+        simpleCopy: 'Haiku rewrites the final answer for the user, then delivers it in text or voice.',
+        chips: ['Riley Haiku', 'User-facing restructure', 'Voice and text delivery'],
+        simpleChips: ['Haiku gets the final answer', 'Applies the rules', 'Delivers text or speech'],
+        active: 'user-facing reasoning',
+        packet: ['do work', 'plan work', 'user-facing reasoning', 'Groupchat direct reply or compact completion'],
         badge: {
-          target: 'Workspace thread task work',
-          title: 'Task delivery surface',
-          duration: 'live now',
-          note: 'Visible task work stays in the workspace thread, while short direct Riley replies can stay in groupchat.'
+          target: 'user-facing reasoning',
+          title: 'Final user-facing pass',
+          duration: 'lightweight',
+          note: 'Haiku is the final user-facing layer for both text and voice replies.'
         },
         simpleBadge: {
-          target: 'Workspace thread task work',
-          title: 'Task workspace',
-          note: 'This is where the real visible task work shows up now.'
+          target: 'user-facing reasoning',
+          title: 'Haiku delivery layer',
+          note: 'Haiku is the layer that actually talks back to the user.'
         }
       }
     ];

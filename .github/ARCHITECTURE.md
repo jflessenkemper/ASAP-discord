@@ -4,9 +4,9 @@ This document describes the target architecture.
 
 An animated walkthrough lives in [assets/architecture-runtime-animated.html](../assets/architecture-runtime-animated.html).
 
-Today, the runtime still has some Riley paths locked to Opus. The intended direction is stricter separation: Riley owns planning and synthesis internally with Sonnet, while Opus owns implementation, execution routing, loop invocation, and completion assessment before anything is returned to Riley.
+Today, the runtime still has some Riley paths locked to Opus. The intended direction is stricter separation: Riley Haiku owns the user-facing conversation layer, voice-call reasoning, and response restructuring, while Riley Sonnet owns planning and escalation into work. Opus owns implementation, execution routing, loop invocation, and completion assessment before anything is returned through Haiku to the user.
 
-Discord-visible text now has a stricter contract too: a lightweight Anthropic-fast sanitizer rewrites assistant output before it is posted, short Riley-directed replies can stay in groupchat, visible task work lands in the workspace thread, and tool use is collapsed into one-line status logs in the acting agent's own channel instead of a shared tools surface.
+Discord-visible communication now has a stricter contract too: Riley Haiku is the Anthropic-fast restructuring layer for anything user-facing. She applies the user's rules to replies, handles voice-call reasoning through the ElevenLabs relay, escalates to Riley Sonnet only when work needs to be done, and keeps tool use collapsed into one-line status logs in the acting agent's own channel instead of a shared tools surface.
 
 ## System Context
 
@@ -15,11 +15,11 @@ flowchart LR
     User[User]
     Groupchat[Groupchat channel\ndirect reply or compact completion]
     Workspace[Workspace thread\ntask work]
-    OutputSanitizer["Anthropic-fast Discord\noutput sanitizer"]
     ToolLogs["Agent channel\none-line tool logs"]
 
     subgraph FrontDoor[Front Door]
-        Riley["Riley (Sonnet) plans, decides, synthesizes"]
+        RileyHaiku["Riley (Haiku) user-facing rules, restructure, voice reasoning"]
+        Riley["Riley (Sonnet) plans, decides, escalates work"]
         Voice[ElevenLabs speech relay]
     end
 
@@ -81,9 +81,10 @@ flowchart LR
         LoopsCh[Loops]
     end
 
-    User -->|text| Riley
+    User -->|text| RileyHaiku
     User -->|voice| Voice
-    Voice --> Riley
+    Voice --> RileyHaiku
+    RileyHaiku -->|needs real work| Riley
     Riley -->|execute| Opus
     Opus <--> AgentManagerCore
     AgentManagerCore <--> QAAgent
@@ -120,9 +121,10 @@ flowchart LR
     StewardQueue -->|background stewardship| OpsHub
     SelfImproveEngine -->|ops updates| OpsHub
     Opus -->|done| Riley
-    Riley -->|visible text reply| OutputSanitizer
-    OutputSanitizer -->|short direct reply| Groupchat
-    OutputSanitizer -->|task reply| Workspace
+    Riley -->|handoff final answer| RileyHaiku
+    RileyHaiku -->|short direct reply| Groupchat
+    RileyHaiku -->|task reply| Workspace
+    RileyHaiku -->|spoken reply| Voice
     Workspace -->|optional compact completion| Groupchat
     AgentManagerCore -->|tool summaries| ToolLogs
     QAAgent -->|tool summaries| ToolLogs
@@ -149,8 +151,8 @@ flowchart LR
     classDef hidden fill:transparent,stroke:transparent,color:transparent;
 
     class User user;
-    class Riley riley;
-    class Groupchat,Workspace,OutputSanitizer,ToolLogs,SelfImproveEngine,QAAgent,UXAgent,SecurityAgent,APIAgent,DBAAgent,PerformanceAgent,DevOpsAgent,CopywriterAgent,LawyerAgent,IOSAgent,AndroidAgent,QAChan,UXChan,SecurityChan,APIChan,DBAChan,PerformanceChan,DevOpsChan,CopywriterChan,LawyerChan,IOSChan,AndroidChan,TestEngine,LoggingEngine,MemoryLoop,DatabaseAudit,ChannelHeartbeat,UpgradesTriage,VoiceSession,GoalWatchdog,TerminalCh,ErrorsCh,LimitsCh,HealthCh,VoiceCh,LoopsCh surface;
+    class RileyHaiku,Riley riley;
+    class Groupchat,Workspace,ToolLogs,SelfImproveEngine,QAAgent,UXAgent,SecurityAgent,APIAgent,DBAAgent,PerformanceAgent,DevOpsAgent,CopywriterAgent,LawyerAgent,IOSAgent,AndroidAgent,QAChan,UXChan,SecurityChan,APIChan,DBAChan,PerformanceChan,DevOpsChan,CopywriterChan,LawyerChan,IOSChan,AndroidChan,TestEngine,LoggingEngine,MemoryLoop,DatabaseAudit,ChannelHeartbeat,UpgradesTriage,VoiceSession,GoalWatchdog,TerminalCh,ErrorsCh,LimitsCh,HealthCh,VoiceCh,LoopsCh surface;
     class Voice voice;
     class Opus opus;
     class AgentManagerCore riley;
@@ -165,9 +167,9 @@ flowchart LR
     VoiceSession[Discord voice session]
     SpeakerGate[Single-speaker gate]
     SpeechIO[ElevenLabs speech I/O and transcript pipeline]
-    Riley[Riley with Sonnet plans, tracks, and responds]
+    RileyHaiku["Riley (Haiku) voice reasoning and user-facing rules"]
+    Riley["Riley (Sonnet) plans and escalates work"]
     Workspace[Workspace thread]
-    OutputSanitizer["Anthropic-fast Discord\noutput sanitizer"]
     ToolLogs["Agent channel\none-line tool logs"]
     ExecutionFabric[Specialists, tools, and loop adapters]
     StewardQueue[Durable stewardship outbox]
@@ -182,10 +184,11 @@ flowchart LR
         AgentManagerCore --> SelfImproveEngine
     end
 
-    UserVoice --> VoiceSession --> SpeakerGate --> SpeechIO --> Riley
-    Riley -->|ask for decision while call is live| VoiceSession
-    Riley -->|execution needed| Workspace
+    UserVoice --> VoiceSession --> SpeakerGate --> SpeechIO --> RileyHaiku
+    RileyHaiku -->|keep reasoning in voice| SpeechIO
+    RileyHaiku -->|execution needed| Riley
     Riley -->|manager handoff| AgentManager
+    Riley -->|handoff work context| Workspace
     Workspace --> Opus
     Opus --> ExecutionFabric
     ExecutionFabric --> Opus
@@ -197,8 +200,9 @@ flowchart LR
     ExecutionFabric -->|tool summaries| ToolLogs
     OpsSteward -->|stewardship report| SelfImproveEngine
     Opus -->|completed result| Riley
-    Riley -->|visible text reply| OutputSanitizer --> Workspace
-    Riley -->|short spoken reply| SpeechIO --> VoiceSession --> UserHears
+    Riley -->|handoff final answer| RileyHaiku
+    RileyHaiku -->|workspace text reply| Workspace
+    RileyHaiku -->|spoken reply| SpeechIO --> VoiceSession --> UserHears
 
     classDef user fill:#4f8fcb,stroke:#2f6ea3,color:#ffffff,stroke-width:2px;
     classDef riley fill:#4ea56b,stroke:#2f7a49,color:#ffffff,stroke-width:2px;
@@ -207,10 +211,10 @@ flowchart LR
     classDef voice fill:#7b4fd6,stroke:#5934a5,color:#ffffff,stroke-width:2px;
 
     class UserVoice,UserHears user;
-    class Riley riley;
+    class RileyHaiku,Riley riley;
     class VoiceSession,SpeechIO,SpeakerGate voice;
     class Opus opus;
-    class Workspace,OutputSanitizer,ToolLogs,ExecutionFabric,SelfImproveEngine,StewardQueue surface;
+    class Workspace,ToolLogs,ExecutionFabric,SelfImproveEngine,StewardQueue surface;
     class AgentManagerCore riley;
     class OpsSteward riley;
 ```
@@ -219,10 +223,10 @@ flowchart LR
 
 ```mermaid
 flowchart TB
-    Request[Request reaches Riley]
-    Riley[Riley with Sonnet plans, decides, and tracks the goal]
+    Request[Request reaches Riley Haiku]
+    RileyHaiku["Riley (Haiku) user-facing rules and restructure"]
+    Riley["Riley (Sonnet) plans, decides, and tracks the goal"]
     Workspace[Workspace thread and agent channels]
-    OutputSanitizer["Anthropic-fast Discord\noutput sanitizer"]
     ToolLogs["Agent channel\none-line tool logs"]
     Opus["Riley (Opus) executes the plan and checks completion"]
     Specialists[Agent manager and specialist reports]
@@ -244,8 +248,8 @@ flowchart TB
         AgentManagerCore --> SelfImproveEngine
     end
 
-    Request --> Riley
-    Riley --> Workspace
+    Request --> RileyHaiku
+    RileyHaiku -->|needs real work| Riley
     Riley -->|execution plan after any decision gate| Opus
     Riley -->|manager handoff| AgentManager
     Opus --> Specialists
@@ -263,7 +267,8 @@ flowchart TB
     OpsSteward --> WorkspaceUpdates --> Workspace
     Opus --> OpusReturn
     OpusReturn --> Riley
-    Riley --> OutputSanitizer --> Workspace
+    Riley -->|handoff final answer| RileyHaiku
+    RileyHaiku --> Workspace
     Workspace --> FinalAnswer
 
     classDef user fill:#4f8fcb,stroke:#2f6ea3,color:#ffffff,stroke-width:2px;
@@ -272,9 +277,9 @@ flowchart TB
     classDef surface fill:#7b8794,stroke:#56616d,color:#ffffff,stroke-width:2px;
 
     class Request,FinalAnswer user;
-    class Riley,AgentManagerCore riley;
+    class RileyHaiku,Riley,AgentManagerCore riley;
     class Opus,OpusReturn opus;
-    class Workspace,OutputSanitizer,ToolLogs,Specialists,Tools,SelfImproveEngine,ExecutionOutcome,StewardQueue,LoopAdapters,LoopReports,OpsChannels,WorkspaceUpdates surface;
+    class Workspace,ToolLogs,Specialists,Tools,SelfImproveEngine,ExecutionOutcome,StewardQueue,LoopAdapters,LoopReports,OpsChannels,WorkspaceUpdates surface;
     class OpsSteward riley;
 ```
 
@@ -526,7 +531,7 @@ The architecture depends on these surfaces being explicit:
 | Voice | `src/discord/handlers/callSession.ts`, `src/discord/voice/connection.ts`, `src/discord/voice/tts.ts` | Voice intake, live session control, single-speaker gating, and speech I/O |
 | Model execution | `src/discord/claude.ts`, `src/discord/opusExecution.ts` | Riley planning model selection plus Opus execution routing, stewardship derivation, and completion assessment |
 | Agent channels | `src/discord/agents.ts`, `src/discord/handoff.ts` | Agent identities, execution delegation, and channel handoff logic |
-| Discord output contract | `src/discord/services/discordOutputSanitizer.ts`, `src/discord/handlers/textChannel.ts` | Anthropic-fast output cleanup, direct-or-workspace reply routing, and one-line tool log formatting |
+| Discord output contract | `src/discord/services/discordOutputSanitizer.ts`, `src/discord/handlers/textChannel.ts` | Riley Haiku user-facing restructuring, voice-call reply shaping, and one-line tool log formatting |
 | Tools | `src/discord/tools.ts`, `src/discord/toolsDb.ts`, `src/discord/toolsGcp.ts` | Execution surfaces used by Riley and agents |
 | Loop orchestration | `src/discord/operationsSteward.ts`, `src/discord/loopAdapters.ts` | Stewardship request derivation and callable loop execution |
 | Loop visibility | `src/discord/loopHealth.ts`, `src/discord/loggingEngine.ts` | Loop state tracking, reporting, thread-status, and ops-facing visibility |
