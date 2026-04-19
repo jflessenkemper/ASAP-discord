@@ -8,8 +8,8 @@ This is not a synthetic unit test. It is an operator-level validation pack desig
 
 This pack is designed to exercise or verify:
 
-1. Riley as the primary text interface in groupchat.
-2. Riley-direct execution plus specialist-review routing.
+1. Riley Haiku as the primary text and voice interface for user-facing conversation.
+2. Riley Sonnet escalation only when real work needs to be planned and executed.
 3. Tool-backed execution across code, GitHub, database, cloud, Discord, and lifecycle surfaces.
 4. Loop visibility: status, loops, health, monitoring surfaces, and explicit loop reports in the Operations loop channel.
 5. Decision handling in groupchat and the queued/offline decision path.
@@ -73,9 +73,9 @@ Important constraints:
 
 ### Expected Success Signals
 
-1. Riley behaves as the front door and does not answer only as a passive explainer.
+1. Riley Haiku behaves as the front door and does not answer only as a passive explainer.
 2. Riley creates a clear numbered plan.
-3. Riley executes directly and only brings in specialists where their domain expertise is actually needed.
+3. Riley escalates to Sonnet for real work and only brings in specialists where their domain expertise is actually needed.
 4. Riley exposes status and loop-health information in plain language.
 5. Riley can point to the dedicated Operations loop channel when discussing loop activity.
 6. Riley references cost, budget, limits, or token efficiency where relevant.
@@ -111,7 +111,7 @@ After I respond, continue the conversation the same way so we can prove voice gu
 
 ### Expected Success Signals
 
-1. Riley answers briefly and naturally.
+1. Riley Haiku answers briefly and naturally.
 2. Riley suggests a concrete next step instead of speaking vaguely.
 3. If a major decision is needed, Riley asks directly in voice.
 4. Riley does not defer live-call decisions to the decisions channel.
@@ -206,6 +206,16 @@ Stress mode requirements:
 ## Anthropic Usage And Cost Reporting For A Test
 
 If you want a before-and-after Anthropic report for a Riley test run, use the included Admin API helper in this repo.
+
+## Front Door Model To Watch For
+
+When using this pack, the intended behavior is:
+
+1. Riley Haiku talks to the user first in groupchat or voice.
+2. Riley Haiku follows the user-facing communication rules and keeps direct replies natural.
+3. Riley Sonnet engages only when Haiku decides the request needs real work.
+4. Opus executes after Sonnet has planned the work.
+5. Final user-facing replies come back through Haiku before they reach the user.
 
 ### Important Limitation
 
