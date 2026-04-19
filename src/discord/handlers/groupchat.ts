@@ -41,6 +41,7 @@ import {
   type SelfImprovementQueuePayload,
 } from '../selfImprovementQueue';
 import { postAgentErrorLog } from '../services/agentErrors';
+import { buildToolNotificationLine, formatToolNotificationItem } from '../services/discordOutputSanitizer';
 import { captureAndPostScreenshots } from '../services/screenshots';
 import { makeOutboundCall, makeAsapTesterCall, startConferenceCall, isTelephonyAvailable } from '../services/telephony';
 import { getWebhook, sendWebhookMessage, WebhookCapableChannel } from '../services/webhooks';
@@ -86,7 +87,7 @@ const rileyStallNoticeAt = new Map<string, number>();
 const RILEY_STALL_NOTICE_COOLDOWN_MS = parseInt(process.env.RILEY_STALL_NOTICE_COOLDOWN_MS || '120000', 10);
 
 /** Send a tool-use notification as the agent (via webhook). */
-async function sendToolNotification(channel: WebhookCapableChannel, agent: AgentConfig, summary: string): Promise<void> {
+async function sendToolNotification(channel: WebhookCapableChannel, agent: AgentConfig, toolName: string, summary: string): Promise<void> {
   const key = `${channel.id}:${agent.id}`;
   let batch = toolNotificationBatches.get(key);
   if (!batch) {
@@ -94,7 +95,7 @@ async function sendToolNotification(channel: WebhookCapableChannel, agent: Agent
     toolNotificationBatches.set(key, batch);
   }
 
-  batch.items.push(String(summary || '').trim());
+  batch.items.push(formatToolNotificationItem(toolName, summary));
   if (batch.items.length >= TOOL_NOTIFICATION_MAX_ITEMS) {
     await flushToolNotificationBatch(key);
     return;
@@ -134,7 +135,7 @@ async function flushToolNotificationBatch(key: string): Promise<void> {
     return;
   }
 
-  const content = `🔧 ${deduped.join(' | ')}`;
+  const content = buildToolNotificationLine(deduped);
 
   try {
     await sendWebhookMessage(targetChannel, {
@@ -1250,17 +1251,6 @@ async function ensureGoalWorkspace(groupchat: TextChannel, senderName: string, c
     goalState.startedAt = Date.now();
     lastThreadCloseReviewAt = 0;
 
-    const riley = getAgent('executive-assistant' as AgentId);
-    if (riley) {
-      await sendWebhookMessage(thread, {
-        content: `🧵 Workspace created for: ${content.slice(0, 300)}`,
-        username: `${riley.emoji} ${riley.name}`,
-        avatarURL: riley.avatarUrl,
-      }).catch(() => {});
-    }
-
-    await groupchat.send(`🧵 Created workspace thread: <#${thread.id}>`).catch(() => {});
-
     return thread;
   });
 }
@@ -1861,7 +1851,7 @@ async function dispatchToAgent(
     [...agentMemory, ...groupHistory],
     contextMessage,
     async (toolName, summary) => {
-      sendToolNotification(outputChannel, agent, `[${toolName}] ${summary}`).catch(() => {});
+      sendToolNotification(outputChannel, agent, toolName, summary).catch(() => {});
       options.onToolUse?.(toolName, summary);
     },
     {
@@ -2302,8 +2292,8 @@ async function handleRileyMessage(
         });
     }, RILEY_NO_RESPONSE_TIMEOUT_MS);
 
-    stopTyping = startTypingLoop(rileyWorkChannel);
-    await setThinkingMessage(rileyWorkChannel, riley);
+    stopTyping = startTypingLoop(workspaceChannel);
+    await setThinkingMessage(workspaceChannel, riley);
 
     const rileyMemory = getMemoryContext('executive-assistant');
     const contextMessage = `[${senderName}]: ${userMessage}`;
@@ -2323,7 +2313,7 @@ async function handleRileyMessage(
     const contextMessageWithLang = `${textLangHint ? `${contextMessage}${textLangHint}` : contextMessage}${mentionGuide}${threadCloseGuide}${decisionGuide}`;
 
     const response = await agentRespond(riley, [...rileyMemory, ...groupHistory], contextMessageWithLang, async (toolName, summary) => {
-      sendToolNotification(rileyWorkChannel, riley, `[${toolName}] ${summary}`).catch(() => {});
+      sendToolNotification(rileyWorkChannel, riley, toolName, summary).catch(() => {});
     }, {
       signal,
       outputMode: 'machine_json',
@@ -2433,10 +2423,7 @@ async function handleRileyMessage(
         pm.delete().catch(() => {});
       }
       progressMessages.length = 0;
-      await sendAgentMessage(rileyWorkChannel, riley, displayResponse);
-      if (workspaceChannel.id !== rileyWorkChannel.id) {
-        await sendAgentMessage(workspaceChannel, riley, displayResponse);
-      }
+      await sendAgentMessage(workspaceChannel, riley, displayResponse);
       if (workspaceChannel.id !== groupchat.id && (statusBlocked || (completionClaimed && completionVerified && shouldMirrorCompletionToGroupchat(displayResponse, workspaceChannel, groupchat)))) {
         const compact = buildCompactGroupchatStatus(displayResponse, {
           complete: completionClaimed && completionVerified && !statusBlocked,
@@ -2486,7 +2473,7 @@ async function handleRileyMessage(
         // Re-invoke Riley for the next sub-task
         const rileyMemoryCtx = getMemoryContext('executive-assistant');
         const continuationResponse = await agentRespond(riley, [...rileyMemoryCtx, ...groupHistory], continuationPrompt, async (toolName, summary) => {
-          sendToolNotification(rileyWorkChannel, riley, `[${toolName}] ${summary}`).catch(() => {});
+          sendToolNotification(rileyWorkChannel, riley, toolName, summary).catch(() => {});
         }, {
           signal,
           outputMode: 'machine_json',

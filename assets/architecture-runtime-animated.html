@@ -361,7 +361,7 @@
     import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
 
     const liveRun = {
-      prompt: 'Ask Riley to get rid of the tools channel, and force all agents including herself to put tool use in their own channels. Also tool use messages should be one line, so determine what the max char limit is per line and force all agents to use that when posting tool uses.',
+      prompt: 'Add a Haiku sanitizer for all Discord-bound agent output, remove bracketed tool labels, keep every tool-use message on one line in the acting agent channel, and keep Riley\'s visible groupchat-task replies in the workspace thread instead of her own channel or redundant workspace-created chatter.',
       note: ''
     };
 
@@ -369,7 +369,10 @@
  flowchart TB
   User["User"]
   Opus["Riley (Opus)<br/>do work"]
-  Groupchat["Groupchat<br/>reply user"]
+  Groupchat["Groupchat<br/>compact completion"]
+  Workspace["Workspace thread<br/>visible work"]
+  OutputSanitizer["Haiku sanitizer<br/>Discord output"]
+  ToolLogs["Agent channel<br/>one-line tool logs"]
   QAAgent["QA"]
   UXAgent["UX"]
     SecurityAgent["Security"]
@@ -474,9 +477,24 @@
     StewardQueue -->|background stewardship| OpsHub
     SelfImproveEngine -->|ops updates| OpsHub
     Opus -->|done| Riley
+    Riley -->|visible text reply| OutputSanitizer
+    OutputSanitizer -->|workspace-first post| Workspace
+    Workspace -->|optional compact status| Groupchat
+    AgentManagerCore -->|tool summaries| ToolLogs
+    QAAgent -->|tool summaries| ToolLogs
+    UXAgent -->|tool summaries| ToolLogs
+    SecurityAgent -->|tool summaries| ToolLogs
+    APIAgent -->|tool summaries| ToolLogs
+    DBAAgent -->|tool summaries| ToolLogs
+    PerformanceAgent -->|tool summaries| ToolLogs
+    DevOpsAgent -->|tool summaries| ToolLogs
+    CopywriterAgent -->|tool summaries| ToolLogs
+    LawyerAgent -->|tool summaries| ToolLogs
+    IOSAgent -->|tool summaries| ToolLogs
+    AndroidAgent -->|tool summaries| ToolLogs
     Riley -->|if in voice| Voice
     Voice -->|spoken update| User
-    Riley -->|otherwise| Groupchat
+    Riley -->|if in text| Workspace
     Groupchat -->|tag user| User
 
     classDef user fill:#4f8fcb,stroke:#2f6ea3,color:#ffffff,stroke-width:2px;
@@ -488,7 +506,7 @@
 
     class User user;
     class Riley riley;
-    class Groupchat,SelfImproveEngine,QAAgent,UXAgent,SecurityAgent,APIAgent,DBAAgent,PerformanceAgent,DevOpsAgent,CopywriterAgent,LawyerAgent,IOSAgent,AndroidAgent,QAChan,UXChan,SecurityChan,APIChan,DBAChan,PerformanceChan,DevOpsChan,CopywriterChan,LawyerChan,IOSChan,AndroidChan,TestEngine,LoggingEngine,MemoryLoop,DatabaseAudit,ChannelHeartbeat,UpgradesTriage,VoiceSession,GoalWatchdog,TerminalCh,ErrorsCh,LimitsCh,HealthCh,VoiceCh,LoopsCh surface;
+    class Groupchat,Workspace,OutputSanitizer,ToolLogs,SelfImproveEngine,QAAgent,UXAgent,SecurityAgent,APIAgent,DBAAgent,PerformanceAgent,DevOpsAgent,CopywriterAgent,LawyerAgent,IOSAgent,AndroidAgent,QAChan,UXChan,SecurityChan,APIChan,DBAChan,PerformanceChan,DevOpsChan,CopywriterChan,LawyerChan,IOSChan,AndroidChan,TestEngine,LoggingEngine,MemoryLoop,DatabaseAudit,ChannelHeartbeat,UpgradesTriage,VoiceSession,GoalWatchdog,TerminalCh,ErrorsCh,LimitsCh,HealthCh,VoiceCh,LoopsCh surface;
     class Voice voice;
     class Opus opus;
     class AgentManagerCore riley;
@@ -519,8 +537,8 @@
       {
         label: 'Step 2 of 10',
         title: 'Riley (Sonnet) plans the route',
-        copy: 'Riley decides whether the task needs Opus, specialist agents, voice handling, or a direct answer. In the latest live probe, this planning stage did persist invoke events, but not a clean response span yet.',
-        simpleCopy: 'Riley quickly decides the best path: answer directly, use a stronger worker, or bring in specialist help.',
+        copy: 'Riley decides whether the task needs Opus, specialist agents, voice handling, or a direct answer, and she now treats the workspace thread as the primary visible surface for groupchat tasks.',
+        simpleCopy: 'Riley decides the path and treats the workspace thread as the main place where visible task work should appear.',
         chips: ['2 invokes seen in ARCHSIM_2', 'Planning logs only', 'Debugger focus: front door'],
         simpleChips: ['Riley plans the job', 'Chooses the route', 'Sets the next step'],
         active: 'plan route',
@@ -561,10 +579,10 @@
       {
         label: 'Step 4 of 10',
         title: 'The agent manager fans out tool work',
-        copy: 'The manager coordinates evidence collection, tool calls, and specialist routing. In the latest live probe, this is where most of the time is being spent.',
-        simpleCopy: 'Riley can split work across tools and helper roles instead of trying to do everything in one place.',
-        chips: ['19 tool calls so far', '46.8s cumulative tool time', 'Latest issue: allowlist block then retry'],
-        simpleChips: ['Uses tools', 'Collects evidence', 'Calls helpers'],
+        copy: 'The manager coordinates evidence collection, tool calls, and specialist routing. Tool updates now stay in the acting agent channel as single-line logs instead of leaking into the user-facing thread.',
+        simpleCopy: 'Riley can split work across tools and helper roles, but the tool chatter stays out of the user-facing workspace thread.',
+        chips: ['One-line tool logs', 'Agent-owned tool channels', 'No bracketed tool labels'],
+        simpleChips: ['Uses tools', 'Keeps logs short', 'Tool chatter stays separate'],
         active: 'Agent manager delegate',
         packet: ['do work', 'Agent manager delegate'],
         badge: {
@@ -669,44 +687,44 @@
       },
       {
         label: 'Step 9 of 10',
-        title: 'Riley synthesizes the visible answer',
-        copy: 'The user-facing thread is updated after the specialist and tool passes finish. The fresh ARCHSIM_2 probe has not produced this final visible answer yet, so the timings shown here still come from the completed baseline audit.',
-        simpleCopy: 'Riley gathers everything back together and turns it into the final answer the user sees.',
-        chips: ['Fresh probe: pending', 'Baseline complete at +140.3s', 'Thread tagging'],
-        simpleChips: ['Final answer', 'Comes back to the user', 'Visible result'],
-        active: 'reply user',
-        packet: ['do work', 'plan route', 'reply user', 'User'],
+        title: 'Haiku sanitizes the visible answer before Discord sees it',
+        copy: 'Before a text reply is posted, the Discord-bound message runs through a lightweight Haiku sanitizer so leaked tool markers and formatting noise are cleaned up without changing the meaning.',
+        simpleCopy: 'A lightweight sanitizer cleans the final Discord text before it is posted.',
+        chips: ['Haiku sanitizer', 'Discord output contract', 'Visible text cleanup'],
+        simpleChips: ['Clean final text', 'Same meaning', 'Discord-safe output'],
+        active: 'Haiku sanitizer Discord output',
+        packet: ['do work', 'plan route', 'Haiku sanitizer Discord output', 'Workspace thread visible work'],
         badge: {
-          target: 'reply user',
-          title: 'Visible output',
-          duration: '+140.3s',
-          note: 'Thread delivery is visible here; token usage belongs to the model steps that produced it.'
+          target: 'Haiku sanitizer Discord output',
+          title: 'Output cleanup',
+          duration: 'lightweight',
+          note: 'The sanitizer rewrites Discord-bound text only when needed and keeps the meaning intact.'
         },
         simpleBadge: {
-          target: 'reply user',
-          title: 'Answer back to user',
-          note: 'This is the visible response Riley sends back.'
+          target: 'Haiku sanitizer Discord output',
+          title: 'Clean text pass',
+          note: 'The final Discord text is cleaned before posting.'
         }
       },
       {
         label: 'Step 10 of 10',
-        title: 'Loops and ops channels publish the aftermath',
-        copy: 'After the user gets the answer, the runtime posts operational follow-up for stewardship, loop health, and background improvements. The latest probe has not reached this phase yet.',
-        simpleCopy: 'After the answer is sent, Riley can still post maintenance and follow-up updates behind the scenes.',
-        chips: ['Fresh probe: not reached', 'Baseline ops post +161.7s', 'Post-answer maintenance'],
-        simpleChips: ['Behind-the-scenes follow-up', 'Maintenance updates', 'Does not block the user'],
-        active: 'Loops',
-        packet: ['Steward outbox', 'Ops channels', 'Loops'],
+        title: 'Workspace-first delivery leaves groupchat quiet and tool logs separate',
+        copy: 'The visible answer lands in the workspace thread first, groupchat only gets a compact completion when needed, and one-line tool logs stay in the acting agent channel. The redundant workspace-created bot post is gone.',
+        simpleCopy: 'The workspace gets the real answer, groupchat stays quieter, and tool logs stay in agent channels.',
+        chips: ['Workspace-first text delivery', 'Optional compact groupchat status', 'No redundant workspace-created post'],
+        simpleChips: ['Workspace is primary', 'Groupchat stays concise', 'No duplicate creation chatter'],
+        active: 'Workspace thread visible work',
+        packet: ['Haiku sanitizer Discord output', 'Workspace thread visible work', 'Groupchat compact completion'],
         badge: {
-          target: 'Loops',
-          title: 'Ops follow-up',
-          duration: '+161.7s',
-          note: 'Post-response reporting closes the traced walkthrough.'
+          target: 'Workspace thread visible work',
+          title: 'Workspace-first output',
+          duration: 'live now',
+          note: 'Visible task work stays in the workspace thread; groupchat gets only compact completion status when appropriate.'
         },
         simpleBadge: {
-          target: 'Loops',
-          title: 'Aftercare',
-          note: 'Maintenance and improvement updates happen after the main reply is done.'
+          target: 'Workspace thread visible work',
+          title: 'Primary reply surface',
+          note: 'This is where the real visible task work shows up now.'
         }
       }
     ];

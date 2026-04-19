@@ -5,6 +5,7 @@ import { agentRespond, ConversationMessage } from '../claude';
 import { appendToMemory, getMemoryContext } from '../memory';
 import { recordTextChannelTimeout, updateTextChannelQueueDepth } from '../metrics';
 import { mirrorAgentResponse } from '../services/diagnosticsWebhook';
+import { buildToolNotificationLine, formatToolNotificationItem, sanitizeDiscordVisibleOutput } from '../services/discordOutputSanitizer';
 import { clearWebhookCache, sendWebhookMessage, WebhookCapableChannel } from '../services/webhooks';
 
 import { isLowSignalCompletion } from './responseNormalization';
@@ -333,7 +334,7 @@ async function handleAgentMessageInner(
         if (disableTools) return;
         try {
           await sendWebhookMessage(channel, {
-            content: `🔧 [${toolName}] ${summary}`,
+            content: buildToolNotificationLine([formatToolNotificationItem(toolName, summary)]),
             username: `${agent.emoji} ${agent.name}`,
             avatarURL: agent.avatarUrl,
           });
@@ -535,13 +536,14 @@ export async function sendAgentMessage(
   ) ? '✅ Done.' : response;
 
   const rendered = ensureCompletionToken(renderAgentMessage(effectiveResponse), completionToken);
-  if (!rendered.trim()) {
+  const sanitized = await sanitizeDiscordVisibleOutput(rendered);
+  if (!sanitized.trim()) {
     return;
   }
 
   // Compact very long text-only responses (>8000 chars = 4+ Discord messages)
   // to avoid wall-of-text spam. Preserve key sections and truncate the rest.
-  const compacted = compactLongResponse(rendered);
+  const compacted = compactLongResponse(sanitized);
 
   const duplicateDecision = shouldSuppressCareerOpsDuplicate(channel, compacted);
   if (duplicateDecision.suppress) {

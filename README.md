@@ -35,6 +35,9 @@ flowchart LR
     User[User]
     Opus["Riley (Opus)<br/>execution and completion"]
     Groupchat[Groupchat channel]
+    Workspace[Workspace thread]
+    OutputSanitizer["Haiku Discord<br/>output sanitizer"]
+    ToolLogs["Agent channel<br/>one-line tool logs"]
     QAAgent[QA]
     UXAgent[UX Reviewer]
     SecurityAgent[Security Auditor]
@@ -135,9 +138,24 @@ flowchart LR
     StewardQueue -->|background stewardship| OpsHub
     SelfImproveEngine -->|ops updates| OpsHub
     Opus -->|done| Riley
+    Riley -->|visible reply| OutputSanitizer
+    OutputSanitizer -->|workspace-first post| Workspace
+    Workspace -->|optional compact completion| Groupchat
+    AgentManagerCore -->|tool summaries| ToolLogs
+    QAAgent -->|tool summaries| ToolLogs
+    UXAgent -->|tool summaries| ToolLogs
+    SecurityAgent -->|tool summaries| ToolLogs
+    APIAgent -->|tool summaries| ToolLogs
+    DBAAgent -->|tool summaries| ToolLogs
+    PerformanceAgent -->|tool summaries| ToolLogs
+    DevOpsAgent -->|tool summaries| ToolLogs
+    CopywriterAgent -->|tool summaries| ToolLogs
+    LawyerAgent -->|tool summaries| ToolLogs
+    IOSAgent -->|tool summaries| ToolLogs
+    AndroidAgent -->|tool summaries| ToolLogs
     Riley -->|if in voice| Voice
     Voice -->|spoken update| User
-    Riley -->|otherwise| Groupchat
+    Riley -->|if in text| Workspace
     Groupchat -->|tag user| User
 
     classDef user fill:#4f8fcb,stroke:#2f6ea3,color:#ffffff,stroke-width:2px;
@@ -149,14 +167,14 @@ flowchart LR
 
     class User user;
     class Riley riley;
-    class Groupchat,SelfImproveEngine,QAAgent,UXAgent,SecurityAgent,APIAgent,DBAAgent,PerformanceAgent,DevOpsAgent,CopywriterAgent,LawyerAgent,IOSAgent,AndroidAgent,QAChan,UXChan,SecurityChan,APIChan,DBAChan,PerformanceChan,DevOpsChan,CopywriterChan,LawyerChan,IOSChan,AndroidChan,TestEngine,LoggingEngine,MemoryLoop,DatabaseAudit,ChannelHeartbeat,UpgradesTriage,VoiceSession,GoalWatchdog,TerminalCh,ErrorsCh,LimitsCh,HealthCh,VoiceCh,LoopsCh surface;
+    class Groupchat,Workspace,OutputSanitizer,ToolLogs,SelfImproveEngine,QAAgent,UXAgent,SecurityAgent,APIAgent,DBAAgent,PerformanceAgent,DevOpsAgent,CopywriterAgent,LawyerAgent,IOSAgent,AndroidAgent,QAChan,UXChan,SecurityChan,APIChan,DBAChan,PerformanceChan,DevOpsChan,CopywriterChan,LawyerChan,IOSChan,AndroidChan,TestEngine,LoggingEngine,MemoryLoop,DatabaseAudit,ChannelHeartbeat,UpgradesTriage,VoiceSession,GoalWatchdog,TerminalCh,ErrorsCh,LimitsCh,HealthCh,VoiceCh,LoopsCh surface;
     class Voice voice;
     class Opus opus;
     class AgentManagerCore riley;
     class OpsHub hidden;
 ```
 
-This diagram shows the target architecture. Riley's Sonnet agent manager sends work to sub-agents and manages the self-improvement engine as a separate manager-owned layer. Opus emits execution outcomes back to the manager, the manager writes stewardship work to a durable outbox, and a background worker runs that path without holding the user turn open.
+This diagram shows the target architecture. Riley's Sonnet agent manager sends work to sub-agents and manages the self-improvement engine as a separate manager-owned layer. Opus emits execution outcomes back to the manager, the manager writes stewardship work to a durable outbox, and a background worker runs that path without holding the user turn open. Discord-bound text now passes through a Haiku sanitizer, visible work lands in the workspace thread first, and tool use stays as one-line logs in the acting agent's own channel.
 
 The full architecture diagram is in [.github/ARCHITECTURE.md](.github/ARCHITECTURE.md).
 

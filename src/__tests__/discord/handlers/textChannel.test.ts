@@ -30,6 +30,9 @@ jest.mock('../../../discord/metrics', () => ({
 jest.mock('../../../discord/services/diagnosticsWebhook', () => ({
   mirrorAgentResponse: jest.fn(),
 }));
+jest.mock('../../../services/anthropicText', () => ({
+  generateAnthropicText: jest.fn(),
+}));
 jest.mock('../../../discord/services/webhooks', () => ({
   clearWebhookCache: jest.fn(),
   sendWebhookMessage: jest.fn(),
@@ -38,9 +41,16 @@ jest.mock('../../../discord/handlers/responseNormalization', () => ({
   isLowSignalCompletion: jest.fn().mockReturnValue(false),
 }));
 
-import { renderAgentMessage, clearHistory } from '../../../discord/handlers/textChannel';
+import { generateAnthropicText } from '../../../services/anthropicText';
+import { sendWebhookMessage } from '../../../discord/services/webhooks';
+import { renderAgentMessage, clearHistory, sendAgentMessage } from '../../../discord/handlers/textChannel';
 
 describe('textChannel', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    (generateAnthropicText as jest.Mock).mockResolvedValue('Sanitized response');
+  });
+
   describe('renderAgentMessage()', () => {
     it('strips [ACTION:*] tags', () => {
       const result = renderAgentMessage('Hello [ACTION:deploy] world');
@@ -131,6 +141,33 @@ describe('textChannel', () => {
   describe('clearHistory()', () => {
     it('does not throw when clearing unknown channel', () => {
       expect(() => clearHistory('unknown-channel-id')).not.toThrow();
+    });
+  });
+
+  describe('sendAgentMessage()', () => {
+    it('sanitizes visible Discord output through the sanitizer pass', async () => {
+      const channel = { name: 'groupchat' } as any;
+      const agent = { id: 'executive-assistant', emoji: '📋', name: 'Riley', avatarUrl: 'https://example.test/riley.png' } as any;
+
+      await sendAgentMessage(channel, agent, 'Original response with [TOOL:run_command] marker');
+
+      expect(generateAnthropicText).toHaveBeenCalled();
+      expect(sendWebhookMessage).toHaveBeenCalledWith(
+        channel,
+        expect.objectContaining({ content: 'Sanitized response' }),
+      );
+    });
+
+    it('falls back to local sanitization when the sanitizer call fails', async () => {
+      const channel = { name: 'groupchat' } as any;
+      const agent = { id: 'qa', emoji: '🧪', name: 'QA', avatarUrl: 'https://example.test/qa.png' } as any;
+      (generateAnthropicText as jest.Mock).mockRejectedValueOnce(new Error('timeout'));
+
+      await sendAgentMessage(channel, agent, 'Result [TOOL:read_file] with @everyone warning');
+
+      const sentPayload = (sendWebhookMessage as jest.Mock).mock.calls[0][1];
+      expect(sentPayload.content).toContain('@\u200beveryone');
+      expect(sentPayload.content).not.toContain('[TOOL:');
     });
   });
 });
