@@ -42,6 +42,7 @@ import {
 } from '../selfImprovementQueue';
 import { postAgentErrorLog } from '../services/agentErrors';
 import { buildToolNotificationLine, formatToolNotificationItem } from '../services/discordOutputSanitizer';
+import { shouldEchoDirectedResponseToGroupchat, shouldKeepGroupchatPromptInChannel } from '../services/groupchatRouting';
 import { captureAndPostScreenshots } from '../services/screenshots';
 import { makeOutboundCall, makeAsapTesterCall, startConferenceCall, isTelephonyAvailable } from '../services/telephony';
 import { getWebhook, sendWebhookMessage, WebhookCapableChannel } from '../services/webhooks';
@@ -189,7 +190,6 @@ const RILEY_PROGRESS_PING_MS = parseInt(
 );
 const SELF_IMPROVEMENT_WORKER_POLL_MS = Math.max(2_000, parseInt(process.env.SELF_IMPROVEMENT_WORKER_POLL_MS || '5000', 10));
 const SELF_IMPROVEMENT_WORKER_ERROR_COOLDOWN_MS = Math.max(5_000, parseInt(process.env.SELF_IMPROVEMENT_WORKER_ERROR_COOLDOWN_MS || '60000', 10));
-const DIRECT_GROUPCHAT_SHORT_PROMPT_MAX_WORDS = parseInt(process.env.DIRECT_GROUPCHAT_SHORT_PROMPT_MAX_WORDS || '18', 10);
 const GOAL_WATCHDOG_TOKEN_OVERRUN_ALLOWANCE = Math.max(0, parseInt(process.env.RILEY_TOKEN_OVERRUN_ALLOWANCE || '2000000', 10));
 
 const GOAL_STALL_TIMEOUT_MS = parseInt(process.env.GOAL_STALL_TIMEOUT_MS || '420000', 10);
@@ -385,22 +385,6 @@ function compactAuditField(value: string | undefined | null, maxLen = 80): strin
   const normalized = (value || 'n/a').replace(/\s+/g, ' ').trim();
   if (normalized.length <= maxLen) return normalized;
   return `${normalized.slice(0, maxLen - 1)}…`;
-}
-
-function normalizeDirectedPrompt(prompt: string): string {
-  return String(prompt || '')
-    .replace(/<@[!&]?\d+>/g, ' ')
-    .replace(/^(?:\[[^\]]+\]\s*)+/g, '')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
-function shouldEchoDirectedResponseToGroupchat(agentIds: string[], userMessage: string): boolean {
-  if (agentIds.length !== 1 || agentIds[0] !== 'executive-assistant') return false;
-  const normalized = normalizeDirectedPrompt(userMessage);
-  if (!normalized) return false;
-  if (normalized.length > 180) return false;
-  return normalized.split(/\s+/).length <= DIRECT_GROUPCHAT_SHORT_PROMPT_MAX_WORDS;
 }
 
 async function sendAutopilotAudit(
@@ -2155,6 +2139,13 @@ async function processGroupchatMessage(
   signal?: AbortSignal
 ): Promise<void> {
   const senderName = message.member?.displayName || message.author.username;
+  let workspaceChannel: WebhookCapableChannel | null = null;
+  const getWorkspaceChannel = async (): Promise<WebhookCapableChannel> => {
+    if (workspaceChannel) return workspaceChannel;
+    workspaceChannel = await ensureGoalWorkspace(groupchat, senderName, content);
+    return workspaceChannel;
+  };
+
   if (await handleDirectOpsActionIfRequested(content, groupchat)) {
     markGoalProgress('⚡ Quick ops action handled directly');
     return;
@@ -2170,12 +2161,11 @@ async function processGroupchatMessage(
     markGoalProgress('📞 Voice intent handled without workspace thread');
     return;
   }
-
-  const workspaceChannel = await ensureGoalWorkspace(groupchat, senderName, content);
   markGoalProgress();
 
   const approvedAmount = parseBudgetApproval(content);
   if (approvedAmount !== null) {
+    const workspaceChannel = await getWorkspaceChannel();
     const riley = getAgent('executive-assistant' as AgentId);
     const result = approveAdditionalBudget(Number.isFinite(approvedAmount) ? approvedAmount : undefined);
     await refreshUsageDashboard().catch(() => {});
@@ -2211,18 +2201,23 @@ async function processGroupchatMessage(
   }
 
   const uniqueMentions = parseMentionedAgentIds(content);
+  const keepInGroupchat = shouldKeepGroupchatPromptInChannel(uniqueMentions, content);
 
   if (uniqueMentions.length > 0) {
     if (uniqueMentions.length === 1 && uniqueMentions[0] === 'executive-assistant') {
       goalState.setGoal(content);
+      const targetChannel = keepInGroupchat ? groupchat : await getWorkspaceChannel();
       await withRileyResponseWatchdog(
-        workspaceChannel,
+        targetChannel,
         groupchat,
-        handleRileyMessage(content, senderName, message.member || undefined, groupchat, signal, workspaceChannel),
+        handleRileyMessage(content, senderName, message.member || undefined, groupchat, signal, targetChannel, {
+          allowDirectGroupchat: keepInGroupchat,
+        }),
       );
     } else {
       const normalized = `${content}\n\n[System: Riley should execute directly when possible and involve specialists only when needed.]`;
       goalState.setGoal(normalized);
+      const workspaceChannel = await getWorkspaceChannel();
       await withRileyResponseWatchdog(
         workspaceChannel,
         groupchat,
@@ -2231,10 +2226,13 @@ async function processGroupchatMessage(
     }
   } else {
     goalState.setGoal(content);
+    const targetChannel = keepInGroupchat ? groupchat : await getWorkspaceChannel();
     await withRileyResponseWatchdog(
-      workspaceChannel,
+      targetChannel,
       groupchat,
-      handleRileyMessage(content, senderName, message.member || undefined, groupchat, signal, workspaceChannel),
+      handleRileyMessage(content, senderName, message.member || undefined, groupchat, signal, targetChannel, {
+        allowDirectGroupchat: keepInGroupchat,
+      }),
     );
   }
 }
@@ -2294,8 +2292,9 @@ async function handleRileyMessage(
   groupchat: TextChannel,
   signal?: AbortSignal,
   workspaceChannel: WebhookCapableChannel = groupchat,
+  options?: { allowDirectGroupchat?: boolean },
 ): Promise<void> {
-  if (workspaceChannel === groupchat) {
+  if (workspaceChannel === groupchat && !options?.allowDirectGroupchat) {
     workspaceChannel = await ensureGoalWorkspace(groupchat, senderName || 'system', userMessage || 'request');
   }
 

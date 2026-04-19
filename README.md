@@ -34,9 +34,9 @@ This system is closer to an operations room:
 flowchart LR
     User[User]
     Opus["Riley (Opus)<br/>execution and completion"]
-    Groupchat[Groupchat channel]
-    Workspace[Workspace thread]
-    OutputSanitizer["Haiku Discord<br/>output sanitizer"]
+    Groupchat[Groupchat channel<br/>direct reply or compact completion]
+    Workspace[Workspace thread<br/>task work]
+    OutputSanitizer["Anthropic-fast Discord<br/>output sanitizer"]
     ToolLogs["Agent channel<br/>one-line tool logs"]
     QAAgent[QA]
     UXAgent[UX Reviewer]
@@ -139,7 +139,8 @@ flowchart LR
     SelfImproveEngine -->|ops updates| OpsHub
     Opus -->|done| Riley
     Riley -->|visible reply| OutputSanitizer
-    OutputSanitizer -->|workspace-first post| Workspace
+    OutputSanitizer -->|short direct reply| Groupchat
+    OutputSanitizer -->|task reply| Workspace
     Workspace -->|optional compact completion| Groupchat
     AgentManagerCore -->|tool summaries| ToolLogs
     QAAgent -->|tool summaries| ToolLogs
@@ -174,7 +175,7 @@ flowchart LR
     class OpsHub hidden;
 ```
 
-This diagram shows the target architecture. Riley's Sonnet agent manager sends work to sub-agents and manages the self-improvement engine as a separate manager-owned layer. Opus emits execution outcomes back to the manager, the manager writes stewardship work to a durable outbox, and a background worker runs that path without holding the user turn open. Discord-bound text now passes through a Haiku sanitizer, visible work lands in the workspace thread first, and tool use stays as one-line logs in the acting agent's own channel.
+This diagram shows the target architecture. Riley's Sonnet agent manager sends work to sub-agents and manages the self-improvement engine as a separate manager-owned layer. Opus emits execution outcomes back to the manager, the manager writes stewardship work to a durable outbox, and a background worker runs that path without holding the user turn open. Discord-bound text now passes through a valid Anthropic-fast sanitizer, short Riley-directed replies can stay in groupchat, task work lands in the workspace thread, and tool use stays as one-line logs in the acting agent's own channel.
 
 The full architecture diagram is in [.github/ARCHITECTURE.md](.github/ARCHITECTURE.md).
 

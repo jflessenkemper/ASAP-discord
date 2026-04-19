@@ -1,9 +1,20 @@
 import { generateAnthropicText } from '../../services/anthropicText';
+import { DEFAULT_FAST_MODEL, isAnthropicModel } from '../../services/modelConfig';
 
 import { errMsg } from '../../utils/errors';
 
 const DISCORD_OUTPUT_SANITIZER_ENABLED = String(process.env.DISCORD_OUTPUT_SANITIZER_ENABLED || 'true').toLowerCase() !== 'false';
-const DISCORD_OUTPUT_SANITIZER_MODEL = String(process.env.DISCORD_OUTPUT_SANITIZER_MODEL || 'claude-3-5-haiku-latest').trim();
+
+function resolveDiscordOutputSanitizerModel(): string {
+  const configured = String(process.env.DISCORD_OUTPUT_SANITIZER_MODEL || '').trim();
+  const candidate = configured || DEFAULT_FAST_MODEL;
+  if (candidate.toLowerCase() === 'claude-3-5-haiku-latest') {
+    return DEFAULT_FAST_MODEL;
+  }
+  return candidate;
+}
+
+const DISCORD_OUTPUT_SANITIZER_MODEL = resolveDiscordOutputSanitizerModel();
 const DISCORD_OUTPUT_SANITIZER_TIMEOUT_MS = Math.max(1000, parseInt(process.env.DISCORD_OUTPUT_SANITIZER_TIMEOUT_MS || '6000', 10));
 const DISCORD_OUTPUT_SANITIZER_MAX_INPUT_CHARS = Math.max(200, parseInt(process.env.DISCORD_OUTPUT_SANITIZER_MAX_INPUT_CHARS || '3200', 10));
 const DISCORD_TOOL_LINE_MAX_CHARS = Math.max(120, parseInt(process.env.DISCORD_TOOL_LINE_MAX_CHARS || '220', 10));
@@ -45,6 +56,7 @@ export async function sanitizeDiscordVisibleOutput(text: string): Promise<string
   const local = sanitizeDiscordVisibleOutputLocal(text);
   if (!local) return local;
   if (!DISCORD_OUTPUT_SANITIZER_ENABLED) return local;
+  if (!isAnthropicModel(DISCORD_OUTPUT_SANITIZER_MODEL)) return local;
   if (local.length > DISCORD_OUTPUT_SANITIZER_MAX_INPUT_CHARS) return local;
   if (local.includes('```')) return local;
 

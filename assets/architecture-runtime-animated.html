@@ -361,7 +361,7 @@
     import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
 
     const liveRun = {
-      prompt: 'Add a Haiku sanitizer for all Discord-bound agent output, remove bracketed tool labels, keep every tool-use message on one line in the acting agent channel, and keep Riley\'s visible groupchat-task replies in the workspace thread instead of her own channel or redundant workspace-created chatter.',
+      prompt: 'Fix the Discord output sanitizer model setup, keep short Riley-directed replies in groupchat, keep real task work in workspace threads, and preserve one-line tool logs in the acting agent channel.',
       note: ''
     };
 
@@ -369,9 +369,9 @@
  flowchart TB
   User["User"]
   Opus["Riley (Opus)<br/>do work"]
-  Groupchat["Groupchat<br/>compact completion"]
-  Workspace["Workspace thread<br/>visible work"]
-  OutputSanitizer["Haiku sanitizer<br/>Discord output"]
+  Groupchat["Groupchat<br/>direct reply or compact completion"]
+  Workspace["Workspace thread<br/>task work"]
+  OutputSanitizer["Anthropic-fast sanitizer<br/>Discord output"]
   ToolLogs["Agent channel<br/>one-line tool logs"]
   QAAgent["QA"]
   UXAgent["UX"]
@@ -478,7 +478,8 @@
     SelfImproveEngine -->|ops updates| OpsHub
     Opus -->|done| Riley
     Riley -->|visible text reply| OutputSanitizer
-    OutputSanitizer -->|workspace-first post| Workspace
+    OutputSanitizer -->|short direct reply| Groupchat
+    OutputSanitizer -->|task reply| Workspace
     Workspace -->|optional compact status| Groupchat
     AgentManagerCore -->|tool summaries| ToolLogs
     QAAgent -->|tool summaries| ToolLogs
@@ -537,10 +538,10 @@
       {
         label: 'Step 2 of 10',
         title: 'Riley (Sonnet) plans the route',
-        copy: 'Riley decides whether the task needs Opus, specialist agents, voice handling, or a direct answer, and she now treats the workspace thread as the primary visible surface for groupchat tasks.',
-        simpleCopy: 'Riley decides the path and treats the workspace thread as the main place where visible task work should appear.',
-        chips: ['2 invokes seen in ARCHSIM_2', 'Planning logs only', 'Debugger focus: front door'],
-        simpleChips: ['Riley plans the job', 'Chooses the route', 'Sets the next step'],
+        copy: 'Riley decides whether the request is a short direct reply that can stay in groupchat or real task work that needs a workspace, then chooses Opus, specialists, or voice handling only when needed.',
+        simpleCopy: 'Riley first decides whether to answer directly in groupchat or open a task workspace, then picks the deeper execution path if needed.',
+        chips: ['Direct reply vs task routing', 'Lazy workspace creation', 'Debugger focus: front door'],
+        simpleChips: ['Riley plans the route', 'Direct or task path', 'Workspace only when needed'],
         active: 'plan route',
         packet: ['User', 'plan route'],
         badge: {
@@ -687,43 +688,43 @@
       },
       {
         label: 'Step 9 of 10',
-        title: 'Haiku sanitizes the visible answer before Discord sees it',
-        copy: 'Before a text reply is posted, the Discord-bound message runs through a lightweight Haiku sanitizer so leaked tool markers and formatting noise are cleaned up without changing the meaning.',
+        title: 'The Anthropic-fast sanitizer cleans the visible answer before Discord sees it',
+        copy: 'Before a text reply is posted, the Discord-bound message runs through a valid Anthropic-fast sanitizer so leaked tool markers and formatting noise are cleaned up without changing the meaning.',
         simpleCopy: 'A lightweight sanitizer cleans the final Discord text before it is posted.',
-        chips: ['Haiku sanitizer', 'Discord output contract', 'Visible text cleanup'],
+        chips: ['Anthropic-fast sanitizer', 'Discord output contract', 'Visible text cleanup'],
         simpleChips: ['Clean final text', 'Same meaning', 'Discord-safe output'],
-        active: 'Haiku sanitizer Discord output',
-        packet: ['do work', 'plan route', 'Haiku sanitizer Discord output', 'Workspace thread visible work'],
+        active: 'Anthropic-fast sanitizer Discord output',
+        packet: ['do work', 'plan route', 'Anthropic-fast sanitizer Discord output', 'Workspace thread task work'],
         badge: {
-          target: 'Haiku sanitizer Discord output',
+          target: 'Anthropic-fast sanitizer Discord output',
           title: 'Output cleanup',
           duration: 'lightweight',
           note: 'The sanitizer rewrites Discord-bound text only when needed and keeps the meaning intact.'
         },
         simpleBadge: {
-          target: 'Haiku sanitizer Discord output',
+          target: 'Anthropic-fast sanitizer Discord output',
           title: 'Clean text pass',
           note: 'The final Discord text is cleaned before posting.'
         }
       },
       {
         label: 'Step 10 of 10',
-        title: 'Workspace-first delivery leaves groupchat quiet and tool logs separate',
-        copy: 'The visible answer lands in the workspace thread first, groupchat only gets a compact completion when needed, and one-line tool logs stay in the acting agent channel. The redundant workspace-created bot post is gone.',
-        simpleCopy: 'The workspace gets the real answer, groupchat stays quieter, and tool logs stay in agent channels.',
-        chips: ['Workspace-first text delivery', 'Optional compact groupchat status', 'No redundant workspace-created post'],
-        simpleChips: ['Workspace is primary', 'Groupchat stays concise', 'No duplicate creation chatter'],
-        active: 'Workspace thread visible work',
-        packet: ['Haiku sanitizer Discord output', 'Workspace thread visible work', 'Groupchat compact completion'],
+        title: 'Direct answers can stay in groupchat while task work lands in the workspace',
+        copy: 'Short Riley-directed replies can stay in groupchat, real task work lands in the workspace thread, and one-line tool logs stay in the acting agent channel. The redundant workspace-created bot post is gone.',
+        simpleCopy: 'Small direct answers can stay in groupchat, while real task work goes to the workspace and tool logs stay separate.',
+        chips: ['Short direct groupchat replies', 'Workspace for task execution', 'No redundant workspace-created post'],
+        simpleChips: ['Groupchat for quick replies', 'Workspace for task work', 'No duplicate creation chatter'],
+        active: 'Workspace thread task work',
+        packet: ['Anthropic-fast sanitizer Discord output', 'Workspace thread task work', 'Groupchat direct reply or compact completion'],
         badge: {
-          target: 'Workspace thread visible work',
-          title: 'Workspace-first output',
+          target: 'Workspace thread task work',
+          title: 'Task delivery surface',
           duration: 'live now',
-          note: 'Visible task work stays in the workspace thread; groupchat gets only compact completion status when appropriate.'
+          note: 'Visible task work stays in the workspace thread, while short direct Riley replies can stay in groupchat.'
         },
         simpleBadge: {
-          target: 'Workspace thread visible work',
-          title: 'Primary reply surface',
+          target: 'Workspace thread task work',
+          title: 'Task workspace',
           note: 'This is where the real visible task work shows up now.'
         }
       }

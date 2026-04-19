@@ -1,5 +1,5 @@
 import { generateAnthropicText } from '../services/anthropicText';
-import { GUARDRAILS_MODEL } from '../services/modelConfig';
+import { DEFAULT_FAST_MODEL, GUARDRAILS_MODEL, isAnthropicModel } from '../services/modelConfig';
 
 import { logAgentEvent } from './activityLog';
 import { errMsg } from '../utils/errors';
@@ -22,10 +22,15 @@ const GUARDRAILS_OUTPUT_ENABLED = process.env.GUARDRAILS_OUTPUT_ENABLED !== 'fal
 const GUARDRAILS_MAX_INPUT_CHARS = parseInt(process.env.GUARDRAILS_MAX_INPUT_CHARS || '2000', 10);
 const GUARDRAILS_TIMEOUT_MS = parseInt(process.env.GUARDRAILS_TIMEOUT_MS || '5000', 10);
 const GUARDRAIL_SAMPLE_RATE = parseFloat(process.env.GUARDRAIL_INPUT_SAMPLE_RATE || '0.2');
+const GUARDRAILS_TEXT_MODEL = isAnthropicModel(GUARDRAILS_MODEL)
+  ? GUARDRAILS_MODEL
+  : (isAnthropicModel(DEFAULT_FAST_MODEL) ? DEFAULT_FAST_MODEL : '');
+
 async function classify(prompt: string): Promise<string | null> {
+  if (!GUARDRAILS_TEXT_MODEL) return null;
   return generateAnthropicText({
     prompt,
-    model: GUARDRAILS_MODEL,
+    model: GUARDRAILS_TEXT_MODEL,
     maxTokens: 100,
     temperature: 0,
   });

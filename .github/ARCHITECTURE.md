@@ -6,16 +6,16 @@ An animated walkthrough lives in [assets/architecture-runtime-animated.html](../
 
 Today, the runtime still has some Riley paths locked to Opus. The intended direction is stricter separation: Riley owns planning and synthesis internally with Sonnet, while Opus owns implementation, execution routing, loop invocation, and completion assessment before anything is returned to Riley.
 
-Discord-visible text now has a stricter contract too: a lightweight Haiku sanitizer rewrites assistant output before it is posted, visible work for groupchat tasks lands in the workspace thread first, and tool use is collapsed into one-line status logs in the acting agent's own channel instead of a shared tools surface.
+Discord-visible text now has a stricter contract too: a lightweight Anthropic-fast sanitizer rewrites assistant output before it is posted, short Riley-directed replies can stay in groupchat, visible task work lands in the workspace thread, and tool use is collapsed into one-line status logs in the acting agent's own channel instead of a shared tools surface.
 
 ## System Context
 
 ```mermaid
 flowchart LR
     User[User]
-    Groupchat[Groupchat channel]
-    Workspace[Workspace thread]
-    OutputSanitizer["Haiku Discord\noutput sanitizer"]
+    Groupchat[Groupchat channel\ndirect reply or compact completion]
+    Workspace[Workspace thread\ntask work]
+    OutputSanitizer["Anthropic-fast Discord\noutput sanitizer"]
     ToolLogs["Agent channel\none-line tool logs"]
 
     subgraph FrontDoor[Front Door]
@@ -121,7 +121,8 @@ flowchart LR
     SelfImproveEngine -->|ops updates| OpsHub
     Opus -->|done| Riley
     Riley -->|visible text reply| OutputSanitizer
-    OutputSanitizer -->|workspace-first reply| Workspace
+    OutputSanitizer -->|short direct reply| Groupchat
+    OutputSanitizer -->|task reply| Workspace
     Workspace -->|optional compact completion| Groupchat
     AgentManagerCore -->|tool summaries| ToolLogs
     QAAgent -->|tool summaries| ToolLogs
@@ -166,7 +167,7 @@ flowchart LR
     SpeechIO[ElevenLabs speech I/O and transcript pipeline]
     Riley[Riley with Sonnet plans, tracks, and responds]
     Workspace[Workspace thread]
-    OutputSanitizer["Haiku Discord\noutput sanitizer"]
+    OutputSanitizer["Anthropic-fast Discord\noutput sanitizer"]
     ToolLogs["Agent channel\none-line tool logs"]
     ExecutionFabric[Specialists, tools, and loop adapters]
     StewardQueue[Durable stewardship outbox]
@@ -221,7 +222,7 @@ flowchart TB
     Request[Request reaches Riley]
     Riley[Riley with Sonnet plans, decides, and tracks the goal]
     Workspace[Workspace thread and agent channels]
-    OutputSanitizer["Haiku Discord\noutput sanitizer"]
+    OutputSanitizer["Anthropic-fast Discord\noutput sanitizer"]
     ToolLogs["Agent channel\none-line tool logs"]
     Opus["Riley (Opus) executes the plan and checks completion"]
     Specialists[Agent manager and specialist reports]
@@ -525,7 +526,7 @@ The architecture depends on these surfaces being explicit:
 | Voice | `src/discord/handlers/callSession.ts`, `src/discord/voice/connection.ts`, `src/discord/voice/tts.ts` | Voice intake, live session control, single-speaker gating, and speech I/O |
 | Model execution | `src/discord/claude.ts`, `src/discord/opusExecution.ts` | Riley planning model selection plus Opus execution routing, stewardship derivation, and completion assessment |
 | Agent channels | `src/discord/agents.ts`, `src/discord/handoff.ts` | Agent identities, execution delegation, and channel handoff logic |
-| Discord output contract | `src/discord/services/discordOutputSanitizer.ts`, `src/discord/handlers/textChannel.ts` | Haiku-backed output cleanup, workspace-first visible replies, and one-line tool log formatting |
+| Discord output contract | `src/discord/services/discordOutputSanitizer.ts`, `src/discord/handlers/textChannel.ts` | Anthropic-fast output cleanup, direct-or-workspace reply routing, and one-line tool log formatting |
 | Tools | `src/discord/tools.ts`, `src/discord/toolsDb.ts`, `src/discord/toolsGcp.ts` | Execution surfaces used by Riley and agents |
 | Loop orchestration | `src/discord/operationsSteward.ts`, `src/discord/loopAdapters.ts` | Stewardship request derivation and callable loop execution |
 | Loop visibility | `src/discord/loopHealth.ts`, `src/discord/loggingEngine.ts` | Loop state tracking, reporting, thread-status, and ops-facing visibility |
