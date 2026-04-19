@@ -36,7 +36,6 @@
     "quality": "npm run lint && npm run typecheck && npm test"
   },
   "dependencies": {
-    "@deepgram/sdk": "^3.13.0",
     "@discordjs/opus": "^0.10.0",
     "@discordjs/voice": "^0.19.2",
     "@google-cloud/storage": "^7.15.0",

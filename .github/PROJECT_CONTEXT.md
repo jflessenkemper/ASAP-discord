@@ -13,7 +13,7 @@ ASAP-discord is a Discord-operated automation and career-ops system. Riley is th
 - **Database**: PostgreSQL (Cloud SQL, `australia-southeast1`)
 - **Hosting**: Google Cloud Run (service: `asap`, region: `australia-southeast1`)
 - **CI/CD**: Cloud Build (manual trigger via `gcloud builds submit`)
-- **AI**: Anthropic Claude (Sonnet for Riley planning/management, Opus for execution/completion where needed), Gemini (TTS/STT fallback), ElevenLabs (TTS), Deepgram (real-time STT)
+- **AI**: Anthropic Claude (Sonnet for Riley planning/management, Opus for execution/completion where needed), Gemini (text and supporting runtime features), ElevenLabs (voice TTS, batch STT, and realtime STT)
 - **Discord**: 13-agent bot system coordinated by Riley
 - **Career Ops**: job scan/evaluation/drafting/submission workflow stored in PostgreSQL
 
@@ -100,9 +100,8 @@ src/
 | `DISCORD_BOT_TOKEN` | Discord bot token |
 | `DISCORD_GUILD_ID` | Discord server ID |
 | `DATABASE_URL` | PostgreSQL connection string |
-| `GEMINI_API_KEY` | Google Gemini (TTS/STT fallback) |
-| `ELEVENLABS_API_KEY` | ElevenLabs (primary TTS) |
-| `DEEPGRAM_API_KEY` | Deepgram (real-time STT) |
+| `GEMINI_API_KEY` | Google Gemini text features and supporting runtime calls |
+| `ELEVENLABS_API_KEY` | ElevenLabs voice TTS and STT |
 | `DAILY_BUDGET_USD` | Daily dollar spending limit (default: $250.00) |
 | `FRONTEND_URL` | Production app URL |
 

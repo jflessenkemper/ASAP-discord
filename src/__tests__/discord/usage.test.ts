@@ -59,7 +59,7 @@ describe('usage', () => {
     });
 
     it('resolves Ace', () => {
-      expect(toAgentTag('Ace (Developer)')).toBe('developer');
+      expect(toAgentTag('Ace (Developer)')).toBe('executive-assistant');
     });
 
     it('resolves Max', () => {
@@ -116,7 +116,7 @@ describe('usage', () => {
 
     it('is case insensitive', () => {
       expect(toAgentTag('RILEY')).toBe('executive-assistant');
-      expect(toAgentTag('ace')).toBe('developer');
+      expect(toAgentTag('ace')).toBe('executive-assistant');
     });
   });
 

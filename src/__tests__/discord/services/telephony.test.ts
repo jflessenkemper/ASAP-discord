@@ -36,12 +36,12 @@ jest.mock('../../../discord/memory', () => ({
   appendToMemory: jest.fn(),
   upsertMemory: jest.fn().mockResolvedValue(undefined),
 }));
-jest.mock('../../../discord/voice/deepgram', () => ({
-  startLiveTranscription: jest.fn().mockResolvedValue({
+jest.mock('../../../discord/voice/elevenlabsRealtime', () => ({
+  startElevenLabsRealtimeTranscription: jest.fn().mockResolvedValue({
     send: jest.fn(),
     close: jest.fn(),
   }),
-  isDeepgramAvailable: jest.fn().mockReturnValue(true),
+  isElevenLabsRealtimeAvailable: jest.fn().mockReturnValue(true),
 }));
 jest.mock('../../../discord/voice/elevenlabs', () => ({
   elevenLabsTTS: jest.fn().mockResolvedValue(Buffer.alloc(0)),
@@ -335,8 +335,8 @@ describe('telephony', () => {
         getMemoryContext: jest.fn(), appendToMemory: jest.fn(),
         upsertMemory: jest.fn().mockResolvedValue(undefined),
       }));
-      jest.doMock('../../../discord/voice/deepgram', () => ({
-        startLiveTranscription: jest.fn(), isDeepgramAvailable: jest.fn().mockReturnValue(false),
+      jest.doMock('../../../discord/voice/elevenlabsRealtime', () => ({
+        startElevenLabsRealtimeTranscription: jest.fn(), isElevenLabsRealtimeAvailable: jest.fn().mockReturnValue(false),
       }));
       jest.doMock('../../../discord/voice/elevenlabs', () => ({
         elevenLabsTTS: jest.fn(),
@@ -474,8 +474,8 @@ describe('telephony', () => {
         getMemoryContext: jest.fn(), appendToMemory: jest.fn(),
         upsertMemory: jest.fn().mockResolvedValue(undefined),
       }));
-      jest.doMock('../../../discord/voice/deepgram', () => ({
-        startLiveTranscription: jest.fn(), isDeepgramAvailable: jest.fn().mockReturnValue(false),
+      jest.doMock('../../../discord/voice/elevenlabsRealtime', () => ({
+        startElevenLabsRealtimeTranscription: jest.fn(), isElevenLabsRealtimeAvailable: jest.fn().mockReturnValue(false),
       }));
       jest.doMock('../../../discord/voice/elevenlabs', () => ({
         elevenLabsTTS: jest.fn(),

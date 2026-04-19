@@ -2,6 +2,8 @@
 
 This document describes the target architecture.
 
+An animated walkthrough lives in [assets/architecture-runtime-animated.html](../assets/architecture-runtime-animated.html).
+
 Today, the runtime still has some Riley paths locked to Opus. The intended direction is stricter separation: Riley owns planning and synthesis internally with Sonnet, while Opus owns implementation, execution routing, loop invocation, and completion assessment before anything is returned to Riley.
 
 ## System Context
@@ -13,7 +15,7 @@ flowchart LR
 
     subgraph FrontDoor[Front Door]
         Riley["Riley (Sonnet) plans, decides, synthesizes"]
-        Voice[ElevenLabs voice relay]
+        Voice[ElevenLabs speech relay]
     end
 
     Opus["Riley (Opus) execution and completion"]
@@ -141,7 +143,7 @@ flowchart LR
     UserVoice[User speaks in Discord voice]
     VoiceSession[Discord voice session]
     SpeakerGate[Single-speaker gate]
-    SpeechIO[Speech I/O and transcript pipeline]
+    SpeechIO[ElevenLabs speech I/O and transcript pipeline]
     Riley[Riley with Sonnet plans, tracks, and responds]
     Workspace[Workspace thread]
     ExecutionFabric[Specialists, tools, and loop adapters]

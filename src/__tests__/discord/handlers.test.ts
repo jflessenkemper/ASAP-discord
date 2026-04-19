@@ -22,6 +22,15 @@ function buildContextMessage(senderName: string, userMessage: string): string {
 
 // ─── Mock pool so callSession / usage imports don't fail ──────────────────
 jest.mock('../../db/pool', () => require('../mocks/pool'));
+jest.mock('@discordjs/voice', () => ({
+  VoiceConnectionStatus: {
+    Signalling: 'signalling',
+    Connecting: 'connecting',
+    Ready: 'ready',
+    Disconnected: 'disconnected',
+    Destroyed: 'destroyed',
+  },
+}));
 
 // ─── Tests ──────────────────────────────────────────────────────────────────
 
@@ -80,14 +89,9 @@ describe('callSession — isVoiceInputAvailable logic', () => {
     jest.resetModules();
   });
 
-  it('returns ok=true when DEEPGRAM_API_KEY is set', async () => {
-    process.env.DEEPGRAM_API_KEY = 'test-key';
+  it('loads callSession successfully when ElevenLabs voice is configured', async () => {
     process.env.ELEVENLABS_API_KEY = 'test-elevenlabs';
     // Minimal mocks so the module can load
-    jest.mock('../../discord/voice/deepgram', () => ({
-      isDeepgramAvailable: () => true,
-      startLiveTranscription: jest.fn(),
-    }));
     jest.mock('../../discord/usage', () => ({
       isGeminiOverLimit: () => false,
       recordGeminiUsage: jest.fn(),
@@ -114,7 +118,6 @@ describe('callSession — isVoiceInputAvailable logic', () => {
     expect(typeof isCallActive).toBe('function');
     expect(isCallActive()).toBe(false);
 
-    delete process.env.DEEPGRAM_API_KEY;
     delete process.env.ELEVENLABS_API_KEY;
   });
 });

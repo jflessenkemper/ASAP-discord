@@ -1,6 +1,6 @@
 /**
  * Tests for src/discord/services/modelHealthCheck.ts (service)
- * Model/provider health checks — Anthropic, Deepgram, ElevenLabs.
+ * Model/provider health checks — Anthropic and ElevenLabs.
  */
 
 const mockQuery = jest.fn().mockResolvedValue({ rows: [], rowCount: 0 });
@@ -100,7 +100,6 @@ describe('services/modelHealthCheck', () => {
 
       // Set all required API keys
       process.env.ANTHROPIC_API_KEY = 'test-key';
-      process.env.DEEPGRAM_API_KEY = 'test-key';
       process.env.ELEVENLABS_API_KEY = 'test-key';
 
       // Mock all fetch calls to succeed
@@ -123,7 +122,6 @@ describe('services/modelHealthCheck', () => {
       );
 
       delete process.env.ANTHROPIC_API_KEY;
-      delete process.env.DEEPGRAM_API_KEY;
       delete process.env.ELEVENLABS_API_KEY;
     });
 
@@ -311,72 +309,6 @@ describe('services/modelHealthCheck', () => {
       expect(postDiagnostic).toHaveBeenCalled();
 
       delete process.env.GEMINI_API_KEY;
-    });
-
-    it('handles Deepgram check success', async () => {
-      mockConnect.mockResolvedValueOnce({
-        query: jest.fn().mockResolvedValue({ rows: [{ locked: true }] }),
-        release: jest.fn(),
-      });
-
-      process.env.DEEPGRAM_API_KEY = 'test-key';
-
-      mockFetch.mockImplementation(async (url: string) => {
-        if (String(url).includes('deepgram')) {
-          return {
-            ok: true,
-            status: 200,
-            json: jest.fn().mockResolvedValue({}),
-            text: jest.fn().mockResolvedValue('ok'),
-          };
-        }
-        return {
-          ok: false,
-          status: 404,
-          json: jest.fn().mockResolvedValue({}),
-          text: jest.fn().mockResolvedValue('not found'),
-        };
-      });
-
-      await runModelHealthChecks();
-      expect(postDiagnostic).toHaveBeenCalled();
-
-      delete process.env.DEEPGRAM_API_KEY;
-    });
-
-    it('handles Deepgram check failure', async () => {
-      mockConnect.mockResolvedValueOnce({
-        query: jest.fn().mockResolvedValue({ rows: [{ locked: true }] }),
-        release: jest.fn(),
-      });
-
-      process.env.DEEPGRAM_API_KEY = 'test-key';
-      mockFetch.mockResolvedValue({
-        ok: false,
-        status: 403,
-        json: jest.fn().mockResolvedValue({}),
-        text: jest.fn().mockResolvedValue('forbidden'),
-      });
-
-      await runModelHealthChecks();
-      expect(postDiagnostic).toHaveBeenCalled();
-
-      delete process.env.DEEPGRAM_API_KEY;
-    });
-
-    it('handles Deepgram network error', async () => {
-      mockConnect.mockResolvedValueOnce({
-        query: jest.fn().mockResolvedValue({ rows: [{ locked: true }] }),
-        release: jest.fn(),
-      });
-
-      process.env.DEEPGRAM_API_KEY = 'test-key';
-      mockFetch.mockRejectedValue(new Error('network error'));
-
-      await runModelHealthChecks();
-      expect(postDiagnostic).toHaveBeenCalled();
-
-      delete process.env.DEEPGRAM_API_KEY;
     });
 
     it('handles ElevenLabs check success', async () => {

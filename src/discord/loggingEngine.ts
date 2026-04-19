@@ -104,7 +104,6 @@ function getLogSourceChannels(channels: BotChannels): TextChannel[] {
     channels.agentErrors,
     channels.voiceErrors,
     channels.terminal,
-    channels.tools,
     channels.github,
     channels.cost,
     channels.callLog,

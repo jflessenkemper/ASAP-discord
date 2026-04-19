@@ -23,15 +23,6 @@ jest.mock('../../discord/services/webhooks', () => ({
   getWebhook: jest.fn().mockResolvedValue({ id: 'wh-1' }),
 }));
 
-// ---- Mock tools ----
-jest.mock('../../discord/tools', () => ({
-  REPO_TOOLS: [
-    { name: 'read_file' },
-    { name: 'run_command' },
-    { name: 'send_channel_message' },
-  ],
-}));
-
 jest.mock('../../utils/errors', () => ({
   errMsg: (e: any) => (e instanceof Error ? e.message : String(e)),
 }));
@@ -228,7 +219,6 @@ describe('setup', () => {
     expect(result.decisions).toBeDefined();
     expect(result.github).toBeDefined();
     expect(result.upgrades).toBeDefined();
-    expect(result.tools).toBeDefined();
     expect(result.callLog).toBeDefined();
     expect(result.limits).toBeDefined();
     expect(result.cost).toBeDefined();

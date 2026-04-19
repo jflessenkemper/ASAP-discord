@@ -34,15 +34,13 @@ describe('runtimeSecrets', () => {
     mockEnsureGoogleCredentials.mockResolvedValue(false);
     mockGetGoogleCredentialBootstrapState.mockReturnValue({ attempted: false, path: null });
     // Reset relevant env vars
-    delete process.env.GEMINI_API_KEY;
     delete process.env.ANTHROPIC_API_KEY;
-    delete process.env.DEEPGRAM_API_KEY;
     delete process.env.ELEVENLABS_API_KEY;
     delete process.env.DISCORD_TEST_BOT_TOKEN;
     delete process.env.GITHUB_TOKEN;
     delete process.env.ADZUNA_APP_ID;
     delete process.env.ADZUNA_APP_KEY;
-    delete process.env.GEMINI_API_KEY_SECRET_NAME;
+    delete process.env.ANTHROPIC_API_KEY_SECRET_NAME;
     process.env.GOOGLE_CLOUD_PROJECT = 'test-project';
     process.env.RUNTIME_SECRET_MANAGER_ENABLED = 'true';
   });
@@ -58,9 +56,7 @@ describe('runtimeSecrets', () => {
   });
 
   it('skips loading when env vars are already set', async () => {
-    process.env.GEMINI_API_KEY = 'already-set';
     process.env.ANTHROPIC_API_KEY = 'already-set';
-    process.env.DEEPGRAM_API_KEY = 'already-set';
     process.env.ELEVENLABS_API_KEY = 'already-set';
     process.env.DISCORD_TEST_BOT_TOKEN = 'already-set';
     process.env.GITHUB_TOKEN = 'already-set';
@@ -70,7 +66,7 @@ describe('runtimeSecrets', () => {
     const { loadRuntimeSecrets } = require('../../services/runtimeSecrets');
     await loadRuntimeSecrets();
     expect(mockFetch).not.toHaveBeenCalled();
-    expect(process.env.GEMINI_API_KEY).toBe('already-set');
+    expect(process.env.ANTHROPIC_API_KEY).toBe('already-set');
   });
 
   it('skips loading when no project ID is available', async () => {
@@ -92,7 +88,7 @@ describe('runtimeSecrets', () => {
 
     const { loadRuntimeSecrets } = require('../../services/runtimeSecrets');
     await loadRuntimeSecrets();
-    expect(process.env.GEMINI_API_KEY).toBe('test-api-key');
+    expect(process.env.ANTHROPIC_API_KEY).toBe('test-api-key');
     expect(mockFetch).toHaveBeenCalled();
   });
 
@@ -121,7 +117,7 @@ describe('runtimeSecrets', () => {
 
     const { loadRuntimeSecrets } = require('../../services/runtimeSecrets');
     await loadRuntimeSecrets();
-    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('Could not load GEMINI_API_KEY'));
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('Could not load ANTHROPIC_API_KEY'));
     warnSpy.mockRestore();
   });
 
@@ -167,7 +163,7 @@ describe('runtimeSecrets', () => {
   });
 
   it('uses override secret name from env', async () => {
-    process.env.GEMINI_API_KEY_SECRET_NAME = 'custom-secret-name';
+    process.env.ANTHROPIC_API_KEY_SECRET_NAME = 'custom-secret-name';
     const encodedValue = Buffer.from('custom-key').toString('base64');
     mockFetch.mockResolvedValue({
       ok: true,

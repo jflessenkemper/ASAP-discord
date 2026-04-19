@@ -1,9 +1,9 @@
 /**
  * Twilio telephony integration — lets users call Riley via a real phone number,
- * and lets Riley call out to a phone number. Uses the same Deepgram STT +
- * ElevenLabs TTS + Claude pipeline as the Discord voice system.
+ * and lets Riley call out to a phone number. Uses the same ElevenLabs STT/TTS
+ * + Claude pipeline as the Discord voice system.
  *
- * Inbound:  User dials Twilio number → WebSocket media stream → Deepgram → Claude → ElevenLabs → Twilio
+ * Inbound:  User dials Twilio number → WebSocket media stream → ElevenLabs realtime STT → Claude → ElevenLabs TTS → Twilio
  * Outbound: Riley triggers call → Twilio REST API dials user → same pipeline
  */
 
@@ -17,8 +17,8 @@ import pool from '../../db/pool';
 import { getAgent, AgentId } from '../agents';
 import { agentRespond, ConversationMessage, summarizeCall } from '../claude';
 import { getMemoryContext, appendToMemory, upsertMemory } from '../memory';
-import { startLiveTranscription, DeepgramLiveSession, isDeepgramAvailable } from '../voice/deepgram';
 import { elevenLabsTTS } from '../voice/elevenlabs';
+import { startElevenLabsRealtimeTranscription, isElevenLabsRealtimeAvailable } from '../voice/elevenlabsRealtime';
 import { errMsg } from '../../utils/errors';
 
 const TWILIO_ACCOUNT_SID = process.env.TWILIO_ACCOUNT_SID;
@@ -29,6 +29,12 @@ const SERVER_URL = process.env.SERVER_URL || process.env.FRONTEND_URL || '';
 let twilioClient: Twilio.Twilio | null = null;
 let callLogChannel: TextChannel | null = null;
 let groupchatChannel: TextChannel | null = null;
+const TELEPHONY_MAX_TOKENS = Math.max(120, parseInt(process.env.TELEPHONY_MAX_TOKENS || '220', 10));
+
+type RealtimeTranscriptionSession = {
+  send: (audio: Buffer) => void;
+  close: () => void;
+};
 
 function getTwilioClient(): Twilio.Twilio {
   if (!twilioClient) {
@@ -108,7 +114,7 @@ interface PhoneSession {
   startTime: Date;
   transcript: string[];
   conversationHistory: ConversationMessage[];
-  deepgramSession: DeepgramLiveSession | null;
+  realtimeSession: RealtimeTranscriptionSession | null;
   audioBuffer: Buffer[];
   processing: boolean;
   active: boolean;
@@ -200,7 +206,7 @@ export function attachTelephonyWebSocket(server: HttpServer): void {
                 startTime: new Date(),
                 transcript: [],
                 conversationHistory: [],
-                deepgramSession: null,
+                realtimeSession: null,
                 audioBuffer: [],
                 processing: false,
                 active: true,
@@ -229,9 +235,9 @@ export function attachTelephonyWebSocket(server: HttpServer): void {
             const audioChunk = Buffer.from(msg.media.payload, 'base64');
             const pcm = mulawToPCM(audioChunk);
 
-            if (session.deepgramSession) {
+            if (session.realtimeSession) {
               const upsampled = upsample8kTo48kStereo(pcm);
-              session.deepgramSession.send(upsampled);
+              session.realtimeSession.send(upsampled);
             }
             break;
           }
@@ -264,31 +270,36 @@ export function attachTelephonyWebSocket(server: HttpServer): void {
 
 
 async function startSessionSTT(session: PhoneSession): Promise<void> {
-  if (!isDeepgramAvailable()) {
-    console.warn('Deepgram not available for phone STT');
+  if (!isElevenLabsRealtimeAvailable()) {
+    console.warn('ElevenLabs realtime STT not available for phone STT');
     return;
   }
 
   let utteranceBuffer = '';
   let utteranceTimer: ReturnType<typeof setTimeout> | null = null;
 
-  session.deepgramSession = await startLiveTranscription(
-    (text: string, detectedLanguage?: string) => {
-      utteranceBuffer += (utteranceBuffer ? ' ' : '') + text;
+  const onTranscript = (text: string, detectedLanguage?: string) => {
+    utteranceBuffer += (utteranceBuffer ? ' ' : '') + text;
 
-      if (utteranceTimer) clearTimeout(utteranceTimer);
-      utteranceTimer = setTimeout(async () => {
-        if (!utteranceBuffer.trim() || !session.active) return;
-        const fullText = utteranceBuffer.trim();
-        utteranceBuffer = '';
+    if (utteranceTimer) clearTimeout(utteranceTimer);
+    utteranceTimer = setTimeout(async () => {
+      if (!utteranceBuffer.trim() || !session.active) return;
+      const fullText = utteranceBuffer.trim();
+      utteranceBuffer = '';
 
-        await handlePhoneInput(session, fullText, detectedLanguage);
-      }, 800); // 800ms after last fragment = full utterance
-    },
-    (err) => {
-      console.error('Phone Deepgram error:', err.message);
-    }
-  );
+      await handlePhoneInput(session, fullText, detectedLanguage);
+    }, 800);
+  };
+
+  if (isElevenLabsRealtimeAvailable()) {
+    session.realtimeSession = await startElevenLabsRealtimeTranscription(
+      onTranscript,
+      (err) => {
+        console.error('Phone ElevenLabs realtime error:', err.message);
+      }
+    );
+    return;
+  }
 }
 
 
@@ -338,7 +349,8 @@ Do NOT use markdown formatting — this is spoken audio.${langHint}`;
       context,
       undefined,
       {
-        maxTokens: 1024,
+        maxTokens: TELEPHONY_MAX_TOKENS,
+        priority: 'voice',
         threadKey: `phone:${session.callSid || session.callerNumber || 'unknown'}`,
       }
     );
@@ -448,7 +460,7 @@ export async function makeOutboundCall(toNumber: string, greeting?: string): Pro
     startTime: new Date(),
     transcript: [],
     conversationHistory: [],
-    deepgramSession: null,
+    realtimeSession: null,
     audioBuffer: [],
     processing: false,
     active: true,
@@ -505,7 +517,7 @@ async function endPhoneSession(session: PhoneSession): Promise<void> {
   if (!session.active) return;
   session.active = false;
 
-  session.deepgramSession?.close();
+  session.realtimeSession?.close();
 
   const duration = Math.round((Date.now() - session.startTime.getTime()) / 1000 / 60);
   session.transcript.push(`[${new Date().toLocaleTimeString()}] Call ended`);
@@ -583,7 +595,7 @@ function mulawToPCM(mulaw: Buffer): Buffer {
   return pcm;
 }
 
-/** Upsample 8kHz mono PCM s16le to 48kHz stereo PCM s16le (for Deepgram compatibility) */
+/** Upsample 8kHz mono PCM s16le to 48kHz stereo PCM s16le for ElevenLabs realtime STT. */
 function upsample8kTo48kStereo(pcm8k: Buffer): Buffer {
   const ratio = 6; // 48000/8000
   const samplesIn = pcm8k.length / 2;
@@ -693,7 +705,7 @@ export async function startConferenceCall(
     startTime: new Date(),
     transcript: [],
     conversationHistory: [],
-    deepgramSession: null,
+    realtimeSession: null,
     audioBuffer: [],
     processing: false,
     active: true,

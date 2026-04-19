@@ -10,7 +10,7 @@ This file is the single source of truth for how the ASAP Discord server should l
 |----------|---------|
 | **ASAP** | Main channels — groupchat, decisions, call-log, screenshots, url, voice |
 | **Agents** | One workspace channel per agent (13 channels) |
-| **Operations** | System-managed feeds — github, upgrades, tools, limits, cost, terminal, thread-status, voice-errors, agent-errors |
+| **Operations** | System-managed feeds — github, upgrades, limits, cost, terminal, thread-status, voice-errors, agent-errors |
 | **👤-jflessenkemper-personal** | Jordan's personal channels — career-ops, job-applications |
 
 The personal category name is dynamic: `👤-{DISCORD_OWNER_NAME}-personal` (env var, defaults to `jflessenkemper`).
@@ -46,7 +46,6 @@ All ops channels live under the **Operations** category and have a **channel con
 | `🧵-thread-status` | 🧵 Automated hourly summary of open workspace threads and close-ready items. | owner=system; cadence=hourly; stale=2h | Thread status snapshots post here. |
 | `📦-github` | 📦 Live GitHub activity feed — commits, PRs, issues, releases | owner=system; cadence=on-event; stale=24h | GitHub activity feed posts here as one-line updates. |
 | `🆙-upgrades` | 🆙 Agent-proposed upgrades: better ways of working, blockers to remove, and worthwhile capability enhancements | owner=system; cadence=daily-triage; stale=48h | Agents can post upgrade ideas, blockers to remove, and automation/tooling enhancements here for Jordan to approve. |
-| `🧰-tools` | 🧰 Agent capabilities and runtime tool access summary | owner=operations-manager; cadence=on-change; stale=7d | Auto-generated tools summary (refreshed on startup). |
 | `📊-limits` | 📊 Gemini/GCP usage, quotas, and estimated spend — refreshed every 5 minutes | owner=jude; cadence=5m; stale=20m | _(no welcome message)_ |
 | `💸-cost` | 💸 Per-action spend feed by agent (model, tokens, estimated USD) | owner=jude; cadence=on-request; stale=24h | One-line agent cost feed posts here. |
 | `💻-terminal` | 💻 Live feed of all tool calls made by agents — file ops, git, commands, searches | owner=riley; cadence=on-tool-call; stale=2h | One-line tool activity feed posts here. |

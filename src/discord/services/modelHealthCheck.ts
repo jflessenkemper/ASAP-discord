@@ -72,7 +72,6 @@ export async function runModelHealthChecks(): Promise<void> {
   const results: CheckResult[] = [];
 
   results.push(await checkAnthropic());
-  results.push(await checkDeepgram());
   results.push(await checkElevenLabs());
 
   const okCount = results.filter((r) => r.ok).length;
@@ -182,26 +181,6 @@ async function checkAnthropic(): Promise<CheckResult> {
     return { name: 'Anthropic', ok: true, detail: `models available: ${ANTHROPIC_HEALTHCHECK_MODELS.join(', ')}` };
   } catch (err) {
     return { name: 'Anthropic', ok: false, detail: errMsg(err) };
-  }
-}
-
-async function checkDeepgram(): Promise<CheckResult> {
-  const key = process.env.DEEPGRAM_API_KEY;
-  if (!key) return { name: 'Deepgram', ok: false, detail: 'DEEPGRAM_API_KEY missing' };
-
-  try {
-    const res = await fetchWithTimeout('https://api.deepgram.com/v1/projects', {
-      method: 'GET',
-      headers: { Authorization: `Token ${key}` },
-    }, 12000);
-
-    if (!res.ok) {
-      const body = await safeText(res);
-      return { name: 'Deepgram', ok: false, detail: `HTTP ${res.status} ${body.slice(0, 120)}` };
-    }
-    return { name: 'Deepgram', ok: true, detail: 'API reachable' };
-  } catch (err) {
-    return { name: 'Deepgram', ok: false, detail: errMsg(err) };
   }
 }
 

@@ -80,7 +80,6 @@ type ToolNotificationBatch = {
 const TOOL_NOTIFICATION_FLUSH_MS = parseInt(process.env.TOOL_NOTIFICATION_FLUSH_MS || '2500', 10);
 const TOOL_NOTIFICATION_MAX_ITEMS = parseInt(process.env.TOOL_NOTIFICATION_MAX_ITEMS || '6', 10);
 const TOOL_NOTIFICATION_CHANNEL_COOLDOWN_MS = parseInt(process.env.TOOL_NOTIFICATION_CHANNEL_COOLDOWN_MS || '5000', 10);
-const TOOL_NOTIFICATIONS_TOOLS_ONLY = String(process.env.TOOL_NOTIFICATIONS_TOOLS_ONLY || 'true').toLowerCase() !== 'false';
 const toolNotificationBatches = new Map<string, ToolNotificationBatch>();
 const toolNotificationLastPostedAt = new Map<string, number>();
 const rileyStallNoticeAt = new Map<string, number>();
@@ -122,13 +121,7 @@ async function flushToolNotificationBatch(key: string): Promise<void> {
   }
 
   const deduped = [...new Set(items)].slice(0, TOOL_NOTIFICATION_MAX_ITEMS);
-  const channels = getBotChannels();
-  const targetChannel = (TOOL_NOTIFICATIONS_TOOLS_ONLY && channels?.tools)
-    ? channels.tools
-    : batch.channel;
-  const contextPrefix = targetChannel.id !== batch.channel.id
-    ? `[#${(batch.channel as any)?.name || 'channel'}] `
-    : '';
+  const targetChannel = batch.channel;
 
   const channelCooldown = Math.max(0, TOOL_NOTIFICATION_CHANNEL_COOLDOWN_MS);
   const lastPostedAt = toolNotificationLastPostedAt.get(targetChannel.id) || 0;
@@ -141,9 +134,7 @@ async function flushToolNotificationBatch(key: string): Promise<void> {
     return;
   }
 
-  const content = deduped.length === 1
-    ? `🔧 ${contextPrefix}${deduped[0]}`
-    : `🔧 ${contextPrefix}${deduped.length} tool actions:\n- ${deduped.join('\n- ')}`;
+  const content = `🔧 ${deduped.join(' | ')}`;
 
   try {
     await sendWebhookMessage(targetChannel, {

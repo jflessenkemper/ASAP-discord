@@ -10,7 +10,6 @@ import { recordVoiceCallStart, recordVoiceCallEnd } from '../metrics';
 import { postDiagnostic, mirrorAgentResponse, mirrorVoiceTranscript } from '../services/diagnosticsWebhook';
 import { getWebhook } from '../services/webhooks';
 import { listenToAllMembersSmart, VoiceTranscription } from '../voice/connection';
-import { isDeepgramAvailable } from '../voice/deepgram';
 import { isElevenLabsAvailable, primeElevenLabsVoiceCache } from '../voice/elevenlabs';
 import { getElevenLabsConvaiReply, isElevenLabsConvaiEnabled } from '../voice/elevenlabsConvai';
 import { isElevenLabsRealtimeAvailable } from '../voice/elevenlabsRealtime';
@@ -149,9 +148,8 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): 
 
 function isVoiceInputAvailable(): { ok: boolean; reason?: string } {
   if (isElevenLabsRealtimeAvailable()) return { ok: true };
-  if (isDeepgramAvailable()) return { ok: true };
   if (!isElevenLabsAvailable()) {
-    return { ok: false, reason: 'Neither realtime STT nor ElevenLabs batch STT is configured.' };
+    return { ok: false, reason: 'Neither ElevenLabs realtime STT nor ElevenLabs batch STT is configured.' };
   }
   return { ok: true };
 }
@@ -807,9 +805,7 @@ export async function startCall(
 
   const sttNote = (String(process.env.VOICE_REALTIME_MODE || 'true').toLowerCase() !== 'false' && isElevenLabsRealtimeAvailable())
     ? '\n🎙️ ElevenLabs realtime STT is active.'
-    : isDeepgramAvailable()
-      ? '\n⚠️ ElevenLabs realtime STT unavailable — using Deepgram realtime fallback.'
-      : '\n⚠️ Realtime STT unavailable — using ElevenLabs batch mode (~1-2s latency).';
+    : '\n⚠️ ElevenLabs realtime STT unavailable — using ElevenLabs batch mode (~1-2s latency).';
   await sendLifecycleNoticeOnce(
     groupchat,
     `started:${voiceChannel.id}`,

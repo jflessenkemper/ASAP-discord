@@ -84,10 +84,11 @@ function scheduleBrowserPoolClose(): void {
   if (browserPoolTimer) clearTimeout(browserPoolTimer);
   browserPoolTimer = setTimeout(() => {
     if (!browserPool) return;
-    browserPool.close().catch(() => {});
+    void Promise.resolve(browserPool.close()).catch(() => {});
     browserPool = null;
     browserPoolTimer = null;
   }, BROWSER_POOL_IDLE_MS);
+  browserPoolTimer.unref?.();
 }
 
 /**

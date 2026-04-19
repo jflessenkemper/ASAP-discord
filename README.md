@@ -160,6 +160,8 @@ This diagram shows the target architecture. Riley's Sonnet agent manager sends w
 
 The full architecture diagram is in [.github/ARCHITECTURE.md](.github/ARCHITECTURE.md).
 
+An animated walkthrough is in [assets/architecture-runtime-animated.html](assets/architecture-runtime-animated.html).
+
 ## Main Features
 
 - Text-first control in Discord group chat.
@@ -239,8 +241,8 @@ The code is ready. The last things to check are environment and infrastructure.
 1. Make sure the database is reachable from the machine running the bot.
 2. Run the migrations before first use.
 3. Set the required Discord bot token and guild ID.
-4. Set a Gemini key for language and transcription.
-5. Add ElevenLabs if you want the best voice experience.
+4. Set a Gemini key for non-voice model features that still use Gemini.
+5. Add ElevenLabs for voice transcription and speech.
 6. Start the bot and run a smoke test.
 
 ### Current Status Of This Repo
@@ -265,7 +267,7 @@ That means the remaining blocker is environment access, not application code.
 - Discord.js
 - PostgreSQL
 - Google Cloud Run
-- Anthropic + Gemini + ElevenLabs + Deepgram
+- Anthropic + Gemini + ElevenLabs
 
 ## If You Want The Technical View
 

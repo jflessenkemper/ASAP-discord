@@ -134,7 +134,7 @@ export function recordTtsLatency(service: 'elevenlabs' | 'gemini', latencyMs: nu
   observeHistogram(ttsLatencyMs, latencyMs, { service });
 }
 
-export function recordTranscriptionLatency(service: 'deepgram' | 'gemini' | 'elevenlabs', latencyMs: number): void {
+export function recordTranscriptionLatency(service: 'elevenlabs', latencyMs: number): void {
   observeHistogram(transcriptionMs, latencyMs, { service });
 }
 

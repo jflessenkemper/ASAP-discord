@@ -1241,7 +1241,7 @@ function truncateToolResult(result: string, maxChars = DEFAULT_TOOL_RESULT_TRUNC
 
 const OPS_CHANNELS_CONTEXT = `
 Operations channels (available to all agents):
-#📦-github — commits/PRs feed, #🆙-upgrades — improvement proposals, #🧰-tools — agent capabilities,
+#📦-github — commits/PRs feed, #🆙-upgrades — improvement proposals,
 #📊-limits — usage/quotas, #💸-cost — spend tracking, #📸-screenshots — visual regression,
 #💻-terminal — command output, #🚨-agent-errors — error logs, #🧯-voice-errors — voice diagnostics.
 Post findings to the relevant ops channel when appropriate.`.trim();

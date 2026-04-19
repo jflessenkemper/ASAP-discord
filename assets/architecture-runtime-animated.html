@@ -1,0 +1,971 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ASAP Runtime Architecture Animation</title>
+  <style>
+    :root {
+      --packet: #fff4c2;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html,
+    body {
+      margin: 0;
+      min-height: 100%;
+      background:
+        radial-gradient(circle at top left, rgba(78, 165, 107, 0.16), transparent 26%),
+        radial-gradient(circle at top right, rgba(79, 143, 203, 0.14), transparent 22%),
+        linear-gradient(180deg, #111712 0%, #0b0f0c 100%);
+      overflow: auto;
+      font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
+    }
+
+    .diagram-shell {
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      padding: 16px;
+      gap: 12px;
+    }
+
+    .inspector {
+      position: sticky;
+      top: 12px;
+      z-index: 5;
+      width: min(1600px, calc(100vw - 24px));
+      margin: 0 auto;
+      padding: 14px 16px;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 16px;
+      background: rgba(11, 15, 12, 0.86);
+      backdrop-filter: blur(16px);
+      box-shadow: 0 18px 50px rgba(0, 0, 0, 0.28);
+    }
+
+    .inspector-topline {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: center;
+      margin-bottom: 8px;
+    }
+
+    .inspector-step {
+      display: inline-block;
+      margin-bottom: 8px;
+      padding: 4px 10px;
+      border-radius: 999px;
+      background: rgba(78, 165, 107, 0.18);
+      color: #d9f6e1;
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+
+    .inspector-title {
+      color: #f4f7f4;
+      font-size: 20px;
+      font-weight: 700;
+      line-height: 1.15;
+    }
+
+    .inspector-copy {
+      margin-top: 4px;
+      color: rgba(237, 243, 238, 0.76);
+      font-size: 14px;
+      line-height: 1.45;
+    }
+
+    .inspector-meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 12px;
+    }
+
+    .panel {
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 14px;
+      background: rgba(255, 255, 255, 0.035);
+      padding: 10px 12px;
+      margin-top: 12px;
+    }
+
+    .panel-title {
+      margin-bottom: 0;
+      color: #d7e4d9;
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+    }
+
+    .panel-body {
+      margin-top: 10px;
+    }
+
+    .prompt-text {
+      margin: 0;
+      color: rgba(237, 243, 238, 0.8);
+      font-size: 12px;
+      line-height: 1.4;
+      white-space: pre-wrap;
+    }
+
+    .prompt-note {
+      margin-top: 8px;
+      color: rgba(237, 243, 238, 0.62);
+      font-size: 12px;
+      line-height: 1.35;
+    }
+
+    .control-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+      justify-content: flex-end;
+      padding: 4px;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.035);
+    }
+
+    .zoom-row {
+      display: inline-flex;
+      gap: 6px;
+      align-items: center;
+      margin-left: 6px;
+      padding-left: 10px;
+      border-left: 1px solid rgba(255, 255, 255, 0.08);
+    }
+
+    .zoom-readout {
+      min-width: 48px;
+      color: rgba(244, 247, 244, 0.72);
+      font-size: 12px;
+      text-align: center;
+    }
+
+    .control-btn {
+      appearance: none;
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.05);
+      color: #f4f7f4;
+      padding: 8px 12px;
+      font: inherit;
+      font-size: 13px;
+      cursor: pointer;
+      transition: background 140ms ease, border-color 140ms ease, transform 140ms ease;
+    }
+
+    .control-btn:hover {
+      background: rgba(255, 255, 255, 0.09);
+      border-color: rgba(255, 255, 255, 0.18);
+    }
+
+    .control-btn:active {
+      transform: translateY(1px);
+    }
+
+    .control-btn.primary {
+      background: rgba(78, 165, 107, 0.16);
+      border-color: rgba(78, 165, 107, 0.36);
+      color: #dff8e6;
+    }
+
+    .inspector-chip {
+      padding: 6px 10px;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.04);
+      color: #e1e8e2;
+      font-size: 12px;
+      white-space: nowrap;
+    }
+
+    .diagram-stage {
+      position: relative;
+      width: min(1600px, calc(100vw - 24px));
+      height: calc(100vh - 150px);
+      min-height: 700px;
+      margin: 0 auto;
+      overflow: hidden;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 18px;
+      background: rgba(8, 12, 9, 0.54);
+      box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.02);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 16px;
+      cursor: grab;
+      touch-action: none;
+      user-select: none;
+    }
+
+    .diagram-stage.is-dragging {
+      cursor: grabbing;
+    }
+
+    #diagram {
+      position: relative;
+      width: 100%;
+      height: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+    }
+
+    .diagram-fit {
+      position: relative;
+      transform-origin: center center;
+      will-change: transform;
+    }
+
+    #diagram svg {
+      display: block;
+      width: auto;
+      height: auto;
+      max-width: none;
+      max-height: none;
+      overflow: visible;
+    }
+
+    .mermaid-active > rect,
+    .mermaid-active > path,
+    .mermaid-active > polygon,
+    .mermaid-active .basic.label-container > rect,
+    .mermaid-active .label-container > rect,
+    .mermaid-active .cluster rect {
+      filter: drop-shadow(0 0 22px rgba(255, 255, 255, 0.18));
+      stroke: #ffffff !important;
+      stroke-width: 3px !important;
+    }
+
+    g.node,
+    g.cluster,
+    g.edgePath,
+    g.edgeLabel {
+      transition: opacity 220ms ease, transform 220ms ease, filter 220ms ease;
+    }
+
+    .mermaid-dim {
+      opacity: 0.16;
+      filter: saturate(0.55);
+    }
+
+    .mermaid-active {
+      opacity: 1;
+    }
+
+    .mermaid-pulse > rect,
+    .mermaid-pulse > path,
+    .mermaid-pulse > polygon,
+    .mermaid-pulse .basic.label-container > rect,
+    .mermaid-pulse .label-container > rect,
+    .mermaid-pulse .cluster rect {
+      animation: debuggerPulse 1.3s ease-in-out infinite;
+    }
+
+    @keyframes debuggerPulse {
+      0%, 100% {
+        filter: drop-shadow(0 0 12px rgba(255, 255, 255, 0.16));
+      }
+      50% {
+        filter: drop-shadow(0 0 24px rgba(255, 255, 255, 0.28));
+      }
+    }
+
+    @media (max-width: 900px) {
+      .diagram-shell {
+        padding: 10px;
+      }
+
+      .inspector {
+        width: calc(100vw - 20px);
+        top: 8px;
+      }
+
+      .inspector-topline {
+        grid-template-columns: 1fr;
+        display: grid;
+      }
+
+      .control-row {
+        justify-content: flex-start;
+        width: max-content;
+      }
+
+      .zoom-row {
+        border-left: 0;
+        padding-left: 0;
+        margin-left: 0;
+      }
+
+      .diagram-stage {
+        width: calc(100vw - 20px);
+        height: calc(100vh - 240px);
+        min-height: 420px;
+      }
+
+      .inspector-title {
+        font-size: 18px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="diagram-shell">
+    <div class="inspector">
+      <div class="inspector-topline">
+        <div class="inspector-step" id="step-label">Step 1</div>
+        <div class="control-row">
+          <button class="control-btn" id="restart-btn" type="button">Restart</button>
+          <button class="control-btn" id="prev-btn" type="button">Previous</button>
+          <button class="control-btn primary" id="play-pause-btn" type="button">Play</button>
+          <button class="control-btn" id="next-btn" type="button">Next</button>
+          <div class="zoom-row">
+            <button class="control-btn" id="zoom-out-btn" type="button">-</button>
+            <div class="zoom-readout" id="zoom-readout">100%</div>
+            <button class="control-btn" id="zoom-in-btn" type="button">+</button>
+            <button class="control-btn" id="zoom-reset-btn" type="button">Fit</button>
+          </div>
+        </div>
+      </div>
+      <div class="inspector-title" id="step-title">Waiting for runtime trace</div>
+      <div class="inspector-copy" id="step-copy">The diagram now runs as a debugger-style walkthrough. Token badges only appear over the box that is active in the current step.</div>
+      <div class="inspector-meta" id="step-meta"></div>
+      <div class="panel">
+        <div class="panel-title">What I Asked Riley</div>
+        <div class="panel-body">
+          <p class="prompt-text" id="prompt-text"></p>
+          <div class="prompt-note" id="prompt-note"></div>
+        </div>
+      </div>
+    </div>
+    <div class="diagram-stage" id="diagram-stage">
+      <div id="diagram"></div>
+    </div>
+  </div>
+
+  <script type="module">
+    import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+
+    const liveRun = {
+      prompt: 'Ask Riley to get rid of the tools channel, and force all agents including herself to put tool use in their own channels. Also tool use messages should be one line, so determine what the max char limit is per line and force all agents to use that when posting tool uses.',
+      note: ''
+    };
+
+    const diagramSource = String.raw`
+ flowchart TB
+  User["User"]
+  Opus["Riley (Opus)<br/>do work"]
+  Groupchat["Groupchat<br/>reply user"]
+  QAAgent["QA"]
+  UXAgent["UX"]
+    SecurityAgent["Security"]
+    APIAgent["API"]
+    DBAAgent["DBA"]
+    PerformanceAgent["Performance"]
+    DevOpsAgent["DevOps"]
+    CopywriterAgent["Copywriter"]
+    LawyerAgent["Lawyer"]
+    IOSAgent["iOS"]
+    AndroidAgent["Android"]
+
+    subgraph FrontDoor["Front Door"]
+      direction LR
+      Riley["Riley (Sonnet)<br/>plan route"]
+        Voice["ElevenLabs<br/>voice relay"]
+    end
+
+    subgraph AgentManager["Riley (Sonnet)<br/>agent manager"]
+        direction LR
+      AgentManagerCore["Agent manager<br/>delegate"]
+      SelfImproveEngine["Self-improve"]
+      StewardQueue["Steward outbox"]
+        AgentManagerCore --> SelfImproveEngine
+        SelfImproveEngine --> StewardQueue
+    end
+
+    subgraph AgentChannels["Agent channels"]
+        direction LR
+        QAChan["QA thread"]
+        UXChan["UX thread"]
+        SecurityChan["Security thread"]
+        APIChan["API thread"]
+        DBAChan["DBA thread"]
+        PerformanceChan["Perf thread"]
+        DevOpsChan["DevOps thread"]
+        CopywriterChan["Copy thread"]
+        LawyerChan["Lawyer thread"]
+        IOSChan["iOS thread"]
+        AndroidChan["Android thread"]
+    end
+
+    subgraph LoopBox["Independent loops"]
+      direction LR
+        TestEngine["Tests"]
+        LoggingEngine["Logs"]
+        MemoryLoop["Memory"]
+        DatabaseAudit["DB audit"]
+        ChannelHeartbeat["Heartbeat"]
+        UpgradesTriage["Upgrades"]
+        VoiceSession["Voice"]
+        GoalWatchdog["Watchdog"]
+    end
+
+    subgraph OpsChannels["Ops channels"]
+      direction LR
+        OpsHub(( ))
+        TerminalCh["Terminal"]
+        ErrorsCh["Errors"]
+        LimitsCh["Limits"]
+        HealthCh["Health"]
+        VoiceCh["Voice ops"]
+        LoopsCh["Loops"]
+    end
+
+    User -->|text| Riley
+    User -->|voice| Voice
+    Voice --> Riley
+    Riley -->|execute| Opus
+    Opus <--> AgentManagerCore
+    AgentManagerCore <--> QAAgent
+    AgentManagerCore <--> UXAgent
+    AgentManagerCore <--> SecurityAgent
+    AgentManagerCore <--> APIAgent
+    AgentManagerCore <--> DBAAgent
+    AgentManagerCore <--> PerformanceAgent
+    AgentManagerCore <--> DevOpsAgent
+    AgentManagerCore <--> CopywriterAgent
+    AgentManagerCore <--> LawyerAgent
+    AgentManagerCore <--> IOSAgent
+    AgentManagerCore <--> AndroidAgent
+    QAAgent --> QAChan
+    UXAgent --> UXChan
+    SecurityAgent --> SecurityChan
+    APIAgent --> APIChan
+    DBAAgent --> DBAChan
+    PerformanceAgent --> PerformanceChan
+    DevOpsAgent --> DevOpsChan
+    CopywriterAgent --> CopywriterChan
+    LawyerAgent --> LawyerChan
+    IOSAgent --> IOSChan
+    AndroidAgent --> AndroidChan
+    Opus -->|execution outcome| AgentManagerCore
+    TestEngine --> SelfImproveEngine
+    LoggingEngine --> SelfImproveEngine
+    MemoryLoop --> SelfImproveEngine
+    DatabaseAudit --> SelfImproveEngine
+    ChannelHeartbeat --> SelfImproveEngine
+    UpgradesTriage --> SelfImproveEngine
+    VoiceSession --> SelfImproveEngine
+    GoalWatchdog --> SelfImproveEngine
+    StewardQueue -->|background stewardship| OpsHub
+    SelfImproveEngine -->|ops updates| OpsHub
+    Opus -->|done| Riley
+    Riley -->|if in voice| Voice
+    Voice -->|spoken update| User
+    Riley -->|otherwise| Groupchat
+    Groupchat -->|tag user| User
+
+    classDef user fill:#4f8fcb,stroke:#2f6ea3,color:#ffffff,stroke-width:2px;
+    classDef riley fill:#4ea56b,stroke:#2f7a49,color:#ffffff,stroke-width:2px;
+    classDef opus fill:#d9822b,stroke:#9a5416,color:#ffffff,stroke-width:2px;
+    classDef surface fill:#7b8794,stroke:#56616d,color:#ffffff,stroke-width:2px;
+    classDef voice fill:#7b4fd6,stroke:#5934a5,color:#ffffff,stroke-width:2px;
+    classDef hidden fill:transparent,stroke:transparent,color:transparent;
+
+    class User user;
+    class Riley riley;
+    class Groupchat,SelfImproveEngine,QAAgent,UXAgent,SecurityAgent,APIAgent,DBAAgent,PerformanceAgent,DevOpsAgent,CopywriterAgent,LawyerAgent,IOSAgent,AndroidAgent,QAChan,UXChan,SecurityChan,APIChan,DBAChan,PerformanceChan,DevOpsChan,CopywriterChan,LawyerChan,IOSChan,AndroidChan,TestEngine,LoggingEngine,MemoryLoop,DatabaseAudit,ChannelHeartbeat,UpgradesTriage,VoiceSession,GoalWatchdog,TerminalCh,ErrorsCh,LimitsCh,HealthCh,VoiceCh,LoopsCh surface;
+    class Voice voice;
+    class Opus opus;
+    class AgentManagerCore riley;
+    class OpsHub hidden;
+`;
+
+    const animationPhases = [
+      {
+        label: 'Step 1 of 10',
+        title: 'Request enters the runtime',
+        copy: 'The debugger starts at the incoming user request. No model tokens are spent here yet; this is the handoff into Riley.',
+        simpleCopy: 'A person asks Riley to do something. This is the starting point before any reasoning or tool use begins.',
+        chips: ['Latest probe start 10:53:14Z', 'Entry: groupchat or ElevenLabs voice', 'Trace window opened'],
+        simpleChips: ['User asks for help', 'Starting point', 'No AI work yet'],
+        active: 'User',
+        packet: ['User', 'plan route'],
+        badge: {
+          target: 'User',
+          title: 'Input event',
+          note: 'No model call yet. The runtime is just receiving the request.'
+        },
+        simpleBadge: {
+          target: 'User',
+          title: 'Start',
+          note: 'Riley has just received the request.'
+        }
+      },
+      {
+        label: 'Step 2 of 10',
+        title: 'Riley (Sonnet) plans the route',
+        copy: 'Riley decides whether the task needs Opus, specialist agents, voice handling, or a direct answer. In the latest live probe, this planning stage did persist invoke events, but not a clean response span yet.',
+        simpleCopy: 'Riley quickly decides the best path: answer directly, use a stronger worker, or bring in specialist help.',
+        chips: ['2 invokes seen in ARCHSIM_2', 'Planning logs only', 'Debugger focus: front door'],
+        simpleChips: ['Riley plans the job', 'Chooses the route', 'Sets the next step'],
+        active: 'plan route',
+        packet: ['User', 'plan route'],
+        badge: {
+          target: 'plan route',
+          title: 'Planning step',
+          note: 'Token trace not persisted for this planner step in ARCHSIM.'
+        },
+        simpleBadge: {
+          target: 'plan route',
+          title: 'Planner',
+          note: 'Riley is deciding how to tackle the request.'
+        }
+      },
+      {
+        label: 'Step 3 of 10',
+        title: 'Opus runs the main execution pass',
+        copy: 'This is the expensive implementation pass. The latest live probe has already recorded its first visible cost event here, even though the response span has not landed yet.',
+        simpleCopy: 'For heavier work, Riley hands the task to Opus, which does the deeper reasoning and execution.',
+        chips: ['Latest visible cost: $0.2552', 'Tokens: 16.1k in / 190 out', 'Model: claude-opus-4-6'],
+        simpleChips: ['Heavy thinking step', 'Main worker is active', 'Deep execution'],
+        active: 'do work',
+        packet: ['plan route', 'do work'],
+        badge: {
+          target: 'do work',
+          title: 'Model usage',
+          in: '16.1k',
+          out: '190',
+          note: 'Latest ARCHSIM_2 cost event. Full response timing has not persisted yet.'
+        },
+        simpleBadge: {
+          target: 'do work',
+          title: 'Main worker',
+          note: 'This is the strong worker Riley uses for the hardest part of the job.'
+        }
+      },
+      {
+        label: 'Step 4 of 10',
+        title: 'The agent manager fans out tool work',
+        copy: 'The manager coordinates evidence collection, tool calls, and specialist routing. In the latest live probe, this is where most of the time is being spent.',
+        simpleCopy: 'Riley can split work across tools and helper roles instead of trying to do everything in one place.',
+        chips: ['19 tool calls so far', '46.8s cumulative tool time', 'Latest issue: allowlist block then retry'],
+        simpleChips: ['Uses tools', 'Collects evidence', 'Calls helpers'],
+        active: 'Agent manager delegate',
+        packet: ['do work', 'Agent manager delegate'],
+        badge: {
+          target: 'Agent manager delegate',
+          title: 'Tool loop',
+          in: '0',
+          out: '0',
+          duration: '46.8s',
+          note: 'ARCHSIM_2 is currently tool-heavy here, including an allowlist block on run_command.'
+        },
+        simpleBadge: {
+          target: 'Agent manager delegate',
+          title: 'Coordinator',
+          note: 'This part spreads the job across tools and specialist helpers.'
+        }
+      },
+      {
+        label: 'Step 5 of 10',
+        title: 'UX Reviewer runs a traced specialist pass',
+        copy: 'This step is based on the last fully completed audit, not the new live probe. The current ARCHSIM_2 run has not yet reached a persisted specialist response.',
+        simpleCopy: 'If needed, Riley can ask a specialist to review one aspect of the work, like user experience.',
+        chips: ['Baseline: ARCHSIM_1', 'Duration: 6.9s', 'Cost: $0.0815'],
+        simpleChips: ['Specialist help', 'Focused review', 'UX example'],
+        active: 'UX',
+        packet: ['Agent manager delegate', 'UX', 'UX thread'],
+        badge: {
+          target: 'UX',
+          title: 'Specialist usage',
+          in: '4.5k',
+          out: '183',
+          duration: '6.9s',
+          note: 'Specialist review with persisted trace tokens and timing.'
+        },
+        simpleBadge: {
+          target: 'UX',
+          title: 'Specialist review',
+          note: 'Riley can bring in focused expert help when the task benefits from it.'
+        }
+      },
+      {
+        label: 'Step 6 of 10',
+        title: 'QA responds, but without token trace coverage',
+        copy: 'QA did participate in the last completed end-to-end audit, but without a persisted token span. The current ARCHSIM_2 run has not yet reached QA delegation.',
+        simpleCopy: 'Another example is QA, where Riley asks for testing and validation support.',
+        chips: ['Baseline: ARCHSIM_1', 'Reply seen at +129.6s', 'Trace gap: QA'],
+        simpleChips: ['Testing support', 'Checks the work', 'Validation step'],
+        active: 'QA',
+        packet: ['Agent manager delegate', 'QA', 'QA thread'],
+        badge: {
+          target: 'QA',
+          title: 'Event only',
+          duration: '+129.6s',
+          note: 'No persisted in/out token span for this QA step.'
+        },
+        simpleBadge: {
+          target: 'QA',
+          title: 'QA check',
+          note: 'Riley can ask for testing help before finishing the task.'
+        }
+      },
+      {
+        label: 'Step 7 of 10',
+        title: 'Self-improvement work is queued off the user path',
+        copy: 'Once the live answer is nearly complete, Riley derives background stewardship work and queues it so the user path stays responsive. This is still represented by the last completed audit.',
+        simpleCopy: 'After the main answer is nearly ready, Riley can spin off follow-up improvement work in the background.',
+        chips: ['Baseline: ARCHSIM_1', 'Queued at +132.5s', 'Background-only'],
+        simpleChips: ['Background follow-up', 'Does not block the reply', 'Improvement work'],
+        active: 'Self-improve',
+        packet: ['Agent manager delegate', 'Self-improve'],
+        badge: {
+          target: 'Self-improve',
+          title: 'Background derivation',
+          duration: '+132.5s',
+          note: 'This creates stewardship packets instead of spending visible reply tokens.'
+        },
+        simpleBadge: {
+          target: 'Self-improve',
+          title: 'Background learning',
+          note: 'Riley saves improvement work for later so the user does not wait.'
+        }
+      },
+      {
+        label: 'Step 8 of 10',
+        title: 'The durable outbox takes over',
+        copy: 'Stewardship is persisted and can survive restarts. This handoff is shown from the completed baseline audit until the fresh live probe reaches the same phase.',
+        simpleCopy: 'That background work is stored safely so it can keep going even if the app restarts.',
+        chips: ['Baseline: ARCHSIM_1', 'Started at +137.3s', 'Retry-safe'],
+        simpleChips: ['Stored safely', 'Can retry later', 'Survives restarts'],
+        active: 'Steward outbox',
+        packet: ['Self-improve', 'Steward outbox', 'Ops channels'],
+        badge: {
+          target: 'Steward outbox',
+          title: 'Persisted job',
+          duration: '+137.3s',
+          note: 'Durable queue event. No direct model token span on this handoff.'
+        },
+        simpleBadge: {
+          target: 'Steward outbox',
+          title: 'Saved for later',
+          note: 'Follow-up work is stored safely instead of being lost.'
+        }
+      },
+      {
+        label: 'Step 9 of 10',
+        title: 'Riley synthesizes the visible answer',
+        copy: 'The user-facing thread is updated after the specialist and tool passes finish. The fresh ARCHSIM_2 probe has not produced this final visible answer yet, so the timings shown here still come from the completed baseline audit.',
+        simpleCopy: 'Riley gathers everything back together and turns it into the final answer the user sees.',
+        chips: ['Fresh probe: pending', 'Baseline complete at +140.3s', 'Thread tagging'],
+        simpleChips: ['Final answer', 'Comes back to the user', 'Visible result'],
+        active: 'reply user',
+        packet: ['do work', 'plan route', 'reply user', 'User'],
+        badge: {
+          target: 'reply user',
+          title: 'Visible output',
+          duration: '+140.3s',
+          note: 'Thread delivery is visible here; token usage belongs to the model steps that produced it.'
+        },
+        simpleBadge: {
+          target: 'reply user',
+          title: 'Answer back to user',
+          note: 'This is the visible response Riley sends back.'
+        }
+      },
+      {
+        label: 'Step 10 of 10',
+        title: 'Loops and ops channels publish the aftermath',
+        copy: 'After the user gets the answer, the runtime posts operational follow-up for stewardship, loop health, and background improvements. The latest probe has not reached this phase yet.',
+        simpleCopy: 'After the answer is sent, Riley can still post maintenance and follow-up updates behind the scenes.',
+        chips: ['Fresh probe: not reached', 'Baseline ops post +161.7s', 'Post-answer maintenance'],
+        simpleChips: ['Behind-the-scenes follow-up', 'Maintenance updates', 'Does not block the user'],
+        active: 'Loops',
+        packet: ['Steward outbox', 'Ops channels', 'Loops'],
+        badge: {
+          target: 'Loops',
+          title: 'Ops follow-up',
+          duration: '+161.7s',
+          note: 'Post-response reporting closes the traced walkthrough.'
+        },
+        simpleBadge: {
+          target: 'Loops',
+          title: 'Aftercare',
+          note: 'Maintenance and improvement updates happen after the main reply is done.'
+        }
+      }
+    ];
+
+    let currentPhase = 0;
+    let autoplayTimer = null;
+    let svg = null;
+    let isAutoplay = false;
+    let baseScale = 1;
+    let userScale = 1;
+    let panX = 0;
+    let panY = 0;
+    let dragState = null;
+
+    mermaid.initialize({
+      startOnLoad: false,
+      theme: 'dark',
+      securityLevel: 'loose',
+      fontFamily: 'IBM Plex Sans, Segoe UI, sans-serif',
+      flowchart: {
+        curve: 'basis',
+        useMaxWidth: true,
+        htmlLabels: true
+      },
+      themeVariables: {
+        background: '#131915',
+        primaryTextColor: '#edf3ee',
+        primaryBorderColor: '#2f6ea3',
+        lineColor: '#98a6a0',
+        tertiaryTextColor: '#edf3ee',
+        clusterBkg: '#171d19',
+        clusterBorder: '#4d5a54',
+        fontSize: '13px'
+      }
+    });
+
+    function normalizeText(value) {
+      return String(value || '').replace(/\s+/g, ' ').replace(/<br\s*\/?>/gi, ' ').trim().toLowerCase();
+    }
+
+    function groupText(group) {
+      return normalizeText(group.textContent || '');
+    }
+
+    function findTargetsByLabel(label) {
+      const query = normalizeText(label);
+      return [...svg.querySelectorAll('g.node, g.cluster')].filter((group) => groupText(group).includes(query));
+    }
+
+    function clearVisualState() {
+      svg.querySelectorAll('.mermaid-active').forEach((group) => group.classList.remove('mermaid-active'));
+      svg.querySelectorAll('.mermaid-pulse').forEach((group) => group.classList.remove('mermaid-pulse'));
+      svg.querySelectorAll('.mermaid-dim').forEach((group) => group.classList.remove('mermaid-dim'));
+    }
+
+    function updateInspector(phase) {
+      document.getElementById('step-label').textContent = phase.label;
+      document.getElementById('step-title').textContent = phase.title;
+      document.getElementById('step-copy').textContent = phase.simpleCopy || phase.copy;
+      const meta = document.getElementById('step-meta');
+      const chips = phase.simpleChips || phase.chips || [];
+      meta.innerHTML = chips.map((chip) => `<div class="inspector-chip">${chip}</div>`).join('');
+    }
+
+    function updateRunHeader() {
+      document.getElementById('prompt-text').textContent = liveRun.prompt;
+      document.getElementById('prompt-note').textContent = '';
+      document.querySelector('.panel-title').textContent = 'What I Asked Riley';
+    }
+
+    function fitDiagramToStage() {
+      const stage = document.getElementById('diagram-stage');
+      const frame = document.getElementById('diagram-fit');
+      if (!stage || !frame || !svg) {
+        return;
+      }
+      const viewBox = svg.viewBox && svg.viewBox.baseVal ? svg.viewBox.baseVal : null;
+      const naturalWidth = viewBox && viewBox.width ? viewBox.width : svg.getBBox().width;
+      const naturalHeight = viewBox && viewBox.height ? viewBox.height : svg.getBBox().height;
+      frame.style.width = `${naturalWidth}px`;
+      frame.style.height = `${naturalHeight}px`;
+      baseScale = Math.min(
+        (stage.clientWidth - 32) / naturalWidth,
+        (stage.clientHeight - 32) / naturalHeight,
+      );
+      applyViewTransform();
+    }
+
+    function clamp(value, min, max) {
+      return Math.min(max, Math.max(min, value));
+    }
+
+    function applyViewTransform() {
+      const frame = document.getElementById('diagram-fit');
+      if (!frame) {
+        return;
+      }
+      const scale = Math.min(baseScale * userScale, 8);
+      frame.style.transform = `translate(${panX}px, ${panY}px) scale(${scale})`;
+      const readout = document.getElementById('zoom-readout');
+      if (readout) {
+        readout.textContent = `${Math.round(userScale * 100)}%`;
+      }
+    }
+
+    function resetZoom() {
+      userScale = 1;
+      panX = 0;
+      panY = 0;
+      applyViewTransform();
+    }
+
+    function zoomBy(delta) {
+      userScale = clamp(Number((userScale + delta).toFixed(2)), 0.6, 6);
+      applyViewTransform();
+    }
+
+    function bindStageInteractions() {
+      const stage = document.getElementById('diagram-stage');
+      if (!stage) {
+        return;
+      }
+
+      stage.addEventListener('wheel', (event) => {
+        event.preventDefault();
+        const direction = event.deltaY < 0 ? 0.12 : -0.12;
+        zoomBy(direction);
+      }, { passive: false });
+
+      stage.addEventListener('pointerdown', (event) => {
+        dragState = {
+          pointerId: event.pointerId,
+          startX: event.clientX,
+          startY: event.clientY,
+          startPanX: panX,
+          startPanY: panY,
+        };
+        stage.classList.add('is-dragging');
+        stage.setPointerCapture(event.pointerId);
+      });
+
+      stage.addEventListener('pointermove', (event) => {
+        if (!dragState || dragState.pointerId !== event.pointerId) {
+          return;
+        }
+        panX = dragState.startPanX + (event.clientX - dragState.startX);
+        panY = dragState.startPanY + (event.clientY - dragState.startY);
+        applyViewTransform();
+      });
+
+      const clearDrag = (event) => {
+        if (!dragState || dragState.pointerId !== event.pointerId) {
+          return;
+        }
+        dragState = null;
+        stage.classList.remove('is-dragging');
+      };
+
+      stage.addEventListener('pointerup', clearDrag);
+      stage.addEventListener('pointercancel', clearDrag);
+      stage.addEventListener('pointerleave', (event) => {
+        if (event.buttons === 0) {
+          clearDrag(event);
+        }
+      });
+    }
+
+    function setAutoplayState(nextState) {
+      isAutoplay = nextState;
+      document.getElementById('play-pause-btn').textContent = isAutoplay ? 'Pause' : 'Play';
+      updateRunHeader();
+      if (isAutoplay) {
+        startAutoplay();
+      } else if (autoplayTimer) {
+        clearInterval(autoplayTimer);
+        autoplayTimer = null;
+      }
+    }
+
+    function goToPhase(nextIndex) {
+      currentPhase = (nextIndex + animationPhases.length) % animationPhases.length;
+      renderPhase();
+      if (isAutoplay) {
+        startAutoplay();
+      }
+    }
+
+    function renderPhase() {
+      if (!svg) {
+        return;
+      }
+      const phase = animationPhases[currentPhase];
+      clearVisualState();
+      [...svg.querySelectorAll('g.node, g.cluster')].forEach((group) => group.classList.add('mermaid-dim'));
+      findTargetsByLabel(phase.active).forEach((group) => {
+        group.classList.remove('mermaid-dim');
+        group.classList.add('mermaid-active');
+        group.classList.add('mermaid-pulse');
+      });
+      updateInspector(phase);
+    }
+
+    function startAutoplay() {
+      if (autoplayTimer) {
+        clearInterval(autoplayTimer);
+      }
+      autoplayTimer = setInterval(() => {
+        currentPhase = (currentPhase + 1) % animationPhases.length;
+        renderPhase();
+      }, 3600);
+    }
+
+    function bindControls() {
+      document.getElementById('restart-btn').addEventListener('click', () => {
+        setAutoplayState(false);
+        goToPhase(0);
+      });
+      document.getElementById('prev-btn').addEventListener('click', () => {
+        setAutoplayState(false);
+        goToPhase(currentPhase - 1);
+      });
+      document.getElementById('next-btn').addEventListener('click', () => {
+        setAutoplayState(false);
+        goToPhase(currentPhase + 1);
+      });
+      document.getElementById('play-pause-btn').addEventListener('click', () => {
+        setAutoplayState(!isAutoplay);
+      });
+      document.getElementById('zoom-in-btn').addEventListener('click', () => zoomBy(0.2));
+      document.getElementById('zoom-out-btn').addEventListener('click', () => zoomBy(-0.2));
+      document.getElementById('zoom-reset-btn').addEventListener('click', () => resetZoom());
+    }
+
+    async function renderDiagram() {
+      const rendered = await mermaid.render('asap-runtime-diagram', diagramSource);
+      document.getElementById('diagram').innerHTML = `<div class="diagram-fit" id="diagram-fit">${rendered.svg}</div>`;
+      svg = document.querySelector('#diagram svg');
+      if (!svg) {
+        return;
+      }
+      svg.removeAttribute('height');
+      fitDiagramToStage();
+      updateRunHeader();
+      renderPhase();
+      bindControls();
+      bindStageInteractions();
+      setAutoplayState(false);
+    }
+
+    window.addEventListener('resize', () => {
+      if (svg) {
+        fitDiagramToStage();
+        renderPhase();
+      }
+    });
+
+    renderDiagram().catch((error) => {
+      document.getElementById('diagram').innerHTML = `<div style="padding:24px;color:#ffdbdb;line-height:1.5">Failed to render Mermaid diagram: ${String(error)}</div>`;
+    });
+  </script>
+</body>
+</html>

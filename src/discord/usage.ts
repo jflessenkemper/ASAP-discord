@@ -252,6 +252,7 @@ function markUsageDirty(): void {
       console.error('Usage counter flush failed:', errMsg(err));
     });
   }, 2000);
+  usageWriteTimer.unref?.();
 }
 
 export async function initUsageCounters(): Promise<void> {
@@ -878,6 +879,7 @@ export async function startDashboardUpdates(): Promise<void> {
       console.error('Dashboard update error:', errMsg(err))
     );
   }, DASHBOARD_UPDATE_INTERVAL_MS);
+  updateInterval.unref?.();
 }
 
 export async function refreshUsageDashboard(): Promise<void> {

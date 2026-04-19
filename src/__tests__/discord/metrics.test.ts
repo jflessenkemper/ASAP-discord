@@ -99,7 +99,7 @@ describe('metrics', () => {
 
   describe('transcription metrics', () => {
     it('records transcription latency', () => {
-      recordTranscriptionLatency('deepgram', 500);
+      recordTranscriptionLatency('elevenlabs', 500);
       const text = getMetricsText();
       expect(text).toContain('asap_transcription_latency_ms_bucket');
     });
@@ -147,7 +147,7 @@ describe('metrics', () => {
     it('updates Gemini spend gauge', () => {
       updateGeminiSpend(12.50);
       const text = getMetricsText();
-      expect(text).toContain('asap_gemini_spent_usd');
+      expect(text).toContain('asap_llm_spent_usd');
     });
   });
 });

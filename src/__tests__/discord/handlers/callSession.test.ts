@@ -90,10 +90,6 @@ jest.mock('../../../discord/voice/connection', () => ({
   VoiceTranscription: {},
 }));
 
-jest.mock('../../../discord/voice/deepgram', () => ({
-  isDeepgramAvailable: jest.fn().mockReturnValue(false),
-}));
-
 jest.mock('../../../discord/voice/elevenlabs', () => ({
   isElevenLabsAvailable: jest.fn().mockReturnValue(true),
   primeElevenLabsVoiceCache: jest.fn().mockResolvedValue(undefined),
@@ -301,8 +297,6 @@ describe('callSession', () => {
       process.env.GEMINI_API_KEY = '';
       const { isElevenLabsRealtimeAvailable } = require('../../../discord/voice/elevenlabsRealtime');
       (isElevenLabsRealtimeAvailable as jest.Mock).mockReturnValue(false);
-      const { isDeepgramAvailable } = require('../../../discord/voice/deepgram');
-      (isDeepgramAvailable as jest.Mock).mockReturnValue(false);
       const { isElevenLabsAvailable } = require('../../../discord/voice/elevenlabs');
       (isElevenLabsAvailable as jest.Mock).mockReturnValue(false);
 

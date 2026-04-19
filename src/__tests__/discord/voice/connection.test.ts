@@ -65,10 +65,6 @@ jest.mock('prism-media', () => ({
 }));
 
 // ── STT service mocks ──
-jest.mock('../../../discord/voice/deepgram', () => ({
-  isDeepgramAvailable: jest.fn().mockReturnValue(false),
-  startLiveTranscription: jest.fn(),
-}));
 jest.mock('../../../discord/voice/elevenlabsRealtime', () => ({
   startElevenLabsRealtimeTranscription: jest.fn(),
   ElevenLabsRealtimeSession: jest.fn(),
@@ -91,10 +87,8 @@ import {
   listenToUser,
   listenToAllMembers,
   listenToAllMembersSmart,
-  listenToUserDeepgram,
   listenToUserElevenLabsRealtime,
 } from '../../../discord/voice/connection';
-import { isDeepgramAvailable, startLiveTranscription } from '../../../discord/voice/deepgram';
 import { isElevenLabsRealtimeAvailable, startElevenLabsRealtimeTranscription } from '../../../discord/voice/elevenlabsRealtime';
 import { transcribeVoiceDetailed } from '../../../discord/voice/tts';
 
@@ -422,7 +416,6 @@ describe('voice/connection', () => {
   // ────────────────────────────────────────
   describe('listenToAllMembersSmart()', () => {
     it('uses ElevenLabs batch STT when nothing else is available', () => {
-      (isDeepgramAvailable as jest.Mock).mockReturnValue(false);
       (isElevenLabsRealtimeAvailable as jest.Mock).mockReturnValue(false);
       process.env.VOICE_REALTIME_MODE = 'false';
 
@@ -430,17 +423,6 @@ describe('voice/connection', () => {
       const subStream = new Readable({ read() {} });
       mockReceiverSubscribe.mockReturnValue(subStream);
 
-      const unsub = listenToAllMembersSmart(mockConnection as any, channel, jest.fn());
-      unsub();
-    });
-
-    it('uses Deepgram when available and preferred', () => {
-      (isDeepgramAvailable as jest.Mock).mockReturnValue(true);
-      (isElevenLabsRealtimeAvailable as jest.Mock).mockReturnValue(false);
-      process.env.VOICE_REALTIME_MODE = 'true';
-      process.env.VOICE_STT_PROVIDER = 'deepgram';
-
-      const channel = makeVoiceChannel([]);
       const unsub = listenToAllMembersSmart(mockConnection as any, channel, jest.fn());
       unsub();
     });
@@ -455,7 +437,6 @@ describe('voice/connection', () => {
     });
 
     it('respects VOICE_STT_PROVIDER=elevenlabs fallback to batch', () => {
-      (isDeepgramAvailable as jest.Mock).mockReturnValue(false);
       (isElevenLabsRealtimeAvailable as jest.Mock).mockReturnValue(false);
       process.env.VOICE_REALTIME_MODE = 'false';
       process.env.VOICE_STT_PROVIDER = 'elevenlabs';
@@ -469,7 +450,6 @@ describe('voice/connection', () => {
     });
 
     it('defaults to ElevenLabs batch STT for unsupported provider values', () => {
-      (isDeepgramAvailable as jest.Mock).mockReturnValue(false);
       (isElevenLabsRealtimeAvailable as jest.Mock).mockReturnValue(false);
       process.env.VOICE_REALTIME_MODE = 'false';
       process.env.VOICE_STT_PROVIDER = 'unsupported';
@@ -480,65 +460,6 @@ describe('voice/connection', () => {
 
       const unsub = listenToAllMembersSmart(mockConnection as any, channel, jest.fn());
       unsub();
-    });
-  });
-
-  // ────────────────────────────────────────
-  // listenToUserDeepgram
-  // ────────────────────────────────────────
-  describe('listenToUserDeepgram()', () => {
-    it('falls back to batch on timeout', async () => {
-      jest.useFakeTimers();
-      const member = makeMember('300', 'DGUser', false);
-
-      // startLiveTranscription never resolves
-      (startLiveTranscription as jest.Mock).mockReturnValue(new Promise(() => {}));
-
-      const subStream = new Readable({ read() {} });
-      mockReceiverSubscribe.mockReturnValue(subStream);
-
-      const unsub = listenToUserDeepgram(mockConnection as any, member, jest.fn());
-
-      // Advance past the 10s timeout
-      jest.advanceTimersByTime(11_000);
-
-      unsub();
-      jest.useRealTimers();
-    });
-
-    it('returns cleanup when session starts', async () => {
-      const member = makeMember('301', 'DGUser2', false);
-      const mockDgSession = { send: jest.fn(), close: jest.fn() };
-
-      (startLiveTranscription as jest.Mock).mockResolvedValue(mockDgSession);
-
-      const subStream = new Readable({ read() {} });
-      mockReceiverSubscribe.mockReturnValue(subStream);
-
-      const unsub = listenToUserDeepgram(mockConnection as any, member, jest.fn());
-      await new Promise((r) => setTimeout(r, 50));
-      unsub();
-      expect(mockDgSession.close).toHaveBeenCalled();
-    });
-
-    it('handles deepgram startup failure', async () => {
-      jest.useFakeTimers();
-      const member = makeMember('302', 'DGFail', false);
-
-      (startLiveTranscription as jest.Mock).mockRejectedValue(new Error('connection failed'));
-
-      const subStream = new Readable({ read() {} });
-      mockReceiverSubscribe.mockReturnValue(subStream);
-
-      const unsub = listenToUserDeepgram(mockConnection as any, member, jest.fn());
-
-      // Let it propagate
-      await jest.advanceTimersByTimeAsync(50);
-      // Retry timer fires
-      await jest.advanceTimersByTimeAsync(2_000);
-
-      unsub();
-      jest.useRealTimers();
     });
   });
 

@@ -111,7 +111,6 @@ Riley has two test layers:
 | Status | Source File | Lines | Stmts | Test File |
 |--------|------------|-------|-------|-----------|
 | ❌ | `discord/voice/connection.ts` | 1008 | 0% | `__tests__/discord/voice/connection.test.ts` |
-| 🟡 | `discord/voice/deepgram.ts` | 92 | 60% | `__tests__/discord/voice/deepgram.test.ts` |
 | 🟡 | `discord/voice/elevenlabs.ts` | 189 | 63% | `__tests__/discord/voice/elevenlabs.test.ts` |
 | 🟡 | `discord/voice/elevenlabsConvai.ts` | 186 | 12% | `__tests__/discord/voice/elevenlabsConvai.test.ts` |
 | 🟡 | `discord/voice/elevenlabsRealtime.ts` | 188 | 6% | `__tests__/discord/voice/elevenlabsRealtime.test.ts` |
