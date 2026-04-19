@@ -34,7 +34,7 @@ import { setActiveSmokeTestRunning } from './handlers/groupchat';
 import { mobileHarnessStart, mobileHarnessStep, mobileHarnessSnapshot, mobileHarnessStop } from './services/mobileHarness';
 import { captureAndPostScreenshots } from './services/screenshots';
 import { getWebhook } from './services/webhooks';
-import { setDailyBudgetLimit } from './usage';
+import { clearConversationTokens, getConversationTokenUsage, setConversationTokenLimit, setDailyBudgetLimit, setDailyClaudeTokenLimit } from './usage';
 import { upsertMemory, appendMemoryRow, readMemoryRow } from './memory';
 import {
   scanAdzuna,
@@ -1336,6 +1336,67 @@ export const REPO_TOOLS = [
     },
   },
   {
+    name: 'set_daily_claude_token_limit',
+    description:
+      'Set the daily Claude token cap. Takes effect immediately and persists across restarts.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        limit_tokens: {
+          type: 'number',
+          description: 'New daily Claude token cap, e.g. 12000000. Must be greater than 0.',
+        },
+        reason: {
+          type: 'string',
+          description: 'Brief reason for the change, e.g. "Owner approved higher token ceiling for self-improvement".',
+        },
+      },
+      required: ['limit_tokens'],
+    },
+  },
+  {
+    name: 'set_conversation_token_limit',
+    description:
+      'Set the per-conversation token window used to keep long Discord threads healthy. Takes effect immediately and persists across restarts.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        limit_tokens: {
+          type: 'number',
+          description: 'New per-conversation hard token cap. Must be greater than 1.',
+        },
+        warn_tokens: {
+          type: 'number',
+          description: 'Optional warning threshold below the hard cap. Defaults to about 60% of the limit.',
+        },
+        reason: {
+          type: 'string',
+          description: 'Brief reason for the change.',
+        },
+      },
+      required: ['limit_tokens'],
+    },
+  },
+  {
+    name: 'reset_conversation_token_window',
+    description:
+      'Clear the token window for the current Discord conversation thread so Riley can continue without opening a fresh workspace.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        thread_key: {
+          type: 'string',
+          description: 'Optional explicit thread key. If omitted, uses the active conversation thread key.',
+        },
+        reason: {
+          type: 'string',
+          description: 'Brief reason for the reset.',
+        },
+      },
+      required: [],
+    },
+  },
+  {
     name: 'fetch_url',
     description:
       'Fetch any URL content (web pages, APIs, docs). Returns response body as text. Supports GET and POST.',
@@ -1776,7 +1837,7 @@ const RILEY_TOOL_NAMES = new Set([
   'mobile_harness_start', 'mobile_harness_step', 'mobile_harness_snapshot', 'mobile_harness_stop',
   'gcp_preflight', 'gcp_get_env', 'gcp_list_revisions', 'gcp_secret_list', 'gcp_build_status',
   'gcp_logs_query', 'gcp_run_describe', 'gcp_storage_ls', 'gcp_artifact_list', 'gcp_sql_describe', 'gcp_project_info',
-  'set_daily_budget', 'db_query_readonly', 'db_schema',
+  'set_daily_budget', 'set_daily_claude_token_limit', 'set_conversation_token_limit', 'reset_conversation_token_window', 'db_query_readonly', 'db_schema',
   'job_scan', 'job_evaluate', 'job_tracker', 'job_profile_update', 'job_post_approvals',
   // ── Riley autonomy: code mutation, PR workflow, deploy ──
   'write_file', 'edit_file', 'batch_edit', 'run_command',
@@ -2173,6 +2234,39 @@ async function executeToolInternal(
         const result = setDailyBudgetLimit(limitUsd, true);
         const reason = input.reason ? ` Reason: ${input.reason}` : '';
         return `✅ Daily budget updated: $${result.previous.toFixed(2)} → $${result.current.toFixed(2)}/day.${reason}\nSpent today: $${result.spent.toFixed(4)} | Remaining: $${result.remaining.toFixed(2)}\nChange is effective immediately and persisted to .env.`;
+      }
+      case 'set_daily_claude_token_limit': {
+        const limitTokens = Number(input.limit_tokens);
+        if (!Number.isFinite(limitTokens) || limitTokens <= 0) {
+          return `❌ Invalid Claude token limit: ${input.limit_tokens}. Must be a positive number.`;
+        }
+        const result = setDailyClaudeTokenLimit(limitTokens, true);
+        const reason = input.reason ? ` Reason: ${input.reason}` : '';
+        return `✅ Daily Claude token limit updated: ${result.previous} → ${result.current}.${reason}\nUsed today: ${result.used} | Remaining: ${result.remaining}\nChange is effective immediately and persisted to .env.`;
+      }
+      case 'set_conversation_token_limit': {
+        const limitTokens = Number(input.limit_tokens);
+        const warnTokens = input.warn_tokens === undefined ? undefined : Number(input.warn_tokens);
+        if (!Number.isFinite(limitTokens) || limitTokens <= 1) {
+          return `❌ Invalid conversation token limit: ${input.limit_tokens}. Must be greater than 1.`;
+        }
+        if (warnTokens !== undefined && (!Number.isFinite(warnTokens) || warnTokens < 1 || warnTokens >= limitTokens)) {
+          return `❌ Invalid conversation warning threshold: ${input.warn_tokens}. It must be at least 1 and less than the hard limit.`;
+        }
+        const result = setConversationTokenLimit(limitTokens, true, warnTokens);
+        const reason = input.reason ? ` Reason: ${input.reason}` : '';
+        return `✅ Conversation token limit updated: ${result.previous} → ${result.current} with warn threshold ${result.warn}.${reason}\nChange is effective immediately and persisted to .env.`;
+      }
+      case 'reset_conversation_token_window': {
+        const targetKey = String(input.thread_key || context?.threadKey || '').trim();
+        if (!targetKey) {
+          return '❌ No conversation thread key is available to reset. Run this from an active Discord thread or provide thread_key explicitly.';
+        }
+        const before = getConversationTokenUsage(targetKey);
+        clearConversationTokens(targetKey);
+        const after = getConversationTokenUsage(targetKey);
+        const reason = input.reason ? ` Reason: ${input.reason}` : '';
+        return `✅ Conversation token window reset for ${targetKey}.${reason}\nBefore: used=${before.used} warn=${before.warn} limit=${before.limit}\nAfter: used=${after.used} warn=${after.warn} limit=${after.limit}`;
       }
       case 'fetch_url':
         return await fetchUrl(input.url, input.method, input.headers, input.body);

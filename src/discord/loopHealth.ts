@@ -11,6 +11,7 @@ export type LoopId =
   | 'test-engine'
   | 'thread-status-reporter'
   | 'goal-watchdog'
+  | 'self-improvement-worker'
   | 'voice-session';
 
 export interface LoopHealthEntry {
@@ -33,6 +34,7 @@ const LOOP_LABELS: Record<LoopId, string> = {
   'test-engine': 'Test Engine',
   'thread-status-reporter': 'Thread Status Reporter',
   'goal-watchdog': 'Goal Watchdog',
+  'self-improvement-worker': 'Self-Improvement Worker',
   'voice-session': 'Voice Session',
 };
 
@@ -45,6 +47,7 @@ const LOOP_ORDER: LoopId[] = [
   'test-engine',
   'thread-status-reporter',
   'goal-watchdog',
+  'self-improvement-worker',
   'voice-session',
 ];
 

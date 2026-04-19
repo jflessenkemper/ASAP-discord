@@ -47,12 +47,12 @@ import { makeOutboundCall, makeAsapTesterCall, startConferenceCall, isTelephonyA
 import { getWebhook, sendWebhookMessage, WebhookCapableChannel } from '../services/webhooks';
 import {
   approveAdditionalBudget,
-  getClaudeTokenStatus,
+  clearConversationTokens,
+  getClaudeTokenLimitState,
   getContextEfficiencyReport,
   getRemainingBudget,
   getUsageReport,
   isBudgetExceeded,
-  isClaudeOverLimit,
   refreshLiveBillingData,
   refreshUsageDashboard,
 } from '../usage';
@@ -169,6 +169,8 @@ let activeThinkingMessage: Message | null = null;
 let activeGroupchatOwner: { userId: string; displayName: string } | null = null;
 let selfImprovementWorkerRunning = false;
 let selfImprovementWorkerTimer: ReturnType<typeof setInterval> | null = null;
+let lastSelfImprovementWorkerErrorAt = 0;
+let lastSelfImprovementWorkerErrorKey = '';
 
 // When true, a smoke_test_agents tool call is in progress. Tester bot messages
 // arriving during this window are subprocess probes and must NOT abort or
@@ -186,7 +188,9 @@ const RILEY_PROGRESS_PING_MS = parseInt(
   10,
 );
 const SELF_IMPROVEMENT_WORKER_POLL_MS = Math.max(2_000, parseInt(process.env.SELF_IMPROVEMENT_WORKER_POLL_MS || '5000', 10));
+const SELF_IMPROVEMENT_WORKER_ERROR_COOLDOWN_MS = Math.max(5_000, parseInt(process.env.SELF_IMPROVEMENT_WORKER_ERROR_COOLDOWN_MS || '60000', 10));
 const DIRECT_GROUPCHAT_SHORT_PROMPT_MAX_WORDS = parseInt(process.env.DIRECT_GROUPCHAT_SHORT_PROMPT_MAX_WORDS || '18', 10);
+const GOAL_WATCHDOG_TOKEN_OVERRUN_ALLOWANCE = Math.max(0, parseInt(process.env.RILEY_TOKEN_OVERRUN_ALLOWANCE || '2000000', 10));
 
 const GOAL_STALL_TIMEOUT_MS = parseInt(process.env.GOAL_STALL_TIMEOUT_MS || '420000', 10);
 const GOAL_STALL_CHECK_INTERVAL_MS = parseInt(process.env.GOAL_STALL_CHECK_INTERVAL_MS || '60000', 10);
@@ -608,13 +612,13 @@ function getGoalWatchdogBlocker(): GoalWatchdogBlocker | null {
     };
   }
 
-  if (isClaudeOverLimit()) {
-    const { used, limit, remaining } = getClaudeTokenStatus();
+  const tokenStatus = getClaudeTokenLimitState(GOAL_WATCHDOG_TOKEN_OVERRUN_ALLOWANCE);
+  if (tokenStatus.overHardLimit) {
     return {
       kind: 'token',
-      status: '⏸️ Parked: daily Anthropic token limit reached',
-      detail: `Token gate active at ${used}/${limit} Claude tokens. Auto-recovery is paused until capacity returns.`,
-      workspaceMessage: `⏸️ I parked this goal because the daily Anthropic token limit is active at ${used}/${limit} tokens with ${remaining} remaining. I will stop watchdog retries until the limit resets or the runtime cap is raised.`,
+      status: '⏸️ Parked: Anthropic hard token limit reached',
+      detail: `Token gate active at ${tokenStatus.used}/${tokenStatus.hardLimit} Claude tokens (soft limit ${tokenStatus.limit}). Auto-recovery is paused until capacity returns.`,
+      workspaceMessage: `⏸️ I parked this goal because the Anthropic hard token limit is active at ${tokenStatus.used}/${tokenStatus.hardLimit} tokens. The soft daily limit is ${tokenStatus.limit}, but Riley's overrun allowance is now exhausted, so I will stop watchdog retries until the limit resets or the runtime cap is raised.`,
       action: 'await token capacity',
     };
   }
@@ -945,6 +949,7 @@ async function closeGoalWorkspace(
   workspaceChannel: WebhookCapableChannel,
   reason: string
 ): Promise<void> {
+  clearConversationTokens(`groupchat:${workspaceChannel.id}`);
   let thread: any = null;
   if ('setArchived' in workspaceChannel) {
     thread = workspaceChannel;
@@ -1036,6 +1041,7 @@ async function maybeReviewThreadForClosure(groupchat: TextChannel): Promise<void
     || await groupchat.threads.fetch(goalState.threadId).catch(() => null);
 
   if (!thread || thread.archived) {
+    clearConversationTokens(`groupchat:${goalState.threadId}`);
     goalState.threadId = null;
     return;
   }
@@ -1722,25 +1728,60 @@ async function processSelfImprovementBackgroundJob(job: SelfImprovementQueuePayl
   );
 }
 
+function noteSelfImprovementWorkerIssue(detail: string, level: 'warn' | 'error' = 'warn'): void {
+  const normalized = String(detail || 'unknown self-improvement worker error').replace(/\s+/g, ' ').trim();
+  recordLoopHealth('self-improvement-worker', level === 'error' ? 'error' : 'warn', normalized.slice(0, 160));
+
+  const now = Date.now();
+  const key = normalized.slice(0, 180).toLowerCase();
+  if (key === lastSelfImprovementWorkerErrorKey && now - lastSelfImprovementWorkerErrorAt < SELF_IMPROVEMENT_WORKER_ERROR_COOLDOWN_MS) {
+    return;
+  }
+
+  lastSelfImprovementWorkerErrorKey = key;
+  lastSelfImprovementWorkerErrorAt = now;
+  void postAgentErrorLog('self-improvement:worker', 'Self-improvement queue unavailable', {
+    level,
+    detail: normalized,
+  });
+}
+
 export async function runSelfImprovementQueueTick(): Promise<void> {
   if (selfImprovementWorkerRunning) return;
   selfImprovementWorkerRunning = true;
   try {
     while (true) {
-      const claimed = await claimNextSelfImprovementJob(process.env.RUNTIME_INSTANCE_TAG || process.env.HOSTNAME || `pid-${process.pid}`);
+      let claimed;
+      try {
+        claimed = await claimNextSelfImprovementJob(process.env.RUNTIME_INSTANCE_TAG || process.env.HOSTNAME || `pid-${process.pid}`);
+      } catch (err) {
+        noteSelfImprovementWorkerIssue(errMsg(err), 'warn');
+        break;
+      }
       if (!claimed) break;
       try {
         await processSelfImprovementBackgroundJob(claimed.payload);
-        await markSelfImprovementJobCompleted(claimed.id);
+        try {
+          await markSelfImprovementJobCompleted(claimed.id);
+        } catch (err) {
+          noteSelfImprovementWorkerIssue(errMsg(err), 'warn');
+          break;
+        }
       } catch (err) {
         const detail = errMsg(err);
         logAgentEvent(claimed.payload.packet.stewardAgentId, 'error', `steward-handoff:blocked:${detail}`);
+        noteSelfImprovementWorkerIssue(detail, claimed.attempts >= claimed.maxAttempts ? 'error' : 'warn');
         void postAgentErrorLog('self-improvement:worker', 'Background stewardship worker failed', {
           level: claimed.attempts >= claimed.maxAttempts ? 'error' : 'warn',
           detail,
           agentId: claimed.payload.packet.stewardAgentId,
         });
-        await markSelfImprovementJobFailed(claimed.id, claimed.attempts, claimed.maxAttempts, detail);
+        try {
+          await markSelfImprovementJobFailed(claimed.id, claimed.attempts, claimed.maxAttempts, detail);
+        } catch (markErr) {
+          noteSelfImprovementWorkerIssue(errMsg(markErr), 'warn');
+          break;
+        }
       }
     }
   } finally {
@@ -1751,9 +1792,13 @@ export async function runSelfImprovementQueueTick(): Promise<void> {
 export function startSelfImprovementQueueWorker(): void {
   if (selfImprovementWorkerTimer) return;
   selfImprovementWorkerTimer = setInterval(() => {
-    void runSelfImprovementQueueTick();
+    void runSelfImprovementQueueTick().catch((err) => {
+      noteSelfImprovementWorkerIssue(errMsg(err), 'warn');
+    });
   }, SELF_IMPROVEMENT_WORKER_POLL_MS);
-  void runSelfImprovementQueueTick();
+  void runSelfImprovementQueueTick().catch((err) => {
+    noteSelfImprovementWorkerIssue(errMsg(err), 'warn');
+  });
 }
 
 export function stopSelfImprovementQueueWorker(): void {

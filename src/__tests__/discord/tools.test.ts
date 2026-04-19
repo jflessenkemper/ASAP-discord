@@ -43,7 +43,13 @@ jest.mock('../../discord/services/mobileHarness', () => ({
 }));
 jest.mock('../../discord/services/screenshots', () => ({ captureAndPostScreenshots: jest.fn() }));
 jest.mock('../../discord/services/webhooks', () => ({ getWebhook: jest.fn() }));
-jest.mock('../../discord/usage', () => ({ setDailyBudgetLimit: jest.fn() }));
+jest.mock('../../discord/usage', () => ({
+  setDailyBudgetLimit: jest.fn(),
+  setDailyClaudeTokenLimit: jest.fn(),
+  setConversationTokenLimit: jest.fn(),
+  clearConversationTokens: jest.fn(),
+  getConversationTokenUsage: jest.fn(() => ({ used: 0, warn: 300000, limit: 500000, overWarn: false, overLimit: false })),
+}));
 jest.mock('../../discord/memory', () => ({
   upsertMemory: jest.fn(),
   appendMemoryRow: jest.fn(),
@@ -178,6 +184,13 @@ describe('tools — tool definitions', () => {
       const names = new Set(RILEY_TOOLS.map(t => t.name));
       expect(names.has('set_daily_budget')).toBe(true);
     });
+
+    it('includes token control tools', () => {
+      const names = new Set(RILEY_TOOLS.map(t => t.name));
+      expect(names.has('set_daily_claude_token_limit')).toBe(true);
+      expect(names.has('set_conversation_token_limit')).toBe(true);
+      expect(names.has('reset_conversation_token_window')).toBe(true);
+    });
   });
 
   describe('PROMPT_*_TOOLS (compacted)', () => {
@@ -293,6 +306,9 @@ describe('tools — agent access control', () => {
       expect(agentCanUseTool('executive-assistant', 'gcp_deploy')).toBe(true);
       expect(agentCanUseTool('executive-assistant', 'gcp_redeploy_bot_vm')).toBe(true);
       expect(agentCanUseTool('executive-assistant', 'merge_pull_request')).toBe(true);
+        expect(agentCanUseTool('executive-assistant', 'set_daily_claude_token_limit')).toBe(true);
+        expect(agentCanUseTool('executive-assistant', 'set_conversation_token_limit')).toBe(true);
+        expect(agentCanUseTool('executive-assistant', 'reset_conversation_token_window')).toBe(true);
     });
   });
 });
@@ -307,6 +323,24 @@ describe('tools — executeTool access control', () => {
     // read_file might fail on non-existent file, but shouldn't say "not allowed"
     const result = await executeTool('read_file', { path: 'package.json' }, { agentId: 'qa' });
     expect(result).not.toContain('not allowed');
+  });
+
+  it('executes Riley token control tools', async () => {
+    const usage = require('../../discord/usage');
+    usage.setDailyClaudeTokenLimit.mockReturnValue({ previous: 8000000, current: 12000000, used: 125000, remaining: 11875000 });
+    usage.setConversationTokenLimit.mockReturnValue({ previous: 500000, current: 900000, warn: 450000 });
+    usage.getConversationTokenUsage
+      .mockReturnValueOnce({ used: 640000, warn: 300000, limit: 500000, overWarn: true, overLimit: true })
+      .mockReturnValueOnce({ used: 0, warn: 300000, limit: 500000, overWarn: false, overLimit: false });
+
+    const dailyResult = await executeTool('set_daily_claude_token_limit', { limit_tokens: 12000000 }, { agentId: 'executive-assistant', threadKey: 'groupchat:thread-1' });
+    const convoResult = await executeTool('set_conversation_token_limit', { limit_tokens: 900000, warn_tokens: 450000 }, { agentId: 'executive-assistant', threadKey: 'groupchat:thread-1' });
+    const resetResult = await executeTool('reset_conversation_token_window', {}, { agentId: 'executive-assistant', threadKey: 'groupchat:thread-1' });
+
+    expect(dailyResult).toContain('Daily Claude token limit updated');
+    expect(convoResult).toContain('Conversation token limit updated');
+    expect(resetResult).toContain('Conversation token window reset');
+    expect(usage.clearConversationTokens).toHaveBeenCalledWith('groupchat:thread-1');
   });
 });
 

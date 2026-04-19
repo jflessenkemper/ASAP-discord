@@ -36,11 +36,17 @@ import {
   getRemainingBudget,
   approveAdditionalBudget,
   setDailyBudgetLimit,
+  setDailyClaudeTokenLimit,
   getClaudeTokenStatus,
+  getClaudeTokenLimitState,
   getUsageReport,
   getCostOpsSummaryLine,
   getContextEfficiencyReport,
   getPromptAttributionSnapshot,
+  recordConversationTokens,
+  getConversationTokenUsage,
+  clearConversationTokens,
+  setConversationTokenLimit,
   initUsageCounters,
   flushUsageCounters,
   getUsageEmbed,
@@ -220,6 +226,22 @@ describe('usage', () => {
     });
   });
 
+  describe('setDailyClaudeTokenLimit()', () => {
+    it('updates the Claude token limit immediately', () => {
+      const before = getClaudeTokenStatus().limit;
+      const result = setDailyClaudeTokenLimit(before + 12345, false);
+      expect(result.previous).toBe(before);
+      expect(result.current).toBe(before + 12345);
+      expect(getClaudeTokenStatus().limit).toBe(before + 12345);
+
+      setDailyClaudeTokenLimit(before, false);
+    });
+
+    it('rejects invalid token limits', () => {
+      expect(() => setDailyClaudeTokenLimit(0, false)).toThrow('Invalid Claude token limit');
+    });
+  });
+
   describe('getClaudeTokenStatus()', () => {
     it('returns status with used, remaining, limit', () => {
       const status = getClaudeTokenStatus();
@@ -227,6 +249,35 @@ describe('usage', () => {
       expect(status).toHaveProperty('remaining');
       expect(status).toHaveProperty('limit');
       expect(status.used + status.remaining).toBe(status.limit);
+    });
+
+    it('reports the hard limit with Riley overrun allowance', () => {
+      const status = getClaudeTokenLimitState(2500);
+      expect(status.hardLimit).toBe(status.limit + 2500);
+      expect(status.hardRemaining).toBe(status.hardLimit - status.used);
+    });
+  });
+
+  describe('conversation token tracking', () => {
+    it('allows the conversation token limit to change at runtime', () => {
+      const before = getConversationTokenUsage('conversation-limit-runtime');
+      const result = setConversationTokenLimit(before.limit + 5000, false, before.warn + 1000);
+      const after = getConversationTokenUsage('conversation-limit-runtime');
+
+      expect(result.previous).toBe(before.limit);
+      expect(after.limit).toBe(before.limit + 5000);
+      expect(after.warn).toBe(before.warn + 1000);
+
+      setConversationTokenLimit(before.limit, false, before.warn);
+    });
+
+    it('clears stale conversation token windows', () => {
+      const key = 'conversation-clear-test';
+      recordConversationTokens(key, 42_000);
+      expect(getConversationTokenUsage(key).used).toBe(42_000);
+
+      clearConversationTokens(key);
+      expect(getConversationTokenUsage(key).used).toBe(0);
     });
   });
 

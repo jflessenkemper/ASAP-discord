@@ -29,7 +29,7 @@ import { getLoggingEngineRuntimeContext } from './loggingEngine';
 import { recordModelSuccess, recordModelFailure, resolveHealthyModel, isModelAvailable } from './modelHealth';
 import { recordAgentResponse, recordRateLimitHit } from './metrics';
 import { REPO_TOOLS, getToolsForAgent, executeTool, getToolAuditCallback } from './tools';
-import { createTraceContext, recordSpan, newSpanId, type TraceContext, type TraceSpan, recordClaudeUsage, isClaudeOverLimit, isBudgetExceeded, getRemainingBudget, getClaudeTokenStatus, approveAdditionalBudget, type PromptBreakdown, recordConversationTokens, getConversationTokenUsage } from './usage';
+import { createTraceContext, recordSpan, newSpanId, type TraceContext, type TraceSpan, recordClaudeUsage, isClaudeOverLimit, isBudgetExceeded, getRemainingBudget, getClaudeTokenStatus, getClaudeTokenLimitState, approveAdditionalBudget, type PromptBreakdown, recordConversationTokens, getConversationTokenUsage, clearConversationTokens } from './usage';
 import { recallRelevantContext, recordAgentDecision } from './vectorMemory';
 
 
@@ -2988,8 +2988,8 @@ ${getLatestSmokeHealthLine()}`;
   ]);
 
   for (let round = 0; round < maxToolRounds; round++) {
-    const tokenStatus = getClaudeTokenStatus();
-    const tokenHardExceeded = tokenStatus.used >= (tokenStatus.limit + Math.max(0, RILEY_TOKEN_OVERRUN_ALLOWANCE));
+    const tokenStatus = getClaudeTokenLimitState(RILEY_TOKEN_OVERRUN_ALLOWANCE);
+    const tokenHardExceeded = tokenStatus.overHardLimit;
 
     if (isBudgetExceeded()) {
       if (RILEY_AUTO_APPROVE_BUDGET && autoBudgetPassesUsed < RILEY_AUTO_APPROVE_BUDGET_MAX_PASSES) {
@@ -3096,10 +3096,16 @@ ${getLatestSmokeHealthLine()}`;
       recordConversationTokens(convKey, usageTelemetry.inputTokens + usageTelemetry.outputTokens);
       const convUsage = getConversationTokenUsage(convKey);
       if (convUsage.overLimit) {
-        logAgentEvent(agent.id, 'error', `Conversation token limit reached: ${convUsage.used} tokens`);
-        return `⚠️ This conversation has used ${Math.round(convUsage.used / 1000)}K tokens (limit: ${Math.round(convUsage.limit / 1000)}K). Please start a new thread to continue.`;
+        if (agent.id === 'executive-assistant' || agent.id === 'operations-manager') {
+          clearConversationTokens(convKey);
+          recordConversationTokens(convKey, usageTelemetry.inputTokens + usageTelemetry.outputTokens);
+          logAgentEvent(agent.id, 'response', `Conversation token window rotated at ${convUsage.used} tokens`);
+        } else {
+          logAgentEvent(agent.id, 'error', `Conversation token limit reached: ${convUsage.used} tokens`);
+          return `⚠️ This conversation has used ${Math.round(convUsage.used / 1000)}K tokens (limit: ${Math.round(convUsage.limit / 1000)}K). Please start a new thread to continue.`;
+        }
       }
-      if (convUsage.overWarn && !convUsage.overLimit) {
+      if (requestedOutputMode !== 'machine_json' && convUsage.overWarn && !convUsage.overLimit) {
         finalText = `${finalText}\n\n⚠️ _This conversation has used ${Math.round(convUsage.used / 1000)}K of ${Math.round(convUsage.limit / 1000)}K token limit. Consider starting a new thread soon._`;
       }
 

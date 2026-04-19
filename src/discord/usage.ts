@@ -130,6 +130,28 @@ const DAILY_LIMITS = {
 };
 const DEFAULT_BUDGET_APPROVAL_INCREMENT_USD = parseFloat(process.env.BUDGET_APPROVAL_INCREMENT_USD || '5.00');
 const DASHBOARD_UPDATE_INTERVAL_MS = 5 * 60 * 1000;
+let conversationTokenWarn = parseInt(process.env.CONVERSATION_TOKEN_WARN || '300000', 10);
+let conversationTokenLimit = parseInt(process.env.CONVERSATION_TOKEN_LIMIT || '500000', 10);
+
+function persistRuntimeEnvValue(key: string, value: string): void {
+  try {
+    const path = require('path');
+    const fs = require('fs');
+    const envPath = path.resolve(__dirname, '../../.env');
+    if (!fs.existsSync(envPath)) return;
+
+    let contents = fs.readFileSync(envPath, 'utf8');
+    const escapedKey = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const matcher = new RegExp(`^${escapedKey}=.*`, 'm');
+    if (matcher.test(contents)) {
+      contents = contents.replace(matcher, `${key}=${value}`);
+    } else {
+      contents += `\n${key}=${value}\n`;
+    }
+    fs.writeFileSync(envPath, contents, 'utf8');
+  } catch {
+  }
+}
 
 interface UsageCounters {
   claudeInputTokens: number;
@@ -563,21 +585,7 @@ export function setDailyBudgetLimit(
   markUsageDirty();
 
   if (persist) {
-    try {
-      const path = require('path');
-      const fs = require('fs');
-      const envPath = path.resolve(__dirname, '../../.env');
-      if (fs.existsSync(envPath)) {
-        let contents = fs.readFileSync(envPath, 'utf8');
-        if (/^DAILY_BUDGET_USD=/m.test(contents)) {
-          contents = contents.replace(/^DAILY_BUDGET_USD=.*/m, `DAILY_BUDGET_USD=${newLimitUsd.toFixed(2)}`);
-        } else {
-          contents += `\nDAILY_BUDGET_USD=${newLimitUsd.toFixed(2)}\n`;
-        }
-        fs.writeFileSync(envPath, contents, 'utf8');
-      }
-    } catch {
-    }
+    persistRuntimeEnvValue('DAILY_BUDGET_USD', newLimitUsd.toFixed(2));
   }
 
   const spent = effectiveTotalSpendForBudget();
@@ -598,6 +606,54 @@ export function getClaudeTokenStatus(): { used: number; remaining: number; limit
     remaining: Math.max(0, DAILY_LIMITS.claudeTokens - used),
     limit: DAILY_LIMITS.claudeTokens,
     promptBreakdown: getPromptBreakdownSummary(),
+  };
+}
+
+export function getClaudeTokenLimitState(overrunAllowance = 0): {
+  used: number;
+  remaining: number;
+  limit: number;
+  hardLimit: number;
+  hardRemaining: number;
+  overSoftLimit: boolean;
+  overHardLimit: boolean;
+  promptBreakdown: string;
+} {
+  const status = getClaudeTokenStatus();
+  const safeAllowance = Math.max(0, Math.floor(overrunAllowance));
+  const hardLimit = status.limit + safeAllowance;
+  return {
+    ...status,
+    hardLimit,
+    hardRemaining: Math.max(0, hardLimit - status.used),
+    overSoftLimit: status.used >= status.limit,
+    overHardLimit: status.used >= hardLimit,
+  };
+}
+
+export function setDailyClaudeTokenLimit(
+  newLimitTokens: number,
+  persist = true,
+): { previous: number; current: number; used: number; remaining: number } {
+  const nextLimit = Math.floor(newLimitTokens);
+  if (!Number.isFinite(nextLimit) || nextLimit <= 0) {
+    throw new Error(`Invalid Claude token limit: ${newLimitTokens}`);
+  }
+
+  const previous = DAILY_LIMITS.claudeTokens;
+  DAILY_LIMITS.claudeTokens = nextLimit;
+  markUsageDirty();
+
+  if (persist) {
+    persistRuntimeEnvValue('DAILY_LIMIT_CLAUDE_TOKENS', String(nextLimit));
+  }
+
+  const used = usage.claudeInputTokens + usage.claudeOutputTokens;
+  return {
+    previous,
+    current: DAILY_LIMITS.claudeTokens,
+    used,
+    remaining: Math.max(0, DAILY_LIMITS.claudeTokens - used),
   };
 }
 
@@ -934,9 +990,6 @@ async function updateDashboard(): Promise<void> {
 
 // ── Per-Conversation Token Tracking ──
 
-const CONVERSATION_TOKEN_WARN = parseInt(process.env.CONVERSATION_TOKEN_WARN || '300000', 10);
-const CONVERSATION_TOKEN_LIMIT = parseInt(process.env.CONVERSATION_TOKEN_LIMIT || '500000', 10);
-
 const conversationTokens = new Map<string, number>();
 
 export function recordConversationTokens(conversationKey: string, tokens: number): void {
@@ -948,15 +1001,42 @@ export function getConversationTokenUsage(conversationKey: string): { used: numb
   const used = conversationTokens.get(conversationKey) || 0;
   return {
     used,
-    warn: CONVERSATION_TOKEN_WARN,
-    limit: CONVERSATION_TOKEN_LIMIT,
-    overWarn: used >= CONVERSATION_TOKEN_WARN,
-    overLimit: used >= CONVERSATION_TOKEN_LIMIT,
+    warn: conversationTokenWarn,
+    limit: conversationTokenLimit,
+    overWarn: used >= conversationTokenWarn,
+    overLimit: used >= conversationTokenLimit,
   };
 }
 
 export function clearConversationTokens(conversationKey: string): void {
   conversationTokens.delete(conversationKey);
+}
+
+export function setConversationTokenLimit(
+  newLimitTokens: number,
+  persist = true,
+  warnTokens?: number,
+): { previous: number; current: number; warn: number } {
+  const nextLimit = Math.floor(newLimitTokens);
+  if (!Number.isFinite(nextLimit) || nextLimit <= 1) {
+    throw new Error(`Invalid conversation token limit: ${newLimitTokens}`);
+  }
+
+  const previous = conversationTokenLimit;
+  conversationTokenLimit = nextLimit;
+  const requestedWarn = Number.isFinite(warnTokens as number) ? Math.floor(warnTokens as number) : Math.floor(nextLimit * 0.6);
+  conversationTokenWarn = Math.max(1, Math.min(conversationTokenLimit - 1, requestedWarn));
+
+  if (persist) {
+    persistRuntimeEnvValue('CONVERSATION_TOKEN_LIMIT', String(conversationTokenLimit));
+    persistRuntimeEnvValue('CONVERSATION_TOKEN_WARN', String(conversationTokenWarn));
+  }
+
+  return {
+    previous,
+    current: conversationTokenLimit,
+    warn: conversationTokenWarn,
+  };
 }
 
 // ── Prompt Breakdown Dashboard ──
