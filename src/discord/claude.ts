@@ -2631,11 +2631,15 @@ UPGRADES CHANNEL:
       })()
     : '';
 
+  const learnedPatterns = semanticContext
+    ? `\n<learned_patterns>\n${semanticContext.slice(0, 800)}\n</learned_patterns>`
+    : '';
+
   const systemPrompt = `${agent.systemPrompt}
 ${rileyContext}
 <project_context>
 ${getProjectContextForAgent(agent.id)}
-</project_context>
+</project_context>${learnedPatterns}
 
 You are "${agent.name}" responding in Discord.${rileyCoordination}
 RULES: Max 220 words (code exempt). Lead with the useful part. 60-120 words normal; 1-3 sentences for simple asks.${toolsSection}
@@ -2682,7 +2686,7 @@ ${getLatestSmokeHealthLine()}`;
     }
   }
   const runtimeUserMessage = buildRuntimeStatusMessage(
-    semanticContext ? `${userMessage}${semanticContext}` : userMessage,
+    userMessage,
     { remaining, spent, limit },
     { used: tokenUsed, remaining: tokenRemaining, limit: tokenLimit },
   );

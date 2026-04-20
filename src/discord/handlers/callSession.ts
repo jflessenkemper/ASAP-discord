@@ -452,6 +452,8 @@ function createLiveSpeechStreamer(
   const normalizeSegment = (segment: string) =>
     segment.toLowerCase().replace(/\s+/g, ' ').replace(/[^a-z0-9\s]/g, '').trim();
 
+  const warmPhraseSet = new Set(RILEY_WARM_PHRASES.map(p => p.toLowerCase().replace(/[^a-z0-9\s]/g, '').trim()));
+
   const enqueue = (segment: string) => {
     const toSpeak = segment.trim();
     if (!toSpeak) return;
@@ -465,9 +467,14 @@ function createLiveSpeechStreamer(
         if (activeSession?.currentTurnId === turnId) {
           activeSession.outputActive = true;
           activeSession.outputStartedAt = Date.now();
+          activeSession.isPlayingWarmPhrase = warmPhraseSet.has(normalized);
         }
         spokeAny = true;
         await speakPipelined(toSpeak, voice, signal, language, onPlaybackStart);
+        // After playback, clear the warm-phrase flag
+        if (activeSession?.currentTurnId === turnId) {
+          activeSession.isPlayingWarmPhrase = false;
+        }
       })
       .catch(() => {
       });
@@ -521,6 +528,7 @@ export interface CallSession {
   currentTurnId: number;
   outputActive: boolean;
   outputStartedAt: number;
+  isPlayingWarmPhrase: boolean;
   lastInterruptAt: number;
   disconnectedSince: number | null;
   lastInputFingerprint: string;
@@ -561,6 +569,7 @@ function interruptActiveVoiceTurn(reason: string): void {
   activeSession.currentAbortController = null;
   activeSession.outputActive = false;
   activeSession.outputStartedAt = 0;
+  activeSession.isPlayingWarmPhrase = false;
   stopTesterVCPlayback();
   postDiagnostic('Voice turn interrupted.', {
     level: 'info',
@@ -689,6 +698,7 @@ export async function startCall(
     currentTurnId: 0,
     outputActive: false,
     outputStartedAt: 0,
+    isPlayingWarmPhrase: false,
     lastInterruptAt: 0,
     disconnectedSince: null,
     lastInputFingerprint: '',
@@ -786,6 +796,8 @@ export async function startCall(
       return;
     }
     if (!activeSession.outputActive) return;
+    // Let warm phrases (e.g. "One moment.") finish without interruption
+    if (activeSession.isPlayingWarmPhrase) return;
     if (activeSession.outputStartedAt > 0) {
       const activeForMs = Date.now() - activeSession.outputStartedAt;
       if (activeForMs < VOICE_INTERRUPT_MIN_OUTPUT_ACTIVE_MS) return;
@@ -866,6 +878,7 @@ export async function endCall(): Promise<void> {
   session.currentAbortController = null;
   session.outputActive = false;
   session.outputStartedAt = 0;
+  session.isPlayingWarmPhrase = false;
   session.activeSpeakerUserId = null;
   session.activeSpeakerName = null;
   stopTesterVCPlayback();

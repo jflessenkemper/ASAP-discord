@@ -19,7 +19,7 @@ export interface SelfImprovementOpsUpdate {
   severity: 'info' | 'warn' | 'error';
 }
 
-export type OperationsStewardRequestKind = 'remember' | 'logging' | 'test' | 'loop-health' | 'ops-report';
+export type OperationsStewardRequestKind = 'remember' | 'logging' | 'test' | 'loop-health' | 'ops-report' | 'upgrade';
 
 export interface OperationsStewardRequest {
   kind: OperationsStewardRequestKind;

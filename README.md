@@ -22,198 +22,150 @@ Most AI demos stop at "chat with one assistant".
 
 This system is closer to an operations room:
 
-- Riley is the front door.
-- Riley plans and synthesizes the work.
-- Opus handles implementation and execution routing.
-- Agent work happens in dedicated workspaces.
+- Riley EA is the front door and sole orchestrator.
+- Riley plans, delegates to specialists via handoff, and synthesizes the result.
+- Specialists run on Sonnet by default, Opus for code-heavy work.
+- Agent work happens in dedicated workspace threads and agent channels.
 - The system monitors itself while it works.
 
-## Simple Diagram
+## Architecture
 
 ```mermaid
-flowchart LR
+flowchart TD
     User[User]
-    Opus["Riley (Opus)<br/>execution and completion"]
-    Groupchat[Groupchat channel<br/>direct reply or compact completion]
-    Workspace[Workspace thread<br/>task work]
-    ToolLogs["Agent channel<br/>one-line tool logs"]
-    QAAgent[QA]
-    UXAgent[UX Reviewer]
-    SecurityAgent[Security Auditor]
-    APIAgent[API Reviewer]
-    DBAAgent[DBA]
-    PerformanceAgent[Performance]
-    DevOpsAgent[DevOps]
-    CopywriterAgent[Copywriter]
-    LawyerAgent[Lawyer]
-    IOSAgent[iOS Engineer]
-    AndroidAgent[Android Engineer]
 
-    subgraph FrontDoor[Front Door]
-        RileyHaiku["Riley (Haiku)<br/>user-facing rules, restructure, voice reasoning"]
-        Riley["Riley (Sonnet)<br/>plans, decides, escalates work"]
-        Voice[ElevenLabs voice relay]
+    subgraph FrontDoor["Front Door"]
+        Riley["Riley EA · Sonnet<br/>plan · guard · route · voice"]
+        Voice["ElevenLabs<br/>STT ↔ TTS"]
     end
 
-    subgraph AgentManager["Riley (Sonnet)<br/>agent manager"]
-        direction TB
-        AgentManagerCore[Agent manager core]
-        SelfImproveEngine[Self improvement engine]
-        StewardQueue[Durable stewardship outbox]
-        AgentManagerCore --> SelfImproveEngine
-        SelfImproveEngine --> StewardQueue
+    subgraph Agents["Specialist Agents (13)"]
+        AgentList["QA · UX · Security · API · DBA<br/>Performance · DevOps · Copywriter<br/>Lawyer · iOS · Android<br/>Sonnet default · Opus for code-heavy"]
+        DynAgents["+ dynamic agents from DB"]
     end
 
-    subgraph AgentChannels[Agent channels]
-        QAChan["🧪 QA channel"]
-        UXChan["🎨 UX Reviewer channel"]
-        SecurityChan["🔒 Security Auditor channel"]
-        APIChan["📡 API Reviewer channel"]
-        DBAChan["🗄️ DBA channel"]
-        PerformanceChan["⚡ Performance channel"]
-        DevOpsChan["🚀 DevOps channel"]
-        CopywriterChan["✍️ Copywriter channel"]
-        LawyerChan["⚖️ Lawyer channel"]
-        IOSChan["🍎 iOS Engineer channel"]
-        AndroidChan["🤖 Android Engineer channel"]
+    subgraph SelfImprove["Self-Improvement Pipeline"]
+        SIQueue[("Job queue<br/>self_improvement_jobs")]
+        RileyOps["Riley Ops · Sonnet<br/>steward · learn · adapt"]
     end
 
-    subgraph LoopBox[Independent loops]
-        TestEngine[Test engine]
-        LoggingEngine[Logging engine]
-        MemoryLoop[Memory]
-        DatabaseAudit[Database audit]
-        ChannelHeartbeat[Channel heartbeat]
-        UpgradesTriage[Upgrades triage]
-        VoiceSession[Voice session]
-        GoalWatchdog[Goal and thread watchdog]
+    subgraph Surfaces["Discord Surfaces"]
+        Groupchat["#groupchat<br/>reply · rolling tool edits"]
+        Workspace["Workspace thread<br/>deep task work"]
+        AgentCh["Agent channels<br/>per-agent tool logs"]
+        OpsDash["Ops channels<br/>errors · limits · loops<br/>voice · terminal · cost"]
     end
 
-    subgraph OpsChannels[Ops channels]
-        OpsHub(( ))
-        TerminalCh[Terminal]
-        ErrorsCh[Errors]
-        LimitsCh[Limits]
-        HealthCh[Health]
-        VoiceCh[Voice]
-        LoopsCh[Loops]
+    subgraph Loops["Background Loops (11)"]
+        LoopList["heartbeat · logging · memory<br/>db-audit · test-engine · upgrades<br/>thread-status · goal-watchdog<br/>voice-session · anomaly-detection<br/>self-improvement-worker"]
     end
 
-    User -->|text| RileyHaiku
+    subgraph Data["Data Layer (Postgres)"]
+        Memory[("agent_memory<br/>prompts · dynamic agents")]
+        ActivityLog[("agent_activity_log<br/>events · tokens · durations")]
+        Learnings[("agent_learnings<br/>patterns · tags · TTL")]
+        SIJobs[("self_improvement_jobs<br/>durable queue")]
+    end
+
+    User -->|text| Riley
     User -->|voice| Voice
-    Voice --> RileyHaiku
-    RileyHaiku -->|needs real work| Riley
-    Riley -->|execute| Opus
-    Opus <--> AgentManagerCore
-    AgentManagerCore <--> QAAgent
-    AgentManagerCore <--> UXAgent
-    AgentManagerCore <--> SecurityAgent
-    AgentManagerCore <--> APIAgent
-    AgentManagerCore <--> DBAAgent
-    AgentManagerCore <--> PerformanceAgent
-    AgentManagerCore <--> DevOpsAgent
-    AgentManagerCore <--> CopywriterAgent
-    AgentManagerCore <--> LawyerAgent
-    AgentManagerCore <--> IOSAgent
-    AgentManagerCore <--> AndroidAgent
-    QAAgent --> QAChan
-    UXAgent --> UXChan
-    SecurityAgent --> SecurityChan
-    APIAgent --> APIChan
-    DBAAgent --> DBAChan
-    PerformanceAgent --> PerformanceChan
-    DevOpsAgent --> DevOpsChan
-    CopywriterAgent --> CopywriterChan
-    LawyerAgent --> LawyerChan
-    IOSAgent --> IOSChan
-    AndroidAgent --> AndroidChan
-    Opus -->|execution outcome| AgentManagerCore
-    TestEngine --> SelfImproveEngine
-    LoggingEngine --> SelfImproveEngine
-    MemoryLoop --> SelfImproveEngine
-    DatabaseAudit --> SelfImproveEngine
-    ChannelHeartbeat --> SelfImproveEngine
-    UpgradesTriage --> SelfImproveEngine
-    VoiceSession --> SelfImproveEngine
-    GoalWatchdog --> SelfImproveEngine
-    StewardQueue -->|background stewardship| OpsHub
-    SelfImproveEngine -->|ops updates| OpsHub
-    Opus -->|done| Riley
-    Riley -->|handoff final answer| RileyHaiku
-    RileyHaiku -->|short direct reply| Groupchat
-    RileyHaiku -->|task reply| Workspace
-    RileyHaiku -->|spoken reply| Voice
-    Workspace -->|optional compact completion| Groupchat
-    AgentManagerCore -->|tool summaries| ToolLogs
-    QAAgent -->|tool summaries| ToolLogs
-    UXAgent -->|tool summaries| ToolLogs
-    SecurityAgent -->|tool summaries| ToolLogs
-    APIAgent -->|tool summaries| ToolLogs
-    DBAAgent -->|tool summaries| ToolLogs
-    PerformanceAgent -->|tool summaries| ToolLogs
-    DevOpsAgent -->|tool summaries| ToolLogs
-    CopywriterAgent -->|tool summaries| ToolLogs
-    LawyerAgent -->|tool summaries| ToolLogs
-    IOSAgent -->|tool summaries| ToolLogs
-    AndroidAgent -->|tool summaries| ToolLogs
-    Voice -->|spoken update| User
-    Groupchat -->|tag user| User
+    Voice <-->|spoken| Riley
+    Riley <-->|delegate via handoff| AgentList
+    AgentList -->|tool logs| AgentCh
+    Riley -->|reply| Groupchat
+    Riley -->|task reply| Workspace
+    Riley -->|spoken| Voice
+    Voice -->|spoken| User
+    Groupchat -->|notify| User
+    Workspace -->|compact completion| Groupchat
+    Riley -->|ops updates| OpsDash
 
-    classDef user fill:#4f8fcb,stroke:#2f6ea3,color:#ffffff,stroke-width:2px;
-    classDef riley fill:#4ea56b,stroke:#2f7a49,color:#ffffff,stroke-width:2px;
-    classDef opus fill:#d9822b,stroke:#9a5416,color:#ffffff,stroke-width:2px;
-    classDef surface fill:#7b8794,stroke:#56616d,color:#ffffff,stroke-width:2px;
-    classDef voice fill:#7b4fd6,stroke:#5934a5,color:#ffffff,stroke-width:2px;
-    classDef hidden fill:transparent,stroke:transparent,color:transparent;
+    Riley -->|enqueue| SIQueue
+    SIQueue --> RileyOps
+    RileyOps -->|write| Learnings
+    RileyOps -->|post| OpsDash
+    LoopList -->|feed| RileyOps
+    LoopList -->|record| ActivityLog
 
-    class User user;
-    class RileyHaiku,Riley riley;
-    class Groupchat,Workspace,ToolLogs,SelfImproveEngine,QAAgent,UXAgent,SecurityAgent,APIAgent,DBAAgent,PerformanceAgent,DevOpsAgent,CopywriterAgent,LawyerAgent,IOSAgent,AndroidAgent,QAChan,UXChan,SecurityChan,APIChan,DBAChan,PerformanceChan,DevOpsChan,CopywriterChan,LawyerChan,IOSChan,AndroidChan,TestEngine,LoggingEngine,MemoryLoop,DatabaseAudit,ChannelHeartbeat,UpgradesTriage,VoiceSession,GoalWatchdog,TerminalCh,ErrorsCh,LimitsCh,HealthCh,VoiceCh,LoopsCh surface;
-    class Voice voice;
-    class Opus opus;
-    class AgentManagerCore riley;
-    class OpsHub hidden;
+    Riley -->|read/write| Memory
+    AgentList --> ActivityLog
+    Learnings -.->|prompt injection| Riley
+
+    classDef user fill:#4f8fcb,stroke:#2f6ea3,color:#fff,stroke-width:2px
+    classDef riley fill:#4ea56b,stroke:#2f7a49,color:#fff,stroke-width:2px
+    classDef surface fill:#7b8794,stroke:#56616d,color:#fff,stroke-width:2px
+    classDef voice fill:#7b4fd6,stroke:#5934a5,color:#fff,stroke-width:2px
+    classDef data fill:#3a7bd5,stroke:#2566b3,color:#fff,stroke-width:2px
+    classDef improve fill:#c05fbf,stroke:#8a3d88,color:#fff,stroke-width:2px
+
+    class User user
+    class Riley riley
+    class Voice voice
+    class Groupchat,Workspace,AgentCh,OpsDash,AgentList,DynAgents,LoopList surface
+    class Memory,ActivityLog,Learnings,SIJobs data
+    class SIQueue,RileyOps improve
 ```
 
-This diagram shows the target architecture. Riley Haiku is the user-facing layer: she restructures replies to match your rules, handles voice-call reasoning, and only escalates to Riley Sonnet when real work needs to be done. Riley's Sonnet agent manager sends work to sub-agents and manages the self-improvement engine as a separate manager-owned layer. Opus emits execution outcomes back to the manager, the manager writes stewardship work to a durable outbox, and a background worker runs that path without holding the user turn open. User-facing text and voice replies now route back through Riley Haiku, while tool use stays as one-line logs in the acting agent's own channel.
+### How to read this diagram
 
-The full architecture diagram is in [.github/ARCHITECTURE.md](.github/ARCHITECTURE.md).
+**Front Door.** All user input (text or voice) enters through Riley EA, which always runs on Sonnet. Riley applies guardrails, answers simple questions directly, and delegates to specialists when focused review is needed. Voice goes through ElevenLabs for STT/TTS.
+
+**Delegation.** Riley EA is the sole orchestrator. Her JSON response envelope includes a `delegateAgents` list; `handleSubAgents()` runs those specialists in tiered parallel via the handoff protocol. Results are aggregated back to Riley for synthesis. There is no separate "agent manager" — Riley EA plans, delegates, and synthesizes in one flow.
+
+**Model routing.** `resolveModelForAgent()` picks the model per-call: Riley EA and Riley Ops always use Sonnet (`RILEY_PLANNING_MODEL`). Code-heavy agents (EA, Ops, DevOps, iOS, Android) get Opus on high-stakes prompts. All others get Sonnet with health-based fallback. There is no separate "Opus agent" — Opus is a model choice, not an entity.
+
+**Specialist Agents.** 13 static agents (QA, UX, Security, API, DBA, Performance, DevOps, Copywriter, Lawyer, iOS, Android, plus Riley EA and Riley Ops) and dynamic agents loaded from `agent_memory`. Each specialist works in a dedicated Discord channel.
+
+**Self-Improvement Pipeline.** After specialist work completes, a self-improvement packet is built and enqueued as a durable job. A 5-second poll worker claims the job, runs loop adapters, dispatches to Riley Ops (the operations-manager agent), and writes learnings to the database. Failed jobs post to #errors. Accepted upgrades from the triage loop also become jobs.
+
+**Background Loops (11).** Channel heartbeat (30m), logging engine (30m), memory consolidation (4h), database audit (6h), test engine (on-demand), upgrades triage (6h), thread status reporter (1h), goal watchdog (60s), voice session (20s), anomaly detection (30m), self-improvement worker (5s). Each reports health status to the ops dashboard.
+
+**Data Layer.** Four Postgres tables: `agent_memory` (system prompts and dynamic agent definitions), `agent_activity_log` (event-sourced telemetry), `agent_learnings` (patterns with tags and 30-day TTL, injected into future system prompts), and `self_improvement_jobs` (durable job queue with retry/backoff).
+
+**Feedback loop.** Loops detect issues → worker records learnings → learnings are injected into future prompts → agents adapt behavior. This is the closed loop that makes the system learn from its own operation.
+
+The full architecture with per-channel contracts is in [.github/ARCHITECTURE.md](.github/ARCHITECTURE.md).
 
 An animated walkthrough is in [assets/architecture-runtime-animated.html](assets/architecture-runtime-animated.html).
 
 ## Main Features
 
 - Text-first control in Discord group chat.
-- Voice-first control for live conversations.
+- Voice-first control for live conversations via ElevenLabs STT/TTS.
 - Direct user tagging when Riley needs an important decision.
-- Dynamic agents that Riley can create and remove at runtime.
+- 13 static specialist agents plus dynamic agents that Riley can create at runtime.
 - Automated smoke testing after important changes.
 - Read-only database audits to catch schema drift safely.
-- Memory that improves future responses over time.
+- Shared agent learnings: patterns discovered by any agent are written to `agent_learnings` with tags and 30-day TTL, then injected into future system prompts.
+- Anomaly detection: error-rate spikes, token-cost trends, latency degradation, and rate-limit frequency are detected and posted to ops channels.
+- Durable self-improvement queue with retry/backoff and terminal-failure notifications.
+- Rolling-update tool notifications that edit a single message in place instead of posting batches.
 - Usage and budget tracking built into the runtime.
 - GitHub, deployment, screenshot, and diagnostics integrations.
 
-## The 9 Runtime Loops
+## The 11 Runtime Loops
 
 These loops are the part I would usually show an employer because they explain why the bot is more than a chat wrapper.
 
-1. Test engine loop: after code changes, the system maps the changed files to the right smoke tests.
-2. Logging engine loop: Riley gets one condensed view of recent activity-log events and the latest ops-channel signals.
-3. Memory consolidation loop: useful decisions and repeated failure patterns get turned into future context.
-4. Database audit loop: the runtime checks that the expected tables and migrations are present.
-5. Channel heartbeat loop: the bot watches its own status feeds and notices when one goes stale.
-6. Upgrades triage loop: suggestions are collected, grouped, and surfaced back to Riley.
-7. Thread status reporter loop: the runtime snapshots active workspaces and posts condensed thread status.
-8. Goal and thread watchdog loop: the system watches long-running tasks so work does not silently stall.
-9. Voice session loop: live voice calls stay responsive and Riley asks for decisions in voice.
+1. **Channel heartbeat** (30 min): the bot watches its own status feeds and notices when one goes stale.
+2. **Logging engine** (30 min): Riley gets one condensed view of recent activity-log events and the latest ops-channel signals.
+3. **Memory consolidation** (4 h): useful decisions and repeated failure patterns get turned into future context. Deduplicates and expires stale learnings.
+4. **Database audit** (6 h): the runtime checks that the expected tables, migrations, and indexes are present.
+5. **Test engine** (on demand): after code changes, the system maps the changed files to the right smoke tests.
+6. **Upgrades triage** (6 h): suggestions are collected, grouped, and surfaced back to Riley. Accepted upgrades now create durable self-improvement jobs.
+7. **Thread status reporter** (1 h): the runtime snapshots active workspaces and posts condensed thread status.
+8. **Goal watchdog** (60 s): the system watches long-running tasks so work does not silently stall.
+9. **Voice session** (20 s heartbeat): live voice calls stay responsive and Riley asks for decisions in voice.
+10. **Anomaly detection** (30 min): queries the activity log for error-rate spikes, token-cost trends, latency degradation, and rate-limit frequency. Posts anomalies to #errors and records learnings.
+11. **Self-improvement worker** (5 s poll): drains the durable job queue, runs loop adapters, dispatches to the Operations Manager, and writes learnings back to the database.
 
-Self-improvement still exists, but it is now managed by Riley the agent manager as a packet-driven engine. Riley (Operations Manager) is the background stewardship worker inside that path. The current runtime now persists that work in Postgres and drains it through a background worker off the main user request path.
+Self-improvement is managed by Riley the agent manager as a packet-driven engine. Riley (Operations Manager) is the background stewardship worker. The runtime persists that work in Postgres (`self_improvement_jobs`), drains it off the main user path, and writes what it learns to `agent_learnings` for future prompt injection.
 
 ## Token And Cost Optimisation
 
 The system does not just send everything to the biggest model every time. It tries to stay useful and efficient.
 
-- Context caching: repeated context can be reused instead of fully re-sent. The codebase describes this as saving roughly 50% to 75% of tokens in the right situations.
+- Context caching: the infrastructure exists for prompt reuse, but the current provider (Anthropic) does not expose a compatible API. The code gracefully falls back to a no-op until provider support is available.
 - Short handoffs: agent-to-agent context is trimmed so specialists do not get giant history dumps.
 - Smaller replies for voice: live voice answers are intentionally brief to reduce delay and cost.
 - Prompt breakdown tracking: the runtime measures how much of each request is system instructions, history, tools, user message, and tool output.

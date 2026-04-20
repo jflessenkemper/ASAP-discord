@@ -12,7 +12,8 @@ export type LoopId =
   | 'thread-status-reporter'
   | 'goal-watchdog'
   | 'self-improvement-worker'
-  | 'voice-session';
+  | 'voice-session'
+  | 'anomaly-detection';
 
 export interface LoopHealthEntry {
   id: LoopId;
@@ -36,6 +37,7 @@ const LOOP_LABELS: Record<LoopId, string> = {
   'goal-watchdog': 'Goal Watchdog',
   'self-improvement-worker': 'Self-Improvement Worker',
   'voice-session': 'Voice Session',
+  'anomaly-detection': 'Anomaly Detection',
 };
 
 const LOOP_ORDER: LoopId[] = [
@@ -49,6 +51,7 @@ const LOOP_ORDER: LoopId[] = [
   'goal-watchdog',
   'self-improvement-worker',
   'voice-session',
+  'anomaly-detection',
 ];
 
 const loopHealth = new Map<LoopId, MutableLoopHealthEntry>();

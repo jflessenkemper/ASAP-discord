@@ -58,6 +58,7 @@ import {
   refreshUsageDashboard,
 } from '../usage';
 import { logAgentEvent, postOpsLine } from '../activityLog';
+import { recordAgentLearning } from '../vectorMemory';
 
 import { startCall, endCall, isCallActive, injectVoiceTranscriptForTesting, processTesterVoiceTurnForCall } from './callSession';
 import { SYSTEM_COLORS, BUTTON_IDS } from '../ui/constants';
@@ -77,32 +78,28 @@ type ToolNotificationBatch = {
   agent: AgentConfig;
   items: string[];
   timer: NodeJS.Timeout | null;
+  messageId: string | null;
 };
 
 const TOOL_NOTIFICATION_FLUSH_MS = parseInt(process.env.TOOL_NOTIFICATION_FLUSH_MS || '2500', 10);
 const TOOL_NOTIFICATION_MAX_ITEMS = parseInt(process.env.TOOL_NOTIFICATION_MAX_ITEMS || '6', 10);
-const TOOL_NOTIFICATION_CHANNEL_COOLDOWN_MS = parseInt(process.env.TOOL_NOTIFICATION_CHANNEL_COOLDOWN_MS || '5000', 10);
 const toolNotificationBatches = new Map<string, ToolNotificationBatch>();
-const toolNotificationLastPostedAt = new Map<string, number>();
 const rileyStallNoticeAt = new Map<string, number>();
 const RILEY_STALL_NOTICE_COOLDOWN_MS = parseInt(process.env.RILEY_STALL_NOTICE_COOLDOWN_MS || '120000', 10);
 
-/** Send a tool-use notification as the agent (via webhook). */
+/** Send a tool-use notification as the agent (via webhook). Edits an existing message if one exists. */
 async function sendToolNotification(channel: WebhookCapableChannel, agent: AgentConfig, toolName: string, summary: string): Promise<void> {
   const key = `${channel.id}:${agent.id}`;
   let batch = toolNotificationBatches.get(key);
   if (!batch) {
-    batch = { channel, agent, items: [], timer: null };
+    batch = { channel, agent, items: [], timer: null, messageId: null };
     toolNotificationBatches.set(key, batch);
   }
 
   batch.items.push(formatToolNotificationItem(toolName, summary));
-  if (batch.items.length >= TOOL_NOTIFICATION_MAX_ITEMS) {
-    await flushToolNotificationBatch(key);
-    return;
-  }
 
-  if (batch.timer) return;
+  // Debounce: reset timer on each new item so we batch rapid tool calls.
+  if (batch.timer) clearTimeout(batch.timer);
   batch.timer = setTimeout(() => {
     void flushToolNotificationBatch(key);
   }, Math.max(300, TOOL_NOTIFICATION_FLUSH_MS));
@@ -116,44 +113,48 @@ async function flushToolNotificationBatch(key: string): Promise<void> {
     batch.timer = null;
   }
 
-  const items = batch.items.splice(0, TOOL_NOTIFICATION_MAX_ITEMS).filter(Boolean);
-  if (items.length === 0) {
+  if (batch.items.length === 0) {
     toolNotificationBatches.delete(key);
     return;
   }
 
-  const deduped = [...new Set(items)].slice(0, TOOL_NOTIFICATION_MAX_ITEMS);
-  const targetChannel = batch.channel;
+  // Keep only the latest MAX_ITEMS, prefix with count of dropped items
+  const allItems = [...new Set(batch.items)];
+  const overflow = allItems.length - TOOL_NOTIFICATION_MAX_ITEMS;
+  const visibleItems = overflow > 0
+    ? [`... and ${overflow} earlier tools`, ...allItems.slice(overflow)]
+    : allItems;
 
-  const channelCooldown = Math.max(0, TOOL_NOTIFICATION_CHANNEL_COOLDOWN_MS);
-  const lastPostedAt = toolNotificationLastPostedAt.get(targetChannel.id) || 0;
-  const waitMs = channelCooldown - (Date.now() - lastPostedAt);
-  if (waitMs > 0) {
-    batch.items.unshift(...items);
-    batch.timer = setTimeout(() => {
-      void flushToolNotificationBatch(key);
-    }, Math.max(300, waitMs));
-    return;
-  }
-
-  const content = buildToolNotificationLine(deduped);
+  const content = buildToolNotificationLine(visibleItems);
 
   try {
-    await sendWebhookMessage(targetChannel, {
-      content,
-      username: `${batch.agent.emoji} ${batch.agent.name}`,
-      avatarURL: batch.agent.avatarUrl,
-    });
-    toolNotificationLastPostedAt.set(targetChannel.id, Date.now());
+    if (batch.messageId) {
+      // Edit the existing message in place
+      const targetChannel = batch.channel;
+      const wh = await getWebhook(targetChannel);
+      await wh.editMessage(batch.messageId, { content });
+    } else {
+      // First flush: send a new message and store its ID
+      const msg = await sendWebhookMessage(batch.channel, {
+        content,
+        username: `${batch.agent.emoji} ${batch.agent.name}`,
+        avatarURL: batch.agent.avatarUrl,
+      });
+      batch.messageId = msg.id;
+    }
   } catch (err) {
     console.warn(`Webhook tool notification failed for ${batch.agent.name}:`, errMsg(err));
-  } finally {
-    if (batch.items.length === 0) {
+    // If edit failed (e.g. message deleted), reset and try fresh next time
+    batch.messageId = null;
+  }
+}
+
+/** Reset all batches for a channel so the next invocation creates a fresh message. */
+function resetToolNotificationBatches(channelId: string): void {
+  for (const [key, batch] of toolNotificationBatches) {
+    if (key.startsWith(`${channelId}:`)) {
+      if (batch.timer) clearTimeout(batch.timer);
       toolNotificationBatches.delete(key);
-    } else {
-      batch.timer = setTimeout(() => {
-        void flushToolNotificationBatch(key);
-      }, Math.max(300, TOOL_NOTIFICATION_FLUSH_MS));
     }
   }
 }
@@ -1747,6 +1748,20 @@ export async function runSelfImprovementQueueTick(): Promise<void> {
         await processSelfImprovementBackgroundJob(claimed.payload);
         try {
           await markSelfImprovementJobCompleted(claimed.id);
+          // Record a learning from the completed job for future prompt injection
+          const kinds = [...new Set(claimed.payload.packet.requests.map(r => r.kind))];
+          for (const kind of kinds) {
+            const summaries = claimed.payload.packet.requests
+              .filter(r => r.kind === kind)
+              .map(r => r.summary)
+              .join('; ');
+            recordAgentLearning(
+              claimed.payload.packet.stewardAgentId,
+              `Completed ${kind}: ${summaries}`.slice(0, 500),
+              kind,
+              'self-improvement',
+            ).catch(() => {});
+          }
         } catch (err) {
           noteSelfImprovementWorkerIssue(errMsg(err), 'warn');
           break;
@@ -1761,7 +1776,13 @@ export async function runSelfImprovementQueueTick(): Promise<void> {
           agentId: claimed.payload.packet.stewardAgentId,
         });
         try {
-          await markSelfImprovementJobFailed(claimed.id, claimed.attempts, claimed.maxAttempts, detail);
+          await markSelfImprovementJobFailed(claimed.id, claimed.attempts, claimed.maxAttempts, detail, (failedId, failedDetail) => {
+            void postAgentErrorLog('self-improvement:terminal-failure', `❌ Self-improvement job #${failedId} failed permanently: ${failedDetail.slice(0, 300)}`, {
+              level: 'error',
+              detail: failedDetail,
+              agentId: claimed!.payload.packet.stewardAgentId,
+            });
+          });
         } catch (markErr) {
           noteSelfImprovementWorkerIssue(errMsg(markErr), 'warn');
           break;
@@ -1992,6 +2013,7 @@ export async function handleGroupchatMessage(
     activeAbortController = null;
   }
   clearThinkingMessage().catch(() => {});
+  resetToolNotificationBatches(groupchat.id);
 
   const controller = new AbortController();
   activeAbortController = controller;

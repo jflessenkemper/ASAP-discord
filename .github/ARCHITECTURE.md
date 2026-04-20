@@ -1,6 +1,14 @@
 # ASAP Bot - Riley-Centric Architecture
 
-This document describes the target architecture.
+> **⚠️ This document describes the aspirational target architecture, not the current runtime.**
+> For the actual running system (model routing, loop inventory, data layer, and agent delegation), see [README.md](../README.md#architecture). The README diagram is the single source of truth for what the code does today.
+
+Key differences between this target and the current runtime:
+- **"Riley Haiku"** does not exist — all user-facing routing goes through Riley EA on Sonnet (`RILEY_PLANNING_MODEL`).
+- **Opus is a model choice, not a separate agent.** `resolveModelForAgent()` selects Opus for code-heavy agents on high-stakes prompts. Riley EA delegates to specialists directly via `handleSubAgents()`.
+- **There is no separate "Agent Manager" entity.** Riley EA's JSON envelope includes `delegateAgents`; the handoff protocol dispatches and aggregates results.
+- **11 loops** run in production (this doc lists 9 — missing anomaly-detection and self-improvement-worker).
+- **4 Postgres tables** are in production: `agent_memory`, `agent_activity_log`, `agent_learnings`, `self_improvement_jobs`.
 
 An animated walkthrough lives in [assets/architecture-runtime-animated.html](../assets/architecture-runtime-animated.html).
 
@@ -535,7 +543,10 @@ The architecture depends on these surfaces being explicit:
 | Tools | `src/discord/tools.ts`, `src/discord/toolsDb.ts`, `src/discord/toolsGcp.ts` | Execution surfaces used by Riley and agents |
 | Loop orchestration | `src/discord/operationsSteward.ts`, `src/discord/loopAdapters.ts` | Stewardship request derivation and callable loop execution |
 | Loop visibility | `src/discord/loopHealth.ts`, `src/discord/loggingEngine.ts` | Loop state tracking, reporting, thread-status, and ops-facing visibility |
-| Memory | `src/discord/memory.ts`, `src/discord/vectorMemory.ts` | Riley memory, recall, and self-improvement inputs |
+| Memory | `src/discord/memory.ts`, `src/discord/vectorMemory.ts` | Riley memory, recall, agent learnings with 30-day TTL, and self-improvement inputs |
+| Self-improvement | `src/discord/selfImprovementQueue.ts` | Durable job queue backed by `self_improvement_jobs` table with retry/backoff |
+| Anomaly detection | `src/discord/anomalyDetection.ts` | Error-rate, token-cost, latency, and rate-limit anomaly detection loop |
+| Data layer | `src/db/runtimeSchema.ts`, `src/db/migrations/` | Schema expectations for 4 tables: `agent_memory`, `agent_activity_log`, `agent_learnings`, `self_improvement_jobs` |
 
 ## Architectural Rule Of Thumb
 

@@ -1,6 +1,7 @@
 import pool from '../db/pool';
 import type { ExecutionStatus } from './handoff';
 import type { SelfImprovementPacket } from './operationsSteward';
+import { recordAgentLearning } from './vectorMemory';
 
 export interface SelfImprovementQueuePayload {
   packet: SelfImprovementPacket;
@@ -113,7 +114,13 @@ export async function markSelfImprovementJobCompleted(jobId: number): Promise<vo
   );
 }
 
-export async function markSelfImprovementJobFailed(jobId: number, attempts: number, maxAttempts: number, errorDetail: string): Promise<void> {
+export async function markSelfImprovementJobFailed(
+  jobId: number,
+  attempts: number,
+  maxAttempts: number,
+  errorDetail: string,
+  onTerminalFailure?: (jobId: number, errorDetail: string) => void,
+): Promise<void> {
   const exhausted = attempts >= maxAttempts || isNonRetryableSelfImprovementError(errorDetail);
   const retryDelayMs = Math.min(RETRY_MAX_DELAY_MS, RETRY_BASE_DELAY_MS * Math.pow(2, Math.max(0, attempts - 1)));
   const retryDelaySeconds = Math.max(1, Math.ceil(retryDelayMs / 1000));
@@ -131,4 +138,14 @@ export async function markSelfImprovementJobFailed(jobId: number, attempts: numb
      WHERE id = $1`,
     [jobId, exhausted ? 'failed' : 'retry', errorDetail.slice(0, 4000), retryDelaySeconds],
   );
+
+  if (exhausted) {
+    recordAgentLearning(
+      'operations-manager',
+      `Self-improvement job #${jobId} failed after ${attempts} attempts: ${errorDetail.slice(0, 300)}`,
+      'self-improvement-failure',
+      'self-improvement',
+    ).catch(() => {});
+    onTerminalFailure?.(jobId, errorDetail);
+  }
 }

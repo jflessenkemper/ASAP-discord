@@ -46,7 +46,9 @@ import { setCommandAuditCallback, setPRReviewCallback, setSmokeTestCallback, smo
 import { setLimitsChannel, setCostChannel, startDashboardUpdates, stopDashboardUpdates, initUsageCounters, flushUsageCounters, getUsageReport, getCostOpsSummaryLine, refreshUsageDashboard, toAgentTag } from './usage';
 import { formatAge } from '../utils/time';
 import { mapFilesToCategories, getTestsForCategories } from './tester';
-import { recordAgentDecision, consolidateMemoryInsights, recordSmokeInsight } from './vectorMemory';
+import { recordAgentDecision, consolidateMemoryInsights, recordSmokeInsight, recordAgentLearning } from './vectorMemory';
+import { enqueueSelfImprovementJob } from './selfImprovementQueue';
+import { detectAnomalies } from './anomalyDetection';
 import { goalState } from './handlers/goalState';
 import { updateListingByMsgId, draftApplication, getProfile, getPortalByCompany, submitToGreenhouse, getListingById, updateListingStatus, setListingDiscordMsg, guessCompanyEmail, type JobListing } from '../services/jobSearch';
 import { sendJobApplication } from '../services/email';
@@ -71,6 +73,7 @@ let upgradesTriageTimer: ReturnType<typeof setInterval> | null = null;
 let memoryConsolidationTimer: ReturnType<typeof setInterval> | null = null;
 let databaseAuditTimer: ReturnType<typeof setInterval> | null = null;
 let loggingEngineTimer: ReturnType<typeof setInterval> | null = null;
+let anomalyDetectionTimer: ReturnType<typeof setInterval> | null = null;
 const staleAlertDedupe = new Map<string, number>();
 /** Tracks recovery attempts per feed to prevent infinite heal loops. */
 const staleHealAttempts = new Map<string, { count: number; lastAttemptAt: number }>();
@@ -283,6 +286,24 @@ export async function runUpgradesTriage(channels: BotChannels): Promise<void> {
       await dispatchUpgradeToRiley(actionable.sample, channels.groupchat).catch((err) => {
         console.warn('Upgrades auto-dispatch failed:', errMsg(err));
       });
+      // Create a durable self-improvement job so the upgrade is tracked even if the groupchat dispatch is lost
+      enqueueSelfImprovementJob({
+        packet: {
+          managerAgentId: 'executive-assistant',
+          consumerAgentId: 'opus',
+          stewardAgentId: 'operations-manager',
+          summary: `Accepted upgrade: ${actionable.sample.slice(0, 200)}`,
+          requests: [{ kind: 'upgrade', summary: actionable.sample.slice(0, 300) }],
+          recommendedLoopIds: ['upgrades-triage'],
+        },
+        goal: `Apply accepted upgrade: ${actionable.sample.slice(0, 200)}`,
+        conversationSummary: '',
+        status: 'completed',
+        directiveContext: `upgrade-accepted:${actionable.sample.slice(0, 200)}`,
+        groupchatChannelId: channels.groupchat.id,
+        workspaceChannelId: channels.threadStatus?.id || channels.groupchat.id,
+      }).catch((err) => console.warn('Upgrade job enqueue failed:', errMsg(err)));
+      recordAgentLearning('operations-manager', `Accepted upgrade: ${actionable.sample.slice(0, 300)}`, 'upgrade-accepted', 'upgrade').catch(() => {});
     }
     recordLoopHealth('upgrades-triage', 'ok', `items=${top.length}${actionable ? ' dispatched=1' : ' dispatched=0'}`);
   } catch (err) {
@@ -367,6 +388,7 @@ function startOpsMonitors(channels: BotChannels): void {
   if (memoryConsolidationTimer) clearInterval(memoryConsolidationTimer);
   if (databaseAuditTimer) clearInterval(databaseAuditTimer);
   if (loggingEngineTimer) clearInterval(loggingEngineTimer);
+  if (anomalyDetectionTimer) clearInterval(anomalyDetectionTimer);
 
   channelHeartbeatTimer = setInterval(() => {
     void runChannelHeartbeat(channels).catch(() => {});
@@ -397,11 +419,20 @@ function startOpsMonitors(channels: BotChannels): void {
   loggingEngineTimer = setInterval(() => {
     void runLoggingEngine(channels).catch(() => {});
   }, LOGGING_ENGINE_INTERVAL_MS);
+  anomalyDetectionTimer = setInterval(() => {
+    void detectAnomalies().then((anomalies) => {
+      if (anomalies.length > 0 && channels.agentErrors) {
+        const lines = anomalies.map(a => `${a.severity === 'error' ? '❌' : '⚠️'} **${a.type}**: ${a.detail}`);
+        channels.agentErrors.send(`🔍 **Anomaly Detection**\n${lines.join('\n')}`.slice(0, 1900)).catch(() => {});
+      }
+    }).catch(() => {});
+  }, LOGGING_ENGINE_INTERVAL_MS);
 
   void runChannelHeartbeat(channels).catch(() => {});
   void runLoggingEngine(channels).catch(() => {});
   void runUpgradesTriage(channels).catch(() => {});
   void runDatabaseAudit(channels).catch(() => {});
+  void detectAnomalies().catch(() => {});
 }
 
 function decodeBotIdFromToken(token: string): string | null {
