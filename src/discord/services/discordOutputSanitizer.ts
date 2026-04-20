@@ -19,6 +19,97 @@ const DISCORD_OUTPUT_SANITIZER_TIMEOUT_MS = Math.max(1000, parseInt(process.env.
 const DISCORD_OUTPUT_SANITIZER_MAX_INPUT_CHARS = Math.max(200, parseInt(process.env.DISCORD_OUTPUT_SANITIZER_MAX_INPUT_CHARS || '3200', 10));
 const DISCORD_TOOL_LINE_MAX_CHARS = Math.max(120, parseInt(process.env.DISCORD_TOOL_LINE_MAX_CHARS || '220', 10));
 
+// ────────────────────── Tool Chain Display ──────────────────────
+// Copilot-style live-updating tool chain with per-tool emojis.
+
+const TOOL_EMOJI: Record<string, string> = {
+  // File operations
+  read_file: '📖', write_file: '✍️', edit_file: '✏️', batch_edit: '✏️',
+  search_files: '🔍', list_directory: '📂',
+  // Execution
+  run_command: '⚙️', run_tests: '🧪', typecheck: '🔬',
+  // Git / GitHub
+  git_create_branch: '🌿', create_pull_request: '📬', merge_pull_request: '🔀',
+  add_pr_comment: '💬', list_pull_requests: '📋', github_search: '🔍',
+  // Discord channels
+  list_channels: '📺', delete_channel: '🗑️', create_channel: '📺',
+  rename_channel: '✏️', set_channel_topic: '📝', send_channel_message: '💬',
+  delete_category: '🗑️', move_channel: '📦',
+  // GCP / Deploy
+  gcp_preflight: '🔍', gcp_build_image: '🏗️', gcp_deploy: '🚀',
+  gcp_set_env: '⚙️', gcp_get_env: '📖', gcp_list_revisions: '📋',
+  gcp_rollback: '⏮️', gcp_build_status: '📊', gcp_logs_query: '📋',
+  gcp_run_describe: '📊', gcp_redeploy_bot_vm: '🚀', gcp_vm_ssh: '💻',
+  gcp_project_info: '📊', gcp_storage_ls: '📂', gcp_artifact_list: '📋',
+  gcp_sql_describe: '🗄️',
+  // Secrets
+  gcp_secret_set: '🔐', gcp_secret_bind: '🔐', gcp_secret_list: '🔐',
+  // Database
+  db_query: '🗄️', db_query_readonly: '🗄️', db_schema: '🗄️',
+  // Memory
+  memory_read: '🧠', memory_write: '🧠', memory_append: '🧠', memory_list: '🧠',
+  // Screenshots / mobile
+  capture_screenshots: '📸', mobile_harness_start: '📱', mobile_harness_step: '📱',
+  mobile_harness_snapshot: '📸', mobile_harness_stop: '📱',
+  // Network
+  fetch_url: '🌐', read_logs: '📋',
+};
+
+export function getToolEmoji(toolName: string): string {
+  return TOOL_EMOJI[toolName] || '🔧';
+}
+
+export interface ToolChainEntry {
+  emoji: string;
+  summary: string;
+  status: 'running' | 'done';
+}
+
+const TOOL_CHAIN_MAX_VISIBLE = parseInt(process.env.TOOL_CHAIN_MAX_VISIBLE || '15', 10);
+
+export class ToolChainTracker {
+  private entries: ToolChainEntry[] = [];
+
+  startTool(toolName: string, summary: string): void {
+    this.entries.push({
+      emoji: getToolEmoji(toolName),
+      summary: sanitizeToolFragment(summary),
+      status: 'running',
+    });
+  }
+
+  completeTool(toolName: string, summary: string): void {
+    const clean = sanitizeToolFragment(summary);
+    // Mark the matching running entry as done (last match first for parallel calls)
+    for (let i = this.entries.length - 1; i >= 0; i--) {
+      if (this.entries[i].status === 'running' && this.entries[i].summary === clean) {
+        this.entries[i].status = 'done';
+        return;
+      }
+    }
+    // No running match — add as already completed
+    this.entries.push({ emoji: getToolEmoji(toolName), summary: clean, status: 'done' });
+  }
+
+  render(maxVisible = TOOL_CHAIN_MAX_VISIBLE): string {
+    if (this.entries.length === 0) return '';
+    const visible = this.entries.length <= maxVisible
+      ? this.entries
+      : this.entries.slice(-maxVisible);
+    const hidden = this.entries.length - visible.length;
+
+    const lines = visible.map((e) => {
+      const marker = e.status === 'done' ? ' ✓' : '…';
+      return `${e.emoji} ${e.summary}${marker}`;
+    });
+    if (hidden > 0) lines.unshift(`*… ${hidden} earlier tools*`);
+    return lines.join('\n');
+  }
+
+  get size(): number { return this.entries.length; }
+  get isEmpty(): boolean { return this.entries.length === 0; }
+}
+
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | null = null;
   return Promise.race([

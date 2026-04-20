@@ -84,7 +84,7 @@ jest.mock('../../../discord/usage', () => ({
   isGeminiOverLimit: jest.fn().mockReturnValue(false),
 }));
 
-const mockListenToAllMembersSmart = jest.fn().mockReturnValue(() => {});
+const mockListenToAllMembersSmart = jest.fn().mockReturnValue({ unsubscribe: () => {}, preInitMember: () => {} });
 jest.mock('../../../discord/voice/connection', () => ({
   listenToAllMembersSmart: mockListenToAllMembersSmart,
   VoiceTranscription: {},

@@ -5,8 +5,8 @@ import { agentRespond, ConversationMessage } from '../claude';
 import { appendToMemory, getMemoryContext } from '../memory';
 import { recordTextChannelTimeout, updateTextChannelQueueDepth } from '../metrics';
 import { mirrorAgentResponse } from '../services/diagnosticsWebhook';
-import { buildToolNotificationLine, formatToolNotificationItem, sanitizeDiscordVisibleOutput } from '../services/discordOutputSanitizer';
-import { clearWebhookCache, sendWebhookMessage, WebhookCapableChannel } from '../services/webhooks';
+import { buildToolNotificationLine, formatToolNotificationItem, sanitizeDiscordVisibleOutput, ToolChainTracker } from '../services/discordOutputSanitizer';
+import { clearWebhookCache, getWebhook, sendWebhookMessage, WebhookCapableChannel } from '../services/webhooks';
 
 import { isLowSignalCompletion } from './responseNormalization';
 import { errMsg } from '../../utils/errors';
@@ -328,24 +328,55 @@ async function handleAgentMessageInner(
       return true;
     };
 
+    // Tool chain tracker — single message edited in place with live status
+    const toolChain = new ToolChainTracker();
+    let toolChainMessageId: string | null = null;
+    let toolChainEditTimer: NodeJS.Timeout | null = null;
+
+    const flushToolChain = async (): Promise<void> => {
+      if (toolChain.isEmpty) return;
+      if (toolChainEditTimer) { clearTimeout(toolChainEditTimer); toolChainEditTimer = null; }
+      const content = toolChain.render();
+      try {
+        if (toolChainMessageId) {
+          const wh = await getWebhook(channel);
+          await wh.editMessage(toolChainMessageId, { content });
+        } else {
+          const msg = await sendWebhookMessage(channel, {
+            content,
+            username: `${agent.emoji} ${agent.name}`,
+            avatarURL: agent.avatarUrl,
+          });
+          toolChainMessageId = msg.id;
+        }
+      } catch (err) {
+        console.warn(`Tool chain edit failed for ${agent.name}:`, errMsg(err));
+        toolChainMessageId = null;
+      }
+    };
+
+    const scheduleToolChainFlush = (): void => {
+      if (toolChainEditTimer) clearTimeout(toolChainEditTimer);
+      toolChainEditTimer = setTimeout(() => { void flushToolChain(); }, 400);
+    };
+
     const runAgent = async (sourceHistory: ConversationMessage[], disableTools: boolean): Promise<string> => {
       return await withTextTimeout(agentRespond(agent, sourceHistory, userMessageWithLang, async (toolName, summary) => {
         if (signal?.aborted) return;
         if (disableTools) return;
-        try {
-          await sendWebhookMessage(channel, {
-            content: buildToolNotificationLine([formatToolNotificationItem(toolName, summary)]),
-            username: `${agent.emoji} ${agent.name}`,
-            avatarURL: agent.avatarUrl,
-          });
-        } catch (err) {
-          console.warn(`Webhook tool notification failed for ${agent.name}:`, errMsg(err));
-        }
+        toolChain.completeTool(toolName, summary);
+        scheduleToolChainFlush();
       }, {
         signal,
         maxTokens,
         disableTools,
         threadKey: `text:${channelId}`,
+        onToolStart: async (toolName, summary) => {
+          if (signal?.aborted) return;
+          if (disableTools) return;
+          toolChain.startTool(toolName, summary);
+          scheduleToolChainFlush();
+        },
         onPartialText: async (partialText) => {
           await updateStreamPreview(partialText);
         },

@@ -19,7 +19,7 @@ import { LEGACY_APP_TABLES, LEGACY_DROP_MIGRATION, REQUIRED_RUNTIME_TABLES } fro
 import { getAgentByChannelName } from './agents';
 import { getAgent, loadDynamicAgentsFromDb } from './agents';
 import { setVoiceErrorChannel } from './handlers/callSession';
-import { startCall, endCall, isCallActive, processTesterVoiceTurnForCall } from './handlers/callSession';
+import { startCall, endCall, isCallActive, preInitSttForMember, processTesterVoiceTurnForCall } from './handlers/callSession';
 import { setBotChannels } from './handlers/documentation';
 import { setGitHubChannel } from './handlers/github';
 import {
@@ -853,6 +853,9 @@ export async function startBot(): Promise<void> {
         console.error('Voice auto join handler error:', errMsg(err));
         void postAgentErrorLog('discord:voice-auto-start', 'Voice auto join error', { detail: msg, level: 'warn' });
       }
+    } else if (joinedTarget && isCallActive()) {
+      // Pre-init STT for the new member to eliminate WebSocket cold-start latency
+      preInitSttForMember(member);
     }
 
     if (leftTarget && isCallActive()) {

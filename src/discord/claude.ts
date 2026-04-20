@@ -1246,9 +1246,14 @@ Operations channels (available to all agents):
 #💻-terminal — command output, #🚨-agent-errors — error logs, #🧯-voice-errors — voice diagnostics.
 Post findings to the relevant ops channel when appropriate.`.trim();
 
+const OPS_AWARE_AGENTS = new Set(['executive-assistant', 'operations-manager', 'devops']);
+
 function getProjectContextForAgent(agentId: string): string {
   const base = hasFullRepoToolAccess(agentId) ? PROJECT_CONTEXT : PROJECT_CONTEXT_LIGHT;
-  return `${base}\n\n${OPS_CHANNELS_CONTEXT}`;
+  if (OPS_AWARE_AGENTS.has(agentId)) {
+    return `${base}\n\n${OPS_CHANNELS_CONTEXT}`;
+  }
+  return base;
 }
 
 function isCacheablePrompt(agentId: string, userMessage: string, history: ConversationMessage[]): boolean {
@@ -2466,6 +2471,7 @@ export async function agentRespond(
     maxTokens?: number;
     signal?: AbortSignal;
     onPartialText?: (partialText: string) => Promise<void>;
+    onToolStart?: (toolName: string, summary: string) => Promise<void>;
     toolRoundBoost?: number;
     rileyAutoToolApprovalUsed?: boolean;
     safetyCapSynthesisUsed?: boolean;
@@ -3180,6 +3186,10 @@ ${getLatestSmokeHealthLine()}`;
         // Allowed for all agents; keep only safety checks elsewhere.
       }
 
+      // Fire onToolStart before execution for live-updating tool chain display
+      const summary = formatToolSummary(call.name, args);
+      if (options?.onToolStart) await options.onToolStart(call.name, summary);
+
       const result = await executeTool(call.name, args, {
         agentId: agent.id,
         threadKey: toolThreadKey,
@@ -3190,7 +3200,6 @@ ${getLatestSmokeHealthLine()}`;
       if (hasToolFailureSignal(call.name, result)) {
         sawToolFailure = true;
       }
-      const summary = formatToolSummary(call.name, args);
       logAgentEvent(agent.id, 'tool', summary, { durationMs: Date.now() - toolStart });
       if (onToolUse) await onToolUse(call.name, summary);
       const toolAudit = getToolAuditCallback();

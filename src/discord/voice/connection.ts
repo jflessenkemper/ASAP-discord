@@ -225,7 +225,7 @@ const MAX_AUDIO_BUFFER = 5 * 1024 * 1024;
 const VOICE_MIN_AUDIO_BYTES = parseInt(process.env.VOICE_MIN_AUDIO_BYTES || '48000', 10);
 const VOICE_SHORT_BUFFER_COALESCE_WINDOW_MS = Math.max(500, parseInt(process.env.VOICE_SHORT_BUFFER_COALESCE_WINDOW_MS || '2500', 10));
 const MAX_REALTIME_SESSION_RETRIES = parseInt(process.env.MAX_ELEVENLABS_REALTIME_SESSION_RETRIES || process.env.MAX_DEEPGRAM_SESSION_RETRIES || '3', 10);
-const VOICE_ENDPOINT_SILENCE_BASE_MS = parseInt(process.env.VOICE_ENDPOINT_SILENCE_BASE_MS || '900', 10);
+const VOICE_ENDPOINT_SILENCE_BASE_MS = parseInt(process.env.VOICE_ENDPOINT_SILENCE_BASE_MS || '600', 10);
 const VOICE_ENDPOINT_SILENCE_MIN_MS = parseInt(process.env.VOICE_ENDPOINT_SILENCE_MIN_MS || '650', 10);
 const VOICE_ENDPOINT_SILENCE_MAX_MS = parseInt(process.env.VOICE_ENDPOINT_SILENCE_MAX_MS || '1400', 10);
 const VOICE_ENDPOINT_STATE_TTL_MS = Math.max(300_000, parseInt(process.env.VOICE_ENDPOINT_STATE_TTL_MS || '1800000', 10));
@@ -700,7 +700,7 @@ export function listenToAllMembersSmart(
   voiceChannel: VoiceBasedChannel,
   onTranscription: (transcription: VoiceTranscription) => void,
   onSpeechStart?: (member: GuildMember) => void
-): () => void {
+): SmartListenerHandle {
   const preference = getSttProviderPreference();
 
   if (preference === 'elevenlabs' && VOICE_REALTIME_MODE && isElevenLabsRealtimeAvailable()) {
@@ -708,13 +708,16 @@ export function listenToAllMembersSmart(
     return listenToAllMembersElevenLabsRealtime(connection, voiceChannel, onTranscription, onSpeechStart);
   }
 
-  if (preference === 'elevenlabs') {
-    console.log('Using ElevenLabs batch STT for voice transcription');
-    return listenToAllMembers(connection, voiceChannel, onTranscription, onSpeechStart);
-  }
+  const batchUnsub = preference === 'elevenlabs'
+    ? (console.log('Using ElevenLabs batch STT for voice transcription'), listenToAllMembers(connection, voiceChannel, onTranscription, onSpeechStart))
+    : (console.log('Using ElevenLabs batch STT for voice transcription'), listenToAllMembers(connection, voiceChannel, onTranscription, onSpeechStart));
+  return { unsubscribe: batchUnsub, preInitMember: () => {} };
+}
 
-  console.log('Using ElevenLabs batch STT for voice transcription');
-  return listenToAllMembers(connection, voiceChannel, onTranscription, onSpeechStart);
+export interface SmartListenerHandle {
+  unsubscribe: () => void;
+  /** Pre-init STT session for a member joining the channel (avoids cold start). */
+  preInitMember: (member: GuildMember) => void;
 }
 
 function listenToAllMembersElevenLabsRealtime(
@@ -722,31 +725,37 @@ function listenToAllMembersElevenLabsRealtime(
   voiceChannel: VoiceBasedChannel,
   onTranscription: (transcription: VoiceTranscription) => void,
   onSpeechStart?: (member: GuildMember) => void
-): () => void {
+): SmartListenerHandle {
   const unsubscribers: Array<() => void> = [];
   const listeningUserIds = new Set<string>();
   let destroyed = false;
 
-  for (const [, member] of voiceChannel.members) {
-    if (!isTranscribableMember(member)) continue;
+  function initMember(member: GuildMember): void {
+    if (destroyed || listeningUserIds.has(member.id)) return;
+    if (!isTranscribableMember(member)) return;
     listeningUserIds.add(member.id);
     const unsub = listenToUserElevenLabsRealtime(connection, member, onTranscription, onSpeechStart);
     unsubscribers.push(unsub);
   }
 
+  for (const [, member] of voiceChannel.members) {
+    initMember(member);
+  }
+
   const onSpeaking = (userId: string) => {
     if (destroyed || listeningUserIds.has(userId)) return;
     const member = voiceChannel.members.get(userId);
-    if (!member || !isTranscribableMember(member)) return;
-    listeningUserIds.add(userId);
-    const unsub = listenToUserElevenLabsRealtime(connection, member, onTranscription, onSpeechStart);
-    unsubscribers.push(unsub);
+    if (!member) return;
+    initMember(member);
   };
   connection.receiver.speaking.on('start', onSpeaking);
 
-  return () => {
-    destroyed = true;
-    connection.receiver.speaking.off('start', onSpeaking);
-    for (const unsub of unsubscribers) unsub();
+  return {
+    unsubscribe: () => {
+      destroyed = true;
+      connection.receiver.speaking.off('start', onSpeaking);
+      for (const unsub of unsubscribers) unsub();
+    },
+    preInitMember: (member) => initMember(member),
   };
 }

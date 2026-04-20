@@ -41,7 +41,7 @@ import {
   type SelfImprovementQueuePayload,
 } from '../selfImprovementQueue';
 import { postAgentErrorLog } from '../services/agentErrors';
-import { buildToolNotificationLine, formatToolNotificationItem } from '../services/discordOutputSanitizer';
+import { buildToolNotificationLine, formatToolNotificationItem, ToolChainTracker } from '../services/discordOutputSanitizer';
 import { shouldEchoDirectedResponseToGroupchat, shouldKeepGroupchatPromptInChannel } from '../services/groupchatRouting';
 import { captureAndPostScreenshots } from '../services/screenshots';
 import { makeOutboundCall, makeAsapTesterCall, startConferenceCall, isTelephonyAvailable } from '../services/telephony';
@@ -73,88 +73,86 @@ import { buildLoggingEngineReport, runLoggingEngine } from '../loggingEngine';
 import { buildGroupchatDecisionAttention, buildGroupchatSingleUserNotice, buildTextStatusSummary } from '../rileyInteraction';
 
 
-type ToolNotificationBatch = {
+type ToolChainMessage = {
   channel: WebhookCapableChannel;
   agent: AgentConfig;
-  items: string[];
-  timer: NodeJS.Timeout | null;
+  tracker: ToolChainTracker;
   messageId: string | null;
+  editTimer: NodeJS.Timeout | null;
 };
 
-const TOOL_NOTIFICATION_FLUSH_MS = parseInt(process.env.TOOL_NOTIFICATION_FLUSH_MS || '2500', 10);
-const TOOL_NOTIFICATION_MAX_ITEMS = parseInt(process.env.TOOL_NOTIFICATION_MAX_ITEMS || '6', 10);
-const toolNotificationBatches = new Map<string, ToolNotificationBatch>();
+const TOOL_CHAIN_EDIT_DEBOUNCE_MS = parseInt(process.env.TOOL_CHAIN_EDIT_DEBOUNCE_MS || '400', 10);
+const toolChainMessages = new Map<string, ToolChainMessage>();
 const rileyStallNoticeAt = new Map<string, number>();
 const RILEY_STALL_NOTICE_COOLDOWN_MS = parseInt(process.env.RILEY_STALL_NOTICE_COOLDOWN_MS || '120000', 10);
 
-/** Send a tool-use notification as the agent (via webhook). Edits an existing message if one exists. */
-async function sendToolNotification(channel: WebhookCapableChannel, agent: AgentConfig, toolName: string, summary: string): Promise<void> {
+/** Record a tool start/completion for Copilot-style live chain display. */
+function updateToolChain(
+  channel: WebhookCapableChannel,
+  agent: AgentConfig,
+  toolName: string,
+  summary: string,
+  status: 'start' | 'done',
+): void {
   const key = `${channel.id}:${agent.id}`;
-  let batch = toolNotificationBatches.get(key);
-  if (!batch) {
-    batch = { channel, agent, items: [], timer: null, messageId: null };
-    toolNotificationBatches.set(key, batch);
+  let chain = toolChainMessages.get(key);
+  if (!chain) {
+    chain = { channel, agent, tracker: new ToolChainTracker(), messageId: null, editTimer: null };
+    toolChainMessages.set(key, chain);
   }
 
-  batch.items.push(formatToolNotificationItem(toolName, summary));
+  if (status === 'start') {
+    chain.tracker.startTool(toolName, summary);
+  } else {
+    chain.tracker.completeTool(toolName, summary);
+  }
 
-  // Debounce: reset timer on each new item so we batch rapid tool calls.
-  if (batch.timer) clearTimeout(batch.timer);
-  batch.timer = setTimeout(() => {
-    void flushToolNotificationBatch(key);
-  }, Math.max(300, TOOL_NOTIFICATION_FLUSH_MS));
+  // Debounce edits to avoid Discord rate limits
+  if (chain.editTimer) clearTimeout(chain.editTimer);
+  chain.editTimer = setTimeout(() => {
+    void flushToolChainEdit(key);
+  }, Math.max(200, TOOL_CHAIN_EDIT_DEBOUNCE_MS));
 }
 
-async function flushToolNotificationBatch(key: string): Promise<void> {
-  const batch = toolNotificationBatches.get(key);
-  if (!batch) return;
-  if (batch.timer) {
-    clearTimeout(batch.timer);
-    batch.timer = null;
+/** Legacy wrapper — called from onToolUse callbacks that only have 'done' status */
+async function sendToolNotification(channel: WebhookCapableChannel, agent: AgentConfig, toolName: string, summary: string): Promise<void> {
+  updateToolChain(channel, agent, toolName, summary, 'done');
+}
+
+async function flushToolChainEdit(key: string): Promise<void> {
+  const chain = toolChainMessages.get(key);
+  if (!chain || chain.tracker.isEmpty) return;
+  if (chain.editTimer) {
+    clearTimeout(chain.editTimer);
+    chain.editTimer = null;
   }
 
-  if (batch.items.length === 0) {
-    toolNotificationBatches.delete(key);
-    return;
-  }
-
-  // Keep only the latest MAX_ITEMS, prefix with count of dropped items
-  const allItems = [...new Set(batch.items)];
-  const overflow = allItems.length - TOOL_NOTIFICATION_MAX_ITEMS;
-  const visibleItems = overflow > 0
-    ? [`... and ${overflow} earlier tools`, ...allItems.slice(overflow)]
-    : allItems;
-
-  const content = buildToolNotificationLine(visibleItems);
+  const content = chain.tracker.render();
 
   try {
-    if (batch.messageId) {
-      // Edit the existing message in place
-      const targetChannel = batch.channel;
-      const wh = await getWebhook(targetChannel);
-      await wh.editMessage(batch.messageId, { content });
+    if (chain.messageId) {
+      const wh = await getWebhook(chain.channel);
+      await wh.editMessage(chain.messageId, { content });
     } else {
-      // First flush: send a new message and store its ID
-      const msg = await sendWebhookMessage(batch.channel, {
+      const msg = await sendWebhookMessage(chain.channel, {
         content,
-        username: `${batch.agent.emoji} ${batch.agent.name}`,
-        avatarURL: batch.agent.avatarUrl,
+        username: `${chain.agent.emoji} ${chain.agent.name}`,
+        avatarURL: chain.agent.avatarUrl,
       });
-      batch.messageId = msg.id;
+      chain.messageId = msg.id;
     }
   } catch (err) {
-    console.warn(`Webhook tool notification failed for ${batch.agent.name}:`, errMsg(err));
-    // If edit failed (e.g. message deleted), reset and try fresh next time
-    batch.messageId = null;
+    console.warn(`Tool chain edit failed for ${chain.agent.name}:`, errMsg(err));
+    chain.messageId = null;
   }
 }
 
-/** Reset all batches for a channel so the next invocation creates a fresh message. */
-function resetToolNotificationBatches(channelId: string): void {
-  for (const [key, batch] of toolNotificationBatches) {
+/** Reset tool chain for a channel so the next invocation creates a fresh message. */
+function resetToolChain(channelId: string): void {
+  for (const [key, chain] of toolChainMessages) {
     if (key.startsWith(`${channelId}:`)) {
-      if (batch.timer) clearTimeout(batch.timer);
-      toolNotificationBatches.delete(key);
+      if (chain.editTimer) clearTimeout(chain.editTimer);
+      toolChainMessages.delete(key);
     }
   }
 }
@@ -1901,7 +1899,7 @@ async function dispatchToAgent(
     [...agentMemory, ...groupHistory],
     contextMessage,
     async (toolName, summary) => {
-      sendToolNotification(outputChannel, agent, toolName, summary).catch(() => {});
+      updateToolChain(outputChannel, agent, toolName, summary, 'done');
       options.onToolUse?.(toolName, summary);
     },
     {
@@ -1909,6 +1907,9 @@ async function dispatchToAgent(
       signal: options.signal,
       priority: options.priority,
       threadKey: `groupchat:${outputChannel.id}`,
+      onToolStart: async (toolName, summary) => {
+        updateToolChain(outputChannel, agent, toolName, summary, 'start');
+      },
     }
   );
 
@@ -2013,7 +2014,7 @@ export async function handleGroupchatMessage(
     activeAbortController = null;
   }
   clearThinkingMessage().catch(() => {});
-  resetToolNotificationBatches(groupchat.id);
+  resetToolChain(groupchat.id);
 
   const controller = new AbortController();
   activeAbortController = controller;
@@ -2379,12 +2380,15 @@ async function handleRileyMessage(
     const contextMessageWithLang = `${textLangHint ? `${contextMessage}${textLangHint}` : contextMessage}${mentionGuide}${threadCloseGuide}${decisionGuide}`;
 
     const response = await agentRespond(riley, [...rileyMemory, ...groupHistory], contextMessageWithLang, async (toolName, summary) => {
-      sendToolNotification(rileyWorkChannel, riley, toolName, summary).catch(() => {});
+      updateToolChain(rileyWorkChannel, riley, toolName, summary, 'done');
     }, {
       signal,
       outputMode: 'machine_json',
       machineEnvelopeRaw: true,
       threadKey: `groupchat:${workspaceChannel.id}`,
+      onToolStart: async (toolName, summary) => {
+        updateToolChain(rileyWorkChannel, riley, toolName, summary, 'start');
+      },
     });
 
     const responseEnvelope = extractAgentResponseEnvelope(response);
@@ -2539,12 +2543,15 @@ async function handleRileyMessage(
         // Re-invoke Riley for the next sub-task
         const rileyMemoryCtx = getMemoryContext('executive-assistant');
         const continuationResponse = await agentRespond(riley, [...rileyMemoryCtx, ...groupHistory], continuationPrompt, async (toolName, summary) => {
-          sendToolNotification(rileyWorkChannel, riley, toolName, summary).catch(() => {});
+          updateToolChain(rileyWorkChannel, riley, toolName, summary, 'done');
         }, {
           signal,
           outputMode: 'machine_json',
           machineEnvelopeRaw: true,
           threadKey: `groupchat:${workspaceChannel.id}`,
+          onToolStart: async (toolName, summary) => {
+            updateToolChain(rileyWorkChannel, riley, toolName, summary, 'start');
+          },
         });
 
         if (signal?.aborted) break;

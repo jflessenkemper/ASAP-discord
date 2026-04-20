@@ -32,97 +32,157 @@ This system is closer to an operations room:
 
 ```mermaid
 flowchart TD
-    User[User]
+    User([User])
 
     subgraph FrontDoor["Front Door"]
         Riley["Riley EA · Sonnet<br/>plan · guard · route · voice"]
-        Voice["ElevenLabs<br/>STT ↔ TTS"]
-    end
-
-    subgraph Agents["Specialist Agents (13)"]
-        AgentList["QA · UX · Security · API · DBA<br/>Performance · DevOps · Copywriter<br/>Lawyer · iOS · Android<br/>Sonnet default · Opus for code-heavy"]
-        DynAgents["+ dynamic agents from DB"]
-    end
-
-    subgraph SelfImprove["Self-Improvement Pipeline"]
-        SIQueue[("Job queue<br/>self_improvement_jobs")]
-        RileyOps["Riley Ops · Sonnet<br/>steward · learn · adapt"]
-    end
-
-    subgraph Surfaces["Discord Surfaces"]
-        Groupchat["#groupchat<br/>reply · rolling tool edits"]
-        Workspace["Workspace thread<br/>deep task work"]
-        AgentCh["Agent channels<br/>per-agent tool logs"]
-        OpsDash["Ops channels<br/>errors · limits · loops<br/>voice · terminal · cost"]
-    end
-
-    subgraph Loops["Background Loops (11)"]
-        LoopList["heartbeat · logging · memory<br/>db-audit · test-engine · upgrades<br/>thread-status · goal-watchdog<br/>voice-session · anomaly-detection<br/>self-improvement-worker"]
-    end
-
-    subgraph Data["Data Layer (Postgres)"]
-        Memory[("agent_memory<br/>prompts · dynamic agents")]
-        ActivityLog[("agent_activity_log<br/>events · tokens · durations")]
-        Learnings[("agent_learnings<br/>patterns · tags · TTL")]
-        SIJobs[("self_improvement_jobs<br/>durable queue")]
+        Voice["ElevenLabs · STT ↔ TTS"]
     end
 
     User -->|text| Riley
     User -->|voice| Voice
-    Voice <-->|spoken| Riley
-    Riley <-->|delegate via handoff| AgentList
-    AgentList -->|tool logs| AgentCh
-    Riley -->|reply| Groupchat
-    Riley -->|task reply| Workspace
-    Riley -->|spoken| Voice
-    Voice -->|spoken| User
-    Groupchat -->|notify| User
-    Workspace -->|compact completion| Groupchat
-    Riley -->|ops updates| OpsDash
+    Voice -->|transcribe| Riley
 
-    Riley -->|enqueue| SIQueue
-    SIQueue --> RileyOps
-    RileyOps -->|write| Learnings
-    RileyOps -->|post| OpsDash
-    LoopList -->|feed| RileyOps
-    LoopList -->|record| ActivityLog
+    Riley -->|delegate| Agents
+    Riley -->|enqueue| SelfImprove
 
-    Riley -->|read/write| Memory
-    AgentList --> ActivityLog
-    Learnings -.->|prompt injection| Riley
+    subgraph Agents["Specialist Agents · 11 + dynamic"]
+        Max["🧪 Max · QA<br/>read · test · db-query"]
+        Sophie["🎨 Sophie · UX<br/>read · screenshots · mobile"]
+        Kane["🔒 Kane · Security<br/>read · test · gcp-inspect"]
+        Raj["📡 Raj · API<br/>read · test · typecheck"]
+        Elena["🗄️ Elena · DBA<br/>read · db-query · db-schema"]
+        Kai["⚡ Kai · Perf<br/>read · test · gcp-logs"]
+        Jude["🚀 Jude · DevOps<br/>ALL: write · deploy · merge"]
+        Mia["🍎 Mia · iOS<br/>ALL: write · deploy · merge"]
+        Leo["🤖 Leo · Android<br/>ALL: write · deploy · merge"]
+        Liv["✍️ Liv · Copy<br/>read · memory · fetch-url"]
+        Harper["⚖️ Harper · Lawyer<br/>read · memory · fetch-url"]
+        DBAgents["🔌 DB · dynamic<br/>varies per agent"]
+        Max ~~~ Sophie ~~~ Kane ~~~ Raj ~~~ Elena ~~~ Kai
+        Jude ~~~ Mia ~~~ Leo ~~~ Liv ~~~ Harper ~~~ DBAgents
+    end
+
+    subgraph SelfImprove["Self-Improvement Pipeline"]
+        SIQueue[("si_jobs queue")]
+        RileyOps["🛰️ Riley Ops · Sonnet<br/>steward · learn · adapt"]
+        SIQueue --> RileyOps
+    end
+
+    Agents -->|tool logs + replies| Surfaces
+    RileyOps -->|ops posts| Surfaces
+
+    subgraph Surfaces["Discord Server · 30 channels"]
+        UserCh["💬 User-facing<br/>groupchat · threads<br/>decisions · voice"]
+        AgentCh["🤖 Agent channels<br/>1 per specialist"]
+        OpsCh["📊 Ops channels<br/>errors · limits · loops<br/>terminal · cost · screens"]
+        PersonalCh["💼 Personal<br/>career-ops · job-apps"]
+        UserCh ~~~ AgentCh ~~~ OpsCh ~~~ PersonalCh
+    end
+
+    Surfaces -->|persist| Data
+    Loops -->|record| Data
+
+    subgraph Loops["Background Loops · 11"]
+        LoopFast["⚡ Fast · Watchdog 60s · Voice 20s · SI Worker 5s"]
+        LoopMed["🔄 Medium · Heartbeat · Logging · Anomaly 30m · Threads 1h"]
+        LoopSlow["🐢 Slow · Memory 4h · DB Audit · Upgrades 6h · Tests on-demand"]
+        LoopFast ~~~ LoopMed ~~~ LoopSlow
+    end
+
+    subgraph Data["Data Layer · Postgres"]
+        Memory[("agent_memory")]
+        ActivityLog[("activity_log")]
+        Learnings[("agent_learnings · ↻ injected into prompts")]
+        SIJobs[("si_jobs")]
+        Memory ~~~ ActivityLog ~~~ Learnings ~~~ SIJobs
+    end
 
     classDef user fill:#4f8fcb,stroke:#2f6ea3,color:#fff,stroke-width:2px
     classDef riley fill:#4ea56b,stroke:#2f7a49,color:#fff,stroke-width:2px
-    classDef surface fill:#7b8794,stroke:#56616d,color:#fff,stroke-width:2px
+    classDef agent fill:#7b8794,stroke:#56616d,color:#fff,stroke-width:2px
     classDef voice fill:#7b4fd6,stroke:#5934a5,color:#fff,stroke-width:2px
     classDef data fill:#3a7bd5,stroke:#2566b3,color:#fff,stroke-width:2px
     classDef improve fill:#c05fbf,stroke:#8a3d88,color:#fff,stroke-width:2px
+    classDef loop fill:#6b7280,stroke:#4b5563,color:#fff,stroke-width:1px
+    classDef surface fill:#374151,stroke:#1f2937,color:#fff,stroke-width:1px
 
     class User user
     class Riley riley
     class Voice voice
-    class Groupchat,Workspace,AgentCh,OpsDash,AgentList,DynAgents,LoopList surface
+    class Max,Sophie,Kane,Raj,Elena,Kai,Jude,Mia,Leo,Liv,Harper,DBAgents agent
+    class UserCh,AgentCh,OpsCh,PersonalCh surface
     class Memory,ActivityLog,Learnings,SIJobs data
     class SIQueue,RileyOps improve
+    class LoopFast,LoopMed,LoopSlow loop
 ```
+
+### Component inventory
+
+Every element in the diagram is listed below. This is the single source of truth — if it's not here, it's not in the bot.
+
+#### Specialist Agents
+
+| Emoji | Name | Role | Channel |
+|-------|------|------|---------|
+| 🧪 | Max | QA | #max-qa |
+| 🎨 | Sophie | UX Reviewer | #sophie-ux |
+| 🔒 | Kane | Security Auditor | #kane-security |
+| 📡 | Raj | API Reviewer | #raj-api |
+| 🗄️ | Elena | DBA | #elena-dba |
+| ⚡ | Kai | Performance | #kai-performance |
+| 🚀 | Jude | DevOps | #jude-devops |
+| 🍎 | Mia | iOS Engineer | #mia-ios |
+| 🤖 | Leo | Android Engineer | #leo-android |
+| ✍️ | Liv | Copywriter | #liv-copywriter |
+| ⚖️ | Harper | Lawyer | #harper-lawyer |
+| — | _dynamic_ | Loaded from `agent_memory` DB | auto-created |
+
+#### Background Loops
+
+| Loop | Interval | Purpose |
+|------|----------|---------|
+| Goal Watchdog | 60 s | Check/advance active goals |
+| Voice Session | 20 s | Heartbeat for active voice calls |
+| SI Worker | 5 s poll | Drain self-improvement job queue |
+| Channel Heartbeat | 30 min | Verify all Discord channels exist |
+| Logging Engine | 30 min | Flush buffered logs |
+| Anomaly Detection | 30 min | Detect runtime anomalies |
+| Thread Status Reporter | 1 h | Post thread status summaries |
+| Memory Consolidation | 4 h | Consolidate agent memory |
+| Database Audit | 6 h | Audit schema & data health |
+| Upgrades Triage | 6 h | Review and enqueue accepted upgrades |
+| Test Engine | on-demand | Run tests when triggered |
+
+#### Discord Channels
+
+| Category | Channels |
+|----------|----------|
+| **User-facing** | 💬 #groupchat · 🧵 workspace threads · 📋 #decisions · 🎤 #voice |
+| **Agent (13)** | One per specialist — tool logs and work output |
+| **Ops (11)** | 🚨 #agent-errors · 📊 #limits · 🔁 #loops · 💻 #terminal · 💸 #cost · 🧯 #voice-errors · 📸 #screenshots · 📦 #github · 🆙 #upgrades · 🔗 #url · 📋 #call-log |
+| **Personal** | 💼 #career-ops · 📋 #job-applications |
+
+#### Data Layer (Postgres)
+
+| Table | Purpose |
+|-------|---------|
+| `agent_memory` | System prompts, dynamic agent definitions |
+| `agent_activity_log` | Event-sourced telemetry (tokens, durations, events) |
+| `agent_learnings` | Patterns with tags, 30-day TTL, injected into prompts |
+| `self_improvement_jobs` | Durable job queue with retry/backoff |
 
 ### How to read this diagram
 
 **Front Door.** All user input (text or voice) enters through Riley EA, which always runs on Sonnet. Riley applies guardrails, answers simple questions directly, and delegates to specialists when focused review is needed. Voice goes through ElevenLabs for STT/TTS.
 
-**Delegation.** Riley EA is the sole orchestrator. Her JSON response envelope includes a `delegateAgents` list; `handleSubAgents()` runs those specialists in tiered parallel via the handoff protocol. Results are aggregated back to Riley for synthesis. There is no separate "agent manager" — Riley EA plans, delegates, and synthesizes in one flow.
+**Delegation.** Riley EA is the sole orchestrator. Her JSON response envelope includes a `delegateAgents` list; `handleSubAgents()` runs those specialists in tiered parallel via the handoff protocol. There is no separate "agent manager" — Riley plans, delegates, and synthesizes in one flow.
 
-**Model routing.** `resolveModelForAgent()` picks the model per-call: Riley EA and Riley Ops always use Sonnet (`RILEY_PLANNING_MODEL`). Code-heavy agents (EA, Ops, DevOps, iOS, Android) get Opus on high-stakes prompts. All others get Sonnet with health-based fallback. There is no separate "Opus agent" — Opus is a model choice, not an entity.
+**Model routing.** `resolveModelForAgent()` picks the model per-call. Riley EA/Ops always use Sonnet. Code-heavy agents get Opus on high-stakes prompts. All others get Sonnet with health fallback. There is no separate "Opus agent" — Opus is a model choice, not an entity.
 
-**Specialist Agents.** 13 static agents (QA, UX, Security, API, DBA, Performance, DevOps, Copywriter, Lawyer, iOS, Android, plus Riley EA and Riley Ops) and dynamic agents loaded from `agent_memory`. Each specialist works in a dedicated Discord channel.
+**Self-Improvement.** After specialist work, a self-improvement packet is enqueued as a durable job. The SI Worker (5s poll) drains the queue, dispatches to Riley Ops, and writes learnings. Loops feed anomalies and failed jobs into the same pipeline.
 
-**Self-Improvement Pipeline.** After specialist work completes, a self-improvement packet is built and enqueued as a durable job. A 5-second poll worker claims the job, runs loop adapters, dispatches to Riley Ops (the operations-manager agent), and writes learnings to the database. Failed jobs post to #errors. Accepted upgrades from the triage loop also become jobs.
-
-**Background Loops (11).** Channel heartbeat (30m), logging engine (30m), memory consolidation (4h), database audit (6h), test engine (on-demand), upgrades triage (6h), thread status reporter (1h), goal watchdog (60s), voice session (20s), anomaly detection (30m), self-improvement worker (5s). Each reports health status to the ops dashboard.
-
-**Data Layer.** Four Postgres tables: `agent_memory` (system prompts and dynamic agent definitions), `agent_activity_log` (event-sourced telemetry), `agent_learnings` (patterns with tags and 30-day TTL, injected into future system prompts), and `self_improvement_jobs` (durable job queue with retry/backoff).
-
-**Feedback loop.** Loops detect issues → worker records learnings → learnings are injected into future prompts → agents adapt behavior. This is the closed loop that makes the system learn from its own operation.
+**Feedback loop.** Loops detect issues → worker records learnings → learnings are injected into future prompts → agents adapt behavior.
 
 The full architecture with per-channel contracts is in [.github/ARCHITECTURE.md](.github/ARCHITECTURE.md).
 

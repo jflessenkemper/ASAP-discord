@@ -48,7 +48,7 @@ export async function startElevenLabsRealtimeTranscription(
   const language = process.env.ELEVENLABS_STT_LANGUAGE_CODE || 'en';
   const includeLanguageDetection = toBoolParam(process.env.ELEVENLABS_STT_INCLUDE_LANGUAGE_DETECTION, true);
   const includeTimestamps = toBoolParam(process.env.ELEVENLABS_STT_INCLUDE_TIMESTAMPS, false);
-  const vadSilenceThresholdSecs = process.env.ELEVENLABS_STT_VAD_SILENCE_THRESHOLD_SECS || '0.7';
+  const vadSilenceThresholdSecs = process.env.ELEVENLABS_STT_VAD_SILENCE_THRESHOLD_SECS || '0.4';
   const vadThreshold = process.env.ELEVENLABS_STT_VAD_THRESHOLD || '0.4';
   const minSpeechDurationMs = process.env.ELEVENLABS_STT_MIN_SPEECH_DURATION_MS || '80';
   const minSilenceDurationMs = process.env.ELEVENLABS_STT_MIN_SILENCE_DURATION_MS || '120';

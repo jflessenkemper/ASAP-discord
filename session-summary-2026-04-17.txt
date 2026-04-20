@@ -1,0 +1,83 @@
+ASAP Discord session summary
+Date: 2026-04-17
+Workspace: /home/jflessenkemper/ASAP-discord
+
+Overview
+- This session started from production debugging context and then shifted heavily into architecture redesign and Mermaid diagram cleanup.
+- The target architecture is now Riley-first: Riley is the single front door, uses Sonnet internally for planning and synthesis, and hands execution to Opus.
+- Opus is responsible for execution routing, implementation work, and assessing whether the work is complete before anything returns to Riley.
+
+Key architecture decisions captured in docs
+- Riley is the single user-facing orchestrator.
+- Sonnet is folded into Riley rather than shown as a separate user-facing system.
+- Opus is the execution and completion layer.
+- Riley may pause in a decisions channel to wait for a user response before handing work to Opus.
+- Riley decides how to deliver completion back to the user: voice if the requesting user is still in voice, otherwise by tagging them in groupchat.
+- ElevenLabs is the voice relay layer and sits inside the Front Door boundary in the diagrams.
+- Independent loops are separate from the front door and separate from agent channels.
+- Self improvement engine sits outside the Independent loops box and receives input from the loop boxes.
+
+Diagram conventions finalized
+- User boxes are blue.
+- Riley / Sonnet boxes are green.
+- Opus boxes are orange.
+- ElevenLabs boxes are purple.
+- Supporting channels, loops, and operational surfaces are grey.
+- Boxes use solid fills instead of glow styling.
+
+Major documentation work completed
+- README.md simple architecture diagram was repeatedly refined.
+- .github/ARCHITECTURE.md system context and prose were repeatedly refined.
+- "Agent workspaces" was renamed to "Agent channels".
+- "Groupchat" was renamed to "Groupchat channel" in the diagrams.
+- Agent channels, independent loops, and ops channels were expanded from abstract boxes into explicit listed boxes.
+- The old generic Opus -> AgentHub delegate/results pattern was replaced.
+
+Latest structural diagram change
+- Opus now connects to a green Riley/Sonnet "agent manager" box.
+- The agent manager fans out to per-agent boxes.
+- Each agent box points to its corresponding agent channel.
+- The old AgentHub / delegate / results wording was removed from the high-level docs.
+- One leftover prose sentence in .github/ARCHITECTURE.md was updated to match the new framing: agent channels, tools, and loops feed evidence and outcomes back into Opus.
+
+Canonical agent list used for the diagrams
+- QA
+- UX Reviewer
+- Security Auditor
+- API Reviewer
+- DBA
+- Performance
+- DevOps
+- Copywriter
+- Lawyer
+- iOS Engineer
+- Android Engineer
+
+Runtime/code changes completed earlier in the session and still relevant
+- Added RILEY_PLANNING_MODEL in src/services/modelConfig.ts.
+- Riley model lock was switched to the planning model in src/discord/claude.ts.
+- Added one-speaker / one-user wait notices in src/discord/rileyInteraction.ts.
+- Implemented single active requester behavior in src/discord/handlers/groupchat.ts.
+- Implemented single active speaker behavior in src/discord/handlers/callSession.ts.
+- Added regression coverage in src/__tests__/discord/handlers/callSession.test.ts.
+
+Validation status
+- Earlier runtime validation passed: typecheck succeeded and the focused callSession test suite passed.
+- Latest doc validation passed: no markdown/doc errors in README.md or .github/ARCHITECTURE.md.
+- Final grep checks found no remaining AgentHub, delegate, results, or Agent workspaces references in those two docs.
+
+Files most relevant to this session
+- /home/jflessenkemper/ASAP-discord/README.md
+- /home/jflessenkemper/ASAP-discord/.github/ARCHITECTURE.md
+- /home/jflessenkemper/ASAP-discord/src/discord/agents.ts
+- /home/jflessenkemper/ASAP-discord/src/services/modelConfig.ts
+- /home/jflessenkemper/ASAP-discord/src/discord/claude.ts
+- /home/jflessenkemper/ASAP-discord/src/discord/rileyInteraction.ts
+- /home/jflessenkemper/ASAP-discord/src/discord/handlers/groupchat.ts
+- /home/jflessenkemper/ASAP-discord/src/discord/handlers/callSession.ts
+- /home/jflessenkemper/ASAP-discord/src/__tests__/discord/handlers/callSession.test.ts
+
+Current state at the end of the session
+- The high-level docs now reflect Riley/Sonnet as the front door and Opus as the execution/completion layer.
+- The latest agent-manager refactor is applied in both README.md and .github/ARCHITECTURE.md.
+- The remaining likely next step, if needed, is a purely visual Mermaid cleanup pass to reduce clutter without changing semantics.

@@ -1,0 +1,122 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "typecheck-discord-fixes",
+			"type": "shell",
+			"command": "npx",
+			"args": [
+				"tsc",
+				"--noEmit",
+				"-p",
+				"tsconfig.json"
+			],
+			"isBackground": false,
+			"group": "test"
+		},
+		{
+			"label": "jest-callsession",
+			"type": "shell",
+			"command": "npx",
+			"args": [
+				"jest",
+				"src/__tests__/discord/handlers/callSession.test.ts",
+				"--runInBand",
+				"--no-coverage"
+			],
+			"isBackground": false,
+			"group": "test"
+		},
+		{
+			"label": "jest-callsession-rerun",
+			"type": "shell",
+			"command": "npx",
+			"args": [
+				"jest",
+				"src/__tests__/discord/handlers/callSession.test.ts",
+				"--runInBand",
+				"--no-coverage"
+			],
+			"isBackground": false,
+			"group": "test"
+		},
+		{
+			"label": "typecheck-discord-fixes-rerun",
+			"type": "shell",
+			"command": "npx",
+			"args": [
+				"tsc",
+				"--noEmit",
+				"-p",
+				"tsconfig.json"
+			],
+			"isBackground": false,
+			"group": "test"
+		},
+		{
+			"label": "typecheck-elevenlabs-voice-id",
+			"type": "shell",
+			"command": "npx",
+			"args": [
+				"tsc",
+				"--noEmit",
+				"-p",
+				"tsconfig.json"
+			],
+			"isBackground": false,
+			"group": "test"
+		},
+		{
+			"label": "jest-voice-elevenlabs",
+			"type": "shell",
+			"command": "npx",
+			"args": [
+				"jest",
+				"src/__tests__/discord/voice.test.ts",
+				"--runInBand",
+				"--no-coverage"
+			],
+			"isBackground": false,
+			"group": "test"
+		},
+		{
+			"label": "typecheck-riley-realtime",
+			"type": "shell",
+			"command": "npx",
+			"args": [
+				"tsc",
+				"--noEmit",
+				"-p",
+				"tsconfig.json"
+			],
+			"isBackground": false,
+			"group": "test"
+		},
+		{
+			"label": "jest-voice-connection",
+			"type": "shell",
+			"command": "npx",
+			"args": [
+				"jest",
+				"src/__tests__/discord/voice/connection.test.ts",
+				"--runInBand",
+				"--no-coverage"
+			],
+			"isBackground": false,
+			"group": "test"
+		},
+		{
+			"label": "jest-agents",
+			"type": "shell",
+			"command": "npx",
+			"args": [
+				"jest",
+				"src/__tests__/discord/agents.test.ts",
+				"--runInBand",
+				"--no-coverage"
+			],
+			"isBackground": false,
+			"group": "test"
+		}
+	]
+}

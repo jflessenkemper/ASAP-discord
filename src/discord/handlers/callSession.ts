@@ -9,7 +9,7 @@ import { appendToMemory, getMemoryContext } from '../memory';
 import { recordVoiceCallStart, recordVoiceCallEnd } from '../metrics';
 import { postDiagnostic, mirrorAgentResponse, mirrorVoiceTranscript } from '../services/diagnosticsWebhook';
 import { getWebhook } from '../services/webhooks';
-import { listenToAllMembersSmart, VoiceTranscription } from '../voice/connection';
+import { listenToAllMembersSmart, SmartListenerHandle, VoiceTranscription } from '../voice/connection';
 import { isElevenLabsAvailable, primeElevenLabsVoiceCache } from '../voice/elevenlabs';
 import { getElevenLabsConvaiReply, isElevenLabsConvaiEnabled } from '../voice/elevenlabsConvai';
 import { isElevenLabsRealtimeAvailable } from '../voice/elevenlabsRealtime';
@@ -544,6 +544,12 @@ export interface CallSession {
 }
 
 let activeSession: CallSession | null = null;
+let activeListenerHandle: SmartListenerHandle | null = null;
+
+/** Pre-init STT for a member joining the voice channel (avoids cold start). */
+export function preInitSttForMember(member: GuildMember): void {
+  activeListenerHandle?.preInitMember(member);
+}
 
 function isTransientConnectionState(status: string): boolean {
   return status === VoiceConnectionStatus.Disconnected || status === 'signalling' || status === 'connecting';
@@ -768,7 +774,7 @@ export async function startCall(
     connection.off('stateChange', onConnectionStateChange);
   });
 
-  const unsub = listenToAllMembersSmart(
+  const listenerHandle = listenToAllMembersSmart(
     connection,
     voiceChannel,
     (transcription) => {
@@ -784,7 +790,8 @@ export async function startCall(
       void postVoiceStageLog('speech_detected', `user=${member.displayName}`);
     }
   );
-  activeSession.unsubscribers.push(unsub);
+  activeSession.unsubscribers.push(listenerHandle.unsubscribe);
+  activeListenerHandle = listenerHandle;
 
   const onSpeakingStart = (userId: string) => {
     if (!activeSession?.active) return;
@@ -891,6 +898,7 @@ export async function endCall(): Promise<void> {
   for (const unsub of session.unsubscribers) {
     unsub();
   }
+  activeListenerHandle = null;
 
   // Restore ASAPTester's identity
   const guildId = session.voiceChannel.guild.id;

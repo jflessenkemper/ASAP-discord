@@ -107,10 +107,18 @@ export async function recordAgentLearning(
 
 // ─── Recall relevant context for a task ───
 
+const RECALL_CACHE_TTL_MS = parseInt(process.env.RECALL_CACHE_TTL_MS || '45000', 10);
+const recallCache = new Map<string, { result: string; ts: number }>();
+
 export async function recallRelevantContext(
   _query: string,
   agentId?: string,
 ): Promise<string> {
+  // Cache by agentId to avoid repeated DB hits for the same agent within the TTL
+  const cacheKey = agentId || '__global';
+  const now = Date.now();
+  const cached = recallCache.get(cacheKey);
+  if (cached && now - cached.ts < RECALL_CACHE_TTL_MS) return cached.result;
   try {
     const { rows } = agentId
       ? await pool.query(
@@ -125,7 +133,10 @@ export async function recallRelevantContext(
            ORDER BY created_at DESC LIMIT $1`,
           [RECALL_LIMIT],
         );
-    if (rows.length === 0) return '';
+    if (rows.length === 0) {
+      recallCache.set(cacheKey, { result: '', ts: Date.now() });
+      return '';
+    }
 
     let result = '';
     for (const r of rows as { tag: string; pattern: string }[]) {
@@ -133,7 +144,9 @@ export async function recallRelevantContext(
       if (result.length + line.length > RECALL_MAX_CHARS) break;
       result += line;
     }
-    return result ? `\n[Learned patterns]\n${result}` : '';
+    const final = result ? `\n[Learned patterns]\n${result}` : '';
+    recallCache.set(cacheKey, { result: final, ts: Date.now() });
+    return final;
   } catch (err) {
     console.error('[vectorMemory] recallRelevantContext failed:', errMsg(err));
     return '';

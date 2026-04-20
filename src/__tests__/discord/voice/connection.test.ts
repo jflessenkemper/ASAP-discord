@@ -423,8 +423,8 @@ describe('voice/connection', () => {
       const subStream = new Readable({ read() {} });
       mockReceiverSubscribe.mockReturnValue(subStream);
 
-      const unsub = listenToAllMembersSmart(mockConnection as any, channel, jest.fn());
-      unsub();
+      const handle = listenToAllMembersSmart(mockConnection as any, channel, jest.fn());
+      handle.unsubscribe();
     });
 
     it('uses ElevenLabs realtime when available', () => {
@@ -432,8 +432,8 @@ describe('voice/connection', () => {
       process.env.VOICE_REALTIME_MODE = 'true';
 
       const channel = makeVoiceChannel([]);
-      const unsub = listenToAllMembersSmart(mockConnection as any, channel, jest.fn());
-      unsub();
+      const handle = listenToAllMembersSmart(mockConnection as any, channel, jest.fn());
+      handle.unsubscribe();
     });
 
     it('respects VOICE_STT_PROVIDER=elevenlabs fallback to batch', () => {
@@ -445,8 +445,8 @@ describe('voice/connection', () => {
       const subStream = new Readable({ read() {} });
       mockReceiverSubscribe.mockReturnValue(subStream);
 
-      const unsub = listenToAllMembersSmart(mockConnection as any, channel, jest.fn());
-      unsub();
+      const handle = listenToAllMembersSmart(mockConnection as any, channel, jest.fn());
+      handle.unsubscribe();
     });
 
     it('defaults to ElevenLabs batch STT for unsupported provider values', () => {
@@ -458,8 +458,8 @@ describe('voice/connection', () => {
       const subStream = new Readable({ read() {} });
       mockReceiverSubscribe.mockReturnValue(subStream);
 
-      const unsub = listenToAllMembersSmart(mockConnection as any, channel, jest.fn());
-      unsub();
+      const handle = listenToAllMembersSmart(mockConnection as any, channel, jest.fn());
+      handle.unsubscribe();
     });
   });
 
