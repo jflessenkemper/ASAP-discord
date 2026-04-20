@@ -79,6 +79,9 @@ import {
   clearGeminiQuotaFuse,
   getGeminiQuotaFuseStatus,
   getContextRuntimeReport,
+  getPinnedModelForTask,
+  isCodingTaskPrompt,
+  parseToolRoundLimit,
 } from '../../discord/claude';
 
 describe('claude', () => {
@@ -187,6 +190,30 @@ describe('claude', () => {
     it('includes context pruning stats', () => {
       const report = getContextRuntimeReport();
       expect(report.toLowerCase()).toContain('prun');
+    });
+  });
+
+  describe('coding task routing', () => {
+    it('treats explicit file edits as coding tasks', () => {
+      expect(isCodingTaskPrompt('Edit src/index.ts to add a guard clause.')).toBe(true);
+    });
+
+    it('pins executive-assistant coding requests to the coding model', () => {
+      expect(getPinnedModelForTask('executive-assistant', 'Modify src/index.ts and fix the failing test.')).toBe('claude-opus-4-6');
+    });
+
+    it('keeps non-coding executive work on the planning model', () => {
+      expect(getPinnedModelForTask('executive-assistant', 'Summarize the current status for Jordan.')).toBe('claude-sonnet-4-20250514');
+    });
+  });
+
+  describe('tool round limits', () => {
+    it('treats zero as unlimited', () => {
+      expect(parseToolRoundLimit('0', '12')).toBe(Number.POSITIVE_INFINITY);
+    });
+
+    it('preserves positive finite limits', () => {
+      expect(parseToolRoundLimit('15', '12')).toBe(15);
     });
   });
 });

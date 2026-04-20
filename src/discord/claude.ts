@@ -63,15 +63,18 @@ const GEMINI_FLASH = DEFAULT_FAST_MODEL;
 const GEMINI_FLASH_LITE = DEFAULT_FAST_MODEL;
 const GEMINI_PRO = DEFAULT_CODING_MODEL;
 const VERTEX_OPUS_ONLY_MODE = process.env.VERTEX_OPUS_ONLY_MODE === 'true';
-const FORCE_OPUS_FOR_CODE_WORK = process.env.FORCE_OPUS_FOR_CODE_WORK === 'true';
-const DEVELOPER_ALWAYS_OPUS = process.env.DEVELOPER_ALWAYS_OPUS === 'true';
+const FORCE_OPUS_FOR_CODE_WORK = process.env.FORCE_OPUS_FOR_CODE_WORK !== 'false';
 const COMPACT_RUNTIME_TOOL_PROMPTS = process.env.COMPACT_RUNTIME_TOOL_PROMPTS !== 'false';
 const CODE_HEAVY_AGENT_IDS = new Set(['executive-assistant', 'operations-manager', 'devops', 'ios-engineer', 'android-engineer']);
 const CODE_WORK_RE = /\b(?:code|coding|implement(?:ation)?|fix(?:ing)?\s+(?:bug|error|crash|issue)|bug(?:fix)?|debug(?:ging)?|refactor(?:ing)?|build(?:ing)?\s+(?:the|a|this)|compile|lint(?:ing)?|typecheck(?:ing)?|deploy(?:ing|ment)?|migration|schema\s+(?:change|update|migration)|pull\s*request|merge\s+(?:pr|branch)|tsx|jsx|react\s+(?:native|component)|expo\s+(?:build|update))\b/i;
+const CODE_EDIT_ACTION_RE = /\b(?:edit|modify|change|patch|update|write|rewrite|create|delete|remove|rename|move|add|insert)\b/i;
+const CODE_ARTIFACT_RE = /(?:^|[\s(])(?:[A-Za-z0-9_./-]+\.(?:ts|tsx|js|jsx|mjs|cjs|json|md|sql|py|rb|go|java|kt|swift|yaml|yml|css|scss|html))(?:\b|[):])/i;
+const CODE_STRUCTURE_RE = /\b(?:file|files|codebase|repo(?:sitory)?|function|class|component|module|method|variable|comment|import|test|types?|interface|schema|migration|tsconfig|package\.json|readme)\b/i;
 const TOOL_ACTION_RE = /\b(?:run|read|search|grep|inspect|check|verify|edit|change|update|deploy|build|test|commit|push|rollback|migrate|open)\b/i;
 const SIMPLE_FAST_PATH_RE = /^(?:ok(?:ay)?|yes|no|thanks?|thank you|status|summary|summari[sz]e|what happened|why|how|help|ping|continue|proceed|looks good|sounds good)\b/i;
 const DIRECT_ANSWER_ONLY_RE = /^(?:ok(?:ay)?|yes|no|thanks?|thank you|understood|sounds good|what does|what is|why is|how does|explain|summari[sz]e|clarify)\b/i;
 const VERIFICATION_TASK_RE = /\b(?:verify|verification|confirm|smoke(?:\s+test)?|evidence|prove|check(?:\s+that)?|regression|screenshot|snapshot|next\s*steps)\b/i;
+const UNLIMITED_TOOL_ROUNDS = Number.POSITIVE_INFINITY;
 
 function normalizePromptForHeuristics(userMessage: string): string {
   return String(userMessage || '')
@@ -94,6 +97,32 @@ function isHighStakesPrompt(userMessage: string): boolean {
 function isCodeWorkPrompt(userMessage: string): boolean {
   const normalized = normalizePromptForHeuristics(userMessage);
   return CODE_WORK_RE.test(normalized);
+}
+
+function isCodeEditingPrompt(userMessage: string): boolean {
+  const normalized = normalizePromptForHeuristics(userMessage);
+  if (!normalized) return false;
+  return CODE_EDIT_ACTION_RE.test(normalized) && (CODE_ARTIFACT_RE.test(normalized) || CODE_STRUCTURE_RE.test(normalized));
+}
+
+export function isCodingTaskPrompt(userMessage: string): boolean {
+  return isCodeWorkPrompt(userMessage) || isCodeEditingPrompt(userMessage);
+}
+
+export function parseToolRoundLimit(rawValue: string | undefined, fallbackValue: string): number {
+  const normalized = String(rawValue ?? fallbackValue).trim().toLowerCase();
+  if (!normalized || normalized === '0' || normalized === 'unlimited' || normalized === 'infinity' || normalized === 'inf') {
+    return UNLIMITED_TOOL_ROUNDS;
+  }
+  const parsed = parseInt(normalized, 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return UNLIMITED_TOOL_ROUNDS;
+  }
+  return parsed;
+}
+
+function hasUnlimitedToolRounds(limit: number): boolean {
+  return !Number.isFinite(limit);
 }
 
 function isSimpleFastPathPrompt(userMessage: string): boolean {
@@ -194,18 +223,17 @@ function resolveToolThreadKey(
  * - Code-heavy prompts escalate to the coding model when warranted.
  * - Riley still escalates to Pro for non-code high-stakes ops prompts.
  */
-/**
- * Returns the hard-locked model for an agent, or null if the agent is not locked.
- * Locked agents NEVER fall back to another model — they retry with backoff instead.
- * Riley is locked to the planning model, while code-heavy implementation can
- * still be locked to Opus where configured.
- */
-function isAgentModelLocked(agentId: string): string | null {
+function getAgentModelOverride(agentId: string): string | null {
   // Per-agent override is a hard lock (bypass health routing)
   const overrideKey = `AGENT_MODEL_OVERRIDE_${agentId.replace(/-/g, '_')}`;
-  const override = process.env[overrideKey];
+  return process.env[overrideKey] || null;
+}
+
+export function getPinnedModelForTask(agentId: string, userMessage: string): string | null {
+  const override = getAgentModelOverride(agentId);
   if (override) return override;
-  // Riley stays on the planning model so execution can route through Opus separately.
+  if (VERTEX_OPUS_ONLY_MODE) return DEFAULT_CODING_MODEL;
+  if (FORCE_OPUS_FOR_CODE_WORK && isCodingTaskPrompt(userMessage)) return DEFAULT_CODING_MODEL;
   if (agentId === 'executive-assistant' || agentId === 'operations-manager') return RILEY_PLANNING_MODEL;
   return null;
 }
@@ -215,17 +243,12 @@ function modelForAgent(agentId: string, userMessage: string): string {
     return DEFAULT_CODING_MODEL;
   }
   // Hard-locked agents bypass health routing entirely — no fallback ever
-  const locked = isAgentModelLocked(agentId);
+  const locked = getPinnedModelForTask(agentId, userMessage);
   if (locked) return locked;
   // Per-agent model override via env var (e.g. AGENT_MODEL_OVERRIDE_security_auditor=gemini-2.5-pro)
-  const overrideKey = `AGENT_MODEL_OVERRIDE_${agentId.replace(/-/g, '_')}`;
-  const override = process.env[overrideKey];
+  const override = getAgentModelOverride(agentId);
   if (override) {
     return resolveHealthyModel(override);
-  }
-  // Riley (EA) is locked above; keep this branch aligned with the planning model.
-  if (agentId === 'executive-assistant' || agentId === 'operations-manager') {
-    return RILEY_PLANNING_MODEL;
   }
   if (isSimpleFastPathPrompt(userMessage)) {
     return resolveHealthyModel(DEFAULT_FAST_MODEL);
@@ -233,7 +256,7 @@ function modelForAgent(agentId: string, userMessage: string): string {
   if (CODE_HEAVY_AGENT_IDS.has(agentId) && isHighStakesPrompt(userMessage)) {
     return resolveHealthyModel(DEFAULT_CODING_MODEL);
   }
-  if (FORCE_OPUS_FOR_CODE_WORK && isCodeWorkPrompt(userMessage)) {
+  if (FORCE_OPUS_FOR_CODE_WORK && isCodingTaskPrompt(userMessage)) {
     return resolveHealthyModel(DEFAULT_CODING_MODEL);
   }
   return resolveHealthyModel(DEFAULT_FAST_MODEL);
@@ -1402,11 +1425,11 @@ export function extractAgentResponseEnvelope(text: string): AgentResponseEnvelop
 }
 
 /** Max tool-use iterations before forcing a text response. Lower defaults help stop runaway loops. */
-const MAX_TOOL_ROUNDS = parseInt(process.env.MAX_TOOL_ROUNDS || '12', 10);
-const MAX_TOOL_ROUNDS_DEVELOPER = parseInt(process.env.MAX_TOOL_ROUNDS_DEVELOPER || '25', 10);
-const MAX_TOOL_ROUNDS_EXECUTIVE = parseInt(process.env.MAX_TOOL_ROUNDS_EXECUTIVE || '20', 10);
+const MAX_TOOL_ROUNDS = parseToolRoundLimit(process.env.MAX_TOOL_ROUNDS, '0');
+const MAX_TOOL_ROUNDS_DEVELOPER = parseToolRoundLimit(process.env.MAX_TOOL_ROUNDS_DEVELOPER, '0');
+const MAX_TOOL_ROUNDS_EXECUTIVE = parseToolRoundLimit(process.env.MAX_TOOL_ROUNDS_EXECUTIVE, '0');
 /** Optional one-time extra Riley pass. Default ON (+10 rounds) so Riley can finish orchestration. */
-const RILEY_AUTO_TOOL_EXTENSION = parseInt(process.env.RILEY_AUTO_TOOL_EXTENSION || '10', 10);
+const RILEY_AUTO_TOOL_EXTENSION = parseToolRoundLimit(process.env.RILEY_AUTO_TOOL_EXTENSION, '0');
 /** Maximum history messages to send per request (excludes current user message) */
 const MAX_CONTEXT_MESSAGES = parseInt(process.env.MAX_CONTEXT_MESSAGES || '10', 10);
 /** Soft cap for history character volume sent per request */
@@ -2533,13 +2556,17 @@ export async function agentRespond(
   // Direct tool requests (e.g. "run smoke tests") should NOT be capped as verification tasks.
   // The verification cap is for lightweight checks, not tool-heavy execution requests.
   const isDirectToolExecution = /smoke_test_agents|run\s+(all\s+)?(smoke|test)|test\s+engine/i.test(userMessage);
-  const verificationRoundCap = (agent.id === 'executive-assistant' && isVerificationTaskPrompt(userMessage) && !isDirectToolExecution)
+  const verificationRoundCap = (!hasUnlimitedToolRounds(baseToolRounds) && agent.id === 'executive-assistant' && isVerificationTaskPrompt(userMessage) && !isDirectToolExecution)
     ? Math.min(baseToolRounds, 2)
     : baseToolRounds;
   const maxToolRounds = verificationRoundCap + Math.max(0, options?.toolRoundBoost || 0);
   const smokePrompt = isSmokePrompt(userMessage) || isDirectToolExecution;
   const toolThreadKey = resolveToolThreadKey(agent.id, conversationHistory, userMessage, options?.threadKey);
-  let activeToolBudget = smokePrompt ? Math.max(maxToolRounds * 4, 40) : resolveInitialToolBudget(agent.id, maxToolRounds);
+  let activeToolBudget = hasUnlimitedToolRounds(maxToolRounds)
+    ? UNLIMITED_TOOL_ROUNDS
+    : smokePrompt
+      ? Math.max(maxToolRounds * 4, 40)
+      : resolveInitialToolBudget(agent.id, maxToolRounds);
   let toolBudgetEscalated = false;
   let sawToolFailure = false;
   let autoBudgetPassesUsed = 0;
@@ -2672,7 +2699,8 @@ RUNTIME EFFICIENCY:
 - Prefer check_file_exists before broad search when validating presence.${outputModePrompt}
 ${getLatestSmokeHealthLine()}`;
 
-  let currentModelName = options?.modelOverride || options?.chatSession?.modelName || (isVoiceLane ? VOICE_FAST_MODEL : agentModel);
+  const preferredModelName = isVoiceLane && !isCodingTaskPrompt(userMessage) ? VOICE_FAST_MODEL : agentModel;
+  let currentModelName = options?.modelOverride || options?.chatSession?.modelName || preferredModelName;
   let escalatedToPro = currentModelName === GEMINI_PRO;
   let opusFallbackUsed = false;
 
@@ -2683,6 +2711,16 @@ ${getLatestSmokeHealthLine()}`;
   }));
   const prunedInitialHistory = applyContextPruningIfDue({ history, modelName: currentModelName, laneKey: pruneLaneKey });
   history = prunedInitialHistory.history;
+
+  const shouldResetChatSession = Boolean(
+    !options?.modelOverride
+    && options?.chatSession?.chat
+    && options?.chatSession?.modelName
+    && options.chatSession.modelName !== preferredModelName
+  );
+  if (shouldResetChatSession) {
+    currentModelName = preferredModelName;
+  }
 
   const agentTools = options?.disableTools ? [] : toolsForPrompt(agent.id, userMessage);
   const geminiTools = toGeminiTools(agentTools);
@@ -2814,9 +2852,11 @@ ${getLatestSmokeHealthLine()}`;
     });
   };
 
-  let model = options?.chatSession?.chat ? null : makeModel(currentModelName);
-  let chat = options?.chatSession?.chat || model!.startChat({ history });
-  if (options?.chatSession && !options.chatSession.chat) {
+  let model = options?.chatSession?.chat && !shouldResetChatSession ? null : makeModel(currentModelName);
+  let chat = options?.chatSession?.chat && !shouldResetChatSession
+    ? options.chatSession.chat
+    : model!.startChat({ history: promptHistory });
+  if (options?.chatSession && (!options.chatSession.chat || shouldResetChatSession)) {
     options.chatSession.chat = chat;
     options.chatSession.modelName = currentModelName;
   }
@@ -2929,7 +2969,7 @@ ${getLatestSmokeHealthLine()}`;
       return '';
     }
     if (isAnthropicModel(currentModelName) && (isAnthropicAuthError(err) || isAnthropicRateLimitError(err))) {
-      const lockedModel = isAgentModelLocked(agent.id);
+      const lockedModel = options?.modelOverride || getPinnedModelForTask(agent.id, userMessage);
       const errKind = isAnthropicAuthError(err) ? 'auth' : 'rate-limit';
       if (lockedModel || VERTEX_OPUS_ONLY_MODE) {
         // Hard-locked agents: retry with exponential backoff on the SAME model, never fall back
@@ -3177,7 +3217,7 @@ ${getLatestSmokeHealthLine()}`;
       }
 
       if (totalToolCalls >= activeToolBudget) {
-        if (!options?.toolBudgetSynthesisUsed) {
+        if (!hasUnlimitedToolRounds(activeToolBudget) && !options?.toolBudgetSynthesisUsed) {
           const budgetPrompt = `${userMessage}\n\n[System note: strict first-pass tool budget reached (${activeToolBudget} calls). Do not use tools. Summarize what is complete, what is still open, and the single best next step.]`;
           logAgentEvent(agent.id, 'response', `Tool budget reached (${activeToolBudget}) — forcing no-tools synthesis`);
           return agentRespond(
@@ -3307,7 +3347,7 @@ ${getLatestSmokeHealthLine()}`;
         return '';
       }
       if (isAnthropicModel(currentModelName) && (isAnthropicAuthError(err) || isAnthropicRateLimitError(err))) {
-        const lockedModel = isAgentModelLocked(agent.id);
+        const lockedModel = options?.modelOverride || getPinnedModelForTask(agent.id, userMessage);
         const errKind = isAnthropicAuthError(err) ? 'auth' : 'rate-limit';
         if (lockedModel || VERTEX_OPUS_ONLY_MODE) {
           // Hard-locked agents: retry with exponential backoff on the SAME model mid-loop
@@ -3400,7 +3440,7 @@ ${getLatestSmokeHealthLine()}`;
     }
   }
 
-  if (agent.id === 'executive-assistant' && !options?.rileyAutoToolApprovalUsed && RILEY_AUTO_TOOL_EXTENSION > 0) {
+  if (!hasUnlimitedToolRounds(maxToolRounds) && agent.id === 'executive-assistant' && !options?.rileyAutoToolApprovalUsed && RILEY_AUTO_TOOL_EXTENSION > 0) {
     const extension = Math.max(1, RILEY_AUTO_TOOL_EXTENSION);
     logAgentEvent(agent.id, 'response', `Riley started one extra tool pass (+${extension} rounds)`);
     return agentRespond(
@@ -3416,7 +3456,7 @@ ${getLatestSmokeHealthLine()}`;
     );
   }
 
-  if (!options?.safetyCapSynthesisUsed) {
+  if (!hasUnlimitedToolRounds(maxToolRounds) && !options?.safetyCapSynthesisUsed) {
     const synthesisPrompt = agent.id === 'executive-assistant'
       ? `${userMessage}\n\n[System note: tool safety cap reached. Do not use tools. In one concise response, summarize current status and evidence gathered. CRITICAL: do not claim work is complete unless evidence is checkable from runtime artifacts (screenshots, harness snapshots, or puppeteer/playwright-style output). If that evidence is missing, explicitly say verification is pending and list what remains open.]`
       : `${userMessage}\n\n[System note: tool safety cap reached. Do not use tools. Return a concise completion summary using this exact format:\nResult: <one sentence>\nEvidence: <files/checks/outcome>\nRisk/Follow-up: <one sentence>.]`;
