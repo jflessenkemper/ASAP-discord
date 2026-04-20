@@ -52,7 +52,7 @@ try {
   console.warn('PROJECT_CONTEXT.md not found — agents will lack project context');
 }
 
-const PROJECT_CONTEXT_MAX_CHARS = parseInt(process.env.PROJECT_CONTEXT_MAX_CHARS || '1800', 10);
+const PROJECT_CONTEXT_MAX_CHARS = parseInt(process.env.PROJECT_CONTEXT_MAX_CHARS || '4000', 10);
 if (PROJECT_CONTEXT.length > PROJECT_CONTEXT_MAX_CHARS) {
   PROJECT_CONTEXT = PROJECT_CONTEXT.slice(0, PROJECT_CONTEXT_MAX_CHARS) + '\n\n[Project context truncated for token efficiency]';
 }
@@ -941,6 +941,13 @@ function toAnthropicBlocks(parts: any[]): any[] {
     if (typeof part?.text === 'string' && part.text.trim()) {
       blocks.push({ type: 'text', text: part.text });
     }
+    // Vision: image content blocks (base64 or URL)
+    if (part?.type === 'image' && part?.source) {
+      blocks.push({
+        type: 'image',
+        source: part.source,
+      });
+    }
     const functionResponse = part?.functionResponse;
     if (functionResponse) {
       blocks.push({
@@ -1397,9 +1404,9 @@ export function extractAgentResponseEnvelope(text: string): AgentResponseEnvelop
 /** Max tool-use iterations before forcing a text response. Lower defaults help stop runaway loops. */
 const MAX_TOOL_ROUNDS = parseInt(process.env.MAX_TOOL_ROUNDS || '12', 10);
 const MAX_TOOL_ROUNDS_DEVELOPER = parseInt(process.env.MAX_TOOL_ROUNDS_DEVELOPER || '25', 10);
-const MAX_TOOL_ROUNDS_EXECUTIVE = parseInt(process.env.MAX_TOOL_ROUNDS_EXECUTIVE || '12', 10);
-/** Optional one-time extra Riley pass. Default ON (+6 rounds) so Riley can finish orchestration. */
-const RILEY_AUTO_TOOL_EXTENSION = parseInt(process.env.RILEY_AUTO_TOOL_EXTENSION || '6', 10);
+const MAX_TOOL_ROUNDS_EXECUTIVE = parseInt(process.env.MAX_TOOL_ROUNDS_EXECUTIVE || '20', 10);
+/** Optional one-time extra Riley pass. Default ON (+10 rounds) so Riley can finish orchestration. */
+const RILEY_AUTO_TOOL_EXTENSION = parseInt(process.env.RILEY_AUTO_TOOL_EXTENSION || '10', 10);
 /** Maximum history messages to send per request (excludes current user message) */
 const MAX_CONTEXT_MESSAGES = parseInt(process.env.MAX_CONTEXT_MESSAGES || '10', 10);
 /** Soft cap for history character volume sent per request */
@@ -2482,6 +2489,8 @@ export async function agentRespond(
     machineEnvelopeRaw?: boolean;
     threadKey?: string;
     toolBudgetSynthesisUsed?: boolean;
+    /** Image content blocks to include with the user message (vision). */
+    imageBlocks?: Array<{ type: 'image'; source: { type: 'base64'; media_type: string; data: string } | { type: 'url'; url: string } }>;
   }
 ): Promise<string> {
   const requestedOutputMode = options?.outputMode || 'machine_json';
@@ -2696,6 +2705,22 @@ ${getLatestSmokeHealthLine()}`;
     { remaining, spent, limit },
     { used: tokenUsed, remaining: tokenRemaining, limit: tokenLimit },
   );
+  // Build multimodal payload when images are attached (vision).
+  // Each image part carries both Gemini (`inlineData`) and Anthropic (`type`+`source`)
+  // fields so both model paths work without extra conversion.
+  const runtimePayload: string | Part[] = options?.imageBlocks?.length
+    ? [
+        { text: runtimeUserMessage } as Part,
+        ...options.imageBlocks.map((img) => ({
+          inlineData: {
+            mimeType: img.source.type === 'base64' ? img.source.media_type : 'image/jpeg',
+            data: img.source.type === 'base64' ? img.source.data : '',
+          },
+          type: 'image',
+          source: img.source,
+        } as any)),
+      ]
+    : runtimeUserMessage;
   const basePromptBreakdown: PromptBreakdown = {
     systemChars: systemPrompt.length,
     historyChars: estimateHistoryChars(promptHistory),
@@ -2872,7 +2897,7 @@ ${getLatestSmokeHealthLine()}`;
       }
     }
     response = await withConcurrencyLimit(currentModelName, () =>
-      withRetry(() => sendMessageWithOptionalStream(chat, runtimeUserMessage, options?.signal, options?.onPartialText))
+      withRetry(() => sendMessageWithOptionalStream(chat, runtimePayload, options?.signal, options?.onPartialText))
     , lane);
     recordModelSuccess(currentModelName, Date.now() - loopStart);
     markCacheTouched(pruneLaneKey);
@@ -2915,7 +2940,7 @@ ${getLatestSmokeHealthLine()}`;
           await new Promise((r) => setTimeout(r, delays[i]));
           try {
             response = await withConcurrencyLimit(currentModelName, () =>
-              withRetry(() => sendMessageWithOptionalStream(chat, runtimeUserMessage, options?.signal, options?.onPartialText))
+              withRetry(() => sendMessageWithOptionalStream(chat, runtimePayload, options?.signal, options?.onPartialText))
             , lane);
             retried = true;
             break;
@@ -2935,7 +2960,7 @@ ${getLatestSmokeHealthLine()}`;
         logAgentEvent(agent.id, 'error', `Anthropic ${errKind} — falling back to ${fallbackModel}`);
         await swapToModel(fallbackModel, history);
         response = await withConcurrencyLimit(currentModelName, () =>
-          withRetry(() => sendMessageWithOptionalStream(chat, runtimeUserMessage, options?.signal, options?.onPartialText))
+          withRetry(() => sendMessageWithOptionalStream(chat, runtimePayload, options?.signal, options?.onPartialText))
         , lane);
       }
     } else if (isGeminiRateLimitError(err) && !opusFallbackUsed && shouldFallbackToOpus(currentModelName)) {
@@ -2943,14 +2968,14 @@ ${getLatestSmokeHealthLine()}`;
       logAgentEvent(agent.id, 'error', `Gemini rate limited — falling back to ${DEFAULT_CODING_MODEL}`);
       await swapToModel(DEFAULT_CODING_MODEL, history);
       response = await withConcurrencyLimit(currentModelName, () =>
-        withRetry(() => sendMessageWithOptionalStream(chat, runtimeUserMessage, options?.signal, options?.onPartialText))
+        withRetry(() => sendMessageWithOptionalStream(chat, runtimePayload, options?.signal, options?.onPartialText))
       , lane);
     } else if (isGeminiQuotaError(err) && !opusFallbackUsed && shouldFallbackToOpus(currentModelName)) {
       opusFallbackUsed = true;
       logAgentEvent(agent.id, 'error', `Gemini quota exhausted — falling back to ${DEFAULT_CODING_MODEL}`);
       await swapToModel(DEFAULT_CODING_MODEL, history);
       response = await withConcurrencyLimit(currentModelName, () =>
-        withRetry(() => sendMessageWithOptionalStream(chat, runtimeUserMessage, options?.signal, options?.onPartialText))
+        withRetry(() => sendMessageWithOptionalStream(chat, runtimePayload, options?.signal, options?.onPartialText))
       , lane);
     } else if (isGeminiAuthError(err) && !opusFallbackUsed && shouldFallbackToOpus(currentModelName)) {
       const fallbackModel = isAnthropicModel(DEFAULT_CODING_MODEL)
@@ -2960,7 +2985,7 @@ ${getLatestSmokeHealthLine()}`;
       logAgentEvent(agent.id, 'error', `Gemini auth/config issue — falling back to ${fallbackModel}`);
       await swapToModel(fallbackModel, history);
       response = await withConcurrencyLimit(currentModelName, () =>
-        withRetry(() => sendMessageWithOptionalStream(chat, runtimeUserMessage, options?.signal, options?.onPartialText))
+        withRetry(() => sendMessageWithOptionalStream(chat, runtimePayload, options?.signal, options?.onPartialText))
       , lane);
     } else if (!isAnthropicModel(currentModelName) && isGeminiRateLimitError(err)) {
       const recoverAt = Math.max(rateLimitedUntil, Date.now() + GEMINI_429_PAUSE_MS);

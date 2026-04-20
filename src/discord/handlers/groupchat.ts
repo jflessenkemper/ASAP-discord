@@ -247,6 +247,39 @@ let threadStatusSourceChannel: TextChannel | null = null;
 let threadStatusReporter: ReturnType<typeof setInterval> | null = null;
 const recentGroupchatFingerprints = new Map<string, number>();
 
+// ── Vision: Discord image attachment → base64 image blocks ──
+
+type ImageBlock = { type: 'image'; source: { type: 'base64'; media_type: string; data: string } };
+
+const IMAGE_CONTENT_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif']);
+const MAX_IMAGE_ATTACHMENTS = 4;
+const MAX_IMAGE_SIZE_BYTES = 10 * 1024 * 1024; // 10 MB
+
+async function extractImageBlocksFromMessage(message: Message): Promise<ImageBlock[]> {
+  const blocks: ImageBlock[] = [];
+  if (!message.attachments?.size) return blocks;
+
+  for (const attachment of message.attachments.values()) {
+    if (blocks.length >= MAX_IMAGE_ATTACHMENTS) break;
+    const ct = String(attachment.contentType || '').split(';')[0].trim().toLowerCase();
+    if (!IMAGE_CONTENT_TYPES.has(ct)) continue;
+    if (attachment.size > MAX_IMAGE_SIZE_BYTES) continue;
+
+    try {
+      const res = await fetch(attachment.url, { signal: AbortSignal.timeout(15_000) });
+      if (!res.ok) continue;
+      const buf = Buffer.from(await res.arrayBuffer());
+      blocks.push({
+        type: 'image',
+        source: { type: 'base64', media_type: ct, data: buf.toString('base64') },
+      });
+    } catch (err) {
+      console.warn(`Failed to download attachment ${attachment.name}:`, err instanceof Error ? err.message : err);
+    }
+  }
+  return blocks;
+}
+
 async function withPgAdvisoryLock<T>(lockKey: string, fn: () => Promise<T>): Promise<T> {
   const client = await pool.connect();
   try {
@@ -2162,6 +2195,8 @@ async function processGroupchatMessage(
   signal?: AbortSignal
 ): Promise<void> {
   const senderName = message.member?.displayName || message.author.username;
+  // Extract images from attachments for vision (non-blocking; empty if none)
+  const imageBlocks = await extractImageBlocksFromMessage(message);
   let workspaceChannel: WebhookCapableChannel | null = null;
   const getWorkspaceChannel = async (): Promise<WebhookCapableChannel> => {
     if (workspaceChannel) return workspaceChannel;
@@ -2223,6 +2258,11 @@ async function processGroupchatMessage(
     return;
   }
 
+  // Append an image hint so the model knows to inspect the attached images
+  if (imageBlocks.length > 0) {
+    content += `\n\n[${imageBlocks.length} image${imageBlocks.length > 1 ? 's' : ''} attached — see the image content blocks in this message]`;
+  }
+
   const uniqueMentions = parseMentionedAgentIds(content);
   const keepInGroupchat = shouldKeepGroupchatPromptInChannel(uniqueMentions, content);
 
@@ -2235,6 +2275,7 @@ async function processGroupchatMessage(
         groupchat,
         handleRileyMessage(content, senderName, message.member || undefined, groupchat, signal, targetChannel, {
           allowDirectGroupchat: keepInGroupchat,
+          imageBlocks,
         }),
       );
     } else {
@@ -2244,7 +2285,7 @@ async function processGroupchatMessage(
       await withRileyResponseWatchdog(
         workspaceChannel,
         groupchat,
-        handleRileyMessage(normalized, senderName, message.member || undefined, groupchat, signal, workspaceChannel),
+        handleRileyMessage(normalized, senderName, message.member || undefined, groupchat, signal, workspaceChannel, { imageBlocks }),
       );
     }
   } else {
@@ -2255,6 +2296,7 @@ async function processGroupchatMessage(
       groupchat,
       handleRileyMessage(content, senderName, message.member || undefined, groupchat, signal, targetChannel, {
         allowDirectGroupchat: keepInGroupchat,
+        imageBlocks,
       }),
     );
   }
@@ -2315,7 +2357,7 @@ async function handleRileyMessage(
   groupchat: TextChannel,
   signal?: AbortSignal,
   workspaceChannel: WebhookCapableChannel = groupchat,
-  options?: { allowDirectGroupchat?: boolean },
+  options?: { allowDirectGroupchat?: boolean; imageBlocks?: ImageBlock[] },
 ): Promise<void> {
   if (workspaceChannel === groupchat && !options?.allowDirectGroupchat) {
     workspaceChannel = await ensureGoalWorkspace(groupchat, senderName || 'system', userMessage || 'request');
@@ -2386,6 +2428,7 @@ async function handleRileyMessage(
       outputMode: 'machine_json',
       machineEnvelopeRaw: true,
       threadKey: `groupchat:${workspaceChannel.id}`,
+      imageBlocks: options?.imageBlocks,
       onToolStart: async (toolName, summary) => {
         updateToolChain(rileyWorkChannel, riley, toolName, summary, 'start');
       },

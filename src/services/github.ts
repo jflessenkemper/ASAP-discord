@@ -2,6 +2,10 @@ import { Octokit } from '@octokit/rest';
 
 const OWNER = process.env.GITHUB_OWNER || 'jflessenkemper';
 const REPO = process.env.GITHUB_REPO || 'ASAP';
+/** Separate repo for bot self-improvement PRs (if ASAP app is the default) */
+const BOT_REPO = process.env.GITHUB_REPO_BOT || 'ASAP-discord';
+
+export { OWNER as GITHUB_OWNER, REPO as GITHUB_REPO, BOT_REPO as GITHUB_BOT_REPO };
 
 let octokit: Octokit | null = null;
 

@@ -152,29 +152,35 @@ function sanitizeLabel(label: string): string {
     .slice(0, 100);
 }
 
+export interface ScreenshotResult {
+  name: string;
+  buffer: Buffer;
+}
+
 export async function captureAndPostScreenshots(
   appUrl: string,
   buildLabel?: string,
   options?: { targetChannel?: TextChannel; clearTargetChannel?: boolean }
-): Promise<void> {
+): Promise<ScreenshotResult[]> {
   const targetChannel = options?.targetChannel || screenshotsChannel;
   if (!targetChannel) {
     console.warn('Screenshots channel not configured — skipping capture');
-    return;
+    return [];
   }
 
   if (!isAllowedUrl(appUrl)) {
     await targetChannel.send(`❌ Screenshot refused — URL not in allowlist: ${appUrl.slice(0, 100)}`);
-    return;
+    return [];
   }
 
   if (captureInProgress) {
     await targetChannel.send('⏳ Screenshot capture already in progress — skipping.');
-    return;
+    return [];
   }
 
   captureInProgress = true;
   let page: Page | null = null;
+  const results: ScreenshotResult[] = [];
 
   const timeout = setTimeout(() => {
     if (page) page.close().catch(() => {});
@@ -220,9 +226,11 @@ export async function captureAndPostScreenshots(
           fullPage: false,
         });
 
+        const buf = screenshot as Buffer;
         attachments.push(
-          new AttachmentBuilder(screenshot as Buffer, { name: `${screen.name}.png` })
+          new AttachmentBuilder(buf, { name: `${screen.name}.png` })
         );
+        results.push({ name: screen.name, buffer: buf });
       } catch (err) {
         const msg = errMsg(err);
         console.error(`Screenshot error for ${screen.name}:`, msg);
@@ -252,4 +260,5 @@ export async function captureAndPostScreenshots(
     }
     scheduleBrowserPoolClose();
   }
+  return results;
 }

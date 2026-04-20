@@ -6,6 +6,7 @@ import helmet from 'helmet';
 import twilio from 'twilio';
 
 import pool from './db/pool';
+import { startRepoSyncLoop, stopRepoSyncLoop } from './discord/repoSync';
 import {
   startBot,
   stopBot,
@@ -355,6 +356,11 @@ const server = app.listen(PORT, () => {
   void (async () => {
     await loadRuntimeSecrets().catch(() => {});
 
+    // Start ASAP app repo sync loop (clone + periodic pull to origin/main)
+    if (DISCORD_BOT_ENABLED) {
+      startRepoSyncLoop();
+    }
+
     // Attach Twilio WebSocket handler for phone calls
     if (isTelephonyAvailable()) {
       attachTelephonyWebSocket(server);
@@ -400,6 +406,7 @@ function shutdown(signal: string) {
   console.log(`${signal} received, shutting down gracefully`);
   server.close(async () => {
     await stopBot().catch(() => {});
+    stopRepoSyncLoop();
     await releaseDiscordBotLock().catch(() => {});
     await pool.end().catch((err) => {
       if (!String(errMsg(err)).includes('Called end on pool more than once')) {

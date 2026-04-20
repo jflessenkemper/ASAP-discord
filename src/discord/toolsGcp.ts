@@ -429,3 +429,55 @@ export async function gcpProjectInfo(): Promise<string> {
     return `❌ Failed to get project info: ${errMsg(err)}`;
   }
 }
+
+// ── deploy_app: submit ASAP app to Cloud Build ──
+
+const APP_REPO_ROOT = process.env.AGENT_REPO_ROOT
+  ? path.resolve(process.env.AGENT_REPO_ROOT)
+  : null;
+
+/**
+ * Deploy the ASAP app to Cloud Run via `gcloud builds submit`.
+ * Runs from AGENT_REPO_ROOT which should contain cloudbuild.yaml.
+ */
+export async function deployApp(commitMessage?: string): Promise<string> {
+  if (!APP_REPO_ROOT || !fs.existsSync(path.join(APP_REPO_ROOT, 'cloudbuild.yaml'))) {
+    return '❌ deploy_app: AGENT_REPO_ROOT is not set or cloudbuild.yaml not found. Set AGENT_REPO_ROOT to the ASAP app directory.';
+  }
+
+  // Optionally commit pending changes before deploying
+  if (commitMessage) {
+    try {
+      execFileSync('git', ['add', '-A'], { cwd: APP_REPO_ROOT, timeout: 15_000, encoding: 'utf-8', env: buildGcpSafeEnv() });
+      const status = execFileSync('git', ['status', '--porcelain'], { cwd: APP_REPO_ROOT, timeout: 10_000, encoding: 'utf-8', env: buildGcpSafeEnv() }).trim();
+      if (status) {
+        execFileSync('git', ['commit', '-m', commitMessage], { cwd: APP_REPO_ROOT, timeout: 30_000, encoding: 'utf-8', env: buildGcpSafeEnv() });
+        execFileSync('git', ['push', 'origin', 'main'], { cwd: APP_REPO_ROOT, timeout: 60_000, encoding: 'utf-8', env: buildGcpSafeEnv() });
+      }
+    } catch (err) {
+      return `⚠️ Git commit/push failed (deploy continues): ${errMsg(err)}`;
+    }
+  }
+
+  try {
+    const output = execFileSync('gcloud', [
+      'builds', 'submit',
+      `--config=cloudbuild.yaml`,
+      `--project=${GCP_PROJECT}`,
+      '--async',
+      '.',
+    ], {
+      cwd: APP_REPO_ROOT,
+      timeout: 120_000,
+      maxBuffer: 1024 * 1024,
+      encoding: 'utf-8',
+      env: buildGcpSafeEnv(),
+    }).trim();
+
+    const buildIdMatch = output.match(/\b([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\b/);
+    const buildId = buildIdMatch?.[1] || 'unknown';
+    return `✅ Cloud Build submitted (async). Build ID: ${buildId}. The app will deploy to Cloud Run service \`${GCP_SERVICE}\` in ${GCP_REGION} once the build completes.`;
+  } catch (err) {
+    return `❌ deploy_app failed: ${errMsg(err)}`;
+  }
+}

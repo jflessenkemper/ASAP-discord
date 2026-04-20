@@ -34,6 +34,8 @@ function isVoiceStartupSelftestEnabled(): boolean {
   return String(process.env.VOICE_STARTUP_SELFTEST_ENABLED || 'false').toLowerCase() === 'true';
 }
 const VOICE_MAX_TOKENS_RILEY = parseInt(process.env.VOICE_MAX_TOKENS_RILEY || (VOICE_LOW_LATENCY_MODE ? '120' : '220'), 10);
+const VOICE_TOOLS_ENABLED = String(process.env.VOICE_TOOLS_ENABLED || 'false').toLowerCase() === 'true';
+const VOICE_TOOLS_MAX_TOKENS = parseInt(process.env.VOICE_TOOLS_MAX_TOKENS || '1024', 10);
 const VOICE_STREAM_PARTIAL_MIN_CHARS = parseInt(process.env.VOICE_STREAM_PARTIAL_MIN_CHARS || (VOICE_LOW_LATENCY_MODE ? '10' : '16'), 10);
 const VOICE_STREAM_FORCE_CHARS = parseInt(process.env.VOICE_STREAM_FORCE_CHARS || (VOICE_LOW_LATENCY_MODE ? '36' : '60'), 10);
 const VOICE_INTERRUPT_MIN_OUTPUT_ACTIVE_MS = parseInt(process.env.VOICE_INTERRUPT_MIN_OUTPUT_ACTIVE_MS || '700', 10);
@@ -282,7 +284,7 @@ function compactVoiceHistoryForPrompt(history: ConversationMessage[]): Conversat
 // ─── Voice Command Detection ───
 
 interface VoiceCommand {
-  type: 'smoke_test' | 'test_health' | 'set_goal' | 'memory_status';
+  type: 'smoke_test' | 'test_health' | 'set_goal' | 'memory_status' | 'deploy_app';
   args?: string;
 }
 
@@ -290,6 +292,7 @@ function detectVoiceCommand(text: string): VoiceCommand | null {
   const lower = text.toLowerCase();
   if (/run\s+(smoke|the)\s+tests?/i.test(lower)) return { type: 'smoke_test' };
   if (/(?:check|what(?:'s| is))\s+(?:the\s+)?test\s+health/i.test(lower)) return { type: 'test_health' };
+  if (/(?:deploy|ship|push)\s+(?:the\s+)?app/i.test(lower)) return { type: 'deploy_app' };
   if (/set\s+(?:a\s+)?goal\s*(?:to|:)?\s*(.+)/i.test(lower)) {
     const match = lower.match(/set\s+(?:a\s+)?goal\s*(?:to|:)?\s*(.+)/i);
     return { type: 'set_goal', args: match?.[1]?.trim() };
@@ -354,6 +357,16 @@ async function handleVoiceCommand(
       } catch {
         response = 'Memory system is currently unavailable.';
       }
+      break;
+    case 'deploy_app':
+      response = 'Deploying the app to Cloud Run now. I\'ll let you know when it\'s done.';
+      import('../toolsGcp').then(({ deployApp }) => {
+        if (deployApp) {
+          deployApp().catch((err: unknown) => {
+            console.warn('[voice-cmd] deploy_app error:', err);
+          });
+        }
+      }).catch(() => {});
       break;
     default:
       response = 'I didn\'t understand that command.';
@@ -1158,14 +1171,19 @@ IMPORTANT: End on a complete sentence, never a fragment.${langHint}`;
         riley,
         [...rileyMemory, ...recentVoiceHistory],
         rileyContext,
-        undefined,
+        VOICE_TOOLS_ENABLED ? async (toolName, summary) => {
+          void postVoiceStageLog('tool_done', `turn=${turnId} tool=${toolName}`);
+        } : undefined,
         {
           signal,
-          maxTokens: VOICE_MAX_TOKENS_RILEY,
-          disableTools: true,
+          maxTokens: VOICE_TOOLS_ENABLED ? VOICE_TOOLS_MAX_TOKENS : VOICE_MAX_TOKENS_RILEY,
+          disableTools: !VOICE_TOOLS_ENABLED,
           priority: 'voice',
           chatSession: session.rileyChatSession,
           threadKey: `voice:${session.voiceChannel.id}`,
+          onToolStart: VOICE_TOOLS_ENABLED ? async (toolName) => {
+            void postVoiceStageLog('tool_start', `turn=${turnId} tool=${toolName}`);
+          } : undefined,
           onPartialText: async (partialText) => {
             if (!firstTokenLogged && partialText.trim()) {
               firstTokenLogged = true;

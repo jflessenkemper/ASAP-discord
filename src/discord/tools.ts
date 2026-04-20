@@ -192,6 +192,7 @@ const TOOL_SERVICE_MAP: Record<string, string> = {
   gcp_secret_bind: 'gcp', gcp_secret_list: 'gcp', gcp_build_status: 'gcp', gcp_logs_query: 'gcp',
   gcp_run_describe: 'gcp', gcp_storage_ls: 'gcp', gcp_artifact_list: 'gcp', gcp_sql_describe: 'gcp',
   gcp_vm_ssh: 'gcp', gcp_redeploy_bot_vm: 'gcp', gcp_project_info: 'gcp',
+  deploy_app: 'gcp',
   fetch_url: 'fetch', capture_screenshots: 'screenshots', job_scan: 'job_search',
 };
 
@@ -1090,6 +1091,21 @@ export const REPO_TOOLS = [
     },
   },
   {
+    name: 'deploy_app',
+    description:
+      'Deploy the ASAP app to Cloud Run via Cloud Build (uses cloudbuild.yaml in the app repo). Optionally commits and pushes pending changes first.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        commit_message: {
+          type: 'string',
+          description: 'If provided, git add + commit + push changes with this message before deploying.',
+        },
+      },
+      required: [],
+    },
+  },
+  {
     name: 'gcp_set_env',
     description:
       'Set or update environment variables on the Cloud Run service. Changes take effect on the next deployment or by forcing a new revision.',
@@ -1807,7 +1823,7 @@ export const REPO_TOOLS = [
  */
 const REVIEW_TOOL_NAMES = new Set([
   'read_file', 'search_files', 'list_directory', 'check_file_exists', 'fetch_url',
-  'db_query_readonly', 'db_schema', 'memory_read', 'memory_list',
+  'db_query_readonly', 'db_schema', 'memory_read', 'memory_write', 'memory_append', 'memory_list',
   'repo_memory_index', 'repo_memory_search', 'repo_memory_add_oss',
   'run_tests', 'typecheck', 'git_file_history', 'smoke_test_agents', 'list_threads',
   'send_channel_message',
@@ -1842,7 +1858,7 @@ const RILEY_TOOL_NAMES = new Set([
   // ── Riley autonomy: code mutation, PR workflow, deploy ──
   'write_file', 'edit_file', 'batch_edit', 'run_command',
   'git_create_branch', 'create_pull_request', 'merge_pull_request', 'add_pr_comment', 'list_pull_requests',
-  'gcp_deploy', 'gcp_rollback', 'gcp_redeploy_bot_vm',
+  'gcp_deploy', 'gcp_rollback', 'gcp_redeploy_bot_vm', 'deploy_app',
   // ── Riley agent lifecycle ──
   'create_agent', 'remove_agent', 'list_agents',
   // ── Riley ops & error analysis ──
@@ -2103,9 +2119,10 @@ async function executeToolInternal(
         const url = input.url || process.env.FRONTEND_URL || 'https://asap-489910.australia-southeast1.run.app';
         const label = (input.label || 'tool-invoked').slice(0, 100);
         const target = await resolveDiscordTextChannel(input.channel_name, context?.agentId);
-        await captureAndPostScreenshots(url, label, { targetChannel: target, clearTargetChannel: false });
+        const results = await captureAndPostScreenshots(url, label, { targetChannel: target, clearTargetChannel: false });
         const destination = target ? `#${target.name}` : '#screenshots';
-        return `Screenshots captured and posted to ${destination}. URL: ${url}`;
+        const screenList = results.map((r) => r.name).join(', ');
+        return `Screenshots captured and posted to ${destination}. URL: ${url}. Screens: ${screenList || 'none'}. ${results.length} image(s) captured on iPhone 17 Pro Max viewport.`;
       }
       case 'mobile_harness_start': {
         const url = input.url || process.env.FRONTEND_URL || 'https://asap-489910.australia-southeast1.run.app';
@@ -2174,6 +2191,14 @@ async function executeToolInternal(
             .catch(e => console.error('[deploy] post-deploy smoke failed:', errMsg(e)));
         }
         return deployResult;
+      }
+      case 'deploy_app': {
+        const { deployApp: deployAppFn } = await import('./toolsGcp');
+        const result = await deployAppFn(input.commit_message);
+        if (result.startsWith('✅')) {
+          await discordSendMessage('groupchat', `🚀 **App deploy submitted** to Cloud Run via Cloud Build.`, undefined, context?.agentId).catch(() => {});
+        }
+        return result;
       }
       case 'gcp_set_env':
         return await gcpSetEnv(input.variables);
@@ -4182,7 +4207,7 @@ function repoMemoryAddOssCache(title: string, content: string, tagsRaw?: string)
   return `Stored OSS knowledge: ${sourcePath} (${chunks.length} chunk(s), fallback-cache).`;
 }
 
-async function repoMemoryIndex(modeRaw?: string, maxFilesRaw?: number): Promise<string> {
+export async function repoMemoryIndex(modeRaw?: string, maxFilesRaw?: number): Promise<string> {
   const mode = String(modeRaw || 'incremental').toLowerCase() === 'full' ? 'full' : 'incremental';
   const maxFiles = Math.min(REPO_MEMORY_MAX_FILES_HARD, Math.max(100, Number(maxFilesRaw) || REPO_MEMORY_DEFAULT_MAX_FILES));
   if (repoMemoryDbDisabled) {
