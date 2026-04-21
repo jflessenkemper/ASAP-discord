@@ -989,10 +989,6 @@ async function handleVoiceInput(transcription: VoiceTranscription): Promise<void
     .trim();
   if (!fingerprint) return;
   if (fingerprint === session.lastInputFingerprint && Date.now() - session.lastInputAt < VOICE_DUPLICATE_WINDOW_MS) {
-    if (Date.now() - session.lastDuplicateNoticeAt > VOICE_DUPLICATE_WINDOW_MS) {
-      session.lastDuplicateNoticeAt = Date.now();
-      session.callLog.send('🟡 I heard that already — waiting for a new utterance.').catch(() => {});
-    }
     return;
   }
   session.lastInputFingerprint = fingerprint;
@@ -1231,7 +1227,7 @@ IMPORTANT: End on a complete sentence, never a fragment.${langHint}`;
         const rileyTtsStartMs = Date.now();
         const rileySpoke = await rileyStreamer.finalize(response);
         await rileyLogAndMirror;
-        if (!rileySpoke && isCurrentTurn() && !signal.aborted) {
+        if ((!rileySpoke || !firstAudioLogged) && isCurrentTurn() && !signal.aborted) {
           await speakPipelined(
             response,
             session.rileyVoiceName,

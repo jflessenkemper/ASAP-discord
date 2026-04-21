@@ -3562,7 +3562,7 @@ function formatToolSummary(toolName: string, input: Record<string, string>): str
     case 'list_directory':
       return `Listing \`${input.path || '.'}\` to inspect project structure`;
     case 'run_command':
-      return `Running \`${input.command.slice(0, 100)}\` to validate or apply changes`;
+      return `Running \`${(input.command || '').slice(0, 100)}\` to validate or apply changes`;
     case 'git_create_branch':
       return `Creating branch \`${input.branch_name}\``;
     case 'create_pull_request':
