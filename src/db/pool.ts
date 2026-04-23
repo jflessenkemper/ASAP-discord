@@ -135,8 +135,27 @@ function stripSslParams(url: string): string {
 // Cloud SQL via Unix socket (Cloud Run): INSTANCE_UNIX_SOCKET=/cloudsql/project:region:instance
 const instanceSocket = process.env.INSTANCE_UNIX_SOCKET;
 
+// Pool sizing — the bot does many concurrent reads (memory recall, learnings,
+// user_events embedding, activity log writes, turn tracker state) plus the
+// background embedding worker and SI job worker. Default pg pool max of 10 is
+// tight under load. Override via DB_POOL_MAX for larger deploys.
+const POOL_MAX = Math.max(10, parseInt(process.env.DB_POOL_MAX || '25', 10));
+const POOL_IDLE_TIMEOUT_MS = Math.max(10_000, parseInt(process.env.DB_POOL_IDLE_TIMEOUT_MS || '30000', 10));
+const POOL_CONNECTION_TIMEOUT_MS = Math.max(1000, parseInt(process.env.DB_POOL_CONNECTION_TIMEOUT_MS || '5000', 10));
+
+const sharedPoolOptions = {
+  max: POOL_MAX,
+  idleTimeoutMillis: POOL_IDLE_TIMEOUT_MS,
+  connectionTimeoutMillis: POOL_CONNECTION_TIMEOUT_MS,
+  // Keep TCP connection alive across idle spans so we don't pay a new
+  // 3-way handshake + TLS (when enabled) on each reconnect.
+  keepAlive: true,
+  keepAliveInitialDelayMillis: 5_000,
+};
+
 const pool = instanceSocket
   ? new Pool({
+      ...sharedPoolOptions,
       user: process.env.DB_USER,
       password: process.env.DB_PASSWORD,
       database: process.env.DB_NAME || 'asap',
@@ -145,10 +164,12 @@ const pool = instanceSocket
     })
   : process.env.DATABASE_URL
     ? new Pool({
+        ...sharedPoolOptions,
         connectionString: stripSslParams(process.env.DATABASE_URL),
         ssl: sslConfig,
       })
     : new Pool({
+        ...sharedPoolOptions,
         host: process.env.DB_HOST || 'localhost',
         port: parseInt(process.env.DB_PORT || '5432', 10),
         user: process.env.DB_USER || 'postgres',

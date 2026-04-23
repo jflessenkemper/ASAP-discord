@@ -25,7 +25,7 @@ export function shouldSkipContractEnforcement(text: string): boolean {
 
 export function buildAceDesignContext(rileyResponse: string): string {
   const mentionGuide = buildAgentMentionGuide(SPECIALIST_IDS);
-  return `[Riley directed you]: ${rileyResponse}\n\n` +
+  return `[Cortana directed you]: ${rileyResponse}\n\n` +
     `Own execution yourself first. Only bring in extra specialists if they are truly needed. ` +
     `If you do delegate, use the exact Discord mentions from this guide: ${mentionGuide}.\n\n` +
     `This is a design deliverable task. You MUST create the file(s) using the write_file tool. ` +
@@ -38,7 +38,7 @@ export function buildAceDesignContext(rileyResponse: string): string {
 
 export function buildAceStandardContext(rileyResponse: string): string {
   const mentionGuide = buildAgentMentionGuide(SPECIALIST_IDS);
-  return `[Riley directed you]: ${rileyResponse}\n\n` +
+  return `[Cortana directed you]: ${rileyResponse}\n\n` +
     `Own execution yourself first. Only bring in extra specialists if they are truly needed. ` +
     `If you do delegate, use the exact Discord mentions from this guide: ${mentionGuide}.\n\n` +
     `After making code changes: create a branch, commit, push, create a PR, then merge the PR using merge_pull_request. ` +

@@ -76,10 +76,10 @@ describe('agents', () => {
   });
 
   describe('getAgent()', () => {
-    it('returns Riley for the legacy developer compatibility ID', () => {
+    it('returns Cortana for the legacy developer compatibility ID', () => {
       const agent = getAgent('developer');
       expect(agent).toBeDefined();
-      expect(agent!.name).toContain('Riley');
+      expect(agent!.name).toContain('Cortana');
     });
 
     it('returns undefined for unknown ID', () => {
@@ -110,12 +110,12 @@ describe('agents', () => {
 
     it('resolves case-insensitively', () => {
       expect(resolveAgentId('ACE')).toBe('executive-assistant');
-      expect(resolveAgentId('Riley')).toBe('executive-assistant');
+      expect(resolveAgentId('Cortana')).toBe('executive-assistant');
     });
 
     it('resolves by role name', () => {
       expect(resolveAgentId('Ace')).toBe('executive-assistant');
-      expect(resolveAgentId('Riley')).toBe('executive-assistant');
+      expect(resolveAgentId('Cortana')).toBe('executive-assistant');
     });
 
     it('returns null for unknown token', () => {
@@ -157,7 +157,7 @@ describe('agents', () => {
     });
 
     it('returns @handle when no role ID is set', () => {
-      expect(getAgentMention('developer')).toBe('@riley');
+      expect(getAgentMention('developer')).toBe('@cortana');
     });
 
     it('returns Discord role mention when role ID is set', () => {
@@ -182,21 +182,21 @@ describe('agents', () => {
   describe('buildAgentMentionGuide()', () => {
     it('builds guide for all agents', () => {
       const guide = buildAgentMentionGuide();
-      expect(guide).toContain('Riley');
+      expect(guide).toContain('Cortana');
       expect(guide.split(', ').length).toBe(13);
     });
 
     it('builds guide for specified agents', () => {
       const guide = buildAgentMentionGuide(['executive-assistant', 'qa']);
-      expect(guide).toContain('Riley');
-      expect(guide).toContain('Max');
+      expect(guide).toContain('Cortana');
+      expect(guide).toContain('Argus');
       expect(guide.split(', ').length).toBe(2);
     });
 
     it('filters out null entries for invalid agent IDs', () => {
       const guide = buildAgentMentionGuide(['developer', 'nonexistent' as any]);
       expect(guide.split(', ').length).toBe(1);
-      expect(guide).toContain('Riley');
+      expect(guide).toContain('Cortana');
       expect(guide).not.toContain('nonexistent');
     });
   });

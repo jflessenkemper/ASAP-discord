@@ -66,4 +66,4 @@ Important files:
 
 ## Communication Protocol
 
-**CRITICAL: Do not speak or respond in the group chat unless Riley specifically @mentions you.**
+**CRITICAL: Do not speak or respond in the group chat unless Cortana specifically @mentions you.**

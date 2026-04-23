@@ -38,7 +38,7 @@ describe('GoalStateManager', () => {
     gsm.setGoal('Deploy staging');
     expect(gsm.isActive()).toBe(true);
     expect(gsm.goal).toBe('Deploy staging');
-    expect(gsm.status).toBe('⏳ Riley planning...');
+    expect(gsm.status).toBe('⏳ Cortana planning...');
   });
 
   /* ── markProgress ────────────────────────────────────── */
@@ -139,7 +139,7 @@ describe('GoalStateManager', () => {
     gsm.setGoal('Ship it');
     const summary = gsm.getSummary()!;
     expect(summary).toContain('Ship it');
-    expect(summary).toContain('⏳ Riley planning...');
+    expect(summary).toContain('⏳ Cortana planning...');
   });
 
   /* ── getCompactGoalLine ──────────────────────────────── */

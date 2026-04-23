@@ -1,10 +1,10 @@
 /**
- * Twilio telephony integration — lets users call Riley via a real phone number,
- * and lets Riley call out to a phone number. Uses the same ElevenLabs STT/TTS
+ * Twilio telephony integration — lets users call Cortana via a real phone number,
+ * and lets Cortana call out to a phone number. Uses the same ElevenLabs STT/TTS
  * + Claude pipeline as the Discord voice system.
  *
  * Inbound:  User dials Twilio number → WebSocket media stream → ElevenLabs realtime STT → Claude → ElevenLabs TTS → Twilio
- * Outbound: Riley triggers call → Twilio REST API dials user → same pipeline
+ * Outbound: Cortana triggers call → Twilio REST API dials user → same pipeline
  */
 
 import { Server as HttpServer } from 'http';
@@ -93,7 +93,7 @@ function identifyCaller(number: string): string | null {
 }
 
 /**
- * Learn a new contact — called when Riley discovers someone's name on a call.
+ * Learn a new contact — called when Cortana discovers someone's name on a call.
  */
 export function learnContact(number: string, name: string): void {
   let normalized = number.replace(/\s+/g, '');
@@ -126,7 +126,7 @@ const activeSessions = new Map<string, PhoneSession>();
 
 /**
  * Returns TwiML XML that connects the caller straight to the WebSocket media stream.
- * No hold message — Riley greets via ElevenLabs TTS once the stream connects.
+ * No hold message — Cortana greets via ElevenLabs TTS once the stream connects.
  */
 export function getInboundTwiML(callerNumber?: string): string {
   const wsUrl = SERVER_URL.replace(/^https?/, 'wss') + '/api/webhooks/twilio/stream';
@@ -221,8 +221,8 @@ export function attachTelephonyWebSocket(server: HttpServer): void {
               newSession.transcript.push(`[${new Date().toLocaleTimeString()}] Inbound call from ${who}`);
 
               const greeting = callerName
-                ? `Hey ${callerName}! It's Riley. What's up?`
-                : `Hey! It's Riley. How can I help you?`;
+                ? `Hey ${callerName}! It's Cortana. What's up?`
+                : `Hey! It's Cortana. How can I help you?`;
               await speakToPhone(newSession, greeting);
             }
             break;
@@ -357,19 +357,19 @@ Do NOT use markdown formatting — this is spoken audio.${langHint}`;
 
     session.conversationHistory.push(
       { role: 'user', content: `[Phone caller]: ${text}` },
-      { role: 'assistant', content: `[Riley]: ${response}` }
+      { role: 'assistant', content: `[Cortana]: ${response}` }
     );
 
     if (session.conversationHistory.length > 40) {
       session.conversationHistory.splice(0, session.conversationHistory.length - 40);
     }
 
-    session.transcript.push(`[${new Date().toLocaleTimeString()}] Riley: ${response}`);
-    logToDiscord(`📋 **Riley**: ${response.slice(0, 1900)}`);
+    session.transcript.push(`[${new Date().toLocaleTimeString()}] Cortana: ${response}`);
+    logToDiscord(`📋 **Cortana**: ${response.slice(0, 1900)}`);
 
     appendToMemory('executive-assistant', [
       { role: 'user', content: `[Phone from ${session.callerNumber}]: ${text}` },
-      { role: 'assistant', content: `[Riley]: ${response}` },
+      { role: 'assistant', content: `[Cortana]: ${response}` },
     ]);
 
     const nameMatch = text.match(/(?:my name(?:'s| is)|i'm|i am|this is|call me)\s+([A-Z][a-z]+)/i);
@@ -422,7 +422,7 @@ async function speakToPhone(session: PhoneSession, text: string): Promise<void> 
 
 
 /**
- * Make an outbound call to a phone number. Riley will speak to the callee.
+ * Make an outbound call to a phone number. Cortana will speak to the callee.
  */
 export async function makeOutboundCall(toNumber: string, greeting?: string): Promise<string> {
   const client = getTwilioClient();
@@ -489,10 +489,10 @@ export async function makeOutboundCall(toNumber: string, greeting?: string): Pro
 /**
  * Make an outbound test call using the ASAPTester voice profile.
  * This is useful for scripted voice smoke tests that should sound distinct
- * from Riley's normal voice.
+ * from Cortana's normal voice.
  */
 export async function makeAsapTesterCall(toNumber: string, greeting?: string): Promise<string> {
-  const callSid = await makeOutboundCall(toNumber, greeting || "Hey, this is ASAPTester running a voice check before handing over to Riley.");
+  const callSid = await makeOutboundCall(toNumber, greeting || "Hey, this is ASAPTester running a voice check before handing over to Cortana.");
   const session = activeSessions.get(callSid);
   if (session) {
     session.ttsVoiceName = process.env.ASAPTESTER_VOICE_NAME || 'Achernar';
@@ -533,7 +533,7 @@ async function endPhoneSession(session: PhoneSession): Promise<void> {
     );
 
     try {
-      const summary = await summarizeCall(session.transcript, ['Caller', 'Riley (Executive Assistant)']);
+      const summary = await summarizeCall(session.transcript, ['Caller', 'Cortana (Executive Assistant)']);
       await callLogChannel.send(`📝 **Summary**\n${summary}`);
     } catch { /* ignore */ }
   }
@@ -649,7 +649,7 @@ async function mp3ToMulaw(mp3: Buffer): Promise<Buffer> {
 
 
 /**
- * Start a conference call. Riley joins as an AI participant.
+ * Start a conference call. Cortana joins as an AI participant.
  * All listed numbers are called and joined to the same conference.
  */
 export async function startConferenceCall(
@@ -720,8 +720,8 @@ export async function startConferenceCall(
     else if (!norm.startsWith('+')) norm = '+61' + norm;
     return identifyCaller(norm) || n;
   }).join(', ');
-  logToDiscord(`📞 **Conference call started** — ${confName}\nParticipants: ${nameList} + Riley`);
-  session.transcript.push(`[${new Date().toLocaleTimeString()}] Conference started: ${nameList} + Riley`);
+  logToDiscord(`📞 **Conference call started** — ${confName}\nParticipants: ${nameList} + Cortana`);
+  session.transcript.push(`[${new Date().toLocaleTimeString()}] Conference started: ${nameList} + Cortana`);
 
   return confName;
 }

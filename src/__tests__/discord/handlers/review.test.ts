@@ -102,7 +102,7 @@ describe('autoReviewPR', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     (getAgent as jest.Mock).mockReturnValue({
-      name: 'Harper Atkinson',
+      name: 'Themis Atkinson',
       emoji: '⚖️',
     });
     (agentRespond as jest.Mock).mockResolvedValue('✅ **APPROVED** — No issues found.');
@@ -118,7 +118,7 @@ describe('autoReviewPR', () => {
     await autoReviewPR(42, 'Fix auth bug', ['src/middleware/auth.ts'], 'diff content', mockGroupchat);
     expect(agentRespond).toHaveBeenCalled();
     expect(mockSend).toHaveBeenCalled();
-    expect(addPRComment).toHaveBeenCalledWith(42, expect.stringContaining('Harper'));
+    expect(addPRComment).toHaveBeenCalledWith(42, expect.stringContaining('Themis'));
     expect(appendToMemory).toHaveBeenCalled();
     expect(documentToChannel).toHaveBeenCalled();
   });

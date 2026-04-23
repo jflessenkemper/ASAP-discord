@@ -84,7 +84,7 @@ function classifyAgentError(err: unknown): string {
     message.includes('billing') ||
     message.includes('credits before continuing')
   ) {
-    return 'Anthropic quota or billing is exhausted right now. Riley needs to restore credits before this can continue.';
+    return 'Anthropic quota or billing is exhausted right now. Cortana needs to restore credits before this can continue.';
   }
   return 'An internal error interrupted the response.';
 }
@@ -414,14 +414,14 @@ async function handleAgentMessageInner(
     const renderedResponse = ensureCompletionToken(renderAgentMessage(response), completionToken);
     if (!renderedResponse.trim()) {
       await sendWebhookMessage(channel, {
-        content: `⚠️ ${agent.name}: I executed the request but did not generate a usable message. Retrying usually fixes this; if it repeats, ask Riley to break the task into smaller steps.`,
+        content: `⚠️ ${agent.name}: I executed the request but did not generate a usable message. Retrying usually fixes this; if it repeats, ask Cortana to break the task into smaller steps.`,
         username: `${agent.emoji} ${agent.name}`,
         avatarURL: agent.avatarUrl,
       }).catch(async () => {
         await sendAgentFallbackMessage(
           channel,
           agent,
-          `⚠️ ${agent.name}: I executed the request but did not generate a usable message. Retrying usually fixes this; if it repeats, ask Riley to break the task into smaller steps.`
+          `⚠️ ${agent.name}: I executed the request but did not generate a usable message. Retrying usually fixes this; if it repeats, ask Cortana to break the task into smaller steps.`
         ).catch(() => {});
       });
       pendingThinkingMessages.delete(channelId);
@@ -473,7 +473,7 @@ async function handleAgentMessageInner(
     try {
       if (pendingThinking && timedOut) {
         // Edit the Thinking message in-place to show timeout — avoids dead placeholder
-        const timeoutMsg = `⏱️ ${agent.name} timed out on this request. Try a narrower question or ask Riley to break it down in #groupchat.`;
+        const timeoutMsg = `⏱️ ${agent.name} timed out on this request. Try a narrower question or ask Cortana to break it down in #groupchat.`;
         await pendingThinking.edit(timeoutMsg).catch(async () => {
           await pendingThinking!.delete().catch(() => {});
           await sendWebhookMessage(channel, {
@@ -500,7 +500,7 @@ async function handleAgentMessageInner(
       }
       if (timedOut && !pendingThinking) {
         await sendWebhookMessage(channel, {
-          content: 'ℹ️ Timeout hint: ask a narrower question or split this into smaller steps. Riley can orchestrate the breakdown in #groupchat.',
+          content: 'ℹ️ Timeout hint: ask a narrower question or split this into smaller steps. Cortana can orchestrate the breakdown in #groupchat.',
           username: `${agent.emoji} ${agent.name}`,
           avatarURL: agent.avatarUrl,
         }).catch(() => {});
@@ -512,7 +512,7 @@ async function handleAgentMessageInner(
         await sendAgentFallbackMessage(
           channel,
           agent,
-          'ℹ️ Timeout hint: ask a narrower question or split this into smaller steps. Riley can orchestrate the breakdown in #groupchat.'
+          'ℹ️ Timeout hint: ask a narrower question or split this into smaller steps. Cortana can orchestrate the breakdown in #groupchat.'
         ).catch(() => {});
       }
     }
@@ -743,13 +743,13 @@ export function renderAgentMessage(raw: string): string {
     .replace(/\[smoke[- ]?token[^\]]*\]/gi, '')
     .replace(/\bSMOKE_[A-Z0-9_]+\b/g, '')
     .replace(/\[smoke test:[^\]]*\]/gi, '')
-    .replace(/^Next step: Riley will post.*$/gm, '')
+    .replace(/^Next step: Cortana will post.*$/gm, '')
     .trim();
   if (!withoutSmokeTokens) return '';
 
   const withoutSpeakerLabel = withoutSmokeTokens
     .replace(/^\s*\[[^\]\r\n]{1,40}\]:\s*/u, '')
-    .replace(/^\s*(?:Riley|Ace|Max|Kane|Sophie|Raj|Elena|Jude|Harper|Kai|Liv|Mia|Leo)\s*:\s*/i, '');
+    .replace(/^\s*(?:Cortana|Ace|Argus|Athena|Aphrodite|Iris|Mnemosyne|Hephaestus|Themis|Hermes|Calliope|Artemis|Prometheus)\s*:\s*/i, '');
   if (!withoutSpeakerLabel) return '';
 
   const withoutHeadings = withoutSpeakerLabel
@@ -800,7 +800,7 @@ function ensureCompletionToken(rendered: string, token: string | null): string {
 function buildCompletionCheckReply(agent: AgentConfig, token: string): string {
   const agentFirst = agent.name.split(' ')[0] || agent.name;
   const paragraphOne = `${agentFirst} is responsible for high-trust execution in ASAP by turning user intent into concrete, auditable outcomes. In practice this means reducing ambiguity, keeping communication crisp, and ensuring that every recommendation includes scope, expected impact, and the safest next action. The role also protects team velocity by identifying blockers early, escalating risk before it becomes outage-level, and converting broad requests into stepwise work that can be validated quickly in Discord and in production workflows.`;
-  const paragraphTwo = `One concrete improvement I recommend is adding a shared response contract used by every agent channel: explicit objective, constraints, acceptance checks, and completion status in a stable output shape. That contract would reduce partial or inconsistent responses, improve automated channel validation reliability, and make retries more deterministic under load. It also gives Riley and operators a cleaner way to audit quality and triage failures because each answer is comparable, measurable, and easier to route to the right owner without losing execution context.`;
+  const paragraphTwo = `One concrete improvement I recommend is adding a shared response contract used by every agent channel: explicit objective, constraints, acceptance checks, and completion status in a stable output shape. That contract would reduce partial or inconsistent responses, improve automated channel validation reliability, and make retries more deterministic under load. It also gives Cortana and operators a cleaner way to audit quality and triage failures because each answer is comparable, measurable, and easier to route to the right owner without losing execution context.`;
   return `${paragraphOne}\n\n${paragraphTwo}\nTOKEN:${token}`;
 }
 

@@ -329,7 +329,7 @@ export function listenToUser(
     cleanupCurrentChain();
     resubscribeCount++;
     if (resubscribeCount >= MAX_RESUBSCRIBES) {
-      console.warn(`Max resubscribes (${MAX_RESUBSCRIBES}) reached for ${member.displayName} — stopping listener`);
+      console.warn(`Argus resubscribes (${MAX_RESUBSCRIBES}) reached for ${member.displayName} — stopping listener`);
       pendingShortAudioByUser.delete(member.id);
       return; // Stop listening instead of continuing forever
     }

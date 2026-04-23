@@ -39,7 +39,7 @@ export interface OperationsStewardSource {
 const SELF_IMPROVEMENT_MANAGER_AGENT_ID = 'executive-assistant';
 const SELF_IMPROVEMENT_STEWARD_AGENT_ID = 'operations-manager';
 const SELF_IMPROVEMENT_CONSUMER_AGENT_ID = 'opus';
-const SELF_IMPROVEMENT_MANAGER_LABEL = 'Riley the agent manager';
+const SELF_IMPROVEMENT_MANAGER_LABEL = 'Cortana the agent manager';
 
 function uniqueRequests(requests: OperationsStewardRequest[]): OperationsStewardRequest[] {
   const seen = new Set<string>();
@@ -112,8 +112,8 @@ export function buildSelfImprovementPacket(source: OperationsStewardSource): Sel
     stewardAgentId: SELF_IMPROVEMENT_STEWARD_AGENT_ID,
     consumerAgentId: SELF_IMPROVEMENT_CONSUMER_AGENT_ID,
     summary: requests.length > 0
-      ? `${SELF_IMPROVEMENT_MANAGER_LABEL} queued ${requests.length} self-improvement item(s) for Riley Opus${kinds.length > 0 ? ` (${kinds.join(', ')})` : ''}.`
-      : `${SELF_IMPROVEMENT_MANAGER_LABEL} did not queue any self-improvement work for Riley Opus.`,
+      ? `${SELF_IMPROVEMENT_MANAGER_LABEL} queued ${requests.length} self-improvement item(s) for Cortana Opus${kinds.length > 0 ? ` (${kinds.join(', ')})` : ''}.`
+      : `${SELF_IMPROVEMENT_MANAGER_LABEL} did not queue any self-improvement work for Cortana Opus.`,
     requests,
     recommendedLoopIds,
   };

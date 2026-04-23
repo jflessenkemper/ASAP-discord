@@ -47,6 +47,10 @@ import { setLimitsChannel, setCostChannel, startDashboardUpdates, stopDashboardU
 import { formatAge } from '../utils/time';
 import { mapFilesToCategories, getTestsForCategories } from './tester';
 import { recordAgentDecision, consolidateMemoryInsights, recordSmokeInsight, recordAgentLearning } from './vectorMemory';
+import { recordUserEvent } from './userEvents';
+import { captureAttachments } from './services/mediaCapture';
+import { startEmbeddingWorker } from './embeddingWorker';
+import { initPresence } from './presence';
 import { enqueueSelfImprovementJob } from './selfImprovementQueue';
 import { detectAnomalies } from './anomalyDetection';
 import { goalState } from './handlers/goalState';
@@ -532,6 +536,26 @@ export async function startBot(): Promise<void> {
 
   client.once(Events.ClientReady, async (readyClient) => {
     console.log(`Discord bot logged in as ${readyClient.user.tag}`);
+    initPresence(readyClient);
+
+    // Warm outbound connections + caches so the first turn after boot is
+    // fast. All best-effort — failures never block startup.
+    void (async () => {
+      try {
+        const [{ warmCortanaVoiceAtStartup }, { warmAnthropicConnection }] = await Promise.all([
+          import('./voice/elevenlabs'),
+          import('./warmStart'),
+        ]);
+        // Run in parallel — voice warm takes ~2-5s for multiple phrases,
+        // Anthropic probe is ~300-800ms. No reason to serialize.
+        await Promise.allSettled([
+          warmCortanaVoiceAtStartup(),
+          warmAnthropicConnection(),
+        ]);
+      } catch (err) {
+        console.warn('[warm] startup warm failed:', errMsg(err));
+      }
+    })();
 
     let guild = readyClient.guilds.cache.get(guildId);
     if (!guild) {
@@ -669,7 +693,7 @@ export async function startBot(): Promise<void> {
           if (hasFails && !goalState.isActive()) {
             const failSummary = `Post-merge smoke test regression from PR #${prNumber}.\nAffected categories: ${[...categories].join(', ')}\n\n${summary}`;
             void dispatchUpgradeToRiley(failSummary, configuredChannels.groupchat).catch((err) => {
-              console.warn(`[smoke-auto] Riley dispatch failed:`, errMsg(err));
+              console.warn(`[smoke-auto] Cortana dispatch failed:`, errMsg(err));
             });
           }
 
@@ -683,6 +707,7 @@ export async function startBot(): Promise<void> {
 
       startOpsMonitors(configuredChannels);
       startSelfImprovementQueueWorker();
+      startEmbeddingWorker();
     } catch (err) {
       const msg = err instanceof Error ? err.stack || err.message : 'Unknown';
       console.error('Channel setup error:', errMsg(err));
@@ -769,6 +794,33 @@ export async function startBot(): Promise<void> {
 
     const channelId = message.channel.id;
 
+    // Capture every user message into user_events for Cortana's memory + SI.
+    // Runs fire-and-forget so memory capture never blocks the hot path.
+    void (async () => {
+      const threadId = message.channel.isThread() ? message.channel.id : null;
+      const parentChannelId = message.channel.isThread()
+        ? (message.channel.parentId || channelId)
+        : channelId;
+      const hasText = !!(message.content && message.content.trim());
+      const hasAttachments = message.attachments.size > 0;
+
+      if (hasText) {
+        await recordUserEvent({
+          userId: message.author.id,
+          channelId: parentChannelId,
+          threadId,
+          messageId: message.id,
+          kind: 'text',
+          text: message.content,
+          metadata: { username: message.author.username },
+        });
+      }
+
+      if (hasAttachments) {
+        await captureAttachments(message, { parentChannelId, threadId });
+      }
+    })().catch((err) => console.warn('[capture] user event capture failed:', errMsg(err)));
+
     try {
       for (const [agentId, channel] of botChannels.agentChannels) {
         if (channel.id === channelId) {
@@ -830,6 +882,59 @@ export async function startBot(): Promise<void> {
     }
   });
 
+  client.on(Events.MessageUpdate, async (oldMessage, newMessage) => {
+    try {
+      if (!newMessage.author || newMessage.author.bot) return;
+      if (!newMessage.guild) return;
+      const parentChannelId = newMessage.channel.isThread()
+        ? (newMessage.channel.parentId || newMessage.channel.id)
+        : newMessage.channel.id;
+      const threadId = newMessage.channel.isThread() ? newMessage.channel.id : null;
+      await recordUserEvent({
+        userId: newMessage.author.id,
+        channelId: parentChannelId,
+        threadId,
+        messageId: newMessage.id,
+        kind: 'edit',
+        text: newMessage.content || null,
+        metadata: {
+          before: typeof oldMessage.content === 'string' ? oldMessage.content.slice(0, 500) : null,
+        },
+      });
+    } catch (err) {
+      console.warn('[capture] edit capture failed:', errMsg(err));
+    }
+  });
+
+  client.on(Events.MessageReactionAdd, async (reaction, user) => {
+    try {
+      if (user.bot) return;
+      if (reaction.partial) {
+        try { await reaction.fetch(); } catch { return; }
+      }
+      const msg = reaction.message;
+      if (!msg?.channel) return;
+      const parentChannelId = msg.channel.isThread()
+        ? (msg.channel.parentId || msg.channel.id)
+        : msg.channel.id;
+      const threadId = msg.channel.isThread() ? msg.channel.id : null;
+      await recordUserEvent({
+        userId: user.id,
+        channelId: parentChannelId,
+        threadId,
+        messageId: msg.id,
+        kind: 'reaction',
+        text: reaction.emoji.name || null,
+        metadata: {
+          emoji: reaction.emoji.name,
+          targetAuthorId: msg.author?.id,
+        },
+      });
+    } catch (err) {
+      console.warn('[capture] reaction capture failed:', errMsg(err));
+    }
+  });
+
   client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
     if (!botChannels) return;
 
@@ -837,7 +942,7 @@ export async function startBot(): Promise<void> {
     const joinedTarget = oldState.channelId !== targetVoiceId && newState.channelId === targetVoiceId;
     const leftTarget = oldState.channelId === targetVoiceId && newState.channelId !== targetVoiceId;
 
-    // Ignore voice state updates unrelated to the managed Riley voice channel.
+    // Ignore voice state updates unrelated to the managed Cortana voice channel.
     if (!joinedTarget && !leftTarget) return;
 
     const member = newState.member || oldState.member;
@@ -876,6 +981,21 @@ export async function startBot(): Promise<void> {
   client.on(Events.InteractionCreate, async (interaction) => {
     if (!interaction.isButton()) return;
     const customId = interaction.customId;
+
+    void recordUserEvent({
+      userId: interaction.user.id,
+      channelId: interaction.channelId ?? '',
+      threadId: interaction.channel?.isThread() ? interaction.channel.id : null,
+      messageId: interaction.message?.id,
+      kind: 'button',
+      text: customId,
+      metadata: {
+        customId,
+        messagePreview: typeof interaction.message?.content === 'string'
+          ? interaction.message.content.slice(0, 200)
+          : null,
+      },
+    }).catch(() => {});
 
     try {
       // ── Job card approve/reject buttons in #📋-job-applications ──

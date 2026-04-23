@@ -259,14 +259,14 @@ describe('opsFeed', () => {
 
     it('capitalizes actor name', () => {
       const line = formatToolAuditHuman({
-        actor: 'kane',
+        actor: 'athena',
         scope: 'tool-audit',
         metric: 'scan_code',
         delta: 'none',
         action: 'none',
         severity: 'warn',
       });
-      expect(line).toContain('**Kane**');
+      expect(line).toContain('**Athena**');
       expect(line).toContain('🟡');
     });
   });

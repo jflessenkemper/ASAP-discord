@@ -61,7 +61,7 @@ function sanitizeWebhookUsername(name: unknown): string | undefined {
   if (!raw) return undefined;
 
   let normalized = raw;
-  // Remove decorative suffix symbols after a role label, e.g. "Riley (Executive Assistant)✦".
+  // Remove decorative suffix symbols after a role label, e.g. "Cortana (Executive Assistant)✦".
   normalized = normalized.replace(/(\([^)]*\))\s*[^\p{L}\p{N}\s)]+$/u, '$1');
   // Fallback trim for any remaining standalone trailing symbol clusters.
   normalized = normalized.replace(/\s+[^\p{L}\p{N}\s]+$/u, '');
@@ -88,6 +88,31 @@ export async function sendWebhookMessage(
     webhookCache.delete(base.id);
     const refreshed = await getWebhook(channel);
     return await refreshed.send(payload);
+  }
+}
+
+/**
+ * Edit a message previously sent via this webhook. Used for rolling status
+ * updates so a single message can reflect "thinking → consulting X → drafting"
+ * without posting new messages for each step.
+ */
+export async function editWebhookMessage(
+  channel: WebhookCapableChannel,
+  messageId: string,
+  content: string,
+): Promise<Message<boolean> | null> {
+  const { threadId } = resolveWebhookParent(channel);
+  const webhook = await getWebhook(channel);
+  try {
+    const payload: { content: string; threadId?: string } = { content };
+    if (threadId) payload.threadId = threadId;
+    return await webhook.editMessage(messageId, payload as any);
+  } catch (err) {
+    if (isStaleWebhookError(err)) return null;
+    // Editing a webhook message can fail if the message was deleted; treat as no-op.
+    const code = Number((err as any)?.code || 0);
+    if (code === 10008) return null; // Unknown Message
+    throw err;
   }
 }
 

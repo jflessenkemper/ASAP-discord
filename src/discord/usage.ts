@@ -119,11 +119,11 @@ export async function recordSpan(span: TraceSpan): Promise<void> {
 }
 
 const DAILY_LIMITS = {
-  /** Max LLM input+output tokens per day */
+  /** Argus LLM input+output tokens per day */
   claudeTokens: parseInt(process.env.DAILY_LIMIT_GEMINI_LLM_TOKENS || process.env.DAILY_LIMIT_CLAUDE_TOKENS || '8000000', 10),
-  /** Max realtime API calls per day */
+  /** Argus realtime API calls per day */
   geminiCalls: parseInt(process.env.DAILY_LIMIT_GEMINI_CALLS || '2000', 10),
-  /** Max ElevenLabs characters per day */
+  /** Argus ElevenLabs characters per day */
   elevenLabsChars: parseInt(process.env.DAILY_LIMIT_ELEVENLABS_CHARS || '10000', 10),
   /** Hard dollar budget — ALL agents stop when this is exceeded */
   budgetUsd: parseFloat(process.env.DAILY_BUDGET_USD || '250.00'),
@@ -250,19 +250,20 @@ function disableUsageDb(reason: string): void {
 
 export function toAgentTag(agentLabel: string): string {
   const normalized = String(agentLabel || '').toLowerCase();
-  if (normalized.includes('riley')) return 'executive-assistant';
-  if (normalized.includes('ace')) return 'executive-assistant';
-  if (normalized.includes('max')) return 'qa';
-  if (normalized.includes('sophie')) return 'ux-reviewer';
-  if (normalized.includes('kane')) return 'security-auditor';
-  if (normalized.includes('raj')) return 'api-reviewer';
-  if (normalized.includes('elena')) return 'dba';
-  if (normalized.includes('kai')) return 'performance';
-  if (normalized.includes('jude')) return 'devops';
-  if (normalized.includes('liv')) return 'copywriter';
-  if (normalized.includes('harper')) return 'lawyer';
-  if (normalized.includes('mia')) return 'ios-engineer';
-  if (normalized.includes('leo')) return 'android-engineer';
+  // Map both current Greek-pantheon names and legacy names (riley/max/etc.)
+  // to their stable agent IDs so logs and metrics keep working across the rename.
+  if (normalized.includes('cortana') || normalized.includes('riley') || normalized.includes('ace')) return 'executive-assistant';
+  if (normalized.includes('argus') || normalized.includes('max')) return 'qa';
+  if (normalized.includes('aphrodite') || normalized.includes('sophie')) return 'ux-reviewer';
+  if (normalized.includes('athena') || normalized.includes('kane')) return 'security-auditor';
+  if (normalized.includes('iris') || normalized.includes('raj')) return 'api-reviewer';
+  if (normalized.includes('mnemosyne') || normalized.includes('elena')) return 'dba';
+  if (normalized.includes('hermes') || normalized.includes('kai')) return 'performance';
+  if (normalized.includes('hephaestus') || normalized.includes('jude')) return 'devops';
+  if (normalized.includes('calliope') || normalized.includes('liv')) return 'copywriter';
+  if (normalized.includes('themis') || normalized.includes('harper')) return 'lawyer';
+  if (normalized.includes('artemis') || normalized.includes('mia')) return 'ios-engineer';
+  if (normalized.includes('prometheus') || normalized.includes('leo')) return 'android-engineer';
   return normalized.replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'unknown';
 }
 

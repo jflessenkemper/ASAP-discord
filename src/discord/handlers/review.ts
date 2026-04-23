@@ -9,7 +9,7 @@ import { documentToChannel } from './documentation';
 import { errMsg } from '../../utils/errors';
 
 /**
- * Patterns of files that trigger automatic review by Harper (Lawyer) and/or Kane (Security).
+ * Patterns of files that trigger automatic review by Themis (Lawyer) and/or Athena (Security).
  * When a PR touches these files, the relevant agents are auto-consulted.
  */
 const SENSITIVE_PATTERNS: Array<{

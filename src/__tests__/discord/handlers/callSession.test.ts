@@ -37,7 +37,7 @@ jest.mock('../../../db/pool', () => ({
 jest.mock('../../../discord/agents', () => ({
   getAgent: jest.fn().mockReturnValue({
     id: 'executive-assistant',
-    name: 'Riley',
+    name: 'Cortana',
     emoji: '📋',
     avatarUrl: 'https://example.com/riley.png',
     voice: 'Achernar',
@@ -45,7 +45,7 @@ jest.mock('../../../discord/agents', () => ({
   AgentId: {},
 }));
 
-const mockAgentRespond = jest.fn().mockResolvedValue('Hello from Riley');
+const mockAgentRespond = jest.fn().mockResolvedValue('Hello from Cortana');
 jest.mock('../../../discord/claude', () => ({
   agentRespond: mockAgentRespond,
   summarizeCall: jest.fn().mockResolvedValue('Call summary text'),
@@ -438,7 +438,7 @@ describe('callSession', () => {
       const result = await processTesterVoiceTurnForCall({
         userId: '107',
         username: 'Tester',
-        text: 'Hello Riley',
+        text: 'Hello Cortana',
       });
       expect(result.ok).toBe(true);
       expect(result.mode).toBe('voice');
@@ -460,7 +460,7 @@ describe('callSession', () => {
       const result = await processTesterVoiceTurnForCall({
         userId: '108',
         username: 'Tester',
-        text: 'Hello Riley',
+        text: 'Hello Cortana',
       });
       expect(result.ok).toBe(true);
       expect(result.mode).toBe('injected');
@@ -482,7 +482,7 @@ describe('callSession', () => {
       const result = await processTesterVoiceTurnForCall({
         userId: '109',
         username: 'Tester',
-        text: 'Hello Riley',
+        text: 'Hello Cortana',
       });
       expect(result.ok).toBe(false);
 
@@ -598,7 +598,7 @@ describe('callSession', () => {
         })
       );
 
-      if (resolveFirstTurn) resolveFirstTurn('Hello from Riley');
+      if (resolveFirstTurn) resolveFirstTurn('Hello from Cortana');
       await firstTurn;
       await endCall();
     });

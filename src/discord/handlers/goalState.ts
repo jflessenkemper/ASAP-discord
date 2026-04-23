@@ -37,7 +37,7 @@ export class GoalStateManager {
     this.goal = goal;
     this.startedAt = Date.now();
     this.clearPause();
-    this.markProgress('⏳ Riley planning...');
+    this.markProgress('⏳ Cortana planning...');
   }
 
   clear(): void {

@@ -29,7 +29,7 @@ describe('vectorMemory', () => {
 
   it('does not log decision or learning storage when persistence is disabled', async () => {
     await expect(recordAgentDecision('executive-assistant', 'Ship it', 'tests are green')).resolves.toBe(false);
-    await expect(recordAgentLearning('executive-assistant', 'Prefer Riley-first execution')).resolves.toBe(false);
+    await expect(recordAgentLearning('executive-assistant', 'Prefer Cortana-first execution')).resolves.toBe(false);
     expect(logAgentEvent).not.toHaveBeenCalled();
   });
 

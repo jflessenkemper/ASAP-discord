@@ -22,6 +22,7 @@ import { textToSpeech } from '../voice/tts';
 import { errMsg } from '../../utils/errors';
 import { recordLoopHealth } from '../loopHealth';
 import { buildVoiceDecisionPolicy, buildVoiceSingleSpeakerNotice } from '../rileyInteraction';
+import { recordUserEvent } from '../userEvents';
 
 /** Heartbeat interval to detect stale connections (every 2 minutes) */
 const HEARTBEAT_INTERVAL = 20 * 1000;
@@ -375,9 +376,9 @@ async function handleVoiceCommand(
   // Log to call log
   if (!VOICE_DISABLE_CALL_LOG) {
     session.transcript.push(`[${new Date().toLocaleTimeString()}] ${transcription.username}: ${userText}`);
-    session.transcript.push(`[${new Date().toLocaleTimeString()}] Riley (EA): ${response}`);
+    session.transcript.push(`[${new Date().toLocaleTimeString()}] Cortana (EA): ${response}`);
     await session.callLog.send(`🎤 **${transcription.username}**: ${userText}`).catch(() => {});
-    await session.callLog.send(`${riley?.emoji || '📋'} **Riley**: ${response}`).catch(() => {});
+    await session.callLog.send(`${riley?.emoji || '📋'} **Cortana**: ${response}`).catch(() => {});
   }
 
   // Speak the response
@@ -422,10 +423,10 @@ async function handoffVoiceInstructionToTextRiley(
 
     await mod.handoffVoiceInstructionToRileyText(trimmed, transcription.username, session.groupchat);
     await postVoiceStageLog('voice_text_handoff', `user=${transcription.username} chars=${trimmed.length}`);
-    await sendAsAgent(session.groupchat, `📝 Voice handoff queued for Riley text: "${trimmed.slice(0, 180)}"`);
+    await sendAsAgent(session.groupchat, `📝 Voice handoff queued for Cortana text: "${trimmed.slice(0, 180)}"`);
     if (!VOICE_DISABLE_CALL_LOG) {
       session.transcript.push(
-        `[${new Date().toLocaleTimeString()}] System: queued voice handoff to Riley text — ${trimmed}`
+        `[${new Date().toLocaleTimeString()}] System: queued voice handoff to Cortana text — ${trimmed}`
       );
     }
     return true;
@@ -440,7 +441,7 @@ async function handoffVoiceInstructionToTextRiley(
       userReason = 'the previous request was interrupted by a newer one.';
     }
     await postVoiceStageLog('voice_text_handoff_failed', `user=${transcription.username} error=${msg}`, 'warn');
-    await sendAsAgent(session.groupchat, `⚠️ Voice handoff to Riley text failed: ${userReason}`);
+    await sendAsAgent(session.groupchat, `⚠️ Voice handoff to Cortana text failed: ${userReason}`);
     return false;
   }
 }
@@ -673,10 +674,10 @@ export async function startCall(
   const riley = getAgent('executive-assistant' as AgentId);
   const selectedRileyVoice = isTesterInitiated ? testerVoiceId : (riley?.voice || 'Achernar');
 
-  // Set ASAPTester's identity to Riley BEFORE joining voice so users see
-  // "Riley" in the voice channel from the moment the bot appears.
+  // Set ASAPTester's identity to Cortana BEFORE joining voice so users see
+  // "Cortana" in the voice channel from the moment the bot appears.
   const guildId = voiceChannel.guild.id;
-  const previousBotNickname = await setTesterNickname(guildId, 'Riley', 'ASAP voice call active');
+  const previousBotNickname = await setTesterNickname(guildId, 'Cortana', 'ASAP voice call active');
   if (riley?.avatarUrl) {
     await setTesterAvatar(riley.avatarUrl);
   }
@@ -843,8 +844,8 @@ export async function startCall(
     `started:${voiceChannel.id}`,
     `✅ **Voice call started**\n` +
       `Initiated by **${initiator.displayName}**\n` +
-      `${riley?.emoji || '📋'} **Riley** is on the line and listening now.\n\n` +
-      `Speak in **${voiceChannel.name}**. Say "leave" or ask Riley to end the call.${sttNote}`
+      `${riley?.emoji || '📋'} **Cortana** is on the line and listening now.\n\n` +
+      `Speak in **${voiceChannel.name}**. Say "leave" or ask Cortana to end the call.${sttNote}`
   );
 
   if (isVoiceStartupSelftestEnabled()) {
@@ -942,7 +943,7 @@ export async function endCall(): Promise<void> {
 
   if (!VOICE_DISABLE_TRANSCRIPT_SUMMARY && !VOICE_DISABLE_CALL_LOG) {
     try {
-      const participants = ['User', 'Riley (Executive Assistant)'];
+      const participants = ['User', 'Cortana (Executive Assistant)'];
       const summary = await summarizeCall(session.transcript, participants);
       await session.callLog.send(`📝 **Summary**\n${summary}`);
       await sendAsAgent(
@@ -961,7 +962,7 @@ export async function endCall(): Promise<void> {
 }
 
 /**
- * Process a voice transcription — Riley (EA) receives it first, then directs agents.
+ * Process a voice transcription — Cortana (EA) receives it first, then directs agents.
  */
 async function handleVoiceInput(transcription: VoiceTranscription): Promise<void> {
   if (!activeSession?.active) return;
@@ -970,6 +971,22 @@ async function handleVoiceInput(transcription: VoiceTranscription): Promise<void
   const userText = (transcription.text || '').trim();
   if (userText.length < VOICE_MIN_INPUT_CHARS) return;
   if (VOICE_FILLER_ONLY_RE.test(userText)) return;
+
+  // Capture the voice utterance into user_events for Cortana's memory + SI.
+  // Fire-and-forget so it never delays the turn.
+  if (transcription.userId) {
+    void recordUserEvent({
+      userId: transcription.userId,
+      channelId: session.voiceChannel.id,
+      kind: 'voice',
+      text: userText,
+      metadata: {
+        username: transcription.username,
+        sttProvider: transcription.sttProvider,
+        sttLatencyMs: transcription.sttLatencyMs,
+      },
+    }).catch(() => {});
+  }
 
   const textHandoffInstruction = extractVoiceToTextHandoffInstruction(userText);
   if (textHandoffInstruction) {
@@ -1090,7 +1107,7 @@ async function handleVoiceInput(transcription: VoiceTranscription): Promise<void
             role: 'user',
             content: `[Voice from ${transcription.username}]: ${userText}`,
           });
-          session.conversationHistory.push({ role: 'assistant', content: `[Riley]: ${response}` });
+          session.conversationHistory.push({ role: 'assistant', content: `[Cortana]: ${response}` });
 
           const rileyLogAndMirror = VOICE_DISABLE_CALL_LOG
             ? Promise.resolve([])
@@ -1100,7 +1117,7 @@ async function handleVoiceInput(transcription: VoiceTranscription): Promise<void
               ]);
           if (!VOICE_DISABLE_CALL_LOG) {
             session.transcript.push(
-              `[${new Date().toLocaleTimeString()}] Riley (EA): ${response}`
+              `[${new Date().toLocaleTimeString()}] Cortana (EA): ${response}`
             );
           }
 
@@ -1143,7 +1160,7 @@ You are in a voice call. ${transcription.username} just spoke. Your job:
 2. If it's a question you can answer directly, answer it
 3. Keep responses directly actionable for the caller
 
-IMPORTANT: This call is Riley-only. Do not delegate to any specialist during live voice.
+IMPORTANT: This call is Cortana-only. Do not delegate to any specialist during live voice.
 ${buildVoiceDecisionPolicy()}
 
 Keep your spoken response very brief (normally 1-2 short sentences) — you're in a voice call, not a text chat.
@@ -1202,7 +1219,7 @@ IMPORTANT: End on a complete sentence, never a fragment.${langHint}`;
         role: 'user',
         content: `[Voice from ${transcription.username}]: ${userText}`,
       });
-      session.conversationHistory.push({ role: 'assistant', content: `[Riley]: ${response}` });
+      session.conversationHistory.push({ role: 'assistant', content: `[Cortana]: ${response}` });
 
       const rileyLogAndMirror = VOICE_DISABLE_CALL_LOG
         ? Promise.resolve([])
@@ -1212,13 +1229,13 @@ IMPORTANT: End on a complete sentence, never a fragment.${langHint}`;
           ]);
       if (!VOICE_DISABLE_CALL_LOG) {
         session.transcript.push(
-          `[${new Date().toLocaleTimeString()}] Riley (EA): ${response}`
+          `[${new Date().toLocaleTimeString()}] Cortana (EA): ${response}`
         );
       }
       if (!VOICE_LOW_LATENCY_MODE) {
         appendToMemory('executive-assistant', [
           { role: 'user', content: `[Voice from ${transcription.username}]: ${userText}` },
-          { role: 'assistant', content: `[Riley]: ${response}` },
+          { role: 'assistant', content: `[Cortana]: ${response}` },
         ]);
       }
       if (!isCurrentTurn()) return;
@@ -1244,30 +1261,30 @@ IMPORTANT: End on a complete sentence, never a fragment.${langHint}`;
         await postVoiceStageLog('riley_tts', `turn=${turnId} tts_play_ms=${Date.now() - rileyTtsStartMs}`);
       } catch (ttsErr) {
         if (!isCurrentTurn()) return;
-        console.error('TTS error for Riley:', ttsErr instanceof Error ? ttsErr.message : 'Unknown');
+        console.error('TTS error for Cortana:', ttsErr instanceof Error ? ttsErr.message : 'Unknown');
         await postVoiceStageLog(
           'riley_tts_failed',
           `turn=${turnId} error=${ttsErr instanceof Error ? ttsErr.message : 'Unknown'}`,
           'error'
         );
-        await postDiagnostic('Riley TTS playback failed during call.', {
+        await postDiagnostic('Cortana TTS playback failed during call.', {
           level: 'error',
           source: 'callSession.handleVoiceInput',
           detail: ttsErr instanceof Error ? ttsErr.message : 'Unknown',
         });
-        sendAsAgent(session.groupchat, '⚠️ Voice playback unavailable — check call-log for Riley\'s response.').catch(() => {});
+        sendAsAgent(session.groupchat, '⚠️ Voice playback unavailable — check call-log for Cortana\'s response.').catch(() => {});
       }
       if (!isCurrentTurn()) return;
 
       } catch (err) {
         if (!isCurrentTurn()) return;
         if (isAbortLikeError(err)) return;
-        console.error('Riley voice error:', errMsg(err));
+        console.error('Cortana voice error:', errMsg(err));
         await postVoiceStageLog('riley_turn_failed', `turn=${turnId} error=${errMsg(err)}`, 'error');
-        await sendAsAgent(session.groupchat, '⚠️ Riley had an error processing voice input.');
+        await sendAsAgent(session.groupchat, '⚠️ Cortana had an error processing voice input.');
       }
     } else {
-      await sendAsAgent(session.groupchat, '⚠️ Riley is unavailable. Voice input not processed.');
+      await sendAsAgent(session.groupchat, '⚠️ Cortana is unavailable. Voice input not processed.');
     }
   } finally {
     if (session.currentTurnId === turnId) {

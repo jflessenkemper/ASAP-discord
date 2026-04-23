@@ -1,6 +1,6 @@
 /**
  * Smoke test definitions — the WHAT (not the HOW).
- * Riley adds/edits tests here. The runner lives in tester.ts.
+ * Cortana adds/edits tests here. The runner lives in tester.ts.
  */
 
 export type CheckPattern = RegExp;
@@ -50,7 +50,7 @@ const RAW_AGENT_CAPABILITY_TESTS: AgentCapabilityTest[] = [
     id: 'executive-assistant',
     category: 'orchestration',
     capability: 'delegate-riley-qa',
-    prompt: 'In a single reply, explain that Riley will execute the code work directly and involve QA for validation.',
+    prompt: 'In a single reply, explain that Cortana will execute the code work directly and involve QA for validation.',
     expectAny: [/riley|execut|direct/i, /qa|max/i],
     requireTokenEcho: false,
     critical: false,
@@ -59,7 +59,7 @@ const RAW_AGENT_CAPABILITY_TESTS: AgentCapabilityTest[] = [
     id: 'executive-assistant',
     category: 'orchestration',
     capability: 'direct-execution-routing',
-    prompt: 'You need security and QA help. Explain in one short reply that Riley will execute directly and involve only the needed specialists for review and validation.',
+    prompt: 'You need security and QA help. Explain in one short reply that Cortana will execute directly and involve only the needed specialists for review and validation.',
     expectAny: [/riley|direct|execut|specialist|delegat/i],
     expectNone: [/@kane|@max|@raj|@elena|@kai|@jude|@liv|@harper|@mia|@leo/i],
     requireTokenEcho: false,
@@ -209,7 +209,7 @@ const RAW_AGENT_CAPABILITY_TESTS: AgentCapabilityTest[] = [
 
   // ── Matrix-extended tests (26 additional tests) ──
 
-  // Riley core: ACTION tags
+  // Cortana core: ACTION tags
   {
     id: 'executive-assistant',
     category: 'core',
@@ -258,7 +258,7 @@ const RAW_AGENT_CAPABILITY_TESTS: AgentCapabilityTest[] = [
     timeoutMs: 150_000,
   },
 
-  // Riley execution: tool-proof tests
+  // Cortana execution: tool-proof tests
   {
     id: 'developer',
     category: 'tool-proof',
@@ -411,7 +411,7 @@ const RAW_AGENT_CAPABILITY_TESTS: AgentCapabilityTest[] = [
     id: 'executive-assistant',
     category: 'orchestration',
     capability: 'delegate-single-specialist',
-    prompt: 'Say that Riley will review the auth route directly and pull in the security specialist if needed.',
+    prompt: 'Say that Cortana will review the auth route directly and pull in the security specialist if needed.',
     expectAny: [/riley|security|auth|review|specialist/i],
     minBotRepliesAfterPrompt: 1,
     requireTokenEcho: false,
@@ -436,7 +436,7 @@ const RAW_AGENT_CAPABILITY_TESTS: AgentCapabilityTest[] = [
     timeoutMs: 150_000,
     critical: false,
   },
-  // Orchestration: specialist chain via Riley
+  // Orchestration: specialist chain via Cortana
   {
     id: 'developer',
     category: 'orchestration',
@@ -446,7 +446,7 @@ const RAW_AGENT_CAPABILITY_TESTS: AgentCapabilityTest[] = [
     timeoutMs: 120_000,
     critical: false,
   },
-  // Tool-proof: Riley job search profile + scan
+  // Tool-proof: Cortana job search profile + scan
   {
     id: 'executive-assistant',
     category: 'tool-proof',
@@ -465,7 +465,7 @@ const RAW_AGENT_CAPABILITY_TESTS: AgentCapabilityTest[] = [
     expectToolAudit: ['job_tracker'],
     timeoutMs: 150_000,
   },
-  // Tool-proof: Riley job scan trigger
+  // Tool-proof: Cortana job scan trigger
   {
     id: 'executive-assistant',
     category: 'tool-proof',
@@ -477,7 +477,7 @@ const RAW_AGENT_CAPABILITY_TESTS: AgentCapabilityTest[] = [
     heavyTool: true,
     attempts: 1,
   },
-  // Tool-proof: Riley draft application
+  // Tool-proof: Cortana draft application
   {
     id: 'executive-assistant',
     category: 'tool-proof',
@@ -489,7 +489,7 @@ const RAW_AGENT_CAPABILITY_TESTS: AgentCapabilityTest[] = [
     heavyTool: true,
     attempts: 1,
   },
-  // Tool-proof: Riley submit application
+  // Tool-proof: Cortana submit application
   {
     id: 'executive-assistant',
     category: 'tool-proof',
@@ -501,7 +501,7 @@ const RAW_AGENT_CAPABILITY_TESTS: AgentCapabilityTest[] = [
     heavyTool: true,
     attempts: 1,
   },
-  // Tool-proof: Riley evaluate listing
+  // Tool-proof: Cortana evaluate listing
   {
     id: 'executive-assistant',
     category: 'tool-proof',
@@ -600,7 +600,7 @@ const RAW_AGENT_CAPABILITY_TESTS: AgentCapabilityTest[] = [
     id: 'executive-assistant',
     category: 'ux',
     capability: 'thread-name-quality',
-    prompt: 'Hey Riley, can you please check if the search codebase tool is working correctly by searching for the main entry point?',
+    prompt: 'Hey Cortana, can you please check if the search codebase tool is working correctly by searching for the main entry point?',
     expectAny: [/search|found|index|entry/i],
     expectNone: [/hey.*riley.*can.*you.*please/i],
     timeoutMs: 180_000,
@@ -663,7 +663,7 @@ const RAW_AGENT_CAPABILITY_TESTS: AgentCapabilityTest[] = [
     id: 'executive-assistant',
     category: 'orchestration',
     capability: 'upgrades-act-on-top',
-    prompt: 'Pick the highest-priority accepted upgrade from #upgrades and say Riley will implement it directly.',
+    prompt: 'Pick the highest-priority accepted upgrade from #upgrades and say Cortana will implement it directly.',
     expectAny: [/riley|implement|direct|upgrade/i],
     timeoutMs: 180_000,
   },
@@ -680,12 +680,12 @@ const RAW_AGENT_CAPABILITY_TESTS: AgentCapabilityTest[] = [
     heavyTool: true,
   },
 
-  // ── Riley autonomy tests ──────────────────────────────────────────────
+  // ── Cortana autonomy tests ──────────────────────────────────────────────
   {
     id: 'executive-assistant',
     category: 'tool-proof',
     capability: 'self-edit-file',
-    prompt: 'Use your edit_file tool directly to add a comment "// Riley was here" at the top of the file src/discord/tester.ts. Then use read_file to verify the change.',
+    prompt: 'Use your edit_file tool directly to add a comment "// Cortana was here" at the top of the file src/discord/tester.ts. Then use read_file to verify the change.',
     expectToolAudit: ['edit_file', 'read_file'],
     timeoutMs: 180_000,
     attempts: 1,
@@ -742,7 +742,7 @@ const RAW_AGENT_CAPABILITY_TESTS: AgentCapabilityTest[] = [
     id: 'executive-assistant',
     category: 'core',
     capability: 'verification-gate-awareness',
-    prompt: 'When Riley claims a UI fix is done, what happens automatically before the thread can close? Describe the verification gate process.',
+    prompt: 'When Cortana claims a UI fix is done, what happens automatically before the thread can close? Describe the verification gate process.',
     expectAny: [/harness|screenshot|capture|evidence|verification|auto/i],
     timeoutMs: 120_000,
   },
@@ -1525,7 +1525,7 @@ const RAW_AGENT_CAPABILITY_TESTS: AgentCapabilityTest[] = [
     id: 'executive-assistant',
     category: 'orchestration',
     capability: 'multi-agent-chain',
-    prompt: 'I need a security review of the auth routes. Explain that Riley will inspect the auth code directly, then involve the security specialist for review, and report back the chain of actions taken.',
+    prompt: 'I need a security review of the auth routes. Explain that Cortana will inspect the auth code directly, then involve the security specialist for review, and report back the chain of actions taken.',
     expectAny: [/riley|security|auth|review|finding|chain|specialist/i],
     minBotRepliesAfterPrompt: 2,
     timeoutMs: 240_000,
@@ -1535,7 +1535,7 @@ const RAW_AGENT_CAPABILITY_TESTS: AgentCapabilityTest[] = [
     id: 'executive-assistant',
     category: 'orchestration',
     capability: 'error-recovery',
-    prompt: 'Attempt to read a file that does not exist: "nonexistent-smoke-test-file-xyz.ts". When the read fails, explain how Riley handles the failure and what the next step would be.',
+    prompt: 'Attempt to read a file that does not exist: "nonexistent-smoke-test-file-xyz.ts". When the read fails, explain how Cortana handles the failure and what the next step would be.',
     expectAny: [/error|not found|fail|recover|retry|alternative|handle|does not exist/i],
     minBotRepliesAfterPrompt: 1,
     timeoutMs: 180_000,
@@ -1752,10 +1752,10 @@ const LEGACY_CAPABILITY_RENAMES = new Map<string, string>();
 
 function normalizeLegacySmokePrompt(prompt: string): string {
   return String(prompt || '')
-    .replace(/\bAce \(Developer\)\b/g, 'Riley')
-    .replace(/\bAce\b/g, 'Riley')
+    .replace(/\bAce \(Developer\)\b/g, 'Cortana')
+    .replace(/\bAce\b/g, 'Cortana')
     .replace(/@ace/gi, '@riley')
-    .replace(/through Riley only only/gi, 'through Riley only');
+    .replace(/through Cortana only only/gi, 'through Cortana only');
 }
 
 function normalizeLegacySmokeTest(test: AgentCapabilityTest): AgentCapabilityTest {

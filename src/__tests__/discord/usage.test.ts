@@ -60,56 +60,56 @@ import {
 
 describe('usage', () => {
   describe('toAgentTag()', () => {
-    it('resolves Riley', () => {
-      expect(toAgentTag('Riley (Executive Assistant)')).toBe('executive-assistant');
+    it('resolves Cortana', () => {
+      expect(toAgentTag('Cortana (Executive Assistant)')).toBe('executive-assistant');
     });
 
     it('resolves Ace', () => {
       expect(toAgentTag('Ace (Developer)')).toBe('executive-assistant');
     });
 
-    it('resolves Max', () => {
-      expect(toAgentTag('Max (QA)')).toBe('qa');
+    it('resolves Argus', () => {
+      expect(toAgentTag('Argus (QA)')).toBe('qa');
     });
 
-    it('resolves Sophie', () => {
-      expect(toAgentTag('Sophie')).toBe('ux-reviewer');
+    it('resolves Aphrodite', () => {
+      expect(toAgentTag('Aphrodite')).toBe('ux-reviewer');
     });
 
-    it('resolves Kane', () => {
-      expect(toAgentTag('Kane')).toBe('security-auditor');
+    it('resolves Athena', () => {
+      expect(toAgentTag('Athena')).toBe('security-auditor');
     });
 
-    it('resolves Raj', () => {
-      expect(toAgentTag('Raj')).toBe('api-reviewer');
+    it('resolves Iris', () => {
+      expect(toAgentTag('Iris')).toBe('api-reviewer');
     });
 
-    it('resolves Elena', () => {
-      expect(toAgentTag('Elena')).toBe('dba');
+    it('resolves Mnemosyne', () => {
+      expect(toAgentTag('Mnemosyne')).toBe('dba');
     });
 
-    it('resolves Kai', () => {
-      expect(toAgentTag('Kai')).toBe('performance');
+    it('resolves Hermes', () => {
+      expect(toAgentTag('Hermes')).toBe('performance');
     });
 
-    it('resolves Jude', () => {
-      expect(toAgentTag('Jude')).toBe('devops');
+    it('resolves Hephaestus', () => {
+      expect(toAgentTag('Hephaestus')).toBe('devops');
     });
 
-    it('resolves Liv', () => {
-      expect(toAgentTag('Liv')).toBe('copywriter');
+    it('resolves Calliope', () => {
+      expect(toAgentTag('Calliope')).toBe('copywriter');
     });
 
-    it('resolves Harper', () => {
-      expect(toAgentTag('Harper')).toBe('lawyer');
+    it('resolves Themis', () => {
+      expect(toAgentTag('Themis')).toBe('lawyer');
     });
 
-    it('resolves Mia', () => {
-      expect(toAgentTag('Mia')).toBe('ios-engineer');
+    it('resolves Artemis', () => {
+      expect(toAgentTag('Artemis')).toBe('ios-engineer');
     });
 
-    it('resolves Leo', () => {
-      expect(toAgentTag('Leo')).toBe('android-engineer');
+    it('resolves Prometheus', () => {
+      expect(toAgentTag('Prometheus')).toBe('android-engineer');
     });
 
     it('normalizes unknown labels', () => {
@@ -251,7 +251,7 @@ describe('usage', () => {
       expect(status.used + status.remaining).toBe(status.limit);
     });
 
-    it('reports the hard limit with Riley overrun allowance', () => {
+    it('reports the hard limit with Cortana overrun allowance', () => {
       const status = getClaudeTokenLimitState(2500);
       expect(status.hardLimit).toBe(status.limit + 2500);
       expect(status.hardRemaining).toBe(status.hardLimit - status.used);
@@ -356,7 +356,7 @@ describe('usage', () => {
     it('includes budget and token fields', () => {
       recordClaudeUsage(5000, 2000, {
         modelName: 'claude-sonnet-4-6',
-        agentLabel: 'Riley',
+        agentLabel: 'Cortana',
         cacheReadInputTokens: 1000,
         cacheCreationInputTokens: 500,
         promptBreakdown: {
