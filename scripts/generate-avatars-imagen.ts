@@ -29,7 +29,10 @@ import { ensureGoogleCredentials } from '../src/services/googleCredentials';
 
 const PROJECT_ID = process.env.GOOGLE_CLOUD_PROJECT || process.env.VERTEX_PROJECT_ID || process.env.GCLOUD_PROJECT;
 const LOCATION = process.env.VERTEX_LOCATION || 'us-central1';
-const MODEL = process.env.IMAGEN_MODEL || 'imagen-3.0-generate-002';
+// Imagen 4 Fast — separate quota bucket from Imagen 3, typically higher QPS
+// and lower per-call latency. Quality is plenty for 256x256 Discord avatars.
+// Override with IMAGEN_MODEL env if quota on this one is also tight.
+const MODEL = process.env.IMAGEN_MODEL || 'imagen-4.0-fast-generate-preview-06-06';
 const OUT_DIR = path.resolve(__dirname, '../assets/avatars');
 
 interface AgentSpec {
@@ -167,6 +170,11 @@ interface ImagenPrediction {
 }
 
 async function getAccessToken(): Promise<string> {
+  // Prefer a pre-supplied token so this works from sandboxes/CI where ADC
+  // isn't configured. Set GCP_ACCESS_TOKEN=$(gcloud auth print-access-token).
+  const preset = String(process.env.GCP_ACCESS_TOKEN || '').trim();
+  if (preset) return preset;
+
   await ensureGoogleCredentials(PROJECT_ID).catch(() => false);
   const auth = new GoogleAuth({ scopes: ['https://www.googleapis.com/auth/cloud-platform'] });
   const client = await auth.getClient();
@@ -234,17 +242,55 @@ async function main(): Promise<void> {
   console.log(`Generating ${queue.length} avatar(s) via Imagen ${MODEL} in ${LOCATION}…`);
   const token = await getAccessToken();
 
-  // Serial, not parallel — Imagen has per-project QPS limits and the output
-  // is small (13 images total on a full run). Predictable beats fast here.
-  for (const spec of queue) {
+  // Imagen per-project per-minute quotas are tight (often 5 QPM). Throttle
+  // between calls + retry quota failures with a minute-long backoff.
+  const throttleMs = Math.max(0, parseInt(process.env.IMAGEN_DELAY_MS || '10000', 10));
+  const retryLimit = Math.max(1, parseInt(process.env.IMAGEN_RETRIES || '3', 10));
+  const skipSizeKb = Math.max(0, parseInt(process.env.IMAGEN_SKIP_IF_LARGER_KB || '100', 10));
+
+  // Skip agents whose avatar is already "big" (previously generated), unless
+  // the caller explicitly listed them on the CLI.
+  const explicit = new Set(subsetIds);
+  const toRun = queue.filter((spec) => {
+    if (explicit.has(spec.id)) return true;
     const out = path.join(OUT_DIR, `${spec.id}.png`);
     try {
-      const bytes = await generateImage(spec, token);
-      fs.writeFileSync(out, bytes);
-      console.log(`  ✓ ${spec.displayName.padEnd(14)} → ${out} (${(bytes.length / 1024).toFixed(1)} KB)`);
-    } catch (err) {
-      console.error(`  ✗ ${spec.displayName}: ${(err as Error).message}`);
+      const s = fs.statSync(out);
+      if (s.size > skipSizeKb * 1024) {
+        console.log(`  ⏭ ${spec.displayName.padEnd(14)} (already ${(s.size / 1024).toFixed(0)} KB)`);
+        return false;
+      }
+    } catch { /* missing is fine */ }
+    return true;
+  });
+
+  const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+  for (let i = 0; i < toRun.length; i++) {
+    const spec = toRun[i];
+    const out = path.join(OUT_DIR, `${spec.id}.png`);
+    let attempt = 0;
+    let success = false;
+    while (attempt < retryLimit && !success) {
+      attempt++;
+      try {
+        const bytes = await generateImage(spec, token);
+        fs.writeFileSync(out, bytes);
+        console.log(`  ✓ ${spec.displayName.padEnd(14)} → ${out} (${(bytes.length / 1024).toFixed(1)} KB)`);
+        success = true;
+      } catch (err) {
+        const msg = (err as Error).message;
+        const isQuota = msg.includes('RESOURCE_EXHAUSTED') || msg.includes('429');
+        if (attempt < retryLimit) {
+          const backoffMs = isQuota ? 65_000 : 5_000 * attempt;
+          console.warn(`  ↻ ${spec.displayName} attempt ${attempt} failed (${isQuota ? 'quota' : 'other'}); waiting ${backoffMs / 1000}s before retry`);
+          await sleep(backoffMs);
+        } else {
+          console.error(`  ✗ ${spec.displayName}: ${msg.slice(0, 200)}`);
+        }
+      }
     }
+    if (i < toRun.length - 1 && throttleMs > 0) await sleep(throttleMs);
   }
 
   console.log('Done.');
