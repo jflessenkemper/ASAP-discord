@@ -1316,6 +1316,78 @@ export function isCallActive(): boolean {
   return activeSession?.active ?? false;
 }
 
+// Cortana-flavored openers for multi-party voice events. Short, dry, varied
+// so repeat joins in one call don't sound scripted. Picked at random per event.
+const VOICE_JOIN_PHRASES: readonly string[] = [
+  'Hey {name}.',
+  '{name} is here.',
+  '{name} just joined us.',
+  'Welcome, {name}.',
+  'Another one — {name}. Hi.',
+  'Look who it is. {name}.',
+];
+const VOICE_LEAVE_PHRASES: readonly string[] = [
+  '{name} dropped out.',
+  'And {name} is gone.',
+  '{name} left us.',
+  'Down one — {name} bailed.',
+];
+
+/** Cooldown (ms) so rapid join/leave flaps don't trigger multiple announcements. */
+const VOICE_MEMBER_ANNOUNCE_COOLDOWN_MS = Math.max(5_000, parseInt(process.env.VOICE_MEMBER_ANNOUNCE_COOLDOWN_MS || '30000', 10));
+const lastMemberAnnounceAt = new Map<string, number>();
+
+/**
+ * Announce a member joining or leaving the active voice call. Cortana speaks
+ * a short line in her voice via TTS + VC playback. No-op when:
+ *   - no call is active
+ *   - the same member event fired within the cooldown window
+ *   - TTS or voice playback is unavailable
+ *
+ * Runs fire-and-forget. Never throws; all errors logged quietly.
+ */
+export async function announceVoiceMember(
+  kind: 'joined' | 'left',
+  displayName: string,
+  memberId: string,
+): Promise<void> {
+  if (!activeSession?.active) return;
+  const session = activeSession;
+
+  // The initiator's join happened before `isCallActive()` returned true
+  // (startCall fires on VoiceStateUpdate from the bot.ts layer). So when
+  // this function gets called, the joiner is by definition a second+
+  // participant.
+
+  const key = `${kind}:${memberId}`;
+  const now = Date.now();
+  const prev = lastMemberAnnounceAt.get(key) || 0;
+  if (now - prev < VOICE_MEMBER_ANNOUNCE_COOLDOWN_MS) return;
+  lastMemberAnnounceAt.set(key, now);
+
+  // Don't step on Cortana mid-reply — skip if she's currently speaking to
+  // someone. They'll see the join silently in Discord UI anyway.
+  if (session.outputActive) return;
+
+  const pool = kind === 'joined' ? VOICE_JOIN_PHRASES : VOICE_LEAVE_PHRASES;
+  const template = pool[Math.floor(Math.random() * pool.length)] ?? pool[0];
+  const line = template.replace('{name}', String(displayName || 'someone').slice(0, 40));
+
+  try {
+    const audio = await withTimeout(
+      textToSpeech(line, session.rileyVoiceName),
+      VOICE_PREFLIGHT_TIMEOUT_MS,
+      'TTS announce member',
+    );
+    if (!activeSession?.active || !audio || audio.length === 0) return;
+    await speakInTesterVC(audio);
+    session.transcript?.push?.(`[${new Date().toLocaleTimeString()}] Cortana (announce): ${line}`);
+  } catch (err) {
+    // Announcements are cosmetic — don't disturb the call on failure.
+    console.debug('[voice] announce failed:', errMsg(err));
+  }
+}
+
 interface VoiceTestInjection {
   userId: string;
   username: string;

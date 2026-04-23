@@ -19,7 +19,7 @@ import { LEGACY_APP_TABLES, LEGACY_DROP_MIGRATION, REQUIRED_RUNTIME_TABLES } fro
 import { getAgentByChannelName } from './agents';
 import { getAgent, loadDynamicAgentsFromDb } from './agents';
 import { setVoiceErrorChannel } from './handlers/callSession';
-import { startCall, endCall, isCallActive, preInitSttForMember, processTesterVoiceTurnForCall } from './handlers/callSession';
+import { startCall, endCall, isCallActive, preInitSttForMember, processTesterVoiceTurnForCall, announceVoiceMember } from './handlers/callSession';
 import { setBotChannels } from './handlers/documentation';
 import { setGitHubChannel } from './handlers/github';
 import {
@@ -51,6 +51,7 @@ import { recordUserEvent } from './userEvents';
 import { captureAttachments } from './services/mediaCapture';
 import { startEmbeddingWorker } from './embeddingWorker';
 import { initPresence } from './presence';
+import { registerContextMenus, handleMessageContextMenu } from './contextMenus';
 import { enqueueSelfImprovementJob } from './selfImprovementQueue';
 import { detectAnomalies } from './anomalyDetection';
 import { goalState } from './handlers/goalState';
@@ -86,6 +87,36 @@ const HEAL_COOLDOWN_MS = 15 * 60 * 1000; // 15 min between heal attempts
 const DEFAULT_TESTER_BOT_ID = '1487426371209789450';
 const OPS_STEWARD_AGENT_ID = 'operations-manager';
 const RUNTIME_INSTANCE_TAG = (process.env.RUNTIME_INSTANCE_TAG || process.env.HOSTNAME || `pid-${process.pid}`).slice(0, 80);
+
+/**
+ * Best-effort inference of which agent authored a given Discord message.
+ * The bot uses per-agent webhook usernames (`📋 Cortana`, `🧪 Argus`, …) so
+ * matching on the displayed author name usually works. Falls back to the
+ * owner of the workspace channel, or 'executive-assistant' as last resort.
+ */
+function inferAgentIdFromMessage(msg: Message): string {
+  const authorName = String(msg.author?.username || '').toLowerCase();
+  if (authorName) {
+    const registry = [
+      'cortana', 'argus', 'aphrodite', 'athena', 'iris', 'mnemosyne',
+      'hermes', 'hephaestus', 'calliope', 'themis', 'artemis', 'prometheus',
+    ];
+    for (const name of registry) {
+      if (authorName.includes(name)) {
+        // Resolve display name → id via the agent lookup
+        const found = getAgentByChannelName(name);
+        if (found) return found.id;
+      }
+    }
+  }
+  // Channel name matches agent channel → use that agent's id
+  const channelName = (msg.channel as { name?: string })?.name;
+  if (channelName) {
+    const found = getAgentByChannelName(channelName);
+    if (found) return found.id;
+  }
+  return 'executive-assistant';
+}
 const nonTesterTriggerNoticeAt = new Map<string, number>();
 let dedupeTableReady = false;
 let lastDedupePruneAt = 0;
@@ -708,6 +739,9 @@ export async function startBot(): Promise<void> {
       startOpsMonitors(configuredChannels);
       startSelfImprovementQueueWorker();
       startEmbeddingWorker();
+      // Register message/user context-menu commands (right-click → Apps
+      // → "Ask Cortana about this"). Idempotent.
+      void registerContextMenus(guild);
     } catch (err) {
       const msg = err instanceof Error ? err.stack || err.message : 'Unknown';
       console.error('Channel setup error:', errMsg(err));
@@ -930,6 +964,22 @@ export async function startBot(): Promise<void> {
           targetAuthorId: msg.author?.id,
         },
       });
+
+      // Quick-react feedback: 👍/👎 on a bot-authored or webhook-authored message
+      // counts as a signal on that agent's reply. Record as an agent_learning
+      // so self-improvement can pick it up later.
+      const emoji = String(reaction.emoji.name || '');
+      const isThumbsUp = emoji === '👍' || emoji === '👍🏻' || emoji === '👍🏼' || emoji === '👍🏽' || emoji === '👍🏾' || emoji === '👍🏿';
+      const isThumbsDown = emoji === '👎' || emoji === '👎🏻' || emoji === '👎🏼' || emoji === '👎🏽' || emoji === '👎🏾' || emoji === '👎🏿';
+      if ((isThumbsUp || isThumbsDown) && (msg.webhookId || msg.author?.bot)) {
+        const agentId = inferAgentIdFromMessage(msg as Message);
+        const preview = typeof msg.content === 'string' ? msg.content.slice(0, 280) : '';
+        const tag = isThumbsUp ? 'feedback-positive' : 'feedback-negative';
+        const pattern = isThumbsUp
+          ? `User \ud83d\udc4d'd this reply: "${preview}"`
+          : `User \ud83d\udc4e'd this reply — consider what went wrong: "${preview}"`;
+        void recordAgentLearning(agentId, pattern, tag, 'discord-react');
+      }
     } catch (err) {
       console.warn('[capture] reaction capture failed:', errMsg(err));
     }
@@ -961,6 +1011,9 @@ export async function startBot(): Promise<void> {
     } else if (joinedTarget && isCallActive()) {
       // Pre-init STT for the new member to eliminate WebSocket cold-start latency
       preInitSttForMember(member);
+      // Multi-party: Cortana acknowledges the new participant out loud.
+      // Fire-and-forget — failure doesn't affect call state.
+      void announceVoiceMember('joined', member.displayName, member.id);
     }
 
     if (leftTarget && isCallActive()) {
@@ -973,12 +1026,27 @@ export async function startBot(): Promise<void> {
           console.error('Voice auto leave handler error:', errMsg(err));
           void postAgentErrorLog('discord:voice-auto-end', 'Voice auto leave error', { detail: msg, level: 'warn' });
         }
+      } else {
+        // Someone left but others remain — Cortana sends them off.
+        void announceVoiceMember('left', member.displayName, member.id);
       }
     }
   });
 
   // ── Button interaction handler for job approvals + draft approvals ──
   client.on(Events.InteractionCreate, async (interaction) => {
+    // Context-menu (right-click → Apps → "Ask Cortana about this"). Routed
+    // into Cortana's orchestration via the groupchat entry point.
+    if (interaction.isMessageContextMenuCommand()) {
+      if (!botChannels) return;
+      try {
+        await handleMessageContextMenu(interaction, botChannels.groupchat);
+      } catch (err) {
+        console.error('Context-menu handler error:', errMsg(err));
+      }
+      return;
+    }
+
     if (!interaction.isButton()) return;
     const customId = interaction.customId;
 

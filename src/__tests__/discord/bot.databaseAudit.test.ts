@@ -10,6 +10,12 @@ jest.mock('discord.js', () => ({
   Events: {},
   Partials: {},
   ChannelType: {},
+  ApplicationCommandType: { Message: 3, User: 2 },
+  ContextMenuCommandBuilder: class {
+    setName() { return this; }
+    setType() { return this; }
+    toJSON() { return {}; }
+  },
   EmbedBuilder: class {
     setTitle() { return this; }
     setDescription() { return this; }

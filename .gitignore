@@ -7,3 +7,4 @@ dist/
 coverage/
 smoke-reports/
 reports/anthropic-usage/
+.claude/
