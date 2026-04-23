@@ -14,22 +14,13 @@ import twilio from 'twilio';
 
 import pool from './db/pool';
 import { startRepoSyncLoop, stopRepoSyncLoop } from './discord/repoSync';
-import {
-  startBot,
-  stopBot,
-  verifySignature,
-  handleGitHubEvent,
-  captureAndPostScreenshots,
-  getBotChannels,
-  postAgentErrorLog,
-  getInboundTwiML,
-  attachTelephonyWebSocket,
-  isTelephonyAvailable,
-  getMetricsText,
-  PROMETHEUS_CONTENT_TYPE,
-  updateLlmSpend,
-  getRemainingBudget,
-} from './discord/bot.single';
+import { startBot, stopBot, getBotChannels } from './discord/bot';
+import { verifySignature, handleGitHubEvent } from './discord/handlers/github';
+import { captureAndPostScreenshots } from './discord/services/screenshots';
+import { postAgentErrorLog } from './discord/services/agentErrors';
+import { getInboundTwiML, attachTelephonyWebSocket, isTelephonyAvailable } from './discord/services/telephony';
+import { getMetricsText, PROMETHEUS_CONTENT_TYPE, updateLlmSpend } from './discord/metrics';
+import { getRemainingBudget } from './discord/usage';
 import { loadRuntimeSecrets } from './services/runtimeSecrets';
 import { errMsg } from './utils/errors';
 

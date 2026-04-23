@@ -93,6 +93,8 @@ jest.mock('../../../discord/voice/connection', () => ({
 jest.mock('../../../discord/voice/elevenlabs', () => ({
   isElevenLabsAvailable: jest.fn().mockReturnValue(true),
   primeElevenLabsVoiceCache: jest.fn().mockResolvedValue(undefined),
+  CORTANA_WARM_PHRASES: ['One moment.', 'Let me check.', "I'm on it.", 'Here is what I found.', 'Done.'],
+  warmCortanaVoiceAtStartup: jest.fn().mockResolvedValue(undefined),
 }));
 
 jest.mock('../../../discord/voice/elevenlabsConvai', () => ({

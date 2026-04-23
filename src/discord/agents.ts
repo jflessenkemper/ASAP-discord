@@ -51,7 +51,7 @@ const AGENT_REGISTRY = [
   { id: 'android-engineer',    name: 'Prometheus (Android Engineer)', handle: 'prometheus', roleName: 'Prometheus', aliases: ['android-engineer', 'android', 'leo', 'prometheus'],                                                         emoji: '🤖',  color: 0x16A34A, voice: 'Iapetus',   channelName: '🤖-android-engineer' },
 ] as const;
 
-export type AgentId = (typeof AGENT_REGISTRY)[number]['id'] | 'developer';
+export type AgentId = (typeof AGENT_REGISTRY)[number]['id'];
 
 const AGENT_IDS = AGENT_REGISTRY.map((a) => a.id) as unknown as readonly AgentId[];
 
@@ -141,10 +141,14 @@ const dynamicAgents = new Map<string, AgentConfig>();
 const DYNAMIC_AGENTS_DB_KEY = 'dynamic-agent-registry';
 let dynamicAgentDbDisabled = false;
 
+/**
+ * Cast a string id to AgentId. Legacy 'developer'/'dev'/'ace' aliases are
+ * now handled through the generic alias-match path in `resolveAgentId`
+ * (they're listed in the executive-assistant's `aliases` array), so no
+ * special-casing is needed here.
+ */
 function normalizeStaticAgentId(id: string): AgentId {
-  return (id === 'developer' || id === 'dev' || id === 'ace')
-    ? 'executive-assistant'
-    : id as AgentId;
+  return id as AgentId;
 }
 
 async function persistDynamicAgents(): Promise<void> {
@@ -285,9 +289,6 @@ function normalizeAgentToken(token: string): string {
 
 export function resolveAgentId(token: string): AgentId | null {
   const normalized = normalizeAgentToken(token);
-  if (normalized === 'developer' || normalized === 'dev' || normalized === 'ace') {
-    return 'executive-assistant';
-  }
   for (const [id, agent] of getAgents()) {
     if (normalized === id) return id;
     if (normalized === agent.handle.toLowerCase()) return id;

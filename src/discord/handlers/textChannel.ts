@@ -29,9 +29,7 @@ const STREAM_EDIT_MIN_CHAR_DELTA = parseInt(process.env.STREAM_EDIT_MIN_CHAR_DEL
 const TEXT_AGENT_RESPONSE_TIMEOUT_MS = parseInt(process.env.TEXT_AGENT_RESPONSE_TIMEOUT_MS || '240000', 10);
 const TEXT_PROGRESS_HEARTBEAT_MS = parseInt(process.env.TEXT_PROGRESS_HEARTBEAT_MS || '15000', 10);
 const CAREER_OPS_DUPLICATE_WINDOW_MS = parseInt(process.env.CAREER_OPS_DUPLICATE_WINDOW_MS || '600000', 10);
-const CAREER_OPS_SUPPRESSION_NOTICE_COOLDOWN_MS = parseInt(process.env.CAREER_OPS_SUPPRESSION_NOTICE_COOLDOWN_MS || '120000', 10);
 const careerOpsLastResponseFingerprint = new Map<string, { fingerprint: string; ts: number }>();
-const careerOpsSuppressionNoticeAt = new Map<string, number>();
 const careerOpsIncomingCompletionFingerprint = new Map<string, number>();
 
 function shouldSuppressCareerOpsDuplicate(channel: WebhookCapableChannel, rendered: string): { suppress: boolean; notice?: string } {
@@ -55,14 +53,8 @@ function shouldSuppressCareerOpsDuplicate(channel: WebhookCapableChannel, render
   const prev = careerOpsLastResponseFingerprint.get(key);
   const now = Date.now();
   if (prev && prev.fingerprint === fingerprint && now - prev.ts < CAREER_OPS_DUPLICATE_WINDOW_MS) {
-    const noticePrev = careerOpsSuppressionNoticeAt.get(key) || 0;
-    if (now - noticePrev >= CAREER_OPS_SUPPRESSION_NOTICE_COOLDOWN_MS) {
-      careerOpsSuppressionNoticeAt.set(key, now);
-      return {
-        suppress: true,
-        notice: 'ℹ️ I already posted that completion update recently, so I skipped the duplicate.',
-      };
-    }
+    // Silent dedupe — the `ℹ️ already posted…` note was more noise than
+    // signal. Skip the duplicate without telling the user.
     return { suppress: true };
   }
   careerOpsLastResponseFingerprint.set(key, { fingerprint, ts: now });
