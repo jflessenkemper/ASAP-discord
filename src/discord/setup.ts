@@ -325,13 +325,13 @@ export async function setupChannels(guild: Guild): Promise<BotChannels> {
   const groupchat = await ensureText(
     MAIN_CHANNELS.groupchat,
     catMain,
-    '💬 Talk to Riley naturally. She coordinates everything.',
+    '💬 Talk to Cortana naturally. She coordinates everything.',
     `**ASAP Command Center**\n\n` +
-      `📋 **Riley (Executive Assistant)** is your point of contact.\n` +
-      `🛠️ **Riley executes directly** and brings in specialists only when needed.\n\n` +
-      `Just type naturally — Riley handles everything.\n` +
+      `📋 **Cortana (Executive Assistant)** is your point of contact.\n` +
+      `🛠️ **Cortana executes directly** and brings in specialists only when needed.\n\n` +
+      `Just type naturally — Cortana handles everything.\n` +
       `She can join voice calls, deploy, take screenshots, and coordinate the whole team.\n\n` +
-        `You can also mention any specialist directly (for example Kane, Elena, or Max). Legacy plain-text handles still work as a fallback.`
+        `You can also mention any specialist directly (for example Athena, Mnemosyne, or Argus). Legacy plain-text handles still work as a fallback.`
   );
 
   const threadStatus = await ensureText(
@@ -345,8 +345,8 @@ export async function setupChannels(guild: Guild): Promise<BotChannels> {
   const decisions = await ensureText(
     MAIN_CHANNELS.decisions,
     catMain,
-    '📋 Riley queues decisions here while you sleep. Reply to any decision to continue the work.',
-    `📋 **Decisions Queue**\n\nWhen the team hits a decision point overnight or while you are away, Riley posts it here instead of stopping work.\nIn live groupchat, Riley can ask you directly and tag you there. In live voice calls, Riley asks you in voice instead of using this channel.\nReply to any decision with your answer — Riley will pick it up and continue.\nClick a button to choose from listed options.`
+    '📋 Cortana queues decisions here while you sleep. Reply to any decision to continue the work.',
+    `📋 **Decisions Queue**\n\nWhen the team hits a decision point overnight or while you are away, Cortana posts it here instead of stopping work.\nIn live groupchat, Cortana can ask you directly and tag you there. In live voice calls, Cortana asks you in voice instead of using this channel.\nReply to any decision with your answer — Cortana will pick it up and continue.\nClick a button to choose from listed options.`
   );
 
   let voiceChannel = guild.channels.cache.find(
@@ -398,8 +398,8 @@ export async function setupChannels(guild: Guild): Promise<BotChannels> {
   const loops = await ensureText(
     OPS_CHANNELS.loops,
     catOps,
-    '🔁 Independent loop runs, start/finish state, and Riley-readable loop reports',
-    '🔁 Loop health changes and loop run reports post here so Riley can reason over them explicitly.',
+    '🔁 Independent loop runs, start/finish state, and Cortana-readable loop reports',
+    '🔁 Loop health changes and loop run reports post here so Cortana can reason over them explicitly.',
     { owner: 'operations-manager', cadence: 'on-loop-run', staleAlert: '24h' }
   );
 
@@ -438,7 +438,7 @@ export async function setupChannels(guild: Guild): Promise<BotChannels> {
   const screenshots = await ensureText(
     OPS_CHANNELS.screenshots,
     catMain,
-    '📸 Automated screenshots of every app screen after each build (iPhone 17 Pro Max)',
+    '📸 Automated screenshots of every app screen after each build (iPhone 17 Pro Argus)',
     '📸 Build screenshot updates post here as one-line entries.',
     { owner: 'riley', cadence: 'on-deploy', staleAlert: '7d' }
   );
@@ -465,7 +465,7 @@ export async function setupChannels(guild: Guild): Promise<BotChannels> {
     OPS_CHANNELS.voiceErrors,
     catOps,
     '🧯 Voice runtime errors and per-stage latency logs (ms) for live debugging',
-    `🧯 **Voice Runtime Logs**\n\nLive voice pipeline telemetry and failures.\nStages include STT, Riley LLM, TTS/playback, sub-agent fan-out, and total turn latency.`,
+    `🧯 **Voice Runtime Logs**\n\nLive voice pipeline telemetry and failures.\nStages include STT, Cortana LLM, TTS/playback, sub-agent fan-out, and total turn latency.`,
     { owner: 'system', cadence: 'on-error', staleAlert: '7d' }
   );
 
@@ -473,7 +473,7 @@ export async function setupChannels(guild: Guild): Promise<BotChannels> {
     OPS_CHANNELS.agentErrors,
     catOps,
     '🚨 Central runtime and agent error feed for postmortems and rapid fixes',
-    `🚨 **Agent Runtime Errors**\n\nCentralized Riley, sub-agent, tooling, and automation failures for later diagnosis and cleanup.`,
+    `🚨 **Agent Runtime Errors**\n\nCentralized Cortana, sub-agent, tooling, and automation failures for later diagnosis and cleanup.`,
     { owner: 'system', cadence: 'on-error', staleAlert: '7d' }
   );
 
@@ -481,7 +481,7 @@ export async function setupChannels(guild: Guild): Promise<BotChannels> {
     PERSONAL_CHANNELS.careerOps,
     catPersonal,
     '💼 Career operations command center: role targets, pipeline, outreach, applications, and weekly goals',
-    `💼 **Career Ops**\n\nUse this channel to run your job search pipeline with Riley: role targeting, shortlist scoring, tailored CV generation, outreach drafts, and application tracking.`,
+    `💼 **Career Ops**\n\nUse this channel to run your job search pipeline with Cortana: role targeting, shortlist scoring, tailored CV generation, outreach drafts, and application tracking.`,
     { owner: 'jflessenkemper', cadence: 'daily', staleAlert: '14d' }
   );
 
@@ -489,7 +489,7 @@ export async function setupChannels(guild: Guild): Promise<BotChannels> {
     PERSONAL_CHANNELS.jobApplications,
     catPersonal,
     '📋 Job approval queue — click Approve or Reject on each card · cards update after you choose',
-    `📋 **Job Applications**\n\n**How it works:**\n1. Ask Riley to scan & evaluate jobs in #💼-career-ops\n2. Riley posts the best matches here as cards\n3. Click **Approve** — Riley auto-drafts a tailored cover letter & resume highlights, then posts them in #💼-career-ops\n4. Click **Reject** to skip\n5. Cards update after you choose so only pending approvals remain`,
+    `📋 **Job Applications**\n\n**How it works:**\n1. Ask Cortana to scan & evaluate jobs in #💼-career-ops\n2. Cortana posts the best matches here as cards\n3. Click **Approve** — Cortana auto-drafts a tailored cover letter & resume highlights, then posts them in #💼-career-ops\n4. Click **Reject** to skip\n5. Cards update after you choose so only pending approvals remain`,
     { owner: 'jflessenkemper', cadence: 'on-demand', staleAlert: '14d' }
   );
 

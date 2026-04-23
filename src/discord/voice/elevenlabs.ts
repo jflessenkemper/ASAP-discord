@@ -59,9 +59,9 @@ function getClient(): ElevenLabsClient {
  *  Also supports choosing voices by ElevenLabs name directly.
  *  Full catalog: https://elevenlabs.io/voice-library */
 const VOICE_ID_MAP: Record<string, string> = {
-  RileyEL: 'QrFLfof7YAMeKw5w45nz',   // Riley dedicated voice
+  RileyEL: 'XgJBU07aO5LKJqYttcYx',   // Cortana dedicated voice
   Achernar: 'lsgXALPNLFUcQfT1dmP1',  // shared/default legacy voice
-  Aoede: 'QrFLfof7YAMeKw5w45nz',     // legacy alias -> Riley voice
+  Aoede: 'XgJBU07aO5LKJqYttcYx',     // legacy alias -> Cortana voice
 
   sarah: 'EXAVITQu4vr4xnSDxMaL',
   adam: 'pNInz6obpgDQGcFmaJgB',
@@ -180,6 +180,35 @@ export async function primeElevenLabsVoiceCache(
       await elevenLabsTTS(phrase, voiceName, language);
     })
   );
+}
+
+/**
+ * Short filler phrases Cortana says often on voice — warmed into the TTS
+ * cache so the first voice call after boot hits zero-latency playback. If
+ * the set grows, keep it under ~10 entries to avoid over-burning credits
+ * during startup.
+ */
+export const CORTANA_WARM_PHRASES: readonly string[] = [
+  'One moment.',
+  'Let me check.',
+  "I'm on it.",
+  'Here is what I found.',
+  'Done.',
+  'Go ahead.',
+  'Still here.',
+];
+
+/**
+ * Warm the ElevenLabs TTS cache at bot startup so the first voice utterance
+ * after a deploy isn't a cold TTS call. Defaults to Cortana's voice; override
+ * for other agents if needed.
+ */
+export async function warmCortanaVoiceAtStartup(): Promise<void> {
+  if (!isElevenLabsAvailable()) return;
+  const voice = process.env.TELEPHONY_CORTANA_VOICE_NAME
+    || process.env.TELEPHONY_RILEY_VOICE_NAME
+    || 'RileyEL';
+  await primeElevenLabsVoiceCache(voice, [...CORTANA_WARM_PHRASES]);
 }
 
 /**

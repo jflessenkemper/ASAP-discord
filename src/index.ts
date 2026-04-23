@@ -1,5 +1,12 @@
 import 'dotenv/config';
 
+// Install global HTTP keep-alive agent BEFORE any fetch() call happens so
+// outbound calls to Anthropic / Vertex / ElevenLabs can reuse TCP + TLS
+// connections across LLM turns. Must come before other imports that may
+// trigger fetches at module load time.
+import { installGlobalHttpAgent } from './services/httpAgent';
+installGlobalHttpAgent();
+
 import cors from 'cors';
 import express from 'express';
 import helmet from 'helmet';

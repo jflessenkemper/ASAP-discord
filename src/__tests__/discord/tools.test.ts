@@ -169,7 +169,7 @@ describe('tools — tool definitions', () => {
       expect(names.has('smoke_test_agents')).toBe(true);
     });
 
-    it('includes Riley autonomy tools', () => {
+    it('includes Cortana autonomy tools', () => {
       const names = new Set(RILEY_TOOLS.map(t => t.name));
       expect(names.has('write_file')).toBe(true);
       expect(names.has('edit_file')).toBe(true);
@@ -236,7 +236,7 @@ describe('tools — agent access control', () => {
       expect(getToolsForAgent('devops').length).toBe(REPO_TOOLS.length);
     });
 
-    it('returns Riley tools for executive-assistant', () => {
+    it('returns Cortana tools for executive-assistant', () => {
       const tools = getToolsForAgent('executive-assistant');
       expect(tools.length).toBe(RILEY_TOOLS.length);
     });
@@ -301,7 +301,7 @@ describe('tools — agent access control', () => {
       expect(agentCanUseTool('qa', 'db_query_readonly')).toBe(true);
     });
 
-    it('Riley can use autonomy tools', () => {
+    it('Cortana can use autonomy tools', () => {
       expect(agentCanUseTool('executive-assistant', 'write_file')).toBe(true);
       expect(agentCanUseTool('executive-assistant', 'gcp_deploy')).toBe(true);
       expect(agentCanUseTool('executive-assistant', 'gcp_redeploy_bot_vm')).toBe(true);
@@ -325,7 +325,7 @@ describe('tools — executeTool access control', () => {
     expect(result).not.toContain('not allowed');
   });
 
-  it('executes Riley token control tools', async () => {
+  it('executes Cortana token control tools', async () => {
     const usage = require('../../discord/usage');
     usage.setDailyClaudeTokenLimit.mockReturnValue({ previous: 8000000, current: 12000000, used: 125000, remaining: 11875000 });
     usage.setConversationTokenLimit.mockReturnValue({ previous: 500000, current: 900000, warn: 450000 });

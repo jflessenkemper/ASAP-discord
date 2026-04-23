@@ -5,7 +5,7 @@ import { postAgentErrorLog } from './agentErrors';
 import { PUPPETEER_LAUNCH_ARGS, resolvePuppeteerExecutablePath } from './browserRuntime';
 import { errMsg } from '../../utils/errors';
 
-/** iPhone 17 Pro Max approximate viewport (6.9" display, 3x retina → logical pixels) */
+/** iPhone 17 Pro Argus approximate viewport (6.9" display, 3x retina → logical pixels) */
 const VIEWPORT = { width: 440, height: 956, deviceScaleFactor: 3 };
 const NAV_TIMEOUT = parseInt(process.env.SCREENSHOT_NAV_TIMEOUT_MS || '30000', 10);
 /** Overall timeout for the entire capture operation (90 seconds) */
@@ -135,7 +135,7 @@ async function clearChannel(channel: TextChannel): Promise<void> {
 
 /**
  * Capture screenshots of every screen in the app and post them to Discord.
- * Runs headless Chromium sized to iPhone 17 Pro Max.
+ * Runs headless Chromium sized to iPhone 17 Pro Argus.
  * URL must match the allowlist. Only one capture runs at a time.
  */
 
@@ -196,7 +196,7 @@ export async function captureAndPostScreenshots(
       await clearChannel(targetChannel);
     }
 
-    await targetChannel.send(`📸 **Build Screenshots** — ${label}\n🔗 ${appUrl}\nCapturing on iPhone 17 Pro Max (${VIEWPORT.width}×${VIEWPORT.height} @${VIEWPORT.deviceScaleFactor}x)...`);
+    await targetChannel.send(`📸 **Build Screenshots** — ${label}\n🔗 ${appUrl}\nCapturing on iPhone 17 Pro Argus (${VIEWPORT.width}×${VIEWPORT.height} @${VIEWPORT.deviceScaleFactor}x)...`);
 
     const browser = await getPooledBrowser();
     page = await browser.newPage();

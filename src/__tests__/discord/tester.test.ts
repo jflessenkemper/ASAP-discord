@@ -175,7 +175,7 @@ describe('buildPrompt', () => {
 
 describe('normalizeRoleLabel', () => {
   it('lowercases and strips non-alphanumeric', () => {
-    expect(normalizeRoleLabel('Riley (Executive Assistant)')).toBe('riley');
+    expect(normalizeRoleLabel('Cortana (Executive Assistant)')).toBe('cortana');
   });
 
   it('strips parenthetical content', () => {
@@ -319,7 +319,7 @@ describe('validateReplyShape', () => {
 
 describe('buildReadinessSummary', () => {
   const makeResult = (overrides: Partial<TestResult> = {}): TestResult => ({
-    agent: 'Riley',
+    agent: 'Cortana',
     capability: 'test',
     category: 'core',
     passed: true,
@@ -424,7 +424,7 @@ describe('buildReadinessSummary', () => {
 
 describe('suggestFix', () => {
   const makeResult = (overrides: Partial<TestResult> = {}): TestResult => ({
-    agent: 'Riley',
+    agent: 'Cortana',
     capability: 'test',
     category: 'core',
     passed: false,

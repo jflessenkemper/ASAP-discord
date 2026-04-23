@@ -54,11 +54,15 @@ describe('migrate', () => {
     // Default: no migration files
     mockReaddirSync.mockReturnValue([]);
 
-    // Default: getMissingTables for assertRuntimeTablesReady — all tables exist
+    // Default: getMissingTables for assertRuntimeTablesReady — all tables exist.
+    // Keep this in sync with REQUIRED_RUNTIME_TABLES in src/db/runtimeSchema.ts.
     mockQuery
       .mockResolvedValueOnce({ rows: [{ exists: true }] }) // agent_memory
       .mockResolvedValueOnce({ rows: [{ exists: true }] }) // agent_activity_log
-      .mockResolvedValueOnce({ rows: [{ exists: true }] }); // self_improvement_jobs
+      .mockResolvedValueOnce({ rows: [{ exists: true }] }) // self_improvement_jobs
+      .mockResolvedValueOnce({ rows: [{ exists: true }] }) // agent_learnings
+      .mockResolvedValueOnce({ rows: [{ exists: true }] }) // user_events
+      .mockResolvedValueOnce({ rows: [{ exists: true }] }); // decisions
   });
 
   afterAll(() => {
@@ -90,8 +94,11 @@ describe('migrate', () => {
     mockReadFileSync.mockReturnValue('CREATE TABLE test_table (id INT);');
     mockClientQuery.mockResolvedValue(undefined);
 
-    // assertRuntimeTablesReady — all tables exist
+    // assertRuntimeTablesReady — all tables exist (mirror REQUIRED_RUNTIME_TABLES)
     mockQuery
+      .mockResolvedValueOnce({ rows: [{ exists: true }] })
+      .mockResolvedValueOnce({ rows: [{ exists: true }] })
+      .mockResolvedValueOnce({ rows: [{ exists: true }] })
       .mockResolvedValueOnce({ rows: [{ exists: true }] })
       .mockResolvedValueOnce({ rows: [{ exists: true }] })
       .mockResolvedValueOnce({ rows: [{ exists: true }] });
@@ -120,8 +127,11 @@ describe('migrate', () => {
 
     mockReaddirSync.mockReturnValue(['003_agent_memory.sql']);
 
-    // assertRuntimeTablesReady
+    // assertRuntimeTablesReady (mirror REQUIRED_RUNTIME_TABLES)
     mockQuery
+      .mockResolvedValueOnce({ rows: [{ exists: true }] })
+      .mockResolvedValueOnce({ rows: [{ exists: true }] })
+      .mockResolvedValueOnce({ rows: [{ exists: true }] })
       .mockResolvedValueOnce({ rows: [{ exists: true }] })
       .mockResolvedValueOnce({ rows: [{ exists: true }] })
       .mockResolvedValueOnce({ rows: [{ exists: true }] });
@@ -192,9 +202,12 @@ describe('migrate', () => {
 
     mockReaddirSync.mockReturnValue([]);
 
-    // assertRuntimeTablesReady: agent_memory missing
+    // assertRuntimeTablesReady: agent_memory missing, others present (mirror REQUIRED_RUNTIME_TABLES)
     mockQuery
       .mockResolvedValueOnce({ rows: [{ exists: false }] }) // agent_memory missing
+      .mockResolvedValueOnce({ rows: [{ exists: true }] })
+      .mockResolvedValueOnce({ rows: [{ exists: true }] })
+      .mockResolvedValueOnce({ rows: [{ exists: true }] })
       .mockResolvedValueOnce({ rows: [{ exists: true }] })
       .mockResolvedValueOnce({ rows: [{ exists: true }] });
 
@@ -220,8 +233,11 @@ describe('migrate', () => {
     mockReadFileSync.mockReturnValue('SELECT 1;');
     mockClientQuery.mockResolvedValue(undefined);
 
-    // assertRuntimeTablesReady
+    // assertRuntimeTablesReady (mirror REQUIRED_RUNTIME_TABLES)
     mockQuery
+      .mockResolvedValueOnce({ rows: [{ exists: true }] })
+      .mockResolvedValueOnce({ rows: [{ exists: true }] })
+      .mockResolvedValueOnce({ rows: [{ exists: true }] })
       .mockResolvedValueOnce({ rows: [{ exists: true }] })
       .mockResolvedValueOnce({ rows: [{ exists: true }] })
       .mockResolvedValueOnce({ rows: [{ exists: true }] });
@@ -254,8 +270,11 @@ describe('migrate', () => {
 
     mockReaddirSync.mockReturnValue([]);
 
-    // assertRuntimeTablesReady
+    // assertRuntimeTablesReady (mirror REQUIRED_RUNTIME_TABLES)
     mockQuery
+      .mockResolvedValueOnce({ rows: [{ exists: true }] })
+      .mockResolvedValueOnce({ rows: [{ exists: true }] })
+      .mockResolvedValueOnce({ rows: [{ exists: true }] })
       .mockResolvedValueOnce({ rows: [{ exists: true }] })
       .mockResolvedValueOnce({ rows: [{ exists: true }] })
       .mockResolvedValueOnce({ rows: [{ exists: true }] });

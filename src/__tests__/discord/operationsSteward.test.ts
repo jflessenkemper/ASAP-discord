@@ -35,7 +35,7 @@ describe('operationsSteward', () => {
     expect(text).toContain('loops=logging-engine');
   });
 
-  it('builds a Riley-managed self-improvement packet and ops updates', () => {
+  it('builds a Cortana-managed self-improvement packet and ops updates', () => {
     const packet = buildSelfImprovementPacket({
       goal: 'Stabilize deployment reporting',
       status: 'partial',

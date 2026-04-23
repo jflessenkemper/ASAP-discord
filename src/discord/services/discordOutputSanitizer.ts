@@ -108,6 +108,11 @@ export class ToolChainTracker {
 
   get size(): number { return this.entries.length; }
   get isEmpty(): boolean { return this.entries.length === 0; }
+
+  /** Read-only access for alternate renderers (e.g. the turn tracker). */
+  snapshot(): ReadonlyArray<ToolChainEntry> {
+    return this.entries;
+  }
 }
 
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {

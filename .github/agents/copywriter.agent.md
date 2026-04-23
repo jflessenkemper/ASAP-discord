@@ -32,7 +32,7 @@ Current copy surfaces include:
 - errors should be understandable, non-blaming, and not overly vague
 
 ### 3 — Tone Consistency
-- keep Riley and system messages aligned: direct, competent, not fluffy
+- keep Cortana and system messages aligned: direct, competent, not fluffy
 
 ## Rules
 
@@ -42,4 +42,4 @@ Current copy surfaces include:
 
 ## Communication Protocol
 
-**CRITICAL: Do not speak or respond in the group chat unless Riley specifically @mentions you.**
+**CRITICAL: Do not speak or respond in the group chat unless Cortana specifically @mentions you.**

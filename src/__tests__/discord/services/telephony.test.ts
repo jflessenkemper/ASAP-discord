@@ -22,13 +22,13 @@ jest.mock('../../../db/pool', () => ({
 jest.mock('../../../discord/agents', () => ({
   getAgent: jest.fn().mockReturnValue({
     id: 'executive-assistant',
-    name: 'Riley',
-    systemPrompt: 'You are Riley.',
+    name: 'Cortana',
+    systemPrompt: 'You are Cortana.',
   }),
   AgentId: {},
 }));
 jest.mock('../../../discord/claude', () => ({
-  agentRespond: jest.fn().mockResolvedValue('Hello, this is Riley.'),
+  agentRespond: jest.fn().mockResolvedValue('Hello, this is Cortana.'),
   summarizeCall: jest.fn().mockResolvedValue('Call summary.'),
 }));
 jest.mock('../../../discord/memory', () => ({
@@ -433,7 +433,7 @@ describe('telephony', () => {
 
       const confName = await startConferenceCall(['+61411111111', '+61422222222'], 'test-conf');
       expect(confName).toBe('test-conf');
-      // Should call create for each participant + Riley
+      // Should call create for each participant + Cortana
       expect(mockCallsCreate).toHaveBeenCalledTimes(3);
       logSpy.mockRestore();
     });
@@ -452,7 +452,7 @@ describe('telephony', () => {
       const logSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
 
       await startConferenceCall(['0411111111', '422222222']);
-      // First two calls are for participants (normalized), third is Riley
+      // First two calls are for participants (normalized), third is Cortana
       expect(mockCallsCreate).toHaveBeenCalledTimes(3);
       logSpy.mockRestore();
     });

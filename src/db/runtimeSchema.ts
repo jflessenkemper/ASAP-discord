@@ -3,9 +3,11 @@ export const TABLE_EXPECTATIONS_BY_MIGRATION: Record<string, string[]> = {
   '015_agent_activity_log.sql': ['agent_activity_log'],
   '021_self_improvement_jobs.sql': ['self_improvement_jobs'],
   '022_agent_learnings.sql': ['agent_learnings'],
+  '023_user_events.sql': ['user_events'],
+  '024_decisions.sql': ['decisions'],
 };
 
-export const REQUIRED_RUNTIME_TABLES = ['agent_memory', 'agent_activity_log', 'self_improvement_jobs', 'agent_learnings'];
+export const REQUIRED_RUNTIME_TABLES = ['agent_memory', 'agent_activity_log', 'self_improvement_jobs', 'agent_learnings', 'user_events', 'decisions'];
 
 export const LEGACY_APP_TABLES = [
   'quotes',

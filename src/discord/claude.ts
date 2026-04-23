@@ -221,7 +221,7 @@ function resolveToolThreadKey(
  * Model policy:
  * - Voice and other short/status asks stay on the fast model.
  * - Code-heavy prompts escalate to the coding model when warranted.
- * - Riley still escalates to Pro for non-code high-stakes ops prompts.
+ * - Cortana still escalates to Pro for non-code high-stakes ops prompts.
  */
 function getAgentModelOverride(agentId: string): string | null {
   // Per-agent override is a hard lock (bypass health routing)
@@ -1424,11 +1424,11 @@ export function extractAgentResponseEnvelope(text: string): AgentResponseEnvelop
   return parseAgentResponseEnvelope(text);
 }
 
-/** Max tool-use iterations before forcing a text response. Lower defaults help stop runaway loops. */
+/** Argus tool-use iterations before forcing a text response. Lower defaults help stop runaway loops. */
 const MAX_TOOL_ROUNDS = parseToolRoundLimit(process.env.MAX_TOOL_ROUNDS, '0');
 const MAX_TOOL_ROUNDS_DEVELOPER = parseToolRoundLimit(process.env.MAX_TOOL_ROUNDS_DEVELOPER, '0');
 const MAX_TOOL_ROUNDS_EXECUTIVE = parseToolRoundLimit(process.env.MAX_TOOL_ROUNDS_EXECUTIVE, '0');
-/** Optional one-time extra Riley pass. Default ON (+10 rounds) so Riley can finish orchestration. */
+/** Optional one-time extra Cortana pass. Default ON (+10 rounds) so Cortana can finish orchestration. */
 const RILEY_AUTO_TOOL_EXTENSION = parseToolRoundLimit(process.env.RILEY_AUTO_TOOL_EXTENSION, '0');
 /** Maximum history messages to send per request (excludes current user message) */
 const MAX_CONTEXT_MESSAGES = parseInt(process.env.MAX_CONTEXT_MESSAGES || '10', 10);
@@ -2541,6 +2541,30 @@ export async function agentRespond(
   // ─── Vector Memory Recall ───
   const semanticContext = await recallRelevantContext(userMessage, agent.id);
 
+  // ─── Hot context: last N events the owner produced in Discord ───
+  // Only injected for Cortana (front door) and Ops (steward) since they are the
+  // ones synthesizing. Specialists get a clean, focused context window.
+  let userHotContext = '';
+  if (agent.id === 'executive-assistant' || agent.id === 'operations-manager') {
+    const ownerId = String(process.env.DISCORD_OWNER_USER_ID || '').trim();
+    if (ownerId) {
+      try {
+        const { getRecentUserEvents } = await import('./userEvents');
+        const events = await getRecentUserEvents(ownerId, 12);
+        if (events.length) {
+          const lines = events.slice().reverse().map((e) => {
+            const when = new Date(e.created_at as unknown as string).toISOString();
+            const text = (e.text || '').replace(/\s+/g, ' ').slice(0, 180);
+            return `- [${when}] (${e.kind}) ${text}`;
+          });
+          userHotContext = lines.join('\n');
+        }
+      } catch {
+        // Memory capture is best-effort; never let it block a turn.
+      }
+    }
+  }
+
   const cacheKey = cacheEligible ? makeResponseCacheKey(agent.id, userMessage, conversationHistory) : null;
   if (cacheKey) {
     const cached = getCachedResponse(cacheKey);
@@ -2577,7 +2601,7 @@ export async function agentRespond(
     const recoveryTime = formatRecoveryTime(creditsExhaustedUntil);
     return agent.id === 'executive-assistant'
       ? `⚠️ Anthropic quota is exhausted right now. Automatic retries resume at ${recoveryTime}. Pause the team and ask ${getOwnerName()} to check Anthropic billing before more work continues.`
-      : `⚠️ Anthropic quota is exhausted right now. Automatic retries resume at ${recoveryTime}. Ask Riley to request ${getOwnerName()} approval for more credits before continuing.`;
+      : `⚠️ Anthropic quota is exhausted right now. Automatic retries resume at ${recoveryTime}. Ask Cortana to request ${getOwnerName()} approval for more credits before continuing.`;
   }
 
   if (isBudgetExceeded()) {
@@ -2597,7 +2621,7 @@ export async function agentRespond(
     logAgentEvent(agent.id, 'error', `Budget exceeded: $${spent.toFixed(2)}/$${limit.toFixed(2)}`);
     return agent.id === 'executive-assistant'
       ? `⚠️ Daily budget of $${limit.toFixed(2)} has been reached ($${spent.toFixed(2)} spent) and runtime auto-approval could not clear it. Pause the team only now and ask ${getOwnerName()} whether they want more budget before work resumes.`
-      : `⚠️ Daily budget of $${limit.toFixed(2)} has been reached ($${spent.toFixed(2)} spent) and runtime auto-approval could not clear it. Ask Riley to escalate only if she confirms the budget gate is still blocking.`;
+      : `⚠️ Daily budget of $${limit.toFixed(2)} has been reached ($${spent.toFixed(2)} spent) and runtime auto-approval could not clear it. Ask Cortana to escalate only if she confirms the budget gate is still blocking.`;
   }
 
   const { remaining, spent, limit } = getRemainingBudget();
@@ -2615,8 +2639,8 @@ CRITICAL: Do NOT use send_channel_message — use Discord mentions for agent coo
     : `\n- On budget limit: pause, explain needed increase, wait for ${getOwnerName()} approval.\n`;
 
   const workerBudgetGovernance = RILEY_AUTO_APPROVE_BUDGET
-    ? `\n- Budget autopilot active. Only stop for budget if Riley confirms hard block.\n`
-    : `\n- Riley is token master. Ask Riley (not Jordan) for budget/credits.\n`;
+    ? `\n- Budget autopilot active. Only stop for budget if Cortana confirms hard block.\n`
+    : `\n- Cortana is token master. Ask Cortana (not Jordan) for budget/credits.\n`;
 
   const governanceSection = agent.id === 'executive-assistant' ? `
 GOVERNANCE:
@@ -2631,7 +2655,7 @@ SELF-IMPROVEMENT:
 - No access to: gcp_secret_set, db_query (write), Discord channel create/delete.
 ` : `
 GOVERNANCE:
-- Riley is token master and execution owner.
+- Cortana is token master and execution owner.
 ${workerBudgetGovernance}
 `;
 
@@ -2658,7 +2682,7 @@ OUTPUT MODE:
 
   const upgradesChannelRule = `
 UPGRADES CHANNEL:
-- Post improvement ideas to #🆙-upgrades: problem, proposed fix, expected benefit. Max one per task.
+- Post improvement ideas to #🆙-upgrades: problem, proposed fix, expected benefit. Argus one per task.
 - Flag token waste or Discord UX friction when noticed.
 `;
 
@@ -2677,14 +2701,18 @@ UPGRADES CHANNEL:
     ? `\n<learned_patterns>\n${semanticContext.slice(0, 800)}\n</learned_patterns>`
     : '';
 
+  const userRecentActivity = userHotContext
+    ? `\n<user_recent_activity description="Last things the user said or did in Discord — text, voice transcripts, images they sent, reactions, button clicks. Use this before responding. Call recall_user_memory for older context.">\n${userHotContext}\n</user_recent_activity>`
+    : '';
+
   const systemPrompt = `${agent.systemPrompt}
 ${rileyContext}
 <project_context>
 ${getProjectContextForAgent(agent.id)}
-</project_context>${learnedPatterns}
+</project_context>${learnedPatterns}${userRecentActivity}
 
 You are "${agent.name}" responding in Discord.${rileyCoordination}
-RULES: Max 220 words (code exempt). Lead with the useful part. 60-120 words normal; 1-3 sentences for simple asks.${toolsSection}
+RULES: Argus 220 words (code exempt). Lead with the useful part. 60-120 words normal; 1-3 sentences for simple asks.${toolsSection}
 Any human in Discord can request work. Jordan approval only for budget increases.
 Format: 1) action taken, 2) key result, 3) next step/blocker. Skip structure for simple asks.
 No raw JSON, no SMOKE_ tokens, no headings (#/##), no excessive bold, no name/role prefixes.
@@ -3039,7 +3067,7 @@ ${getLatestSmokeHealthLine()}`;
             : `⚠️ Gemini quota is exhausted. Automatic retries resume at ${formatRecoveryTime(creditsExhaustedUntil)}. Pause the team and ask Jordan to top up Google Cloud billing.`)
         : (DISABLE_GEMINI_QUOTA_FUSE
             ? '⚠️ Gemini rejected that request, but the local quota pause is disabled. Retry or continue with other work.'
-            : `⚠️ Gemini quota is exhausted right now. Automatic retries resume at ${formatRecoveryTime(creditsExhaustedUntil)}. Ask Riley to request Jordan approval for more credits before continuing.`);
+            : `⚠️ Gemini quota is exhausted right now. Automatic retries resume at ${formatRecoveryTime(creditsExhaustedUntil)}. Ask Cortana to request Jordan approval for more credits before continuing.`);
     } else if (!isAnthropicModel(currentModelName) && isGeminiAuthError(err)) {
       logAgentEvent(agent.id, 'error', 'Gemini auth/config issue');
       return '⚠️ Gemini auth/config issue detected (not quota). Check runtime API key/service account and provider mode flags, then retry.';
@@ -3084,12 +3112,12 @@ ${getLatestSmokeHealthLine()}`;
       if (isBudgetExceeded()) {
         const { spent: roundSpent, limit: roundLimit } = getRemainingBudget();
         return agent.id === 'executive-assistant'
-          ? `⚠️ Daily budget of $${roundLimit.toFixed(2)} has been reached ($${roundSpent.toFixed(2)} spent) and runtime auto-approval could not clear it. Riley should request budget approval before the team continues.`
-          : `⚠️ Daily budget of $${roundLimit.toFixed(2)} has been reached ($${roundSpent.toFixed(2)} spent) and runtime auto-approval could not clear it. Ask Riley to escalate only if she confirms the block remains.`;
+          ? `⚠️ Daily budget of $${roundLimit.toFixed(2)} has been reached ($${roundSpent.toFixed(2)} spent) and runtime auto-approval could not clear it. Cortana should request budget approval before the team continues.`
+          : `⚠️ Daily budget of $${roundLimit.toFixed(2)} has been reached ($${roundSpent.toFixed(2)} spent) and runtime auto-approval could not clear it. Ask Cortana to escalate only if she confirms the block remains.`;
       }
       return agent.id === 'executive-assistant'
-        ? '⚠️ Daily Anthropic token limit reached. Riley should request approval to raise DAILY_LIMIT_CLAUDE_TOKENS before the team continues.'
-        : '⚠️ Daily Anthropic token limit reached. Ask Riley to request approval before continuing.';
+        ? '⚠️ Daily Anthropic token limit reached. Cortana should request approval to raise DAILY_LIMIT_CLAUDE_TOKENS before the team continues.'
+        : '⚠️ Daily Anthropic token limit reached. Ask Cortana to request approval before continuing.';
     }
 
     if (TOOL_LOOP_TIMEOUT > 0 && Date.now() - loopStart > TOOL_LOOP_TIMEOUT) {
@@ -3430,7 +3458,7 @@ ${getLatestSmokeHealthLine()}`;
               : '⚠️ Gemini quota is exhausted. Pause the team and ask Jordan to top up Google Cloud billing.')
           : (DISABLE_GEMINI_QUOTA_FUSE
               ? '⚠️ Gemini rejected that request mid-run, but the local quota pause is disabled. Retry or continue with other work.'
-              : '⚠️ Gemini quota is exhausted right now. Ask Riley to request Jordan approval for more credits before continuing.');
+              : '⚠️ Gemini quota is exhausted right now. Ask Cortana to request Jordan approval for more credits before continuing.');
       }
       if (!isAnthropicModel(currentModelName) && isGeminiAuthError(err)) {
         logAgentEvent(agent.id, 'error', 'Gemini auth/config issue mid-loop');
@@ -3442,7 +3470,7 @@ ${getLatestSmokeHealthLine()}`;
 
   if (!hasUnlimitedToolRounds(maxToolRounds) && agent.id === 'executive-assistant' && !options?.rileyAutoToolApprovalUsed && RILEY_AUTO_TOOL_EXTENSION > 0) {
     const extension = Math.max(1, RILEY_AUTO_TOOL_EXTENSION);
-    logAgentEvent(agent.id, 'response', `Riley started one extra tool pass (+${extension} rounds)`);
+    logAgentEvent(agent.id, 'response', `Cortana started one extra tool pass (+${extension} rounds)`);
     return agentRespond(
       agent,
       conversationHistory,
@@ -3475,7 +3503,7 @@ ${getLatestSmokeHealthLine()}`;
     );
   }
 
-  logAgentEvent(agent.id, 'error', `Max tool iterations (${maxToolRounds}) after ${totalToolCalls} tool calls`, { durationMs: Date.now() - loopStart });
+  logAgentEvent(agent.id, 'error', `Argus tool iterations (${maxToolRounds}) after ${totalToolCalls} tool calls`, { durationMs: Date.now() - loopStart });
   return agent.id === 'executive-assistant'
     ? 'I hit the per-pass tool safety cap for this run. The latest state is preserved; start a fresh, tighter follow-up if you want me to continue from here.'
     : 'I hit the per-pass tool safety cap for this run. The latest state is preserved; send a tighter follow-up if you want me to continue from here.';

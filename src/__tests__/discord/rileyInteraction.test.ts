@@ -16,7 +16,7 @@ describe('rileyInteraction', () => {
   });
 
   it('builds a groupchat-only decision attention line', () => {
-    expect(buildGroupchatDecisionAttention('groupchat', 'groupchat', '999')).toBe('<@999> Riley needs a decision from you here.');
+    expect(buildGroupchatDecisionAttention('groupchat', 'groupchat', '999')).toBe('<@999> Cortana needs a decision from you here.');
     expect(buildGroupchatDecisionAttention('decisions', 'groupchat', '999')).toBe('');
   });
 
@@ -26,7 +26,7 @@ describe('rileyInteraction', () => {
     expect(summary).toContain('Loops');
   });
 
-  it('tells Riley to ask for decisions directly in live voice', () => {
+  it('tells Cortana to ask for decisions directly in live voice', () => {
     expect(buildVoiceDecisionPolicy()).toContain('ask the caller directly in voice');
     expect(buildVoiceDecisionPolicy()).toContain('Do not defer them to the decisions channel');
   });

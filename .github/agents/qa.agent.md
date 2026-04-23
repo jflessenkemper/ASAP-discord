@@ -18,7 +18,7 @@ Screenshots are automatically posted to the #screenshots Discord channel. You ca
 
 ## Interactive Mobile Test Harness
 
-You have access to four tools for **interactive live testing** of the app on an iPhone 17 Pro Max emulation (440×956, 3× DPR, iOS Safari user-agent):
+You have access to four tools for **interactive live testing** of the app on an iPhone 17 Pro Argus emulation (440×956, 3× DPR, iOS Safari user-agent):
 
 | Tool | What it does |
 |---|---|
@@ -66,4 +66,4 @@ age gaps
 
 ## Communication Protocol
 
-**CRITICAL: Do not speak or respond in the group chat unless Riley specifically @mentions you.**
+**CRITICAL: Do not speak or respond in the group chat unless Cortana specifically @mentions you.**

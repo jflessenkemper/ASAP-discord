@@ -73,9 +73,9 @@ describe('shouldSkipContractEnforcement', () => {
 });
 
 describe('buildAceDesignContext', () => {
-  it('includes Riley directive', () => {
+  it('includes Cortana directive', () => {
     const ctx = buildAceDesignContext('Build the dashboard page');
-    expect(ctx).toContain('[Riley directed you]: Build the dashboard page');
+    expect(ctx).toContain('[Cortana directed you]: Build the dashboard page');
   });
 
   it('includes design deliverable instructions', () => {
@@ -91,9 +91,9 @@ describe('buildAceDesignContext', () => {
 });
 
 describe('buildAceStandardContext', () => {
-  it('includes Riley directive', () => {
+  it('includes Cortana directive', () => {
     const ctx = buildAceStandardContext('Implement feature X');
-    expect(ctx).toContain('[Riley directed you]: Implement feature X');
+    expect(ctx).toContain('[Cortana directed you]: Implement feature X');
   });
 
   it('includes PR workflow instructions', () => {

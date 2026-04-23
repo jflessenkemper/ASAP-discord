@@ -1,6 +1,6 @@
 /**
  * Job search service — Adzuna API + ATS portal scanning for Australian job listings.
- * Used by Riley's job_scan, job_evaluate, and job_tracker tools.
+ * Used by Cortana's job_scan, job_evaluate, and job_tracker tools.
  */
 import https from 'https';
 import pool from '../db/pool';

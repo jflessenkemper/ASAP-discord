@@ -1131,7 +1131,7 @@ async function runVoiceBridgeActiveCallCheck(groupchat: TextChannel, rileyMentio
   }
 
   if (!sawStart) {
-    return { name: 'voice_bridge_active_call', passed: false, detail: 'No active-call confirmation from Riley', critical: false };
+    return { name: 'voice_bridge_active_call', passed: false, detail: 'No active-call confirmation from Cortana', critical: false };
   }
 
   const bridge = await runVoiceBridgeNoActiveCallCheck(groupchat, selfId, Math.min(timeoutMs, 45000));
@@ -1147,11 +1147,11 @@ async function runVoiceBridgeActiveCallCheck(groupchat: TextChannel, rileyMentio
 
 /**
  * Full voice round-trip test:
- * 1. Ask Riley to join voice via groupchat
+ * 1. Ask Cortana to join voice via groupchat
  * 2. Wait for join confirmation
  * 3. Send "tester say:" to trigger TTS playback
  * 4. Wait for "spoke in voice" confirmation
- * 5. Ask Riley to leave voice
+ * 5. Ask Cortana to leave voice
  */
 async function runVoiceRoundTripCheck(
   groupchat: TextChannel,
@@ -1162,7 +1162,7 @@ async function runVoiceRoundTripCheck(
   const token = `VOICE_RT_${Date.now().toString().slice(-6)}`;
   const stepTimeout = Math.min(timeoutMs, 60_000);
 
-  // Step 1: Ask Riley to join voice
+  // Step 1: Ask Cortana to join voice
   const joinMsg = await groupchat.send(`${rileyMention} join voice`);
   const joinStart = Date.now();
   let joinConfirmed = false;
@@ -1178,7 +1178,7 @@ async function runVoiceRoundTripCheck(
     if (hit) {
       const text = extractReplyText(hit);
       if (/listening is unavailable|can't join voice/i.test(text)) {
-        return { name: 'voice_round_trip', passed: false, detail: `Riley cannot join voice: ${text.slice(0, 200)}`, critical: false };
+        return { name: 'voice_round_trip', passed: false, detail: `Cortana cannot join voice: ${text.slice(0, 200)}`, critical: false };
       }
       joinConfirmed = true;
       break;
@@ -1189,7 +1189,7 @@ async function runVoiceRoundTripCheck(
   if (!joinConfirmed) {
     // Cleanup: try to end call just in case
     await groupchat.send(`${rileyMention} leave voice`).catch(() => {});
-    return { name: 'voice_round_trip', passed: false, detail: 'Riley did not confirm joining voice within timeout', critical: false };
+    return { name: 'voice_round_trip', passed: false, detail: 'Cortana did not confirm joining voice within timeout', critical: false };
   }
 
   // Step 2: Wait a moment for voice pipeline to initialize
@@ -1218,7 +1218,7 @@ async function runVoiceRoundTripCheck(
     await sleep(2500);
   }
 
-  // Step 4: Cleanup — ask Riley to leave voice
+  // Step 4: Cleanup — ask Cortana to leave voice
   await groupchat.send(`${rileyMention} leave voice`).catch(() => {});
   await sleep(2000);
 
@@ -1946,7 +1946,7 @@ async function run(): Promise<void> {
       (t) => t.id !== 'executive-assistant' && t.category !== 'orchestration' && t.heavyTool,
     );
 
-    // Phase 1: Groupchat tests (serial — Riley + orchestration)
+    // Phase 1: Groupchat tests (serial — Cortana + orchestration)
     const phase1Start = Date.now();
     console.log(`\n--- Matrix Phase 1: ${groupchatTests.length} groupchat tests (serial) ---`);
     let failFastTriggered = false;

@@ -73,9 +73,9 @@ describe('textChannel', () => {
       expect(result).not.toContain('SMOKE_ABC123');
     });
 
-    it('strips speaker labels (Riley:)', () => {
-      const result = renderAgentMessage('Riley: I will check the status');
-      expect(result).not.toMatch(/^Riley:/);
+    it('strips speaker labels (Cortana:)', () => {
+      const result = renderAgentMessage('Cortana: I will check the status');
+      expect(result).not.toMatch(/^Cortana:/);
       expect(result).toContain('I will check the status');
     });
 
@@ -147,7 +147,7 @@ describe('textChannel', () => {
   describe('sendAgentMessage()', () => {
     it('sanitizes visible Discord output through the sanitizer pass', async () => {
       const channel = { name: 'groupchat' } as any;
-      const agent = { id: 'executive-assistant', emoji: '📋', name: 'Riley', avatarUrl: 'https://example.test/riley.png' } as any;
+      const agent = { id: 'executive-assistant', emoji: '📋', name: 'Cortana', avatarUrl: 'https://example.test/riley.png' } as any;
 
       await sendAgentMessage(channel, agent, 'Original response with [TOOL:run_command] marker');
 

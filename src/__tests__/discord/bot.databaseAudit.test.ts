@@ -154,7 +154,7 @@ describe('bot runDatabaseAudit', () => {
   it('posts a warn summary when legacy tables remain and drop migration is pending', async () => {
     installDatabaseQueryMock({
       appliedMigrations: ['003_agent_memory.sql', '015_agent_activity_log.sql'],
-      existingTables: ['agent_memory', 'agent_activity_log', 'self_improvement_jobs', 'employees', 'clients'],
+      existingTables: ['agent_memory', 'agent_activity_log', 'self_improvement_jobs', 'agent_learnings', 'user_events', 'decisions', 'employees', 'clients'],
     });
 
     await runDatabaseAudit(channels);

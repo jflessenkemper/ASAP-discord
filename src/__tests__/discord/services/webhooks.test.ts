@@ -152,7 +152,7 @@ describe('sendWebhookMessage', () => {
       fetchWebhooks: jest.fn().mockResolvedValue({ find: (fn: any) => fn(wh) ? wh : undefined }),
     });
 
-    await sendWebhookMessage(channel, { content: 'Hi', username: 'Riley (Executive Assistant)✦' } as any);
+    await sendWebhookMessage(channel, { content: 'Hi', username: 'Cortana (Executive Assistant)✦' } as any);
     const sentOptions = mockSend.mock.calls[0][0];
     expect(sentOptions.username).not.toContain('✦');
   });
@@ -264,9 +264,9 @@ describe('sanitizeWebhookUsername – edge cases', () => {
     const channel = makeTextChannel({
       fetchWebhooks: jest.fn().mockResolvedValue({ find: (fn: any) => fn(wh) ? wh : undefined }),
     });
-    await sendWebhookMessage(channel, { content: 'Hi', username: 'Riley ★' } as any);
+    await sendWebhookMessage(channel, { content: 'Hi', username: 'Cortana ★' } as any);
     const sentOptions = mockSend.mock.calls[0][0];
-    expect(sentOptions.username).toBe('Riley');
+    expect(sentOptions.username).toBe('Cortana');
   });
 
   it('clips username to 80 characters', async () => {

@@ -4,17 +4,17 @@ import {
 } from '../../discord/services/groupchatRouting';
 
 describe('groupchatRouting', () => {
-  it('keeps short Riley-directed questions in groupchat', () => {
-    expect(shouldKeepGroupchatPromptInChannel(['executive-assistant'], 'Riley why did that fail?')).toBe(true);
-    expect(shouldEchoDirectedResponseToGroupchat(['executive-assistant'], 'Riley why did that fail?')).toBe(true);
+  it('keeps short Cortana-directed questions in groupchat', () => {
+    expect(shouldKeepGroupchatPromptInChannel(['executive-assistant'], 'Cortana why did that fail?')).toBe(true);
+    expect(shouldEchoDirectedResponseToGroupchat(['executive-assistant'], 'Cortana why did that fail?')).toBe(true);
   });
 
   it('routes real task requests to a workspace', () => {
-    expect(shouldKeepGroupchatPromptInChannel(['executive-assistant'], 'Riley investigate the token blocker failure and fix it')).toBe(false);
+    expect(shouldKeepGroupchatPromptInChannel(['executive-assistant'], 'Cortana investigate the token blocker failure and fix it')).toBe(false);
   });
 
   it('does not keep specialist requests in groupchat', () => {
-    expect(shouldKeepGroupchatPromptInChannel(['qa'], 'Riley why did that fail?')).toBe(false);
+    expect(shouldKeepGroupchatPromptInChannel(['qa'], 'Cortana why did that fail?')).toBe(false);
   });
 
   it('keeps short conversational messages with no agent mentions in groupchat', () => {
@@ -28,7 +28,7 @@ describe('groupchatRouting', () => {
   });
 
   it('keeps groupchat for messages with check/run verbs that are conversational', () => {
-    expect(shouldKeepGroupchatPromptInChannel(['executive-assistant'], 'Riley can you check on that')).toBe(true);
-    expect(shouldKeepGroupchatPromptInChannel(['executive-assistant'], 'Riley run me through what happened')).toBe(true);
+    expect(shouldKeepGroupchatPromptInChannel(['executive-assistant'], 'Cortana can you check on that')).toBe(true);
+    expect(shouldKeepGroupchatPromptInChannel(['executive-assistant'], 'Cortana run me through what happened')).toBe(true);
   });
 });

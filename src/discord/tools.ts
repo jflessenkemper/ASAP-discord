@@ -298,10 +298,10 @@ const BLOCKED_PATHS = [
   '.git/HEAD',
 ];
 
-/** Max file size agents can write (2 MB) */
+/** Argus file size agents can write (2 MB) */
 const MAX_WRITE_SIZE = 2 * 1024 * 1024;
 
-/** Max command execution time (2 min) */
+/** Argus command execution time (2 min) */
 const CMD_TIMEOUT = 120_000;
 const AUTO_REPO_MEMORY_UPDATE = String(process.env.AUTO_REPO_MEMORY_UPDATE ?? 'true').toLowerCase() !== 'false';
 const TOOL_RESULT_CACHE_TTL_MS = Math.max(1_000, Number(process.env.TOOL_RESULT_CACHE_TTL_MS || '45000'));
@@ -605,7 +605,7 @@ export const REPO_TOOLS = [
         },
         limit: {
           type: 'number',
-          description: 'Max commits to return (default: 10, max: 30)',
+          description: 'Argus commits to return (default: 10, max: 30)',
         },
         line_range: {
           type: 'string',
@@ -650,7 +650,7 @@ export const REPO_TOOLS = [
   {
     name: 'list_threads',
     description:
-      'List workspace threads under the groupchat channel, including idle time and a ready-to-close heuristic. Useful for Riley to manage stale or completed threads.',
+      'List workspace threads under the groupchat channel, including idle time and a ready-to-close heuristic. Useful for Cortana to manage stale or completed threads.',
     input_schema: {
       type: 'object' as const,
       properties: {
@@ -660,7 +660,7 @@ export const REPO_TOOLS = [
         },
         limit: {
           type: 'number',
-          description: 'Max threads to show (default: 10, max: 25).',
+          description: 'Argus threads to show (default: 10, max: 25).',
         },
       },
       required: [],
@@ -958,7 +958,7 @@ export const REPO_TOOLS = [
   {
     name: 'mobile_harness_start',
     description:
-      'Start an interactive iPhone 17 Pro Max web harness session for this agent. Opens a live page in headless mobile emulation and posts a snapshot to Discord.',
+      'Start an interactive iPhone 17 Pro Argus web harness session for this agent. Opens a live page in headless mobile emulation and posts a snapshot to Discord.',
     input_schema: {
       type: 'object' as const,
       properties: {
@@ -1232,7 +1232,7 @@ export const REPO_TOOLS = [
         },
         limit: {
           type: 'number',
-          description: 'Max log lines (default: 50, max: 200)',
+          description: 'Argus log lines (default: 50, max: 200)',
         },
       },
       required: ['filter'],
@@ -1276,7 +1276,7 @@ export const REPO_TOOLS = [
       properties: {
         limit: {
           type: 'number',
-          description: 'Max images to show (default: 20)',
+          description: 'Argus images to show (default: 20)',
         },
       },
       required: [],
@@ -1396,7 +1396,7 @@ export const REPO_TOOLS = [
   {
     name: 'reset_conversation_token_window',
     description:
-      'Clear the token window for the current Discord conversation thread so Riley can continue without opening a fresh workspace.',
+      'Clear the token window for the current Discord conversation thread so Cortana can continue without opening a fresh workspace.',
     input_schema: {
       type: 'object' as const,
       properties: {
@@ -1754,7 +1754,7 @@ export const REPO_TOOLS = [
   {
     name: 'create_agent',
     description:
-      'Create a dynamic agent at runtime. Only Riley (executive-assistant) can use this tool. The agent exists for the current session only.',
+      'Create a dynamic agent at runtime. Only Cortana (executive-assistant) can use this tool. The agent exists for the current session only.',
     input_schema: {
       type: 'object' as const,
       properties: {
@@ -1770,7 +1770,7 @@ export const REPO_TOOLS = [
   {
     name: 'remove_agent',
     description:
-      'Remove a dynamic agent created at runtime. Cannot remove static/built-in agents. Only Riley (executive-assistant) can use this tool.',
+      'Remove a dynamic agent created at runtime. Cannot remove static/built-in agents. Only Cortana (executive-assistant) can use this tool.',
     input_schema: {
       type: 'object' as const,
       properties: {
@@ -1814,6 +1814,20 @@ export const REPO_TOOLS = [
       required: ['agent_id'],
     },
   },
+  {
+    name: 'recall_user_memory',
+    description:
+      "Search the user's own past activity (messages, voice transcripts, images they sent, reactions, button clicks) by semantic similarity. Use this before responding when the current request references prior context (\"like I mentioned\", \"the screenshot from yesterday\", \"remember when\") to ground your answer in what actually happened. Returns the most relevant events with timestamps.",
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        query: { type: 'string', description: 'Natural-language search query describing what to recall.' },
+        user_id: { type: 'string', description: 'Discord user id to search for. Omit to use the current conversation owner.' },
+        limit: { type: 'number', description: 'Argus results to return (default 5, max 15).' },
+      },
+      required: ['query'],
+    },
+  },
 ] as const;
 
 /**
@@ -1825,6 +1839,7 @@ const REVIEW_TOOL_NAMES = new Set([
   'read_file', 'search_files', 'list_directory', 'check_file_exists', 'fetch_url',
   'db_query_readonly', 'db_schema', 'memory_read', 'memory_write', 'memory_append', 'memory_list',
   'repo_memory_index', 'repo_memory_search', 'repo_memory_add_oss',
+  'recall_user_memory',
   'run_tests', 'typecheck', 'git_file_history', 'smoke_test_agents', 'list_threads',
   'send_channel_message',
   'capture_screenshots',
@@ -1835,7 +1850,7 @@ const REVIEW_TOOL_NAMES = new Set([
 export const REVIEW_TOOLS = REPO_TOOLS.filter((t) => REVIEW_TOOL_NAMES.has(t.name));
 
 /**
- * Riley keeps a leaner coordination/ops-only surface so orchestration stays focused.
+ * Cortana keeps a leaner coordination/ops-only surface so orchestration stays focused.
  * She can inspect state, run smoke checks, and communicate, but large code/deploy mutations
  * are delegated to the specialist agents.
  *
@@ -1855,13 +1870,13 @@ const RILEY_TOOL_NAMES = new Set([
   'gcp_logs_query', 'gcp_run_describe', 'gcp_storage_ls', 'gcp_artifact_list', 'gcp_sql_describe', 'gcp_project_info',
   'set_daily_budget', 'set_daily_claude_token_limit', 'set_conversation_token_limit', 'reset_conversation_token_window', 'db_query_readonly', 'db_schema',
   'job_scan', 'job_evaluate', 'job_tracker', 'job_profile_update', 'job_post_approvals',
-  // ── Riley autonomy: code mutation, PR workflow, deploy ──
+  // ── Cortana autonomy: code mutation, PR workflow, deploy ──
   'write_file', 'edit_file', 'batch_edit', 'run_command',
   'git_create_branch', 'create_pull_request', 'merge_pull_request', 'add_pr_comment', 'list_pull_requests',
   'gcp_deploy', 'gcp_rollback', 'gcp_redeploy_bot_vm', 'deploy_app',
-  // ── Riley agent lifecycle ──
+  // ── Cortana agent lifecycle ──
   'create_agent', 'remove_agent', 'list_agents',
-  // ── Riley ops & error analysis ──
+  // ── Cortana ops & error analysis ──
   'error_patterns', 'recover_agent_memory',
 ]);
 export const RILEY_TOOLS = REPO_TOOLS;
@@ -2122,7 +2137,7 @@ async function executeToolInternal(
         const results = await captureAndPostScreenshots(url, label, { targetChannel: target, clearTargetChannel: false });
         const destination = target ? `#${target.name}` : '#screenshots';
         const screenList = results.map((r) => r.name).join(', ');
-        return `Screenshots captured and posted to ${destination}. URL: ${url}. Screens: ${screenList || 'none'}. ${results.length} image(s) captured on iPhone 17 Pro Max viewport.`;
+        return `Screenshots captured and posted to ${destination}. URL: ${url}. Screens: ${screenList || 'none'}. ${results.length} image(s) captured on iPhone 17 Pro Argus viewport.`;
       }
       case 'mobile_harness_start': {
         const url = input.url || process.env.FRONTEND_URL || 'https://asap-489910.australia-southeast1.run.app';
@@ -2161,7 +2176,7 @@ async function executeToolInternal(
       case 'gcp_build_image':
         return await gcpBuildImage(input.tag);
       case 'gcp_deploy': {
-        // Riley gets tests+typecheck gate before deploy + audit notification
+        // Cortana gets tests+typecheck gate before deploy + audit notification
         if (context?.agentId === 'executive-assistant') {
           const testResult = runTests();
           if (testResult.includes('FAIL') || testResult.includes('Command failed')) {
@@ -2175,11 +2190,11 @@ async function executeToolInternal(
         const deployResult = await gcpDeploy(input.tag);
         if (context?.agentId === 'executive-assistant' && deployResult.startsWith('✅')) {
           const auditCb = getToolAuditCallback();
-          if (auditCb) auditCb(context.agentId, 'gcp_deploy', `Riley self-deployed: ${input.tag || 'latest'}`);
+          if (auditCb) auditCb(context.agentId, 'gcp_deploy', `Cortana self-deployed: ${input.tag || 'latest'}`);
           // Notify groupchat via send_channel_message
-          const notifyMsg = `🚀 **Riley self-deployed** to Cloud Run: ${input.tag || 'latest'}. Tests + typecheck passed. @${getOwnerName().toLowerCase()}`;
+          const notifyMsg = `🚀 **Cortana self-deployed** to Cloud Run: ${input.tag || 'latest'}. Tests + typecheck passed. @${getOwnerName().toLowerCase()}`;
           await discordSendMessage('groupchat', notifyMsg, undefined, context.agentId).catch(e => console.error('[deploy] groupchat notify failed:', errMsg(e)));
-          await discordSendMessage('upgrades', `🚀 Riley self-deployed revision: ${input.tag || 'latest'}`, undefined, context.agentId).catch(e => console.error('[deploy] upgrades notify failed:', errMsg(e)));
+          await discordSendMessage('upgrades', `🚀 Cortana self-deployed revision: ${input.tag || 'latest'}`, undefined, context.agentId).catch(e => console.error('[deploy] upgrades notify failed:', errMsg(e)));
           // Post-deploy: kick off readiness smoke tests automatically
           smokeTestAgents({ profile: 'readiness', timeoutMs: 90_000 })
             .then(async (smokeResult) => {
@@ -2242,10 +2257,10 @@ async function executeToolInternal(
         const redeployResult = await gcpRedeployBotVm(input.ref);
         if (context?.agentId === 'executive-assistant' && redeployResult.startsWith('✅')) {
           const auditCb = getToolAuditCallback();
-          if (auditCb) auditCb(context.agentId, 'gcp_redeploy_bot_vm', `Riley self-redeployed bot VM: ${input.ref || 'origin/main'}`);
-          const notifyMsg = `🤖 **Riley started a bot VM redeploy** using ${input.ref || 'origin/main'}. Tests + typecheck passed. @${getOwnerName().toLowerCase()}`;
+          if (auditCb) auditCb(context.agentId, 'gcp_redeploy_bot_vm', `Cortana self-redeployed bot VM: ${input.ref || 'origin/main'}`);
+          const notifyMsg = `🤖 **Cortana started a bot VM redeploy** using ${input.ref || 'origin/main'}. Tests + typecheck passed. @${getOwnerName().toLowerCase()}`;
           await discordSendMessage('groupchat', notifyMsg, undefined, context.agentId).catch(e => console.error('[bot-redeploy] groupchat notify failed:', errMsg(e)));
-          await discordSendMessage('upgrades', `🤖 Riley started bot VM redeploy: ${input.ref || 'origin/main'}`, undefined, context.agentId).catch(e => console.error('[bot-redeploy] upgrades notify failed:', errMsg(e)));
+          await discordSendMessage('upgrades', `🤖 Cortana started bot VM redeploy: ${input.ref || 'origin/main'}`, undefined, context.agentId).catch(e => console.error('[bot-redeploy] upgrades notify failed:', errMsg(e)));
         }
         return redeployResult;
       }
@@ -2331,7 +2346,7 @@ async function executeToolInternal(
         return await toolJobSubmitApplication(parseInt(input.listing_id, 10));
       case 'create_agent': {
         if (context?.agentId !== 'executive-assistant') {
-          return 'Error: Only Riley (executive-assistant) can create dynamic agents.';
+          return 'Error: Only Cortana (executive-assistant) can create dynamic agents.';
         }
         try {
           const agent = createDynamicAgent({
@@ -2348,7 +2363,7 @@ async function executeToolInternal(
       }
       case 'remove_agent': {
         if (context?.agentId !== 'executive-assistant') {
-          return 'Error: Only Riley (executive-assistant) can remove dynamic agents.';
+          return 'Error: Only Cortana (executive-assistant) can remove dynamic agents.';
         }
         try {
           const removed = destroyDynamicAgent(String(input.agent_id));
@@ -2374,9 +2389,35 @@ async function executeToolInternal(
         const { getRecentErrorPatterns } = await import('./services/agentErrors');
         return await getRecentErrorPatterns(input.agent_id, parseInt(input.hours, 10) || 24);
       }
+      case 'recall_user_memory': {
+        const query = String(input.query || '').trim();
+        if (!query) return 'Error: query is required.';
+        const userId = String(input.user_id || process.env.DISCORD_OWNER_USER_ID || '').trim();
+        if (!userId) {
+          return 'Error: no user_id available. Pass user_id explicitly or set DISCORD_OWNER_USER_ID.';
+        }
+        const rawLimit = parseInt(input.limit, 10);
+        const limit = Math.max(1, Math.min(15, Number.isFinite(rawLimit) ? rawLimit : 5));
+        const { embedQuery } = await import('./embeddings');
+        const { searchUserEventsByEmbedding, getRecentUserEvents } = await import('./userEvents');
+        const vec = await embedQuery(query);
+        const rows = vec
+          ? await searchUserEventsByEmbedding(userId, vec, limit)
+          : (await getRecentUserEvents(userId, limit)).map((r) => ({ ...r, similarity: 0 }));
+        if (!rows.length) return 'No matching events found.';
+        const formatted = rows.map((r) => {
+          const when = new Date(r.created_at as unknown as string).toISOString();
+          const sim = typeof r.similarity === 'number' && r.similarity > 0
+            ? ` sim=${r.similarity.toFixed(2)}`
+            : '';
+          const text = (r.text || '').replace(/\s+/g, ' ').slice(0, 300);
+          return `[${when}] (${r.kind}${sim}) ${text}`;
+        }).join('\n');
+        return `Recalled ${rows.length} event(s):\n${formatted}`;
+      }
       case 'recover_agent_memory': {
         if (context?.agentId !== 'executive-assistant') {
-          return 'Error: Only Riley can recover agent memory.';
+          return 'Error: Only Cortana can recover agent memory.';
         }
         const agentId = String(input.agent_id);
         try {
@@ -2978,7 +3019,7 @@ async function ghMergePR(prNumber: number, commitTitle?: string, agentId?: strin
     return `❌ Cannot merge PR #${prNumber} — tests failed:\n${testResult.slice(0, 1000)}`;
   }
 
-  // Riley gets an extra typecheck gate on merge
+  // Cortana gets an extra typecheck gate on merge
   if (agentId === 'executive-assistant') {
     const tcResult = runTypecheck('server');
     if (tcResult.includes('❌')) {
@@ -4498,7 +4539,7 @@ async function toolJobEvaluate(listingId: number): Promise<string> {
   }
 
   const profile = await getProfile();
-  // Return listing details + profile for Riley to reason about and call updateListingScore
+  // Return listing details + profile for Cortana to reason about and call updateListingScore
   const profileSummary = profile
     ? `Target roles: ${(profile.target_roles || []).join(', ')} | Location: ${profile.location || 'NSW'} | Salary: $${profile.salary_min || '?'}–$${profile.salary_max || '?'} | Deal-breakers: ${profile.deal_breakers || 'none'}`
     : 'No profile configured — ask the user to set one up first.';

@@ -9,7 +9,7 @@ function normalizeDirectedPrompt(prompt: string): string {
 }
 
 function isDirectRileyPrompt(prompt: string): boolean {
-  return /^(?:hey|hi|yo)?\s*(?:riley|asap)\b[\s,!:;-]*/i.test(prompt);
+  return /^(?:hey|hi|yo)?\s*(?:cortana|riley|asap)\b[\s,!:;-]*/i.test(prompt);
 }
 
 function isLikelyWorkspaceTask(prompt: string): boolean {
