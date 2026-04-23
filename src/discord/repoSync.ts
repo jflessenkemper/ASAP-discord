@@ -5,7 +5,11 @@ import { errMsg } from '../utils/errors';
 
 const ASAP_REPO_URL = process.env.ASAP_REPO_URL || 'https://github.com/jflessenkemper/ASAP.git';
 const ASAP_REPO_DIR = process.env.ASAP_REPO_DIR || '/opt/asap-app';
-const REPO_SYNC_INTERVAL_MS = Math.max(60_000, parseInt(process.env.REPO_SYNC_INTERVAL_MS || '300000', 10));
+// Fallback polling cadence. Webhook-triggered syncs (see handlers/github.ts)
+// handle near-realtime updates; this polling loop is a safety net for when
+// webhooks are missed or the handler is restarted. 2 minutes is frequent
+// enough to catch drift fast, rare enough to be cheap.
+const REPO_SYNC_INTERVAL_MS = Math.max(60_000, parseInt(process.env.REPO_SYNC_INTERVAL_MS || '120000', 10));
 const REPO_SYNC_BRANCH = process.env.REPO_SYNC_BRANCH || 'main';
 
 let syncTimer: ReturnType<typeof setInterval> | null = null;
@@ -121,17 +125,27 @@ export function startRepoSyncLoop(): void {
     console.error('[repo-sync] Initial sync failed:', errMsg(err));
   }
 
+  // Log a tick-level "still alive" signal periodically (every 10 ticks) so
+  // operators can tell the loop is firing even when there's nothing to pull.
+  let ticksSinceLog = 0;
+  const LOG_EVERY_TICKS = Math.max(1, parseInt(process.env.REPO_SYNC_LOG_EVERY || '10', 10));
+
   syncTimer = setInterval(() => {
     try {
       const result = syncRepo();
+      ticksSinceLog++;
       if (result.synced) {
-        console.log(`[repo-sync] Updated to ${result.head}`);
+        console.log(`[repo-sync] Updated to ${result.head} (periodic)`);
+        ticksSinceLog = 0;
         // Incremental re-index when new commits arrive
         import('./tools').then(({ repoMemoryIndex }) => {
           repoMemoryIndex('incremental', 800).catch((err) => {
             console.warn('[repo-sync] Incremental re-index failed:', errMsg(err));
           });
         }).catch(() => {});
+      } else if (ticksSinceLog >= LOG_EVERY_TICKS) {
+        console.log(`[repo-sync] Heartbeat: already at ${result.head} (${ticksSinceLog} ticks, ${Math.round((ticksSinceLog * REPO_SYNC_INTERVAL_MS) / 60_000)}m idle)`);
+        ticksSinceLog = 0;
       }
     } catch (err) {
       console.error('[repo-sync] Periodic sync failed:', errMsg(err));

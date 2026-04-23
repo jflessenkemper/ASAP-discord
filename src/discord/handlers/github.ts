@@ -13,6 +13,31 @@ export function setGitHubChannel(channel: TextChannel): void {
 }
 
 /**
+ * If a push webhook targets the ASAP repo on the configured sync branch,
+ * fire an immediate `syncRepo()` so the local clone at /opt/asap-app is
+ * up-to-date within seconds of the push — no waiting for the periodic tick.
+ *
+ * Best-effort: any failure is logged but never blocks webhook processing.
+ */
+async function triggerAsapRepoSyncIfMatch(payload: Record<string, any>): Promise<void> {
+  const targetRepo = String(payload?.repository?.full_name || '').toLowerCase();
+  const expectedRepo = String(process.env.ASAP_REPO_FULL_NAME || 'jflessenkemper/asap').toLowerCase();
+  if (targetRepo !== expectedRepo) return;
+
+  const branch = String(payload?.ref || '').replace('refs/heads/', '');
+  const expectedBranch = process.env.REPO_SYNC_BRANCH || 'main';
+  if (branch !== expectedBranch) return;
+
+  try {
+    const { syncRepo } = await import('../repoSync');
+    const result = syncRepo();
+    console.log(`[repo-sync] Webhook-triggered: cloned=${result.cloned} synced=${result.synced} head=${result.head}${result.error ? ` error=${result.error}` : ''}`);
+  } catch (err) {
+    console.warn('[repo-sync] Webhook sync trigger failed:', errMsg(err));
+  }
+}
+
+/**
  * Verify GitHub webhook signature (optional — if GITHUB_WEBHOOK_SECRET is set).
  */
 export function verifySignature(payload: string, signature: string | undefined): boolean {
@@ -36,6 +61,13 @@ export async function handleGitHubEvent(
   event: string,
   payload: Record<string, any>
 ): Promise<void> {
+  // Webhook-triggered repo-sync: when a push lands on the configured sync
+  // branch of the ASAP repo, trigger an immediate local pull instead of
+  // waiting for the next periodic tick. Keeps /opt/asap-app near-realtime.
+  if (event === 'push') {
+    void triggerAsapRepoSyncIfMatch(payload);
+  }
+
   if (!githubChannel) return;
 
   const message = formatEvent(event, payload);
