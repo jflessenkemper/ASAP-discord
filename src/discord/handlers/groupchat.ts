@@ -2764,6 +2764,23 @@ export async function dispatchUpgradeToRiley(
 }
 
 /**
+ * Entry point used by the "Ask Cortana about this message" context-menu
+ * command. Routes the target message + the triggering user's identity
+ * into Cortana's standard orchestration so her reply comes back through
+ * the unified turn tracker in the current channel or groupchat.
+ */
+export async function askCortanaAboutMessage(
+  quotedAuthor: string,
+  quotedContent: string,
+  askedBy: string,
+  groupchat: TextChannel,
+): Promise<void> {
+  const content = (quotedContent || '(no text)').slice(0, 1600);
+  const prompt = `[Context-menu ask] ${askedBy} right-clicked a message from @${quotedAuthor} and asked you to take a look. Summarize what it means, flag anything noteworthy, and propose a next step if any.\n\n---\n${content}\n---`;
+  await handleRileyMessage(prompt, askedBy || 'user', undefined, groupchat);
+}
+
+/**
  * Parse and execute [ACTION:xxx] tags from Cortana's response.
  */
 async function executeActions(
