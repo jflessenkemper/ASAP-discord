@@ -9,6 +9,13 @@ describe('discordOutputSanitizer', () => {
     jest.resetModules();
     jest.clearAllMocks();
     delete process.env.DISCORD_OUTPUT_SANITIZER_MODEL;
+    // The sanitizer now defaults OFF (perf win from the April 2026 audit).
+    // Force-enable it for tests that assert on its LLM call path.
+    process.env.DISCORD_OUTPUT_SANITIZER_ENABLED = 'true';
+  });
+
+  afterEach(() => {
+    delete process.env.DISCORD_OUTPUT_SANITIZER_ENABLED;
   });
 
   it('uses the configured fast Anthropic model instead of the stale Haiku alias', async () => {

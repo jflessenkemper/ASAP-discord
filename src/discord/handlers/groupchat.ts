@@ -4,7 +4,8 @@ import { formatAge } from '../../utils/time';
 import { promisify } from 'util';
 import fs from 'fs';
 import path from 'path';
-import pool from '../../db/pool';
+import { isTesterBotId } from '../../utils/botIdentity';
+import { withPgAdvisoryLock } from '../../utils/pgLock';
 
 import { Message, TextChannel, GuildMember, EmbedBuilder, ThreadAutoArchiveDuration, ButtonBuilder, ActionRowBuilder, ButtonStyle, ComponentType, ChannelType } from 'discord.js';
 
@@ -161,6 +162,11 @@ function resetToolChain(channelId: string): void {
 }
 const groupHistory: ConversationMessage[] = loadMemory('groupchat');
 
+// Dedupe the "⏳ Verification pending" notice so it doesn't re-append on
+// every completion-claim cycle. Keyed by goal text, 10 min cooldown.
+const verificationPendingShownAt = new Map<string, number>();
+const VERIFICATION_PENDING_COOLDOWN_MS = Math.max(60_000, parseInt(process.env.VERIFICATION_PENDING_COOLDOWN_MS || '600000', 10));
+
 // Global FIFO for groupchat events. A single stuck request can block all later
 // messages, so processing is always paired with explicit timeout guards.
 let messageQueue: Promise<void> = Promise.resolve();
@@ -223,28 +229,7 @@ const GROUPCHAT_SINGLE_USER_NOTICE_COOLDOWN_MS = parseInt(process.env.GROUPCHAT_
 const DEFAULT_TESTER_BOT_ID = '1487426371209789450';
 let lastGroupchatSingleUserNoticeAt = 0;
 
-function decodeBotIdFromToken(token: string): string | null {
-  try {
-    const head = String(token || '').split('.')[0];
-    if (!head) return null;
-    const normalized = head.replace(/-/g, '+').replace(/_/g, '/');
-    const padded = normalized + '='.repeat((4 - (normalized.length % 4)) % 4);
-    const decoded = Buffer.from(padded, 'base64').toString('utf8').trim();
-    return /^\d{16,22}$/.test(decoded) ? decoded : null;
-  } catch {
-    return null;
-  }
-}
 
-function isTesterBotId(userId: string): boolean {
-  const configured = String(process.env.DISCORD_TESTER_BOT_ID || '')
-    .split(',')
-    .map((id) => id.trim())
-    .filter(Boolean);
-  const tokenDerived = decodeBotIdFromToken(process.env.DISCORD_TEST_BOT_TOKEN || '');
-  const allowed = new Set([DEFAULT_TESTER_BOT_ID, ...configured, ...(tokenDerived ? [tokenDerived] : [])]);
-  return allowed.has(userId);
-}
 let lastThreadCloseReviewAt = 0;
 let lastAutoRebuildErrorAt = 0;
 let lastAutoRebuildErrorKey = '';
@@ -287,16 +272,6 @@ async function extractImageBlocksFromMessage(message: Message): Promise<ImageBlo
   return blocks;
 }
 
-async function withPgAdvisoryLock<T>(lockKey: string, fn: () => Promise<T>): Promise<T> {
-  const client = await pool.connect();
-  try {
-    await client.query('SELECT pg_advisory_lock(hashtext($1))', [lockKey]);
-    return await fn();
-  } finally {
-    await client.query('SELECT pg_advisory_unlock(hashtext($1))', [lockKey]).catch(() => {});
-    client.release();
-  }
-}
 
 function isDuplicateGroupchatMessage(message: Message, content: string): boolean {
   const normalized = String(content || '').replace(/\s+/g, ' ').trim().toLowerCase();
@@ -355,44 +330,33 @@ function hasMultiStepEvidence(text: string): boolean {
   return completionMatches.length >= 3;
 }
 
+/**
+ * Scrub the Status/Root cause/Fix location block from Cortana's visible reply
+ * when she slipped into machine-contract formatting. The block is useful in
+ * logs but noisy for users, so we strip it from what Discord sees. The
+ * upstream activityLog captures the full response separately for audits.
+ *
+ * Historically this also synthesized a "contract" object and dumped JSON to
+ * the console on every turn — that did nothing observable and was CPU +
+ * regex churn, so it's gone.
+ */
 function enforceRileyResponseContract(
   text: string,
-  completionClaimed: boolean,
-  completionVerified: boolean,
+  _completionClaimed: boolean,
+  _completionVerified: boolean,
 ): string {
   const normalized = String(text || '').trim();
   if (!normalized) return normalized;
-  // Skip contract enforcement for creative/design deliverables — the Status/Root-cause
-  // appendage makes no sense for design specs, creative briefs, or information responses.
   if (shouldSkipContractEnforcement(normalized)) return normalized;
   const hasContract = /\bstatus\s*:/i.test(normalized)
     && /\broot cause\s*:/i.test(normalized)
     && /\bfix location\s*:/i.test(normalized)
     && /\bverification evidence\s*:/i.test(normalized)
     && /\bresidual risk\s*:/i.test(normalized);
-  if (hasContract) {
-    // Strip existing contract block from visible output, log internally
-    const stripped = normalized
-      .replace(/\n\s*Status:[\s\S]*$/i, '')
-      .trim();
-    console.log('[riley-contract]', normalized.slice(stripped.length));
-    return stripped || normalized;
-  }
+  if (!hasContract) return normalized;
 
-  const status = inferRileyStatus(normalized, completionClaimed, completionVerified);
-  const rootCause = normalized.split(/(?<=[.!?])\s+/)[0]?.slice(0, 180) || 'Investigation in progress.';
-  const fixLocations = (normalized.match(/(?:[A-Za-z0-9_.-]+\/)+[A-Za-z0-9_.-]+\.[A-Za-z0-9]+/g) || []).slice(0, 3);
-  const verificationEvidence = completionVerified
-    ? 'Runtime evidence present (harness/screenshots/checks observed).'
-    : 'Runtime evidence missing or blocked; completion is not yet verified.';
-  const residualRisk = status === 'fixed'
-    ? 'Monitor regressions in the same user flow after next deploy.'
-    : 'User flow remains at risk until verification passes.';
-
-  // Log contract internally for audit trail, do NOT append to visible output
-  console.log('[riley-contract]', JSON.stringify({ status, rootCause, fixLocations: fixLocations.join(', '), verificationEvidence, residualRisk }));
-
-  return normalized;
+  const stripped = normalized.replace(/\n\s*Status:[\s\S]*$/i, '').trim();
+  return stripped || normalized;
 }
 
 async function emitRileyStallAlert(
@@ -435,6 +399,8 @@ async function sendAutopilotAudit(
   const riley = getAgent('executive-assistant' as AgentId);
   const goal = compactAuditField(goalState.goal || 'none', 64);
   const status = compactAuditField(goalState.status || 'n/a', 48);
+
+  // Structured line for logs + audit analysis.
   const bits = [
     `event=${event}`,
     extra?.action ? `action=${compactAuditField(extra.action, 24)}` : null,
@@ -444,19 +410,21 @@ async function sendAutopilotAudit(
     `status="${status}"`,
     `detail="${compactAuditField(detail, 120)}"`,
   ].filter(Boolean);
-  const line = `AUTOPILOT_AUDIT ${bits.join(' ')}`;
+  console.log(`AUTOPILOT_AUDIT ${bits.join(' ')}`);
 
-  console.log(line);
+  if (process.env.AUTOPILOT_AUDIT_PUBLIC !== 'true') return;
 
-  if (process.env.AUTOPILOT_AUDIT_PUBLIC !== 'true') {
-    return;
-  }
+  // Human one-liner for the channel. The old format exposed raw key=value
+  // pairs which read like terminal output; this reformats as a short sentence.
+  const prettyDetail = compactAuditField(detail, 160);
+  const actionNote = extra?.action ? ` (${compactAuditField(extra.action, 40)})` : '';
+  const attemptNote = Number.isFinite(extra?.attempt) ? ` — attempt ${extra!.attempt}` : '';
+  const line = `🛰️ Autopilot — ${event}${actionNote}${attemptNote}: ${prettyDetail}`;
 
   if (!riley) {
     await groupchat.send(line).catch(() => {});
     return;
   }
-
   try {
     await sendWebhookMessage(groupchat, { content: line, username: `${riley.emoji} ${riley.name}`, avatarURL: riley.avatarUrl });
   } catch {
@@ -2560,9 +2528,16 @@ async function handleRileyMessage(
         }
       }
       if (!completionVerified) {
-        // Append a verification note instead of overwriting the entire response.
-        // The original content has useful context that should not be lost.
-        displayResponse += '\n\n⏳ **Verification pending**: completion cannot be confirmed yet — no runtime evidence in screenshots/harness output. Keeping this open until proof is posted.';
+        // Append the verification note once per goal within a 10-min window.
+        // Without this, every completion-claim cycle appended the same block
+        // again, spamming the workspace with duplicates.
+        const goalKey = String(goalState.goal || 'untagged').slice(0, 120);
+        const now = Date.now();
+        const lastShown = verificationPendingShownAt.get(goalKey) || 0;
+        if (now - lastShown > VERIFICATION_PENDING_COOLDOWN_MS) {
+          verificationPendingShownAt.set(goalKey, now);
+          displayResponse += '\n\n⏳ **Verification pending**: completion cannot be confirmed yet — no runtime evidence in screenshots/harness output. Keeping this open until proof is posted.';
+        }
       }
     }
 
@@ -2697,21 +2672,23 @@ async function handleRileyMessage(
     if (abortLike || signal?.aborted) return;
     const errMsg = err instanceof Error ? err.stack || err.message : String(err);
     console.error('Cortana error:', errMsg);
+    // Full stack goes to #🚨-agent-errors via postAgentErrorLog — the detail
+    // is useful there. The user-facing message stays short and non-scary:
+    // no stack, no code block, just an acknowledgment + retry hint.
     void postAgentErrorLog('riley:groupchat', 'Cortana orchestration error', {
       agentId: 'executive-assistant',
       detail: errMsg,
     });
-    const short = errMsg.length > 200 ? errMsg.slice(0, 200) + '…' : errMsg;
     try {
       hasVisibleRileyResponse = true;
       await sendWebhookMessage(workspaceChannel, {
-        content: `⚠️ Cortana encountered an error:\n\`\`\`${short}\`\`\``,
+        content: '⚠️ Something went sideways on my end. Give me a moment — try again or rephrase.',
         username: `${riley.emoji} ${riley.name}`,
         avatarURL: riley.avatarUrl,
       });
     } catch {
       const fallback = ('send' in workspaceChannel) ? workspaceChannel : rileyWorkChannel;
-      await fallback.send(`⚠️ Cortana encountered an error:\n\`\`\`${short}\`\`\``).catch(() => {});
+      await fallback.send('⚠️ Something went sideways on my end. Give me a moment — try again or rephrase.').catch(() => {});
     }
   } finally {
     if (progressTimer) clearTimeout(progressTimer);

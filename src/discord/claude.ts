@@ -109,6 +109,21 @@ export function isCodingTaskPrompt(userMessage: string): boolean {
   return isCodeWorkPrompt(userMessage) || isCodeEditingPrompt(userMessage);
 }
 
+/**
+ * Narrower gate for Opus pinning: true only when the prompt both *names an
+ * action* (edit/write/delete/…) AND *references a concrete code artifact*
+ * (a file path, class, function, etc). Matches `isCodeEditingPrompt`, but
+ * with an explicit name to make the call sites read as an intent check.
+ *
+ * Loose `isCodingTaskPrompt` previously pinned Opus on any prompt containing
+ * "debug", "refactor", "tsx", etc. That fired on read-only questions like
+ * "what does this tsx file do?" and forced Opus when Sonnet was sufficient —
+ * 3–5× cost inflation on common reads.
+ */
+export function isCodeEditIntent(userMessage: string): boolean {
+  return isCodeEditingPrompt(userMessage);
+}
+
 export function parseToolRoundLimit(rawValue: string | undefined, fallbackValue: string): number {
   const normalized = String(rawValue ?? fallbackValue).trim().toLowerCase();
   if (!normalized || normalized === '0' || normalized === 'unlimited' || normalized === 'infinity' || normalized === 'inf') {
@@ -233,7 +248,7 @@ export function getPinnedModelForTask(agentId: string, userMessage: string): str
   const override = getAgentModelOverride(agentId);
   if (override) return override;
   if (VERTEX_OPUS_ONLY_MODE) return DEFAULT_CODING_MODEL;
-  if (FORCE_OPUS_FOR_CODE_WORK && isCodingTaskPrompt(userMessage)) return DEFAULT_CODING_MODEL;
+  if (FORCE_OPUS_FOR_CODE_WORK && isCodeEditIntent(userMessage)) return DEFAULT_CODING_MODEL;
   if (agentId === 'executive-assistant' || agentId === 'operations-manager') return RILEY_PLANNING_MODEL;
   return null;
 }
@@ -389,9 +404,30 @@ function convertSchemaNode(node: any): any {
   return out;
 }
 
-function sanitizeSchemaNode(node: any): any {
+// Tool descriptions ride along with every LLM call. Capping them at 60 chars
+// keeps the per-call overhead down ~1.5k tokens when all tools are shown.
+// Top-level tool descriptions (see toGeminiTools/toAnthropicTools below)
+// keep the old 180-char budget since each tool only has one.
+const PARAM_DESCRIPTION_MAX = Math.max(40, parseInt(process.env.TOOL_PARAM_DESCRIPTION_MAX || '60', 10));
+const TOOL_DESCRIPTION_MAX = Math.max(60, parseInt(process.env.TOOL_DESCRIPTION_MAX || '180', 10));
+
+// Short, descriptive names that speak for themselves — no per-parameter
+// description needed since the JSON key already tells the LLM what the
+// field is. Dropping descriptions on these saves another ~400 tokens/turn.
+const WELL_KNOWN_PARAM_NAMES = new Set([
+  'path', 'file', 'filename', 'filepath',
+  'query', 'pattern', 'search',
+  'url', 'endpoint',
+  'branch', 'commit', 'sha', 'ref',
+  'pr_number', 'issue_number',
+  'agent_id', 'agent', 'channel_id', 'channel', 'user_id',
+  'limit', 'offset', 'page',
+  'timeout_ms', 'max_tokens',
+]);
+
+function sanitizeSchemaNode(node: any, parentKey?: string): any {
   if (!node || typeof node !== 'object') return node;
-  if (Array.isArray(node)) return node.map(sanitizeSchemaNode);
+  if (Array.isArray(node)) return node.map((n) => sanitizeSchemaNode(n));
 
   const out: Record<string, any> = {};
   for (const [key, value] of Object.entries(node)) {
@@ -399,17 +435,32 @@ function sanitizeSchemaNode(node: any): any {
       continue;
     }
     if (key === 'description') {
-      out[key] = String(value || '').slice(0, 180);
+      // Drop the description entirely for well-known parameter names where
+      // the name already speaks for itself.
+      if (parentKey && WELL_KNOWN_PARAM_NAMES.has(parentKey)) continue;
+      out[key] = String(value || '').slice(0, PARAM_DESCRIPTION_MAX);
       continue;
     }
     if (key === 'anyOf' || key === 'allOf' || key === 'oneOf') {
-      const candidates = Array.isArray(value) ? value.map(sanitizeSchemaNode).slice(0, 3) : [];
+      const candidates = Array.isArray(value) ? value.map((n) => sanitizeSchemaNode(n)).slice(0, 3) : [];
       if (candidates.length > 0) {
         out[key] = candidates;
       }
       continue;
     }
     if (key === 'nullable') {
+      continue;
+    }
+
+    // For the `properties` object, pass each field name as the parent key so
+    // `sanitizeSchemaNode` can decide whether to drop that field's
+    // description (WELL_KNOWN_PARAM_NAMES gate).
+    if (key === 'properties' && value && typeof value === 'object' && !Array.isArray(value)) {
+      const sanitizedProps: Record<string, any> = {};
+      for (const [propKey, propValue] of Object.entries(value as Record<string, unknown>)) {
+        sanitizedProps[propKey] = sanitizeSchemaNode(propValue, propKey);
+      }
+      out[key] = sanitizedProps;
       continue;
     }
 
@@ -437,7 +488,7 @@ function toGeminiTools(tools: AnyTool[]): Tool[] {
   return [{
     functionDeclarations: tools.map((tool) => ({
       name: tool.name,
-      description: String(tool.description || tool.name).slice(0, 180),
+      description: String(tool.description || tool.name).slice(0, TOOL_DESCRIPTION_MAX),
       parameters: convertSchemaNode(sanitizeSchemaNode(tool.input_schema)),
     } as FunctionDeclaration)),
   }];
@@ -495,8 +546,14 @@ type ModelLike = {
   generateContent: (payload: string, requestOptions?: { signal?: AbortSignal }) => Promise<ModelResultLike>;
 };
 
+/**
+ * Deep-clone a Gemini `Content[]` history. Previously used
+ * `JSON.parse(JSON.stringify(…))` — fine correctness but slow on every
+ * tool round inside a chat session. `structuredClone` (Node 17+) is
+ * ~4-6x faster and handles the same JSON-like shapes.
+ */
 function cloneHistory(history: Content[]): Content[] {
-  return JSON.parse(JSON.stringify(history || []));
+  return structuredClone(history || []);
 }
 
 function asVertexSystemInstruction(systemInstruction?: string): { parts: Array<{ text: string }> } | undefined {
@@ -1278,12 +1335,20 @@ Post findings to the relevant ops channel when appropriate.`.trim();
 
 const OPS_AWARE_AGENTS = new Set(['executive-assistant', 'operations-manager', 'devops']);
 
+/**
+ * Per-agent memoization — agent ids are a small fixed set, and the output
+ * is a pure function of (agentId, PROJECT_CONTEXT, OPS_CHANNELS_CONTEXT).
+ * Precomputing means this hot path no longer builds a fresh string on every
+ * `agentRespond` call for Ops-aware agents.
+ */
+const projectContextCache = new Map<string, string>();
 function getProjectContextForAgent(agentId: string): string {
+  const cached = projectContextCache.get(agentId);
+  if (cached !== undefined) return cached;
   const base = hasFullRepoToolAccess(agentId) ? PROJECT_CONTEXT : PROJECT_CONTEXT_LIGHT;
-  if (OPS_AWARE_AGENTS.has(agentId)) {
-    return `${base}\n\n${OPS_CHANNELS_CONTEXT}`;
-  }
-  return base;
+  const out = OPS_AWARE_AGENTS.has(agentId) ? `${base}\n\n${OPS_CHANNELS_CONTEXT}` : base;
+  projectContextCache.set(agentId, out);
+  return out;
 }
 
 function isCacheablePrompt(agentId: string, userMessage: string, history: ConversationMessage[]): boolean {

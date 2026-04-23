@@ -18,31 +18,9 @@ import prism from 'prism-media';
 import { startElevenLabsRealtimeTranscription, ElevenLabsRealtimeSession, isElevenLabsRealtimeAvailable } from './elevenlabsRealtime';
 import { transcribeVoiceDetailed } from './tts';
 import { errMsg } from '../../utils/errors';
+import { isTesterBotId } from '../../utils/botIdentity';
 
-const DEFAULT_TESTER_BOT_ID = '1487426371209789450';
 
-function decodeBotIdFromToken(token: string): string | null {
-  try {
-    const head = String(token || '').split('.')[0];
-    if (!head) return null;
-    const normalized = head.replace(/-/g, '+').replace(/_/g, '/');
-    const padded = normalized + '='.repeat((4 - (normalized.length % 4)) % 4);
-    const decoded = Buffer.from(padded, 'base64').toString('utf8').trim();
-    return /^\d{16,22}$/.test(decoded) ? decoded : null;
-  } catch {
-    return null;
-  }
-}
-
-function isTesterBotId(userId: string): boolean {
-  const configured = String(process.env.DISCORD_TESTER_BOT_ID || '')
-    .split(',')
-    .map((id) => id.trim())
-    .filter(Boolean);
-  const tokenDerived = decodeBotIdFromToken(process.env.DISCORD_TEST_BOT_TOKEN || '');
-  const allowed = new Set([DEFAULT_TESTER_BOT_ID, ...configured, ...(tokenDerived ? [tokenDerived] : [])]);
-  return allowed.has(userId);
-}
 
 function isTranscribableMember(member: GuildMember): boolean {
   if (!member.user.bot) return true;

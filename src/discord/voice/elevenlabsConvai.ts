@@ -1,6 +1,8 @@
 import { ElevenLabsClient } from 'elevenlabs';
 import WebSocket from 'ws';
 
+import { withTimeout } from '../../utils/withTimeout';
+
 let convaiClient: ElevenLabsClient | null = null;
 
 const ELEVENLABS_CONVAI_ENABLED = String(process.env.ELEVENLABS_CONVAI_ENABLED || 'true').toLowerCase() !== 'false';
@@ -24,15 +26,6 @@ function normalizeLanguage(language?: string): string {
   return raw.includes('-') ? raw.split('-')[0] : raw;
 }
 
-function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
-  return new Promise<T>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(`${label} timed out after ${timeoutMs}ms`)), timeoutMs);
-    promise
-      .then(resolve)
-      .catch(reject)
-      .finally(() => clearTimeout(timer));
-  });
-}
 
 export function isElevenLabsConvaiEnabled(): boolean {
   if (!ELEVENLABS_CONVAI_ENABLED) return false;

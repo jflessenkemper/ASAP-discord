@@ -2,8 +2,15 @@ import { generateAnthropicText } from '../../services/anthropicText';
 import { DEFAULT_FAST_MODEL, isAnthropicModel } from '../../services/modelConfig';
 
 import { errMsg } from '../../utils/errors';
+import { withTimeout } from '../../utils/withTimeout';
 
-const DISCORD_OUTPUT_SANITIZER_ENABLED = String(process.env.DISCORD_OUTPUT_SANITIZER_ENABLED || 'true').toLowerCase() !== 'false';
+// Default OFF: the local regex pass in sanitizeDiscordVisibleOutputLocal()
+// already strips the common leaked-marker patterns, and the LLM call this
+// module wraps was firing on every agent reply — adding a full Anthropic
+// round-trip (up to 6 s timeout) per message for minimal added value.
+// Opt back in with DISCORD_OUTPUT_SANITIZER_ENABLED=true when debugging
+// a new leak pattern.
+const DISCORD_OUTPUT_SANITIZER_ENABLED = String(process.env.DISCORD_OUTPUT_SANITIZER_ENABLED || 'false').toLowerCase() === 'true';
 
 function resolveDiscordOutputSanitizerModel(): string {
   const configured = String(process.env.DISCORD_OUTPUT_SANITIZER_MODEL || '').trim();
@@ -115,17 +122,6 @@ export class ToolChainTracker {
   }
 }
 
-function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | null = null;
-  return Promise.race([
-    promise,
-    new Promise<T>((_, reject) => {
-      timer = setTimeout(() => reject(new Error(`Discord sanitizer timed out after ${timeoutMs}ms`)), timeoutMs);
-    }),
-  ]).finally(() => {
-    if (timer) clearTimeout(timer);
-  }) as Promise<T>;
-}
 
 function neutralizeMentions(text: string): string {
   return text
