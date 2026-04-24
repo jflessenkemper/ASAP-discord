@@ -120,10 +120,15 @@ describe('migrate', () => {
     mockQuery
       .mockReset()
       .mockResolvedValueOnce(undefined) // CREATE TABLE
-      .mockResolvedValueOnce({ rows: [{ filename: '003_agent_memory.sql' }] }); // SELECT applied
+      .mockResolvedValueOnce({ rows: [{ filename: '003_agent_memory.sql' }] }) // SELECT applied
+      .mockResolvedValueOnce(undefined); // INSERT baseline row (applied.size > 0 triggers auto-mark)
 
     // For assertAppliedMigrationExpectations: 003_agent_memory.sql expects 'agent_memory'
-    mockQuery.mockResolvedValueOnce({ rows: [{ exists: true }] }); // agent_memory exists
+    // and 000_baseline.sql (auto-marked) expects agent_memory + agent_activity_log
+    mockQuery
+      .mockResolvedValueOnce({ rows: [{ exists: true }] }) // baseline: agent_memory
+      .mockResolvedValueOnce({ rows: [{ exists: true }] }) // baseline: agent_activity_log
+      .mockResolvedValueOnce({ rows: [{ exists: true }] }); // 003_agent_memory.sql: agent_memory
 
     mockReaddirSync.mockReturnValue(['003_agent_memory.sql']);
 
@@ -175,10 +180,16 @@ describe('migrate', () => {
     mockQuery
       .mockReset()
       .mockResolvedValueOnce(undefined) // CREATE TABLE
-      .mockResolvedValueOnce({ rows: [{ filename: '003_agent_memory.sql' }] }); // SELECT applied
+      .mockResolvedValueOnce({ rows: [{ filename: '003_agent_memory.sql' }] }) // SELECT applied
+      .mockResolvedValueOnce(undefined); // INSERT baseline row (applied.size > 0 triggers auto-mark)
 
-    // assertAppliedMigrationExpectations: 003_agent_memory.sql expects 'agent_memory' — missing!
-    mockQuery.mockResolvedValueOnce({ rows: [{ exists: false }] }); // agent_memory missing
+    // assertAppliedMigrationExpectations iterates the expectations map. The
+    // squashed baseline is auto-marked applied (applied.size > 0), so it
+    // also checks agent_memory + agent_activity_log. getMissingTables runs
+    // both queries before returning, then the drift error fires.
+    mockQuery
+      .mockResolvedValueOnce({ rows: [{ exists: false }] }) // baseline: agent_memory missing
+      .mockResolvedValueOnce({ rows: [{ exists: true }] }); // baseline: agent_activity_log present (missing-list non-empty → throw)
 
     mockReaddirSync.mockReturnValue([]);
 
@@ -260,13 +271,15 @@ describe('migrate', () => {
           { filename: '003_agent_memory.sql' },
           { filename: '015_agent_activity_log.sql' },
         ],
-      });
+      })
+      .mockResolvedValueOnce(undefined); // INSERT baseline row (applied.size > 0 triggers auto-mark)
 
-    // assertAppliedMigrationExpectations checks: agent_memory, agent_activity_log
+    // assertAppliedMigrationExpectations: baseline + 003 + 015 all map to agent_memory/agent_activity_log
     mockQuery
-      .mockResolvedValueOnce({ rows: [{ exists: true }] }) // agent_memory
-      .mockResolvedValueOnce({ rows: [{ exists: true }] }) // agent_activity_log
-      .mockResolvedValueOnce({ rows: [{ exists: true }] }); // self_improvement_jobs
+      .mockResolvedValueOnce({ rows: [{ exists: true }] }) // baseline: agent_memory
+      .mockResolvedValueOnce({ rows: [{ exists: true }] }) // baseline: agent_activity_log
+      .mockResolvedValueOnce({ rows: [{ exists: true }] }) // 003: agent_memory
+      .mockResolvedValueOnce({ rows: [{ exists: true }] }); // 015: agent_activity_log
 
     mockReaddirSync.mockReturnValue([]);
 
