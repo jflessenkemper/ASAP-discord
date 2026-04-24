@@ -3,7 +3,7 @@
  * Blocker parsing + upgrade-card recognition (no network calls).
  */
 
-import { isUpgradeApprovalCard, parseBlockerMessage, UPGRADE_CARD_MARKER } from '../../discord/upgradeApproval';
+import { isUpgradeApprovalCard, parseBlockerMessage, parseUpgradeCard, UPGRADE_CARD_MARKER } from '../../discord/upgradeApproval';
 
 describe('upgradeApproval', () => {
   describe('parseBlockerMessage', () => {
@@ -53,6 +53,40 @@ describe('upgradeApproval', () => {
     it('does not match empty or unrelated strings', () => {
       expect(isUpgradeApprovalCard('')).toBe(false);
       expect(isUpgradeApprovalCard('hello world')).toBe(false);
+    });
+  });
+
+  describe('parseUpgradeCard', () => {
+    it('round-trips all fields from a full card', () => {
+      const card = [
+        `${UPGRADE_CARD_MARKER} <@123> — **qa** is blocked.`,
+        '',
+        '**Issue:** cannot run mobile harness.',
+        '**Proposed fix:** add adb tool.',
+        '**Impact if skipped:** mobile PRs cannot be verified.',
+        '',
+        'React ✅ to approve.',
+      ].join('\n');
+      const parsed = parseUpgradeCard(card);
+      expect(parsed).not.toBeNull();
+      expect(parsed!.requestedBy).toBe('qa');
+      expect(parsed!.issue).toContain('cannot run mobile harness');
+      expect(parsed!.suggestedFix).toContain('adb tool');
+      expect(parsed!.impact).toContain('mobile PRs');
+    });
+
+    it('handles a minimal card (no optional fields)', () => {
+      const card = `${UPGRADE_CARD_MARKER} <@123> — **security-auditor** is blocked.\n\n**Issue:** no access to secrets.`;
+      const parsed = parseUpgradeCard(card);
+      expect(parsed).not.toBeNull();
+      expect(parsed!.requestedBy).toBe('security-auditor');
+      expect(parsed!.suggestedFix).toBeNull();
+      expect(parsed!.impact).toBeNull();
+    });
+
+    it('returns null for non-card content', () => {
+      expect(parseUpgradeCard('[BLOCKER] **from:** qa\n**issue:** x')).toBeNull();
+      expect(parseUpgradeCard('plain message')).toBeNull();
     });
   });
 });

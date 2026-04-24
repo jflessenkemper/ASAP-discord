@@ -108,3 +108,22 @@ export async function postUpgradeApprovalCard(
 export function isUpgradeApprovalCard(content: string): boolean {
   return typeof content === 'string' && content.startsWith(UPGRADE_CARD_MARKER);
 }
+
+/**
+ * Parse a Cortana-authored upgrade card back into its structured fields.
+ * Used by the durability layer to log approvals with queryable columns
+ * instead of a single blob.
+ */
+export function parseUpgradeCard(content: string): { requestedBy: string | null; issue: string; suggestedFix: string | null; impact: string | null } | null {
+  if (!isUpgradeApprovalCard(content)) return null;
+  const match = (re: RegExp): string | null => {
+    const m = content.match(re);
+    return m ? m[1].trim() : null;
+  };
+  const requestedBy = match(/\*\*([a-z0-9_-]+)\*\*\s+is blocked/i);
+  const issue = match(/\*\*Issue:\*\*\s*([\s\S]*?)(?=\n\*\*|$)/);
+  const suggestedFix = match(/\*\*Proposed fix:\*\*\s*([\s\S]*?)(?=\n\*\*|$)/);
+  const impact = match(/\*\*Impact if skipped:\*\*\s*([\s\S]*?)(?=\n\*\*|$)/);
+  if (!issue) return null;
+  return { requestedBy, issue, suggestedFix, impact };
+}

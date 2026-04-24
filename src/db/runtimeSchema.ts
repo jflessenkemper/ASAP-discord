@@ -9,6 +9,7 @@ export const TABLE_EXPECTATIONS_BY_MIGRATION: Record<string, string[]> = {
   '022_agent_learnings.sql': ['agent_learnings'],
   '023_user_events.sql': ['user_events'],
   '024_decisions.sql': ['decisions'],
+  '026_upgrade_requests.sql': ['upgrade_requests'],
 };
 
 export const REQUIRED_RUNTIME_TABLES = ['agent_memory', 'agent_activity_log', 'self_improvement_jobs', 'agent_learnings', 'user_events', 'decisions'];

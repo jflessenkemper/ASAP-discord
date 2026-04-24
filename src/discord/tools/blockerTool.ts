@@ -20,6 +20,18 @@ import { errMsg } from '../../utils/errors';
 /** Structured prefix the watcher keys off. Do not change without updating bot.ts. */
 export const BLOCKER_MARKER = '[BLOCKER]';
 
+/**
+ * Per-agent cooldown for report_blocker. Stops a specialist from spamming
+ * approval cards inside a single turn — if they hit the same wall twice in
+ * a row, the second call is suppressed. Test hook resets this between cases.
+ */
+const BLOCKER_COOLDOWN_MS = Math.max(0, parseInt(process.env.REPORT_BLOCKER_COOLDOWN_MS || '300000', 10));
+const lastBlockerCallAt = new Map<string, number>();
+
+export function resetBlockerCooldownsForTests(): void {
+  lastBlockerCallAt.clear();
+}
+
 export interface ReportBlockerInput {
   issue: string;
   suggested_fix?: string;
@@ -39,6 +51,16 @@ export async function runReportBlocker(
 
   const agent = agentId ? getAgent(agentId as AgentId) : null;
   if (!agent) return 'Error: report_blocker called without an agent context.';
+
+  if (BLOCKER_COOLDOWN_MS > 0) {
+    const prev = lastBlockerCallAt.get(agent.id) || 0;
+    const elapsed = Date.now() - prev;
+    if (elapsed < BLOCKER_COOLDOWN_MS) {
+      const remainingSec = Math.ceil((BLOCKER_COOLDOWN_MS - elapsed) / 1000);
+      return `report_blocker is on cooldown for ${agent.id} (${remainingSec}s remaining). Your prior blocker is still waiting for Jordan's approval — don't re-flag the same wall.`;
+    }
+    lastBlockerCallAt.set(agent.id, Date.now());
+  }
 
   const guild = requireGuild();
   await guild.channels.fetch().catch(() => {});

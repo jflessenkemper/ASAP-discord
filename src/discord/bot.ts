@@ -53,7 +53,13 @@ import { captureAttachments } from './services/mediaCapture';
 import { startEmbeddingWorker } from './embeddingWorker';
 import { initPresence } from './presence';
 import { registerContextMenus, handleMessageContextMenu } from './contextMenus';
-import { isUpgradeApprovalCard } from './upgradeApproval';
+import { isUpgradeApprovalCard, parseUpgradeCard } from './upgradeApproval';
+import {
+  formatUpgradeForDispatch,
+  listPendingDispatches,
+  markUpgradeDispatched,
+  recordApprovedUpgrade,
+} from './upgradeRequests';
 import { enqueueSelfImprovementJob } from './selfImprovementQueue';
 import { detectAnomalies } from './anomalyDetection';
 import { goalState } from './handlers/goalState';
@@ -752,6 +758,23 @@ export async function startBot(): Promise<void> {
       // Register message/user context-menu commands (right-click → Apps
       // → "Ask Cortana about this"). Idempotent.
       void registerContextMenus(guild);
+
+      // Startup replay: if a prior run crashed after logging an approval
+      // but before dispatch completed, re-fire those dispatches now.
+      void (async () => {
+        const pending = await listPendingDispatches();
+        if (pending.length === 0) return;
+        console.log(`[upgrade-replay] Resuming ${pending.length} interrupted upgrade dispatch(es)`);
+        for (const row of pending) {
+          const body = formatUpgradeForDispatch(row);
+          try {
+            await dispatchUpgradeToRiley(body, configuredChannels.groupchat);
+            await markUpgradeDispatched(row.id);
+          } catch (err) {
+            console.warn(`[upgrade-replay] dispatch ${row.id} failed:`, errMsg(err));
+          }
+        }
+      })().catch((err) => console.warn('[upgrade-replay] failed:', errMsg(err)));
     } catch (err) {
       const msg = err instanceof Error ? err.stack || err.message : 'Unknown';
       console.error('Channel setup error:', errMsg(err));
@@ -1008,8 +1031,38 @@ export async function startBot(): Promise<void> {
         const inUpgradesChannel = msg.channelId === botChannels.upgrades.id;
         if (inUpgradesChannel && isUpgradeApprovalCard(text)) {
           if (isCheck) {
-            const cleaned = text.replace(/^\[UPGRADE CARD\]\s*<@!?\d+>\s*—\s*/, '').trim();
-            void dispatchUpgradeToRiley(cleaned, botChannels.groupchat).catch(() => {});
+            // Log the approval BEFORE dispatching — if the bot crashes in the
+            // milliseconds between these two calls, the startup replay will
+            // pick it back up from upgrade_requests.
+            const parsed = parseUpgradeCard(text);
+            const groupchat = botChannels.groupchat;
+            void (async () => {
+              let rowId: number | null = null;
+              if (parsed) {
+                rowId = await recordApprovedUpgrade({
+                  requestedBy: parsed.requestedBy,
+                  issue: parsed.issue,
+                  suggestedFix: parsed.suggestedFix,
+                  impact: parsed.impact,
+                  approvedBy: user.username || 'user',
+                  sourceMessageId: msg.id,
+                });
+              }
+              const dispatchBody = parsed
+                ? formatUpgradeForDispatch({
+                    requested_by: parsed.requestedBy,
+                    issue: parsed.issue,
+                    suggested_fix: parsed.suggestedFix,
+                    impact: parsed.impact,
+                  })
+                : text.replace(/^\[UPGRADE CARD\]\s*<@!?\d+>\s*—\s*/, '').trim();
+              try {
+                await dispatchUpgradeToRiley(dispatchBody, groupchat);
+                if (rowId) await markUpgradeDispatched(rowId);
+              } catch (err) {
+                console.warn('[upgrade-approval] dispatch failed:', errMsg(err));
+              }
+            })();
             void msg.reply(`✅ Approved by ${user.username} — implementing now.`).catch(() => {});
           } else {
             void msg.reply(`❌ Dismissed by ${user.username}.`).catch(() => {});
