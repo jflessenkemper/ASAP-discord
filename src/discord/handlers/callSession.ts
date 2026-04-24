@@ -1,7 +1,9 @@
 import { VoiceConnectionStatus } from '@discordjs/voice';
 import { TextChannel, VoiceChannel, GuildMember } from 'discord.js';
-import pool from '../../db/pool';
 
+import { isTesterBotId } from '../../utils/botIdentity';
+import { withPgAdvisoryLock } from '../../utils/pgLock';
+import { withTimeout } from '../../utils/withTimeout';
 import { getAgent, AgentId } from '../agents';
 import { agentRespond, ConversationMessage, summarizeCall, ReusableAgentChatSession } from '../claude';
 import { postOpsLine } from '../activityLog';
@@ -10,7 +12,7 @@ import { recordVoiceCallStart, recordVoiceCallEnd } from '../metrics';
 import { postDiagnostic, mirrorAgentResponse, mirrorVoiceTranscript } from '../services/diagnosticsWebhook';
 import { getWebhook } from '../services/webhooks';
 import { listenToAllMembersSmart, SmartListenerHandle, VoiceTranscription } from '../voice/connection';
-import { isElevenLabsAvailable, primeElevenLabsVoiceCache } from '../voice/elevenlabs';
+import { isElevenLabsAvailable, primeElevenLabsVoiceCache, CORTANA_WARM_PHRASES } from '../voice/elevenlabs';
 import { getElevenLabsConvaiReply, isElevenLabsConvaiEnabled } from '../voice/elevenlabsConvai';
 import { isElevenLabsRealtimeAvailable } from '../voice/elevenlabsRealtime';
 import {
@@ -34,7 +36,10 @@ const VOICE_DISABLE_TRANSCRIPT_SUMMARY = String(process.env.VOICE_DISABLE_TRANSC
 function isVoiceStartupSelftestEnabled(): boolean {
   return String(process.env.VOICE_STARTUP_SELFTEST_ENABLED || 'false').toLowerCase() === 'true';
 }
-const VOICE_MAX_TOKENS_RILEY = parseInt(process.env.VOICE_MAX_TOKENS_RILEY || (VOICE_LOW_LATENCY_MODE ? '120' : '220'), 10);
+const VOICE_MAX_TOKENS_RILEY = parseInt(
+  process.env.VOICE_MAX_TOKENS_CORTANA || process.env.VOICE_MAX_TOKENS_RILEY || (VOICE_LOW_LATENCY_MODE ? '120' : '220'),
+  10,
+);
 const VOICE_TOOLS_ENABLED = String(process.env.VOICE_TOOLS_ENABLED || 'true').toLowerCase() === 'true';
 const VOICE_TOOLS_MAX_TOKENS = parseInt(process.env.VOICE_TOOLS_MAX_TOKENS || '1024', 10);
 const VOICE_STREAM_PARTIAL_MIN_CHARS = parseInt(process.env.VOICE_STREAM_PARTIAL_MIN_CHARS || (VOICE_LOW_LATENCY_MODE ? '10' : '16'), 10);
@@ -49,7 +54,9 @@ const VOICE_CONTEXT_MAX_CHARS = parseInt(process.env.VOICE_CONTEXT_MAX_CHARS || 
 const VOICE_CONTEXT_MESSAGE_MAX_CHARS = parseInt(process.env.VOICE_CONTEXT_MESSAGE_MAX_CHARS || '550', 10);
 const VOICE_CONTEXT_SUMMARY_MAX_CHARS = parseInt(process.env.VOICE_CONTEXT_SUMMARY_MAX_CHARS || '900', 10);
 const VOICE_FILLER_ONLY_RE = /^(?:uh+|um+|hmm+|mm+|ah+|er+|uh huh|huh|hmm okay|okay|ok|yeah|yep|nah|nope)[.!?\s]*$/i;
-const RILEY_WARM_PHRASES = ['One moment.', 'Let me check.', 'I am on it.', 'Here is what I found.', 'Done.'];
+// Shared filler phrase list lives in voice/elevenlabs.ts so the boot-time
+// TTS cache warm-up and the call-time warm-phrase detection stay in sync.
+const RILEY_WARM_PHRASES = CORTANA_WARM_PHRASES;
 const VOICE_TURN_WATCHDOG_MS = parseInt(process.env.VOICE_TURN_WATCHDOG_MS || '20000', 10);
 const VOICE_SINGLE_SPEAKER_NOTICE_COOLDOWN_MS = parseInt(process.env.VOICE_SINGLE_SPEAKER_NOTICE_COOLDOWN_MS || '15000', 10);
 const DEFAULT_TESTER_BOT_ID = '1487426371209789450';
@@ -59,39 +66,8 @@ const VOICE_LIFECYCLE_DEDUPE_MS = parseInt(process.env.VOICE_LIFECYCLE_DEDUPE_MS
 let callStartInProgress = false;
 const lifecycleNoticeLastSentAt = new Map<string, number>();
 
-async function withPgAdvisoryLock<T>(lockKey: string, fn: () => Promise<T>): Promise<T> {
-  const client = await pool.connect();
-  try {
-    await client.query('SELECT pg_advisory_lock(hashtext($1))', [lockKey]);
-    return await fn();
-  } finally {
-    await client.query('SELECT pg_advisory_unlock(hashtext($1))', [lockKey]).catch(() => {});
-    client.release();
-  }
-}
 
-function decodeBotIdFromToken(token: string): string | null {
-  try {
-    const head = String(token || '').split('.')[0];
-    if (!head) return null;
-    const normalized = head.replace(/-/g, '+').replace(/_/g, '/');
-    const padded = normalized + '='.repeat((4 - (normalized.length % 4)) % 4);
-    const decoded = Buffer.from(padded, 'base64').toString('utf8').trim();
-    return /^\d{16,22}$/.test(decoded) ? decoded : null;
-  } catch {
-    return null;
-  }
-}
 
-function isTesterBotId(userId: string): boolean {
-  const configured = String(process.env.DISCORD_TESTER_BOT_ID || '')
-    .split(',')
-    .map((id) => id.trim())
-    .filter(Boolean);
-  const tokenDerived = decodeBotIdFromToken(process.env.DISCORD_TEST_BOT_TOKEN || '');
-  const allowed = new Set([DEFAULT_TESTER_BOT_ID, ...configured, ...(tokenDerived ? [tokenDerived] : [])]);
-  return allowed.has(userId);
-}
 
 function hasManagedTesterBotInChannel(voiceChannel: VoiceChannel): boolean {
   const members = (voiceChannel as { members?: unknown }).members;
@@ -136,18 +112,6 @@ async function postVoiceStageLog(stage: string, detail: string, level: 'info' | 
   }
 }
 
-function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | null = null;
-  return new Promise<T>((resolve, reject) => {
-    timer = setTimeout(() => reject(new Error(`${label} timed out after ${timeoutMs}ms`)), timeoutMs);
-    promise
-      .then((value) => resolve(value))
-      .catch(reject)
-      .finally(() => {
-        if (timer) clearTimeout(timer);
-      });
-  });
-}
 
 function isVoiceInputAvailable(): { ok: boolean; reason?: string } {
   if (isElevenLabsRealtimeAvailable()) return { ok: true };
@@ -880,7 +844,7 @@ export async function startCall(
 
     await postVoiceStageLog('call_started', `channel=${voiceChannel.name} total_startup_ms=${Date.now() - callStartMs}`);
     recordLoopHealth('voice-session', 'ok', `call started channel=${voiceChannel.name}`);
-    primeElevenLabsVoiceCache(selectedRileyVoice, RILEY_WARM_PHRASES).catch(() => {});
+    primeElevenLabsVoiceCache(selectedRileyVoice, [...RILEY_WARM_PHRASES]).catch(() => {});
     } finally {
       callStartInProgress = false;
     }

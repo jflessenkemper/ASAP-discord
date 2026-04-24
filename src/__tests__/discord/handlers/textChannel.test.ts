@@ -3,6 +3,11 @@
  * Text channel message handling — renderAgentMessage, clearHistory.
  */
 
+// The LLM-backed Discord output sanitizer defaults OFF (perf audit). The
+// sendAgentMessage() tests below assert its LLM call fires, so force the
+// env flag on *before* any module imports capture it at load time.
+process.env.DISCORD_OUTPUT_SANITIZER_ENABLED = 'true';
+
 jest.mock('../../../db/pool', () => ({
   default: { query: jest.fn().mockResolvedValue({ rows: [], rowCount: 0 }), on: jest.fn() },
   __esModule: true,

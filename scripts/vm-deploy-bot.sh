@@ -22,7 +22,7 @@ gcloud compute ssh "$VM_NAME" --zone="$VM_ZONE" --command "
   pm2 delete asap-bot 2>/dev/null || true
   export VOICE_REALTIME_MODE="\${VOICE_REALTIME_MODE:-true}"
   export VOICE_STT_PROVIDER="\${VOICE_STT_PROVIDER:-elevenlabs}"
-  export TELEPHONY_RILEY_VOICE_NAME="\${TELEPHONY_RILEY_VOICE_NAME:-RileyEL}"
+  export TELEPHONY_CORTANA_VOICE_NAME="\${TELEPHONY_CORTANA_VOICE_NAME:-\${TELEPHONY_RILEY_VOICE_NAME:-RileyEL}}"
   pm2 start dist/index.js --name asap-bot --cwd '$REMOTE_ROOT' --node-args='-r dotenv/config'
   pm2 status asap-bot | cat
 "

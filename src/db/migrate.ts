@@ -42,6 +42,8 @@ async function assertRuntimeTablesReady(): Promise<void> {
   }
 }
 
+const BASELINE_FILENAME = '000_baseline.sql';
+
 async function migrate() {
   // Create tracking table if it doesn't exist (safe for first run)
   await pool.query(`
@@ -57,6 +59,21 @@ async function migrate() {
   // Get already-applied migrations
   const appliedResult = await pool.query('SELECT filename FROM applied_migrations');
   const applied = new Set(appliedResult.rows.map((r: { filename: string }) => r.filename));
+
+  // Baseline handling: the squashed 000_baseline.sql represents the cumulative
+  // effect of legacy migrations 001–020. On an existing DB those rows are
+  // already in applied_migrations, so we mark the baseline as applied
+  // without running its SQL (which contains non-idempotent ALTER TABLE
+  // ADD CONSTRAINT statements). On a fresh DB the baseline runs normally
+  // and creates the core schema in one shot.
+  if (!applied.has(BASELINE_FILENAME) && applied.size > 0) {
+    console.log(`  ⏭ ${BASELINE_FILENAME} (marking applied — DB predates squash)`);
+    await pool.query(
+      'INSERT INTO applied_migrations (filename) VALUES ($1) ON CONFLICT DO NOTHING',
+      [BASELINE_FILENAME],
+    );
+    applied.add(BASELINE_FILENAME);
+  }
 
   // Detect historical drift before running new migrations.
   await assertAppliedMigrationExpectations(applied);

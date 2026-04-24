@@ -76,10 +76,13 @@ describe('agents', () => {
   });
 
   describe('getAgent()', () => {
-    it('returns Cortana for the legacy developer compatibility ID', () => {
-      const agent = getAgent('developer');
-      expect(agent).toBeDefined();
-      expect(agent!.name).toContain('Cortana');
+    it('resolves legacy developer/ace aliases via resolveAgentId', () => {
+      const devId = resolveAgentId('developer');
+      const aceId = resolveAgentId('ace');
+      expect(devId).toBe('executive-assistant');
+      expect(aceId).toBe('executive-assistant');
+      const agent = getAgent(devId!);
+      expect(agent?.name).toContain('Cortana');
     });
 
     it('returns undefined for unknown ID', () => {
@@ -126,18 +129,18 @@ describe('agents', () => {
 
   describe('setAgentRoleId / getAgentRoleId / resolveAgentIdByRoleId', () => {
     afterEach(() => {
-      setAgentRoleId('developer', null);
+      setAgentRoleId('executive-assistant', null);
     });
 
     it('sets and gets a role ID', () => {
-      setAgentRoleId('developer', '123456789');
-      expect(getAgentRoleId('developer')).toBe('123456789');
+      setAgentRoleId('executive-assistant', '123456789');
+      expect(getAgentRoleId('executive-assistant')).toBe('123456789');
     });
 
     it('clears role ID with null', () => {
-      setAgentRoleId('developer', '123');
-      setAgentRoleId('developer', null);
-      expect(getAgentRoleId('developer')).toBeNull();
+      setAgentRoleId('executive-assistant', '123');
+      setAgentRoleId('executive-assistant', null);
+      expect(getAgentRoleId('executive-assistant')).toBeNull();
     });
 
     it('resolves agent by role ID', () => {
@@ -153,24 +156,26 @@ describe('agents', () => {
 
   describe('getAgentMention()', () => {
     afterEach(() => {
-      setAgentRoleId('developer', null);
+      setAgentRoleId('executive-assistant', null);
     });
 
     it('returns @handle when no role ID is set', () => {
-      expect(getAgentMention('developer')).toBe('@cortana');
+      expect(getAgentMention('executive-assistant')).toBe('@cortana');
     });
 
     it('returns Discord role mention when role ID is set', () => {
-      setAgentRoleId('developer', '123456');
-      expect(getAgentMention('developer')).toBe('<@&123456>');
+      setAgentRoleId('executive-assistant', '123456');
+      expect(getAgentMention('executive-assistant')).toBe('<@&123456>');
     });
   });
 
   describe('getAgentAliases()', () => {
     it('returns deduplicated aliases including ID and handle', () => {
-      const aliases = getAgentAliases('developer');
-      expect(aliases).toContain('developer');
+      const aliases = getAgentAliases('executive-assistant');
+      expect(aliases).toContain('executive-assistant');
+      expect(aliases).toContain('cortana');
       expect(aliases).toContain('riley');
+      expect(aliases).toContain('developer');
       expect(aliases).toContain('dev');
     });
 
@@ -194,7 +199,7 @@ describe('agents', () => {
     });
 
     it('filters out null entries for invalid agent IDs', () => {
-      const guide = buildAgentMentionGuide(['developer', 'nonexistent' as any]);
+      const guide = buildAgentMentionGuide(['executive-assistant', 'nonexistent' as any]);
       expect(guide.split(', ').length).toBe(1);
       expect(guide).toContain('Cortana');
       expect(guide).not.toContain('nonexistent');

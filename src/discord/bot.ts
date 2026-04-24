@@ -28,6 +28,7 @@ import {
   handleDecisionReply,
   handleGroupchatMessage,
   dispatchUpgradeToRiley,
+  dispatchReactionReply,
   getThreadStatusOpsLine,
   startSelfImprovementQueueWorker,
   stopSelfImprovementQueueWorker,
@@ -52,6 +53,13 @@ import { captureAttachments } from './services/mediaCapture';
 import { startEmbeddingWorker } from './embeddingWorker';
 import { initPresence } from './presence';
 import { registerContextMenus, handleMessageContextMenu } from './contextMenus';
+import { isUpgradeApprovalCard, parseUpgradeCard } from './upgradeApproval';
+import {
+  formatUpgradeForDispatch,
+  listPendingDispatches,
+  markUpgradeDispatched,
+  recordApprovedUpgrade,
+} from './upgradeRequests';
 import { enqueueSelfImprovementJob } from './selfImprovementQueue';
 import { detectAnomalies } from './anomalyDetection';
 import { goalState } from './handlers/goalState';
@@ -59,6 +67,7 @@ import { updateListingByMsgId, draftApplication, getProfile, getPortalByCompany,
 import { sendJobApplication } from '../services/email';
 import { SYSTEM_COLORS, BUTTON_IDS, jobScoreColor } from './ui/constants';
 import { errMsg } from '../utils/errors';
+import { isTesterBotId } from '../utils/botIdentity';
 import { buildDatabaseAuditSummary } from './databaseAudit';
 import { recordLoopHealth, setLoopReportChannel } from './loopHealth';
 
@@ -84,7 +93,6 @@ const staleAlertDedupe = new Map<string, number>();
 const staleHealAttempts = new Map<string, { count: number; lastAttemptAt: number }>();
 const HEAL_MAX_ATTEMPTS = 3;
 const HEAL_COOLDOWN_MS = 15 * 60 * 1000; // 15 min between heal attempts
-const DEFAULT_TESTER_BOT_ID = '1487426371209789450';
 const OPS_STEWARD_AGENT_ID = 'operations-manager';
 const RUNTIME_INSTANCE_TAG = (process.env.RUNTIME_INSTANCE_TAG || process.env.HOSTNAME || `pid-${process.pid}`).slice(0, 80);
 
@@ -145,10 +153,28 @@ function getFeedContracts(channels: BotChannels): ChannelFeedContract[] {
   ];
 }
 
+/**
+ * Cache of the most recent message timestamp per monitored channel, updated
+ * opportunistically from `MessageCreate` events (see the `messageCreate`
+ * listener below). Lets the heartbeat loop skip a Discord REST round-trip
+ * per feed when we've seen activity recently.
+ */
+const latestChannelMsgCache = new Map<string, number>();
+
+/** Update the cache when a message lands in a channel we care about. */
+function noteChannelActivity(channelId: string, timestamp: number): void {
+  const prev = latestChannelMsgCache.get(channelId) || 0;
+  if (timestamp > prev) latestChannelMsgCache.set(channelId, timestamp);
+}
+
 async function latestChannelMessageTimestamp(channel: TextChannel): Promise<number | null> {
+  const cached = latestChannelMsgCache.get(channel.id);
+  if (cached) return cached;
   const messages = await channel.messages.fetch({ limit: 1 }).catch(() => null);
   const latest = messages?.first();
-  return latest?.createdTimestamp || null;
+  const ts = latest?.createdTimestamp || null;
+  if (ts) latestChannelMsgCache.set(channel.id, ts);
+  return ts;
 }
 
 export async function runChannelHeartbeat(channels: BotChannels): Promise<void> {
@@ -194,6 +220,17 @@ export async function runChannelHeartbeat(channels: BotChannels): Promise<void> 
         }
       } else {
         staleHealAttempts.delete(contract.key);
+        // Close the loop on any prior stale alert: if we previously emitted
+        // "Feed stale: X" we haven't yet emitted a recovery. Post one now
+        // so the ops channel shows healed → state-change instead of
+        // silently flipping.
+        if (staleAlertDedupe.has(contract.key)) {
+          staleAlertDedupe.delete(contract.key);
+          await postAgentErrorLog('discord:feed-recovered', `Feed recovered: ${contract.key}`, {
+            level: 'info',
+            detail: `channel=#${contract.channel.name} age=${ts ? formatAge(age) : 'unknown'}`,
+          });
+        }
       }
     }
 
@@ -470,28 +507,7 @@ function startOpsMonitors(channels: BotChannels): void {
   void detectAnomalies().catch(() => {});
 }
 
-function decodeBotIdFromToken(token: string): string | null {
-  try {
-    const head = String(token || '').split('.')[0];
-    if (!head) return null;
-    const normalized = head.replace(/-/g, '+').replace(/_/g, '/');
-    const padded = normalized + '='.repeat((4 - (normalized.length % 4)) % 4);
-    const decoded = Buffer.from(padded, 'base64').toString('utf8').trim();
-    return /^\d{16,22}$/.test(decoded) ? decoded : null;
-  } catch {
-    return null;
-  }
-}
 
-function isTesterBotId(userId: string): boolean {
-  const configured = String(process.env.DISCORD_TESTER_BOT_ID || '')
-    .split(',')
-    .map((id) => id.trim())
-    .filter(Boolean);
-  const tokenDerived = decodeBotIdFromToken(process.env.DISCORD_TEST_BOT_TOKEN || '');
-  const allowed = new Set([DEFAULT_TESTER_BOT_ID, ...configured, ...(tokenDerived ? [tokenDerived] : [])]);
-  return allowed.has(userId);
-}
 
 async function ensureDedupeTable(): Promise<void> {
   if (dedupeTableReady) return;
@@ -742,6 +758,23 @@ export async function startBot(): Promise<void> {
       // Register message/user context-menu commands (right-click → Apps
       // → "Ask Cortana about this"). Idempotent.
       void registerContextMenus(guild);
+
+      // Startup replay: if a prior run crashed after logging an approval
+      // but before dispatch completed, re-fire those dispatches now.
+      void (async () => {
+        const pending = await listPendingDispatches();
+        if (pending.length === 0) return;
+        console.log(`[upgrade-replay] Resuming ${pending.length} interrupted upgrade dispatch(es)`);
+        for (const row of pending) {
+          const body = formatUpgradeForDispatch(row);
+          try {
+            await dispatchUpgradeToRiley(body, configuredChannels.groupchat);
+            await markUpgradeDispatched(row.id);
+          } catch (err) {
+            console.warn(`[upgrade-replay] dispatch ${row.id} failed:`, errMsg(err));
+          }
+        }
+      })().catch((err) => console.warn('[upgrade-replay] failed:', errMsg(err)));
     } catch (err) {
       const msg = err instanceof Error ? err.stack || err.message : 'Unknown';
       console.error('Channel setup error:', errMsg(err));
@@ -786,6 +819,12 @@ export async function startBot(): Promise<void> {
   });
 
   client.on(Events.MessageCreate, async (message) => {
+    // Update the heartbeat cache so runChannelHeartbeat can skip a REST
+    // fetch for channels we've seen activity in recently.
+    if (message.channel && 'id' in message.channel) {
+      noteChannelActivity((message.channel as { id: string }).id, message.createdTimestamp);
+    }
+
     // Debug: trace message reception for groupchat channel
     if (botChannels && message.channel.id === botChannels.groupchat.id) {
       console.log(`[msg-trace] author=${message.author.id} bot=${message.author.bot} tester=${isTesterBotId(message.author.id)} content="${String(message.content || '').slice(0, 60)}"`);
@@ -979,6 +1018,66 @@ export async function startBot(): Promise<void> {
           ? `User \ud83d\udc4d'd this reply: "${preview}"`
           : `User \ud83d\udc4e'd this reply — consider what went wrong: "${preview}"`;
         void recordAgentLearning(agentId, pattern, tag, 'discord-react');
+      }
+
+      // ✅/❌ on a bot message that asked a binary question → route as a yes/no reply.
+      const isCheck = emoji === '✅';
+      const isCross = emoji === '❌';
+      if ((isCheck || isCross) && (msg.webhookId || msg.author?.bot) && botChannels) {
+        const text = typeof msg.content === 'string' ? msg.content : '';
+
+        // Upgrade-approval card reactions take priority — ✅ implements,
+        // ❌ dismisses. Handled before the generic yes/no fallback below.
+        const inUpgradesChannel = msg.channelId === botChannels.upgrades.id;
+        if (inUpgradesChannel && isUpgradeApprovalCard(text)) {
+          if (isCheck) {
+            // Log the approval BEFORE dispatching — if the bot crashes in the
+            // milliseconds between these two calls, the startup replay will
+            // pick it back up from upgrade_requests.
+            const parsed = parseUpgradeCard(text);
+            const groupchat = botChannels.groupchat;
+            void (async () => {
+              let rowId: number | null = null;
+              if (parsed) {
+                rowId = await recordApprovedUpgrade({
+                  requestedBy: parsed.requestedBy,
+                  issue: parsed.issue,
+                  suggestedFix: parsed.suggestedFix,
+                  impact: parsed.impact,
+                  approvedBy: user.username || 'user',
+                  sourceMessageId: msg.id,
+                });
+              }
+              const dispatchBody = parsed
+                ? formatUpgradeForDispatch({
+                    requested_by: parsed.requestedBy,
+                    issue: parsed.issue,
+                    suggested_fix: parsed.suggestedFix,
+                    impact: parsed.impact,
+                  })
+                : text.replace(/^\[UPGRADE CARD\]\s*<@!?\d+>\s*—\s*/, '').trim();
+              try {
+                await dispatchUpgradeToRiley(dispatchBody, groupchat);
+                if (rowId) await markUpgradeDispatched(rowId);
+              } catch (err) {
+                console.warn('[upgrade-approval] dispatch failed:', errMsg(err));
+              }
+            })();
+            void msg.reply(`✅ Approved by ${user.username} — implementing now.`).catch(() => {});
+          } else {
+            void msg.reply(`❌ Dismissed by ${user.username}.`).catch(() => {});
+          }
+          return;
+        }
+
+        if (/\?\s*$/.test(text.trim())) {
+          void dispatchReactionReply(
+            isCheck ? 'yes' : 'no',
+            text,
+            user.username || 'user',
+            botChannels.groupchat,
+          );
+        }
       }
     } catch (err) {
       console.warn('[capture] reaction capture failed:', errMsg(err));
