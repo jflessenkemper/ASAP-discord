@@ -18,6 +18,14 @@ gcloud compute ssh "$VM_NAME" --zone="$VM_ZONE" --command "
   export npm_config_playwright_skip_browser_download=true
   npm ci
   node_modules/.bin/tsc --project ./tsconfig.json
+  # Apply any pending DB migrations before restarting the bot so the new
+  # code never hits a schema that hasn't caught up. Skip with SKIP_MIGRATE=1
+  # if a deploy must not touch the DB (e.g. during a DB-side maintenance).
+  if [ \"\${SKIP_MIGRATE:-0}\" != \"1\" ]; then
+    npm run migrate
+  else
+    echo '[vm-deploy] SKIP_MIGRATE=1 — skipping migration step'
+  fi
   pm2 stop asap-bot 2>/dev/null || true
   pm2 delete asap-bot 2>/dev/null || true
   export VOICE_REALTIME_MODE="\${VOICE_REALTIME_MODE:-true}"
