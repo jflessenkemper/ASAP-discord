@@ -211,7 +211,7 @@ export function attachTelephonyWebSocket(server: HttpServer): void {
                 processing: false,
                 active: true,
                 conferenceName: confName,
-                ttsVoiceName: process.env.TELEPHONY_RILEY_VOICE_NAME || 'RileyEL',
+                ttsVoiceName: process.env.TELEPHONY_CORTANA_VOICE_NAME || process.env.TELEPHONY_RILEY_VOICE_NAME || 'RileyEL',
               };
               activeSessions.set(callSid, newSession);
               await startSessionSTT(newSession);
@@ -465,7 +465,7 @@ export async function makeOutboundCall(toNumber: string, greeting?: string): Pro
     processing: false,
     active: true,
     conferenceName: null,
-    ttsVoiceName: process.env.TELEPHONY_RILEY_VOICE_NAME || 'RileyEL',
+    ttsVoiceName: process.env.TELEPHONY_CORTANA_VOICE_NAME || process.env.TELEPHONY_RILEY_VOICE_NAME || 'RileyEL',
   };
   activeSessions.set(call.sid, session);
 
@@ -710,7 +710,7 @@ export async function startConferenceCall(
     processing: false,
     active: true,
     conferenceName: confName,
-    ttsVoiceName: process.env.TELEPHONY_RILEY_VOICE_NAME || 'RileyEL',
+    ttsVoiceName: process.env.TELEPHONY_CORTANA_VOICE_NAME || process.env.TELEPHONY_RILEY_VOICE_NAME || 'RileyEL',
   };
   activeSessions.set(rileyCall.sid, session);
 

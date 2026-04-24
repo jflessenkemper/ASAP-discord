@@ -28,6 +28,7 @@ import {
   handleDecisionReply,
   handleGroupchatMessage,
   dispatchUpgradeToRiley,
+  dispatchReactionReply,
   getThreadStatusOpsLine,
   startSelfImprovementQueueWorker,
   stopSelfImprovementQueueWorker,
@@ -993,6 +994,21 @@ export async function startBot(): Promise<void> {
           ? `User \ud83d\udc4d'd this reply: "${preview}"`
           : `User \ud83d\udc4e'd this reply — consider what went wrong: "${preview}"`;
         void recordAgentLearning(agentId, pattern, tag, 'discord-react');
+      }
+
+      // ✅/❌ on a bot message that asked a binary question → route as a yes/no reply.
+      const isCheck = emoji === '✅';
+      const isCross = emoji === '❌';
+      if ((isCheck || isCross) && (msg.webhookId || msg.author?.bot) && botChannels) {
+        const text = typeof msg.content === 'string' ? msg.content : '';
+        if (/\?\s*$/.test(text.trim())) {
+          void dispatchReactionReply(
+            isCheck ? 'yes' : 'no',
+            text,
+            user.username || 'user',
+            botChannels.groupchat,
+          );
+        }
       }
     } catch (err) {
       console.warn('[capture] reaction capture failed:', errMsg(err));

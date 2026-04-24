@@ -72,6 +72,7 @@ import { goalState, GOAL_THREAD_COUNTER_RE } from './goalState';
 import { LOW_SIGNAL_COMPLETION_RE } from './responseNormalization';
 import { sendAgentMessage, clearHistory } from './textChannel';
 import { errMsg } from '../../utils/errors';
+import { envIntFirst, envBoolFirst } from '../../utils/env';
 import { buildLoopHealthCompactSummary, buildLoopHealthDetailedReport, recordLoopHealth } from '../loopHealth';
 import { buildLoggingEngineReport, runLoggingEngine } from '../loggingEngine';
 import { buildGroupchatDecisionAttention, buildGroupchatSingleUserNotice, buildTextStatusSummary } from '../rileyInteraction';
@@ -88,7 +89,7 @@ type ToolChainMessage = {
 const TOOL_CHAIN_EDIT_DEBOUNCE_MS = parseInt(process.env.TOOL_CHAIN_EDIT_DEBOUNCE_MS || '400', 10);
 const toolChainMessages = new Map<string, ToolChainMessage>();
 const rileyStallNoticeAt = new Map<string, number>();
-const RILEY_STALL_NOTICE_COOLDOWN_MS = parseInt(process.env.RILEY_STALL_NOTICE_COOLDOWN_MS || '120000', 10);
+const RILEY_STALL_NOTICE_COOLDOWN_MS = envIntFirst(['CORTANA_STALL_NOTICE_COOLDOWN_MS', 'RILEY_STALL_NOTICE_COOLDOWN_MS'], 120000);
 
 /** Record a tool start/completion for Copilot-style live chain display. */
 function updateToolChain(
@@ -195,14 +196,14 @@ let claudeNotificationsBoundChannelId: string | null = null;
 const MAX_PARALLEL_SUBAGENTS = parseInt(process.env.MAX_PARALLEL_SUBAGENTS || '3', 10);
 const SUBAGENT_MAX_TOKENS = parseInt(process.env.SUBAGENT_MAX_TOKENS || '900', 10);
 const GROUPCHAT_PROCESS_TIMEOUT_MS = parseInt(process.env.GROUPCHAT_PROCESS_TIMEOUT_MS || '480000', 10);
-const RILEY_NO_RESPONSE_TIMEOUT_MS = parseInt(process.env.RILEY_NO_RESPONSE_TIMEOUT_MS || '180000', 10);
-const RILEY_PROGRESS_PING_MS = parseInt(
-  process.env.RILEY_PROGRESS_PING_MS || String(Math.max(20_000, Math.floor(RILEY_NO_RESPONSE_TIMEOUT_MS * 0.6))),
-  10,
+const RILEY_NO_RESPONSE_TIMEOUT_MS = envIntFirst(['CORTANA_NO_RESPONSE_TIMEOUT_MS', 'RILEY_NO_RESPONSE_TIMEOUT_MS'], 180000);
+const RILEY_PROGRESS_PING_MS = envIntFirst(
+  ['CORTANA_PROGRESS_PING_MS', 'RILEY_PROGRESS_PING_MS'],
+  Math.max(20_000, Math.floor(RILEY_NO_RESPONSE_TIMEOUT_MS * 0.6)),
 );
 const SELF_IMPROVEMENT_WORKER_POLL_MS = Math.max(2_000, parseInt(process.env.SELF_IMPROVEMENT_WORKER_POLL_MS || '5000', 10));
 const SELF_IMPROVEMENT_WORKER_ERROR_COOLDOWN_MS = Math.max(5_000, parseInt(process.env.SELF_IMPROVEMENT_WORKER_ERROR_COOLDOWN_MS || '60000', 10));
-const GOAL_WATCHDOG_TOKEN_OVERRUN_ALLOWANCE = Math.max(0, parseInt(process.env.RILEY_TOKEN_OVERRUN_ALLOWANCE || '2000000', 10));
+const GOAL_WATCHDOG_TOKEN_OVERRUN_ALLOWANCE = Math.max(0, envIntFirst(['CORTANA_TOKEN_OVERRUN_ALLOWANCE', 'RILEY_TOKEN_OVERRUN_ALLOWANCE'], 2000000));
 
 const GOAL_STALL_TIMEOUT_MS = parseInt(process.env.GOAL_STALL_TIMEOUT_MS || '420000', 10);
 const GOAL_STALL_CHECK_INTERVAL_MS = parseInt(process.env.GOAL_STALL_CHECK_INTERVAL_MS || '60000', 10);
@@ -217,7 +218,7 @@ const AUTO_REBUILD_ERROR_COOLDOWN_MS = parseInt(process.env.AUTO_REBUILD_ERROR_C
 const URL_ACTION_COOLDOWN_MS = parseInt(process.env.URL_ACTION_COOLDOWN_MS || '1800000', 10);
 const GROUPCHAT_DUPLICATE_WINDOW_MS = parseInt(process.env.GROUPCHAT_DUPLICATE_WINDOW_MS || '10000', 10);
 /** Maximum continuation cycles for multi-step tasks before stopping. */
-const MAX_CONTINUATION_CYCLES = parseInt(process.env.RILEY_MAX_CONTINUATION_CYCLES || '3', 10);
+const MAX_CONTINUATION_CYCLES = envIntFirst(['CORTANA_MAX_CONTINUATION_CYCLES', 'RILEY_MAX_CONTINUATION_CYCLES'], 3);
 const APP_SERVER_ROOT = (fs.existsSync(path.join(process.cwd(), 'package.json')) && fs.existsSync(path.join(process.cwd(), 'src')))
   ? process.cwd()
   : path.resolve(__dirname, '../../..');
@@ -464,7 +465,7 @@ function ensureClaudeNotifications(groupchat: TextChannel): void {
 function inferImplicitActionTags(text: string): string {
   const tags = new Set<string>();
   const normalized = text.toLowerCase();
-  const allowInfraActions = process.env.RILEY_ALLOW_IMPLICIT_INFRA_ACTIONS === 'true';
+  const allowInfraActions = envBoolFirst(['CORTANA_ALLOW_IMPLICIT_INFRA_ACTIONS', 'RILEY_ALLOW_IMPLICIT_INFRA_ACTIONS']);
 
   const deployRequested = /(build triggered|triggered build|deploying|deployment triggered|rolling out|release started)/i.test(normalized);
   const deployNegated = /\b(?:do not|don't|dont|won't|wont|not|skip|without|avoid|no)\b[^.!?\n]{0,24}\b(?:deploy|deployment|roll\s*out|release)\b/i.test(normalized);
@@ -2364,6 +2365,184 @@ export function getStatusSummary(): string | null {
  * Cortana receives the message, responds, and can involve specialists when needed.
  * She can trigger system actions by including [ACTION:xxx] tags in her response.
  */
+/**
+ * Synthesize any implicit [ACTION:*] tags from Cortana's prose, fold the
+ * machine-supplied tags in, audit the synthesis, and execute the combined set.
+ */
+async function dispatchImpliedActions(
+  orchestrationResponse: string,
+  displayResponse: string,
+  machineActionTags: string[],
+  shouldExecuteDirectly: boolean,
+  groupchat: TextChannel,
+  workspaceChannel: WebhookCapableChannel,
+  member: GuildMember | undefined,
+  userMessage: string,
+): Promise<void> {
+  const implicitTags = inferImplicitActionTags(displayResponse);
+  // When Cortana was asked to execute smoke_test_agents directly, suppress the implicit
+  // [ACTION:SMOKE] tag to avoid running a redundant second smoke test via runSmokeSummary.
+  const filteredImplicitTags = shouldExecuteDirectly
+    ? implicitTags.replace(/\[ACTION:SMOKE\]/gi, '').trim()
+    : implicitTags;
+  const machineTagsBlock = machineActionTags.join('\n');
+  const actionPayload = [orchestrationResponse, machineTagsBlock, filteredImplicitTags].filter(Boolean).join('\n');
+  if (filteredImplicitTags) {
+    await sendAutopilotAudit(
+      groupchat,
+      'implied_actions',
+      'Cortana response implied operational actions without explicit tags; autopilot synthesized tags.',
+      { action: implicitTags.replace(/\s+/g, ',') }
+    );
+  }
+  await executeActions(actionPayload, member, groupchat, workspaceChannel, userMessage);
+}
+
+/**
+ * Runtime-verification gate for completion claims. Triggers an auto-harness
+ * capture if no evidence is found and appends a single "verification pending"
+ * note (cooldown-keyed per goal) when evidence is still missing after that.
+ */
+async function runVerificationCycle(
+  displayResponse: string,
+  userMessage: string,
+  response: string,
+  groupchat: TextChannel,
+  workspaceChannel: WebhookCapableChannel,
+): Promise<{ displayResponse: string; completionClaimed: boolean; completionVerified: boolean }> {
+  const verificationRequired = goalNeedsRuntimeVerification(goalState.goal || userMessage || response);
+  const completionClaimed = isCompletionClaim(displayResponse);
+  let completionVerified = true;
+  let updated = displayResponse;
+
+  if (verificationRequired && completionClaimed) {
+    const evidenceSince = Math.max(Date.now() - 2 * 60 * 60 * 1000, goalState.startedAt - 60_000);
+    completionVerified = await hasRecentRuntimeVerificationEvidence(groupchat, workspaceChannel, evidenceSince);
+    if (!completionVerified) {
+      const appUrl = process.env.FRONTEND_URL || 'https://asap-489910.australia-southeast1.run.app';
+      try {
+        await captureAndPostScreenshots(appUrl, `auto-verify ${(goalState.goal || 'completion').slice(0, 40)}`, {
+          targetChannel: workspaceChannel as TextChannel,
+          clearTargetChannel: false,
+        });
+        completionVerified = await hasRecentRuntimeVerificationEvidence(groupchat, workspaceChannel, evidenceSince);
+      } catch (err) {
+        console.warn('Auto-harness capture failed:', errMsg(err));
+      }
+    }
+    if (!completionVerified) {
+      const goalKey = String(goalState.goal || 'untagged').slice(0, 120);
+      const now = Date.now();
+      const lastShown = verificationPendingShownAt.get(goalKey) || 0;
+      if (now - lastShown > VERIFICATION_PENDING_COOLDOWN_MS) {
+        verificationPendingShownAt.set(goalKey, now);
+        updated += '\n\n⏳ **Verification pending**: completion cannot be confirmed yet — no runtime evidence in screenshots/harness output. Keeping this open until proof is posted.';
+      }
+    }
+  }
+
+  return { displayResponse: updated, completionClaimed, completionVerified };
+}
+
+/**
+ * Multi-step continuation loop: re-invoke Cortana with a follow-up prompt
+ * until the goal is fixed/blocked or MAX_CONTINUATION_CYCLES is reached.
+ * Early-exits on aborted signal, empty continuation output, or a response
+ * fingerprint-identical to the prior cycle (no-progress guard).
+ */
+async function runContinuationCycles(
+  seed: {
+    riley: AgentConfig;
+    goal: string;
+    displayResponse: string;
+    chainResult: { summary?: string };
+    groupchat: TextChannel;
+    workspaceChannel: WebhookCapableChannel;
+    rileyWorkChannel: WebhookCapableChannel;
+    signal?: AbortSignal;
+  },
+): Promise<void> {
+  const { riley, groupchat, workspaceChannel, rileyWorkChannel, signal } = seed;
+  let { displayResponse, chainResult } = seed;
+  let prevFingerprint = displayResponse.trim().slice(0, 240).toLowerCase();
+
+  for (let cycle = 2; cycle <= MAX_CONTINUATION_CYCLES; cycle++) {
+    if (signal?.aborted) break;
+
+    const lastStatus = inferRileyStatus(
+      displayResponse + ' ' + (chainResult.summary || ''),
+      isCompletionClaim(displayResponse),
+      true, // verification is separate from continuation logic
+    );
+    if (lastStatus === 'fixed' || lastStatus === 'blocked') {
+      console.log(`[continuation] Stopping at cycle ${cycle}: status=${lastStatus}`);
+      break;
+    }
+
+    const executionSummary = chainResult.summary
+      ? `Specialist summary: ${chainResult.summary.slice(0, 500)}`
+      : 'No specialist follow-up summary was produced.';
+
+    const continuationPrompt = `[System continuation — cycle ${cycle}/${MAX_CONTINUATION_CYCLES}] Previous cycle status: ${lastStatus}. ${executionSummary}\n\nContinue with the next sub-task from the original goal: "${seed.goal.slice(0, 300)}". Do not repeat completed work. Focus on the next unfinished item.`;
+
+    await sendAutopilotAudit(
+      groupchat,
+      'continuation_cycle',
+      `Multi-step continuation cycle ${cycle}/${MAX_CONTINUATION_CYCLES} for: ${(goalState.goal || '').slice(0, 80)}`,
+      { attempt: cycle }
+    );
+
+    markGoalProgress(`🔄 Continuation cycle ${cycle}/${MAX_CONTINUATION_CYCLES}...`);
+
+    const rileyMemoryCtx = getMemoryContext('executive-assistant');
+    const continuationResponse = await agentRespond(riley, [...rileyMemoryCtx, ...groupHistory], continuationPrompt, async (toolName, summary) => {
+      updateToolChain(rileyWorkChannel, riley, toolName, summary, 'done');
+    }, {
+      signal,
+      outputMode: 'machine_json',
+      machineEnvelopeRaw: true,
+      threadKey: `groupchat:${workspaceChannel.id}`,
+      onToolStart: async (toolName, summary) => {
+        updateToolChain(rileyWorkChannel, riley, toolName, summary, 'start');
+      },
+    });
+
+    if (signal?.aborted) break;
+
+    const contEnvelope = extractAgentResponseEnvelope(continuationResponse);
+    const contVisible = sanitizeVisibleAgentReply(contEnvelope?.human || continuationResponse);
+    const contRendered = appendDefaultNextSteps(contVisible.replace(/\[\s*action:[^\]]+\]/gi, '').trim());
+
+    // No-progress guard: if Cortana returns nothing new, or a response that's
+    // substantively identical to the previous cycle's output, stop looping
+    // instead of burning more tokens on the same restatement.
+    if (!contRendered.trim()) {
+      console.log(`[continuation] Stopping at cycle ${cycle}: empty response`);
+      break;
+    }
+    const fingerprint = contRendered.trim().slice(0, 240).toLowerCase();
+    if (fingerprint === prevFingerprint) {
+      console.log(`[continuation] Stopping at cycle ${cycle}: duplicate response fingerprint`);
+      break;
+    }
+    prevFingerprint = fingerprint;
+
+    appendToMemory('executive-assistant', [
+      { role: 'user', content: continuationPrompt },
+      { role: 'assistant', content: `[Cortana]: ${continuationResponse}` },
+    ]);
+    groupHistory.push({ role: 'user', content: continuationPrompt });
+    groupHistory.push({ role: 'assistant', content: `[Cortana]: ${continuationResponse}` });
+    persistGroupHistory();
+
+    await sendAgentMessage(workspaceChannel, riley, contRendered);
+
+    displayResponse = contRendered;
+    chainResult = await handleAgentChain(continuationResponse, groupchat, workspaceChannel, signal);
+    markGoalProgress(`✅ Cortana cycle ${cycle} completed`);
+  }
+}
+
 async function handleRileyMessage(
   userMessage: string,
   senderName: string,
@@ -2385,20 +2564,22 @@ async function handleRileyMessage(
   let hasVisibleRileyResponse = false;
   let noResponseTimer: NodeJS.Timeout | null = null;
   let progressTimer: NodeJS.Timeout | null = null;
-  const progressMessages: Message[] = [];
   try {
+    stopTyping = startTypingLoop(workspaceChannel);
+    trackAgentActive('executive-assistant', 'planning');
+    // Unified turn tracker: single message Cortana owns, nested sub-lines per
+    // specialist as they activate. setThinkingMessage is kept as a no-op
+    // fallback for code paths that still reference it.
+    const turn = await beginTurn(workspaceChannel, riley);
+    activeTurnByChannel.set(workspaceChannel.id, turn);
+
+    // Progress + stall timers fold their signal into the unified turn message
+    // (via turn.setPhase) rather than posting separate "⏳ still working" lines
+    // that the user then has to scroll past.
     progressTimer = setTimeout(() => {
       if (hasVisibleRileyResponse || signal?.aborted) return;
       const seconds = Math.round(Math.max(0, RILEY_PROGRESS_PING_MS) / 1000);
-      const progressText = `⏳ Cortana is still working (${seconds}s elapsed). No action needed yet.`;
-      void sendWebhookMessage(workspaceChannel, {
-        content: progressText,
-        username: `${riley.emoji} ${riley.name}`,
-        avatarURL: riley.avatarUrl,
-      }).then((msg) => progressMessages.push(msg)).catch(() => {});
-      if (workspaceChannel.id !== groupchat.id) {
-        void groupchat.send(progressText).then((msg) => progressMessages.push(msg)).catch(() => {});
-      }
+      turn.setPhase('executive-assistant', 'working', `still working · ${seconds}s`);
     }, Math.max(5_000, RILEY_PROGRESS_PING_MS));
 
     noResponseTimer = setTimeout(() => {
@@ -2414,14 +2595,6 @@ async function handleRileyMessage(
           });
         });
     }, RILEY_NO_RESPONSE_TIMEOUT_MS);
-
-    stopTyping = startTypingLoop(workspaceChannel);
-    trackAgentActive('executive-assistant', 'planning');
-    // Unified turn tracker: single message Cortana owns, nested sub-lines per
-    // specialist as they activate. setThinkingMessage is kept as a no-op
-    // fallback for code paths that still reference it.
-    const turn = await beginTurn(workspaceChannel, riley);
-    activeTurnByChannel.set(workspaceChannel.id, turn);
 
     const rileyMemory = getMemoryContext('executive-assistant');
     const contextMessage = `[${senderName}]: ${userMessage}`;
@@ -2487,59 +2660,22 @@ async function handleRileyMessage(
 
     if (signal?.aborted) return;
 
-    const implicitTags = inferImplicitActionTags(displayResponse);
-    // When Cortana was asked to execute smoke_test_agents directly, suppress the implicit
-    // [ACTION:SMOKE] tag to avoid running a redundant second smoke test via runSmokeSummary.
-    const filteredImplicitTags = shouldExecuteDirectly
-      ? implicitTags.replace(/\[ACTION:SMOKE\]/gi, '').trim()
-      : implicitTags;
-    const machineTagsBlock = machineActionTags.join('\n');
-    const actionPayloadBase = orchestrationResponse;
-    const actionPayload = [actionPayloadBase, machineTagsBlock, filteredImplicitTags].filter(Boolean).join('\n');
-    if (filteredImplicitTags) {
-      await sendAutopilotAudit(
-        groupchat,
-        'implied_actions',
-        'Cortana response implied operational actions without explicit tags; autopilot synthesized tags.',
-        { action: implicitTags.replace(/\s+/g, ',') }
-      );
-    }
-    await executeActions(actionPayload, member, groupchat, workspaceChannel, userMessage);
+    await dispatchImpliedActions(
+      orchestrationResponse,
+      displayResponse,
+      machineActionTags,
+      shouldExecuteDirectly,
+      groupchat,
+      workspaceChannel,
+      member,
+      userMessage,
+    );
     markGoalProgress();
 
-    const verificationRequired = goalNeedsRuntimeVerification(goalState.goal || userMessage || response);
-    const completionClaimed = isCompletionClaim(displayResponse);
-    let completionVerified = true;
-    if (verificationRequired && completionClaimed) {
-      const evidenceSince = Math.max(Date.now() - 2 * 60 * 60 * 1000, goalState.startedAt - 60_000);
-      completionVerified = await hasRecentRuntimeVerificationEvidence(groupchat, workspaceChannel, evidenceSince);
-      if (!completionVerified) {
-        // Auto-trigger web harness capture before blocking on missing evidence
-        const appUrl = process.env.FRONTEND_URL || 'https://asap-489910.australia-southeast1.run.app';
-        try {
-          await captureAndPostScreenshots(appUrl, `auto-verify ${(goalState.goal || 'completion').slice(0, 40)}`, {
-            targetChannel: workspaceChannel as TextChannel,
-            clearTargetChannel: false,
-          });
-          // Re-check — screenshots were just posted
-          completionVerified = await hasRecentRuntimeVerificationEvidence(groupchat, workspaceChannel, evidenceSince);
-        } catch (err) {
-          console.warn('Auto-harness capture failed:', errMsg(err));
-        }
-      }
-      if (!completionVerified) {
-        // Append the verification note once per goal within a 10-min window.
-        // Without this, every completion-claim cycle appended the same block
-        // again, spamming the workspace with duplicates.
-        const goalKey = String(goalState.goal || 'untagged').slice(0, 120);
-        const now = Date.now();
-        const lastShown = verificationPendingShownAt.get(goalKey) || 0;
-        if (now - lastShown > VERIFICATION_PENDING_COOLDOWN_MS) {
-          verificationPendingShownAt.set(goalKey, now);
-          displayResponse += '\n\n⏳ **Verification pending**: completion cannot be confirmed yet — no runtime evidence in screenshots/harness output. Keeping this open until proof is posted.';
-        }
-      }
-    }
+    const verification = await runVerificationCycle(displayResponse, userMessage, response, groupchat, workspaceChannel);
+    displayResponse = verification.displayResponse;
+    const completionClaimed = verification.completionClaimed;
+    const completionVerified = verification.completionVerified;
 
     // Use the actual verification result instead of re-scanning text for "blocked"/"verification pending"
     // which would false-positive on our appended verification note.
@@ -2564,12 +2700,6 @@ async function handleRileyMessage(
 
     if (!signal?.aborted && displayResponse) {
       hasVisibleRileyResponse = true;
-      // Auto-delete "still working" progress messages before posting real response
-      for (const pm of progressMessages) {
-        pm.delete().catch(() => {});
-      }
-      progressMessages.length = 0;
-
       // Fold the final answer into the same unified message Cortana has been
       // updating for this turn. The tracker marks itself finalized.
       const finalized = await turn.finalize(displayResponse);
@@ -2589,83 +2719,21 @@ async function handleRileyMessage(
       }
     }
 
-    let chainResult = await handleAgentChain(orchestrationResponse, groupchat, workspaceChannel, signal);
+    const chainResult = await handleAgentChain(orchestrationResponse, groupchat, workspaceChannel, signal);
 
     markGoalProgress('✅ Cortana cycle 1 completed');
 
-    // Continuation loop: if this is a multi-step goal and we're not done yet,
-    // re-invoke Cortana with a continuation prompt so she can plan the next sub-task.
-    const isMultiStep = isMultiStepGoal(goalState.goal || userMessage);
-    if (isMultiStep && !signal?.aborted) {
-      for (let cycle = 2; cycle <= MAX_CONTINUATION_CYCLES; cycle++) {
-        // Check whether last cycle's status suggests more work is needed
-        const lastStatus = inferRileyStatus(
-          displayResponse + ' ' + (chainResult.summary || ''),
-          isCompletionClaim(displayResponse),
-          true, // verification is separate from continuation logic
-        );
-        if (lastStatus === 'fixed' || lastStatus === 'blocked') {
-          console.log(`[continuation] Stopping at cycle ${cycle}: status=${lastStatus}`);
-          break;
-        }
-
-        const executionSummary = chainResult.summary
-          ? `Specialist summary: ${chainResult.summary.slice(0, 500)}`
-          : 'No specialist follow-up summary was produced.';
-
-        const continuationPrompt = `[System continuation — cycle ${cycle}/${MAX_CONTINUATION_CYCLES}] Previous cycle status: ${lastStatus}. ${executionSummary}\n\nContinue with the next sub-task from the original goal: "${(goalState.goal || userMessage).slice(0, 300)}". Do not repeat completed work. Focus on the next unfinished item.`;
-
-        await sendAutopilotAudit(
-          groupchat,
-          'continuation_cycle',
-          `Multi-step continuation cycle ${cycle}/${MAX_CONTINUATION_CYCLES} for: ${(goalState.goal || '').slice(0, 80)}`,
-          { attempt: cycle }
-        );
-
-        markGoalProgress(`🔄 Continuation cycle ${cycle}/${MAX_CONTINUATION_CYCLES}...`);
-
-        // Re-invoke Cortana for the next sub-task
-        const rileyMemoryCtx = getMemoryContext('executive-assistant');
-        const continuationResponse = await agentRespond(riley, [...rileyMemoryCtx, ...groupHistory], continuationPrompt, async (toolName, summary) => {
-          updateToolChain(rileyWorkChannel, riley, toolName, summary, 'done');
-        }, {
-          signal,
-          outputMode: 'machine_json',
-          machineEnvelopeRaw: true,
-          threadKey: `groupchat:${workspaceChannel.id}`,
-          onToolStart: async (toolName, summary) => {
-            updateToolChain(rileyWorkChannel, riley, toolName, summary, 'start');
-          },
-        });
-
-        if (signal?.aborted) break;
-
-        const contEnvelope = extractAgentResponseEnvelope(continuationResponse);
-        const contVisible = sanitizeVisibleAgentReply(contEnvelope?.human || continuationResponse);
-        const contRendered = appendDefaultNextSteps(contVisible.replace(/\[\s*action:[^\]]+\]/gi, '').trim());
-
-        appendToMemory('executive-assistant', [
-          { role: 'user', content: continuationPrompt },
-          { role: 'assistant', content: `[Cortana]: ${continuationResponse}` },
-        ]);
-        groupHistory.push({ role: 'user', content: continuationPrompt });
-        groupHistory.push({ role: 'assistant', content: `[Cortana]: ${continuationResponse}` });
-        persistGroupHistory();
-
-        // Post Cortana's continuation response
-        if (contRendered) {
-          await sendAgentMessage(workspaceChannel, riley, contRendered);
-        }
-
-        // Update display for next iteration's status check
-        displayResponse = contRendered;
-
-        chainResult = await handleAgentChain(continuationResponse, groupchat, workspaceChannel, signal);
-
-        markGoalProgress(`✅ Cortana cycle ${cycle} completed`);
-
-        if (signal?.aborted) break;
-      }
+    if (isMultiStepGoal(goalState.goal || userMessage) && !signal?.aborted) {
+      await runContinuationCycles({
+        riley,
+        goal: goalState.goal || userMessage,
+        displayResponse,
+        chainResult,
+        groupchat,
+        workspaceChannel,
+        rileyWorkChannel,
+        signal,
+      });
     }
   } catch (err) {
     const abortLike = String((err as any)?.name || '').includes('Abort') || String((err as any)?.message || '').toLowerCase().includes('abort');
@@ -2755,6 +2823,22 @@ export async function askCortanaAboutMessage(
   const content = (quotedContent || '(no text)').slice(0, 1600);
   const prompt = `[Context-menu ask] ${askedBy} right-clicked a message from @${quotedAuthor} and asked you to take a look. Summarize what it means, flag anything noteworthy, and propose a next step if any.\n\n---\n${content}\n---`;
   await handleRileyMessage(prompt, askedBy || 'user', undefined, groupchat);
+}
+
+/**
+ * Route a yes/no reaction on a bot-authored message as a quick reply.
+ * Used for lightweight binary prompts ("ship it? ✅/❌") where the user
+ * reacts instead of typing a reply.
+ */
+export async function dispatchReactionReply(
+  answer: 'yes' | 'no',
+  quotedContent: string,
+  reactedBy: string,
+  groupchat: TextChannel,
+): Promise<void> {
+  const content = (quotedContent || '').slice(0, 800);
+  const prompt = `[Reaction reply] ${reactedBy} reacted "${answer}" to your question. Treat this as their answer and continue.\n\nYour question was:\n---\n${content}\n---`;
+  await handleRileyMessage(prompt, reactedBy || 'user', undefined, groupchat);
 }
 
 /**

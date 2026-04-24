@@ -22,28 +22,17 @@ import { errMsg } from '../utils/errors';
 
 export const CONTEXT_MENU_ASK_CORTANA = 'Ask Cortana about this';
 
-const commandBuilders = [
+export const contextMenuCommandBuilders = [
   new ContextMenuCommandBuilder()
     .setName(CONTEXT_MENU_ASK_CORTANA)
     .setType(ApplicationCommandType.Message),
 ];
 
-/**
- * Register (or refresh) context-menu commands in a guild. Idempotent —
- * Discord's `set` overwrites so duplicate calls are safe.
- */
 export async function registerContextMenus(guild: Guild): Promise<void> {
   try {
-    const useGlobal = String(process.env.CONTEXT_MENU_GLOBAL || 'false').toLowerCase() === 'true';
-    if (useGlobal && guild.client.application) {
-      await guild.client.application.commands.set(commandBuilders.map((b) => b.toJSON()));
-      console.log('[context-menus] Registered globally (may take up to 1h to appear)');
-      return;
-    }
-    await guild.commands.set(commandBuilders.map((b) => b.toJSON()));
-    console.log(`[context-menus] Registered in guild ${guild.name} (${guild.id})`);
+    await guild.commands.set(contextMenuCommandBuilders.map((b) => b.toJSON()));
   } catch (err) {
-    console.warn('[context-menus] Registration failed:', errMsg(err));
+    console.warn('[context-menus] register failed:', errMsg(err));
   }
 }
 

@@ -36,7 +36,10 @@ const VOICE_DISABLE_TRANSCRIPT_SUMMARY = String(process.env.VOICE_DISABLE_TRANSC
 function isVoiceStartupSelftestEnabled(): boolean {
   return String(process.env.VOICE_STARTUP_SELFTEST_ENABLED || 'false').toLowerCase() === 'true';
 }
-const VOICE_MAX_TOKENS_RILEY = parseInt(process.env.VOICE_MAX_TOKENS_RILEY || (VOICE_LOW_LATENCY_MODE ? '120' : '220'), 10);
+const VOICE_MAX_TOKENS_RILEY = parseInt(
+  process.env.VOICE_MAX_TOKENS_CORTANA || process.env.VOICE_MAX_TOKENS_RILEY || (VOICE_LOW_LATENCY_MODE ? '120' : '220'),
+  10,
+);
 const VOICE_TOOLS_ENABLED = String(process.env.VOICE_TOOLS_ENABLED || 'true').toLowerCase() === 'true';
 const VOICE_TOOLS_MAX_TOKENS = parseInt(process.env.VOICE_TOOLS_MAX_TOKENS || '1024', 10);
 const VOICE_STREAM_PARTIAL_MIN_CHARS = parseInt(process.env.VOICE_STREAM_PARTIAL_MIN_CHARS || (VOICE_LOW_LATENCY_MODE ? '10' : '16'), 10);

@@ -66,63 +66,23 @@ const VERTEX_OPUS_ONLY_MODE = process.env.VERTEX_OPUS_ONLY_MODE === 'true';
 const FORCE_OPUS_FOR_CODE_WORK = process.env.FORCE_OPUS_FOR_CODE_WORK !== 'false';
 const COMPACT_RUNTIME_TOOL_PROMPTS = process.env.COMPACT_RUNTIME_TOOL_PROMPTS !== 'false';
 const CODE_HEAVY_AGENT_IDS = new Set(['executive-assistant', 'operations-manager', 'devops', 'ios-engineer', 'android-engineer']);
-const CODE_WORK_RE = /\b(?:code|coding|implement(?:ation)?|fix(?:ing)?\s+(?:bug|error|crash|issue)|bug(?:fix)?|debug(?:ging)?|refactor(?:ing)?|build(?:ing)?\s+(?:the|a|this)|compile|lint(?:ing)?|typecheck(?:ing)?|deploy(?:ing|ment)?|migration|schema\s+(?:change|update|migration)|pull\s*request|merge\s+(?:pr|branch)|tsx|jsx|react\s+(?:native|component)|expo\s+(?:build|update))\b/i;
-const CODE_EDIT_ACTION_RE = /\b(?:edit|modify|change|patch|update|write|rewrite|create|delete|remove|rename|move|add|insert)\b/i;
-const CODE_ARTIFACT_RE = /(?:^|[\s(])(?:[A-Za-z0-9_./-]+\.(?:ts|tsx|js|jsx|mjs|cjs|json|md|sql|py|rb|go|java|kt|swift|yaml|yml|css|scss|html))(?:\b|[):])/i;
-const CODE_STRUCTURE_RE = /\b(?:file|files|codebase|repo(?:sitory)?|function|class|component|module|method|variable|comment|import|test|types?|interface|schema|migration|tsconfig|package\.json|readme)\b/i;
-const TOOL_ACTION_RE = /\b(?:run|read|search|grep|inspect|check|verify|edit|change|update|deploy|build|test|commit|push|rollback|migrate|open)\b/i;
-const SIMPLE_FAST_PATH_RE = /^(?:ok(?:ay)?|yes|no|thanks?|thank you|status|summary|summari[sz]e|what happened|why|how|help|ping|continue|proceed|looks good|sounds good)\b/i;
-const DIRECT_ANSWER_ONLY_RE = /^(?:ok(?:ay)?|yes|no|thanks?|thank you|understood|sounds good|what does|what is|why is|how does|explain|summari[sz]e|clarify)\b/i;
-const VERIFICATION_TASK_RE = /\b(?:verify|verification|confirm|smoke(?:\s+test)?|evidence|prove|check(?:\s+that)?|regression|screenshot|snapshot|next\s*steps)\b/i;
 const UNLIMITED_TOOL_ROUNDS = Number.POSITIVE_INFINITY;
 
-function normalizePromptForHeuristics(userMessage: string): string {
-  return String(userMessage || '')
-    .replace(/^\[[^\]]+\]:\s*/, '')
-    .replace(/<@[!&]?\d+>/g, ' ')
-    .replace(/^(?:\[[^\]]+\]\s*)+/g, '')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
-/**
- * High-stakes execution prompts where Pro quality is worth the cost.
- * Everything else defaults to Flash for cost efficiency.
- */
-const HIGH_STAKES_RE = /(high[-\s]?stakes|critical|prod(?:uction)?|hotfix|incident|security|auth|migration|rollback|data\s+loss|schema|deploy)/i;
-function isHighStakesPrompt(userMessage: string): boolean {
-  return HIGH_STAKES_RE.test(userMessage);
-}
-
-function isCodeWorkPrompt(userMessage: string): boolean {
-  const normalized = normalizePromptForHeuristics(userMessage);
-  return CODE_WORK_RE.test(normalized);
-}
-
-function isCodeEditingPrompt(userMessage: string): boolean {
-  const normalized = normalizePromptForHeuristics(userMessage);
-  if (!normalized) return false;
-  return CODE_EDIT_ACTION_RE.test(normalized) && (CODE_ARTIFACT_RE.test(normalized) || CODE_STRUCTURE_RE.test(normalized));
-}
-
-export function isCodingTaskPrompt(userMessage: string): boolean {
-  return isCodeWorkPrompt(userMessage) || isCodeEditingPrompt(userMessage);
-}
-
-/**
- * Narrower gate for Opus pinning: true only when the prompt both *names an
- * action* (edit/write/delete/…) AND *references a concrete code artifact*
- * (a file path, class, function, etc). Matches `isCodeEditingPrompt`, but
- * with an explicit name to make the call sites read as an intent check.
- *
- * Loose `isCodingTaskPrompt` previously pinned Opus on any prompt containing
- * "debug", "refactor", "tsx", etc. That fired on read-only questions like
- * "what does this tsx file do?" and forced Opus when Sonnet was sufficient —
- * 3–5× cost inflation on common reads.
- */
-export function isCodeEditIntent(userMessage: string): boolean {
-  return isCodeEditingPrompt(userMessage);
-}
+// Prompt classifiers live in promptHeuristics.ts. We re-export the two
+// public gates callers elsewhere already import from this module.
+import {
+  isHighStakesPrompt,
+  isCodeWorkPrompt,
+  isCodeEditingPrompt,
+  isCodingTaskPrompt as _isCodingTaskPrompt,
+  isCodeEditIntent as _isCodeEditIntent,
+  isSimpleFastPathPrompt as _isSimpleFastPathPrompt,
+  isDirectAnswerOnlyPrompt as _isDirectAnswerOnlyPrompt,
+  isVerificationTaskPrompt as _isVerificationTaskPrompt,
+  normalizePromptForHeuristics,
+} from './promptHeuristics';
+export const isCodingTaskPrompt = _isCodingTaskPrompt;
+export const isCodeEditIntent = _isCodeEditIntent;
 
 export function parseToolRoundLimit(rawValue: string | undefined, fallbackValue: string): number {
   const normalized = String(rawValue ?? fallbackValue).trim().toLowerCase();
@@ -140,25 +100,9 @@ function hasUnlimitedToolRounds(limit: number): boolean {
   return !Number.isFinite(limit);
 }
 
-function isSimpleFastPathPrompt(userMessage: string): boolean {
-  const trimmed = normalizePromptForHeuristics(userMessage);
-  if (!trimmed || trimmed.length > 220) return false;
-  if (TOOL_ACTION_RE.test(trimmed) || isCodeWorkPrompt(trimmed)) return false;
-  return SIMPLE_FAST_PATH_RE.test(trimmed) || trimmed.split(/\s+/).length <= 10;
-}
-
-function isDirectAnswerOnlyPrompt(userMessage: string): boolean {
-  const trimmed = normalizePromptForHeuristics(userMessage);
-  if (!trimmed || trimmed.length > 240) return false;
-  if (TOOL_ACTION_RE.test(trimmed) || isCodeWorkPrompt(trimmed)) return false;
-  return DIRECT_ANSWER_ONLY_RE.test(trimmed) || /^(?:who|what|why|how)\b/i.test(trimmed);
-}
-
-function isVerificationTaskPrompt(userMessage: string): boolean {
-  const trimmed = normalizePromptForHeuristics(userMessage);
-  if (!trimmed || trimmed.length > 500) return false;
-  return VERIFICATION_TASK_RE.test(trimmed);
-}
+const isSimpleFastPathPrompt = _isSimpleFastPathPrompt;
+const isDirectAnswerOnlyPrompt = _isDirectAnswerOnlyPrompt;
+const isVerificationTaskPrompt = _isVerificationTaskPrompt;
 
 function isSmokePrompt(userMessage: string): boolean {
   return /\bSMOKE_[A-Z0-9_]+\b/i.test(String(userMessage || ''));
@@ -287,9 +231,9 @@ function shouldFallbackToOpus(modelName: string): boolean {
  */
 
 const RILEY_AUTO_APPROVE_BUDGET = process.env.RILEY_AUTO_APPROVE_BUDGET !== 'false';
-const RILEY_AUTO_APPROVE_BUDGET_INCREMENT = parseFloat(process.env.RILEY_AUTO_APPROVE_BUDGET_INCREMENT_USD || '5');
-const RILEY_AUTO_APPROVE_BUDGET_MAX_PASSES = parseInt(process.env.RILEY_AUTO_APPROVE_BUDGET_MAX_PASSES || '4', 10);
-const RILEY_TOKEN_OVERRUN_ALLOWANCE = parseInt(process.env.RILEY_TOKEN_OVERRUN_ALLOWANCE || '2000000', 10);
+const RILEY_AUTO_APPROVE_BUDGET_INCREMENT = parseFloat(process.env.CORTANA_AUTO_APPROVE_BUDGET_INCREMENT_USD || process.env.RILEY_AUTO_APPROVE_BUDGET_INCREMENT_USD || '5');
+const RILEY_AUTO_APPROVE_BUDGET_MAX_PASSES = parseInt(process.env.CORTANA_AUTO_APPROVE_BUDGET_MAX_PASSES || process.env.RILEY_AUTO_APPROVE_BUDGET_MAX_PASSES || '4', 10);
+const RILEY_TOKEN_OVERRUN_ALLOWANCE = parseInt(process.env.CORTANA_TOKEN_OVERRUN_ALLOWANCE || process.env.RILEY_TOKEN_OVERRUN_ALLOWANCE || '2000000', 10);
 
 type AnyTool = { name: string; description: string; input_schema: any };
 
