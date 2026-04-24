@@ -45,6 +45,7 @@ import {
   toolJobDraftApplication,
   toolJobSubmitApplication,
 } from './tools/jobTools';
+import { runReportBlocker } from './tools/blockerTool';
 import { jobScoreColor, SYSTEM_COLORS, BUTTON_IDS } from './ui/constants';
 import { errMsg } from '../utils/errors';
 import { formatAge } from '../utils/time';
@@ -1815,6 +1816,29 @@ export const REPO_TOOLS = [
       required: ['query'],
     },
   },
+  {
+    name: 'report_blocker',
+    description:
+      'Report a blocker that is preventing you from completing a task — a missing tool, missing capability, unclear scope, or an external dependency you can\'t satisfy. Posts a structured upgrade request to #🆙-upgrades so Cortana can draft a proposal for Jordan to approve. Use this instead of silently giving up.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        issue: {
+          type: 'string',
+          description: 'What\'s blocking you, concrete and specific. One or two sentences.',
+        },
+        suggested_fix: {
+          type: 'string',
+          description: 'Optional: the capability or change that would unblock you (e.g., "a new tool that lets me X", "access to Y").',
+        },
+        impact: {
+          type: 'string',
+          description: 'Optional: what you can\'t deliver because of this blocker.',
+        },
+      },
+      required: ['issue'],
+    },
+  },
 ] as const;
 
 /**
@@ -1827,6 +1851,7 @@ const REVIEW_TOOL_NAMES = new Set([
   'db_query_readonly', 'db_schema', 'memory_read', 'memory_write', 'memory_append', 'memory_list',
   'repo_memory_index', 'repo_memory_search', 'repo_memory_add_oss',
   'recall_user_memory',
+  'report_blocker',
   'run_tests', 'typecheck', 'git_file_history', 'smoke_test_agents', 'list_threads',
   'send_channel_message',
   'capture_screenshots',
@@ -2099,6 +2124,12 @@ async function executeToolInternal(
         return await discordSetTopic(input.channel_name, input.topic);
       case 'send_channel_message':
         return await discordSendMessage(input.channel_name, input.message, undefined, context?.agentId);
+      case 'report_blocker':
+        return await runReportBlocker(context?.agentId, {
+          issue: input.issue,
+          suggested_fix: input.suggested_fix,
+          impact: input.impact,
+        });
       case 'clear_channel_messages':
         return await discordClearChannelMessages(input.channel_name, parseInt(input.limit, 10) || 500);
       case 'read_channel_messages':

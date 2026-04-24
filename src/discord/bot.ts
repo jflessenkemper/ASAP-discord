@@ -53,6 +53,7 @@ import { captureAttachments } from './services/mediaCapture';
 import { startEmbeddingWorker } from './embeddingWorker';
 import { initPresence } from './presence';
 import { registerContextMenus, handleMessageContextMenu } from './contextMenus';
+import { isUpgradeApprovalCard } from './upgradeApproval';
 import { enqueueSelfImprovementJob } from './selfImprovementQueue';
 import { detectAnomalies } from './anomalyDetection';
 import { goalState } from './handlers/goalState';
@@ -1001,6 +1002,21 @@ export async function startBot(): Promise<void> {
       const isCross = emoji === '❌';
       if ((isCheck || isCross) && (msg.webhookId || msg.author?.bot) && botChannels) {
         const text = typeof msg.content === 'string' ? msg.content : '';
+
+        // Upgrade-approval card reactions take priority — ✅ implements,
+        // ❌ dismisses. Handled before the generic yes/no fallback below.
+        const inUpgradesChannel = msg.channelId === botChannels.upgrades.id;
+        if (inUpgradesChannel && isUpgradeApprovalCard(text)) {
+          if (isCheck) {
+            const cleaned = text.replace(/^\[UPGRADE CARD\]\s*<@!?\d+>\s*—\s*/, '').trim();
+            void dispatchUpgradeToRiley(cleaned, botChannels.groupchat).catch(() => {});
+            void msg.reply(`✅ Approved by ${user.username} — implementing now.`).catch(() => {});
+          } else {
+            void msg.reply(`❌ Dismissed by ${user.username}.`).catch(() => {});
+          }
+          return;
+        }
+
         if (/\?\s*$/.test(text.trim())) {
           void dispatchReactionReply(
             isCheck ? 'yes' : 'no',
