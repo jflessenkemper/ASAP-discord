@@ -62,8 +62,10 @@ describe('turnTracker', () => {
       const cortana = makeAgent();
       await beginTurn(channel, cortana);
       const body = await flushAndGetLastBody();
-      expect(body).toMatch(/^\*\*Cortana\*\* — /);
-      // label seeded by beginTurn is 'thinking…' explicitly
+      // Owner header is now name-less ("Thinking…" + subtext label) — the
+      // webhook avatar identifies Cortana, so duplicating her name in the
+      // body would be redundant.
+      expect(body).toMatch(/^\*\*Thinking…\*\*/);
       expect(body).toContain('thinking');
     });
 
@@ -88,9 +90,12 @@ describe('turnTracker', () => {
 
       const body = await flushAndGetLastBody();
 
-      // Cortana is top-level, sub-agents indent under her.
+      // Cortana (owner) shows "Thinking…" header at the top with the live
+      // activity as italic subtext. Sub-agents indent under her with their
+      // names — they're identified by name, not by avatar like the owner.
       const lines = body.split('\n');
-      expect(lines[0]).toMatch(/^\*\*Cortana\*\* —/);
+      expect(lines[0]).toMatch(/^\*\*Thinking…\*\*/);
+      expect(lines[1]).toMatch(/^_consulting Argus and Aphrodite_/);
       expect(lines.some((l) => l.startsWith('  ↳ **Argus**'))).toBe(true);
       expect(lines.some((l) => l.startsWith('  ↳ **Aphrodite**'))).toBe(true);
       // No "(Role)" parenthetical — short role name only

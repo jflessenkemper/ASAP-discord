@@ -151,6 +151,21 @@ export class TurnTracker {
   }
 
   /**
+   * Render the OWNER's header differently from sub-agents — the owner is
+   * already identified by the webhook avatar (Cortana's name + emoji), so
+   * the header just says "Thinking…" with the live activity as subtext.
+   * Avoids the redundant "Cortana — thinking" stacking that the user
+   * called out as noisy.
+   */
+  private renderOwnerHeader(section: AgentSection): string {
+    const label = section.label || phaseMarker(section.phase);
+    if (section.phase === 'done') {
+      return `**Done** ✓\n_${label}_`;
+    }
+    return `**Thinking…**\n_${label}_`;
+  }
+
+  /**
    * Render the composite message body.
    *
    * Layout: Cortana (the owner) is top-level. Sub-agents are indented under
@@ -174,14 +189,14 @@ export class TurnTracker {
     const lines: string[] = [];
 
     if (ownerSection) {
-      lines.push(this.renderHeader(ownerSection));
+      lines.push(this.renderOwnerHeader(ownerSection));
       lines.push(...this.renderToolLines(ownerSection, MAX_AGENT_TOOLS_VISIBLE, '  '));
     } else if (subAgents.length === 0) {
-      return `**${shortName(this.owner)}** — thinking…`;
+      return '**Thinking…**';
     } else {
       // Owner section missing but sub-agents exist — add a synthetic header
       // so the tree has a root.
-      lines.push(`**${shortName(this.owner)}** — coordinating`);
+      lines.push('**Thinking…**\n_coordinating specialists_');
     }
 
     for (const section of subAgents) {
