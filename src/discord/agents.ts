@@ -25,7 +25,13 @@ export interface AgentConfig {
   systemPrompt: string;
 }
 
-const AVATAR_BASE = 'https://storage.googleapis.com/asap-bot-assets/avatars';
+// Bump AVATAR_VERSION whenever avatars are regenerated in GCS. Discord caches
+// webhook avatars per-URL, so a static URL won't refetch even after the file
+// content changes. The query param is harmless to GCS but forces Discord to
+// pull a fresh image.
+const AVATAR_VERSION = 'v2026-04-26';
+const AVATAR_BASE = `https://storage.googleapis.com/asap-bot-assets/avatars`;
+const AVATAR_QS = `?v=${AVATAR_VERSION}`;
 
 /**
  * Single source of truth for all agent configuration.
@@ -203,7 +209,7 @@ export async function loadDynamicAgentsFromDb(): Promise<number> {
         emoji: config.emoji,
         color: config.color || 0x888888,
         voice: config.voice || 'Kore',
-        avatarUrl: `${AVATAR_BASE}/default.png`,
+        avatarUrl: `${AVATAR_BASE}/default.png${AVATAR_QS}`,
         systemPrompt: config.systemPrompt,
       });
       loaded++;
@@ -240,7 +246,7 @@ export function getAgents(): Map<AgentId, AgentConfig> {
       emoji: entry.emoji,
       color: entry.color,
       voice: entry.voice,
-      avatarUrl: `${AVATAR_BASE}/${entry.id}.png`,
+      avatarUrl: `${AVATAR_BASE}/${entry.id}.png${AVATAR_QS}`,
       systemPrompt,
     });
   }
@@ -350,7 +356,7 @@ export function createDynamicAgent(config: {
     emoji: config.emoji,
     color: config.color || 0x888888,
     voice: config.voice || 'Kore',
-    avatarUrl: `${AVATAR_BASE}/default.png`,
+    avatarUrl: `${AVATAR_BASE}/default.png${AVATAR_QS}`,
     systemPrompt: config.systemPrompt,
   };
   dynamicAgents.set(config.id, agent);
