@@ -488,6 +488,11 @@ export function listenToUserElevenLabsRealtime(
   let retryTimer: ReturnType<typeof setTimeout> | null = null;
   let utteranceStartAt: number | null = null;
   let firstTranscriptPending = false;
+  // Tracks how many transcripts the realtime session has actually delivered.
+  // If we keep getting "connection closed unexpectedly" without ever
+  // receiving a transcript, the endpoint is wedged for this caller and we
+  // shouldn't burn the full retry budget — fall back to batch immediately.
+  let transcriptsReceivedCount = 0;
 
   const receiver = connection.receiver;
 
@@ -520,6 +525,14 @@ export function listenToUserElevenLabsRealtime(
       fallbackToBatch(reason);
       return;
     }
+    // If we've retried at least once and haven't received a single transcript,
+    // the realtime endpoint is wedged for this caller — burn no more retries
+    // and switch to batch STT now. Stops the close→retry→close loop Cortana
+    // diagnosed during the April 2026 voice issue.
+    if (realtimeRetryAttempts >= 1 && transcriptsReceivedCount === 0) {
+      fallbackToBatch(`${reason} (no transcripts received in ${realtimeRetryAttempts} attempt(s))`);
+      return;
+    }
     if (realtimeRetryAttempts >= MAX_REALTIME_SESSION_RETRIES) {
       fallbackToBatch(reason);
       return;
@@ -544,6 +557,7 @@ export function listenToUserElevenLabsRealtime(
     startElevenLabsRealtimeTranscription(
       (text, detectedLanguage) => {
         if (!destroyed && text.trim()) {
+          transcriptsReceivedCount += 1;
           const sttLatencyMs = firstTranscriptPending && utteranceStartAt
             ? Date.now() - utteranceStartAt
             : undefined;

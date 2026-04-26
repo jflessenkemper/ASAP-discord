@@ -119,8 +119,21 @@ export async function recordSpan(span: TraceSpan): Promise<void> {
 }
 
 const DAILY_LIMITS = {
-  /** Argus LLM input+output tokens per day */
-  claudeTokens: parseInt(process.env.DAILY_LIMIT_GEMINI_LLM_TOKENS || process.env.DAILY_LIMIT_CLAUDE_TOKENS || '8000000', 10),
+  /**
+   * Anthropic LLM input+output tokens per day.
+   *
+   * Why a limit at all? Runaway loops (continuation cycles, watchdog
+   * recoveries, agent self-improvement chains) can chew through tokens
+   * fast — at Sonnet pricing 50M tokens ≈ $90 of spend. Hitting the cap
+   * pauses work; raising it via `set_daily_claude_token_limit` (Cortana
+   * tool) takes effect immediately for the current process.
+   *
+   * Default raised to 50M (was 8M) — the 8M cap was tripping during
+   * legitimate long sessions (long voice calls + multi-file self-repair).
+   * The cumulative dollar cap in `budgetUsd` is still the actual safety
+   * net.
+   */
+  claudeTokens: parseInt(process.env.DAILY_LIMIT_GEMINI_LLM_TOKENS || process.env.DAILY_LIMIT_CLAUDE_TOKENS || '50000000', 10),
   /** Argus realtime API calls per day */
   geminiCalls: parseInt(process.env.DAILY_LIMIT_GEMINI_CALLS || '2000', 10),
   /** Argus ElevenLabs characters per day */

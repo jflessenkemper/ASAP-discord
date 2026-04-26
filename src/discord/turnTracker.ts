@@ -158,11 +158,17 @@ export class TurnTracker {
    * called out as noisy.
    */
   private renderOwnerHeader(section: AgentSection): string {
-    const label = section.label || phaseMarker(section.phase);
+    // Subtext is the LIVE ACTIVITY ("still working · 30s", "consulting Argus",
+    // a tool name). Suppress the subtext when it would just echo the header
+    // ("thinking", "planning", "working") — those repeats made the card read
+    // "Thinking… / thinking…", which was the duplicate the user flagged.
+    const rawLabel = (section.label || '').trim();
+    const phaseWords = new Set(['', 'thinking', 'thinking…', 'planning', 'working']);
+    const showSubtext = rawLabel && !phaseWords.has(rawLabel.toLowerCase());
     if (section.phase === 'done') {
-      return `**Done** ✓\n_${label}_`;
+      return showSubtext ? `**Done** ✓\n_${rawLabel}_` : '**Done** ✓';
     }
-    return `**Thinking…**\n_${label}_`;
+    return showSubtext ? `**Thinking…**\n_${rawLabel}_` : '**Thinking…**';
   }
 
   /**

@@ -62,11 +62,11 @@ describe('turnTracker', () => {
       const cortana = makeAgent();
       await beginTurn(channel, cortana);
       const body = await flushAndGetLastBody();
-      // Owner header is now name-less ("Thinking…" + subtext label) — the
-      // webhook avatar identifies Cortana, so duplicating her name in the
-      // body would be redundant.
-      expect(body).toMatch(/^\*\*Thinking…\*\*/);
-      expect(body).toContain('thinking');
+      // Owner header is name-less ("Thinking…") — the webhook avatar
+      // identifies Cortana. The seed label "thinking…" is also suppressed
+      // from the subtext since it would duplicate the header text; only
+      // non-phase-word labels render as italic subtext.
+      expect(body).toMatch(/^\*\*Thinking…\*\*$/);
     });
 
     it('uses the webhook agent identity on the initial send', async () => {

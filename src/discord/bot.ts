@@ -599,6 +599,18 @@ export async function startBot(): Promise<void> {
           warmCortanaVoiceAtStartup(),
           warmAnthropicConnection(),
         ]);
+
+        // Periodic re-warm so the voice path stays warm even when Jordan
+        // hasn't been in a call. ElevenLabs caches expire, the WebSocket
+        // pool times out, and the first cold turn after a quiet hour was
+        // adding ~2s of latency. Default 30 min; tuneable via env.
+        const warmIntervalMs = Math.max(5 * 60 * 1000, parseInt(process.env.VOICE_WARM_INTERVAL_MS || '1800000', 10));
+        setInterval(() => {
+          warmCortanaVoiceAtStartup().catch((err) => {
+            console.warn('[warm-loop] voice rewarm failed:', errMsg(err));
+          });
+          warmAnthropicConnection().catch(() => { /* best-effort */ });
+        }, warmIntervalMs).unref();
       } catch (err) {
         console.warn('[warm] startup warm failed:', errMsg(err));
       }
