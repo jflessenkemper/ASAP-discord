@@ -277,6 +277,23 @@ const SERVER_ROOT = fs.existsSync(path.join(REPO_ROOT, 'server', 'package.json')
   ? path.join(REPO_ROOT, 'server')
   : REPO_ROOT;
 
+/**
+ * "Self" repository root — the bot's own source code (asap-bot).
+ *
+ * REPO_ROOT typically points at the user-facing app (e.g., /opt/asap-app)
+ * so specialists work on user features. SELF_REPO_ROOT lets Cortana and
+ * the operations-manager read+edit the bot's own code via the *_self_*
+ * tool family, which is how she fixes things like voice-chat bugs in her
+ * own runtime.
+ *
+ * Defaults to the directory the running process was launched from
+ * (process.cwd) — that's /opt/asap-bot in production. Override via
+ * SELF_REPO_ROOT env var.
+ */
+const SELF_REPO_ROOT = process.env.SELF_REPO_ROOT
+  ? path.resolve(process.env.SELF_REPO_ROOT)
+  : process.cwd();
+
 /** Directories agents are never allowed to touch */
 const BLOCKED_PATHS = [
   '.env',
@@ -332,6 +349,25 @@ function safePath(relative: string): string {
     if (firstKey !== undefined) safePathCache.delete(firstKey);
   }
   safePathCache.set(relative, resolved);
+  return resolved;
+}
+
+/**
+ * Like safePath, but resolves against SELF_REPO_ROOT (the bot's own code).
+ * Used by the *_self_* tool family that lets Cortana and ops-manager read
+ * and edit the asap-bot codebase for self-repair.
+ */
+function safePathSelf(relative: string): string {
+  const resolved = path.resolve(SELF_REPO_ROOT, relative);
+  if (!resolved.startsWith(SELF_REPO_ROOT)) {
+    throw new Error(`Path escapes self-repo root: ${relative}`);
+  }
+  const rel = path.relative(SELF_REPO_ROOT, resolved);
+  for (const blocked of BLOCKED_PATHS) {
+    if (rel === blocked || rel.startsWith(blocked + '/') || rel.startsWith(blocked + path.sep)) {
+      throw new Error(`Access denied: ${relative}`);
+    }
+  }
 
   return resolved;
 }
@@ -1817,6 +1853,69 @@ export const REPO_TOOLS = [
     },
   },
   {
+    name: 'read_self_file',
+    description:
+      'Read a file from the BOT\'s own source repo (asap-bot, /opt/asap-bot) — your own runtime code. Use this for self-repair on voice chat, tool dispatch, message handling, etc. Path is relative to the bot repo root.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        path: { type: 'string', description: 'File path relative to the bot repo root (e.g., "src/discord/voice/connection.ts").' },
+        offset: { type: 'number', description: 'Byte offset to start reading from. Optional.' },
+        max_bytes: { type: 'number', description: 'Maximum bytes to return. Optional.' },
+      },
+      required: ['path'],
+    },
+  },
+  {
+    name: 'search_self_files',
+    description:
+      'Search across the BOT\'s own source repo (asap-bot) — your own code. Same as search_files but scoped to your runtime, not the user-facing app.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        pattern: { type: 'string', description: 'Regex pattern to search for.' },
+        include: { type: 'string', description: 'Optional file glob (e.g., "*.ts").' },
+      },
+      required: ['pattern'],
+    },
+  },
+  {
+    name: 'edit_self_file',
+    description:
+      'Edit a file in the BOT\'s own source repo (asap-bot). Replaces a UNIQUE occurrence of old_string with new_string. Use this to patch bugs in your own runtime — voice chat, message routing, tool dispatch. Changes apply on next deploy.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        path: { type: 'string', description: 'File path relative to the bot repo root.' },
+        old_string: { type: 'string', description: 'The exact text to replace. Must appear exactly once.' },
+        new_string: { type: 'string', description: 'Replacement text.' },
+      },
+      required: ['path', 'old_string', 'new_string'],
+    },
+  },
+  {
+    name: 'list_self_directory',
+    description: 'List contents of a directory in the BOT\'s own source repo (asap-bot).',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        path: { type: 'string', description: 'Directory path relative to bot repo root. Use "." for the root.' },
+      },
+      required: ['path'],
+    },
+  },
+  {
+    name: 'check_self_file_exists',
+    description: 'Check whether a file or directory exists in the BOT\'s own source repo (asap-bot).',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        path: { type: 'string', description: 'Path relative to bot repo root.' },
+      },
+      required: ['path'],
+    },
+  },
+  {
     name: 'report_blocker',
     description:
       'Report a blocker that is preventing you from completing a task — a missing tool, missing capability, unclear scope, or an external dependency you can\'t satisfy. Posts a structured upgrade request to #🆙-upgrades so Cortana can draft a proposal for Jordan to approve. Use this instead of silently giving up.',
@@ -1890,6 +1989,8 @@ const RILEY_TOOL_NAMES = new Set([
   'create_agent', 'remove_agent', 'list_agents',
   // ── Cortana ops & error analysis ──
   'error_patterns', 'recover_agent_memory',
+  // ── Cortana self-repair: read + edit her own bot codebase ──
+  'read_self_file', 'search_self_files', 'edit_self_file', 'list_self_directory', 'check_self_file_exists',
 ]);
 export const RILEY_TOOLS = REPO_TOOLS;
 
@@ -1949,11 +2050,29 @@ const REVIEW_TOOL_ACCESS_AGENT_IDS = new Set([
   'lawyer',
 ]);
 
+/**
+ * Self-repair tools (read/edit the bot's own code) are gated to Cortana
+ * and the operations-manager only. Everyone else who has FULL_TOOL_ACCESS
+ * still gets every other tool, just not the keys to the bot's own runtime.
+ */
+const SELF_REPAIR_AGENT_IDS = new Set(['executive-assistant', 'operations-manager']);
+const SELF_REPAIR_TOOL_NAMES = new Set([
+  'read_self_file', 'search_self_files', 'edit_self_file', 'list_self_directory', 'check_self_file_exists',
+]);
+
+function filterSelfRepairTools(
+  tools: readonly (typeof REPO_TOOLS[number])[],
+  agentId: string,
+): readonly (typeof REPO_TOOLS[number])[] {
+  if (SELF_REPAIR_AGENT_IDS.has(agentId)) return tools;
+  return tools.filter((t) => !SELF_REPAIR_TOOL_NAMES.has(t.name));
+}
+
 function getRawToolsForAgent(agentId: string): readonly (typeof REPO_TOOLS[number])[] {
   const id = String(agentId || '').trim().toLowerCase();
-  if (!STRICT_AGENT_TOOL_ACCESS) return REPO_TOOLS;
-  if (id === 'developer' || id === 'dev' || id === 'ace') return REPO_TOOLS;
-  if (FULL_TOOL_ACCESS_AGENT_IDS.has(id)) return REPO_TOOLS;
+  if (!STRICT_AGENT_TOOL_ACCESS) return filterSelfRepairTools(REPO_TOOLS, id);
+  if (id === 'developer' || id === 'dev' || id === 'ace') return filterSelfRepairTools(REPO_TOOLS, id);
+  if (FULL_TOOL_ACCESS_AGENT_IDS.has(id)) return filterSelfRepairTools(REPO_TOOLS, id);
   if (id === RILEY_AGENT_ID) return REPO_TOOLS;
   if (REVIEW_TOOL_ACCESS_AGENT_IDS.has(id)) return REVIEW_TOOLS;
   // Unknown agents default to review-grade least privilege.
@@ -2130,6 +2249,16 @@ async function executeToolInternal(
           suggested_fix: input.suggested_fix,
           impact: input.impact,
         });
+      case 'read_self_file':
+        return readSelfFile(input.path, parseInt(input.offset, 10), parseInt(input.max_bytes, 10));
+      case 'search_self_files':
+        return searchSelfFiles(input.pattern, input.include);
+      case 'edit_self_file':
+        return editSelfFile(input.path, input.old_string, input.new_string);
+      case 'list_self_directory':
+        return listSelfDirectory(input.path);
+      case 'check_self_file_exists':
+        return checkSelfFileExists(input.path);
       case 'clear_channel_messages':
         return await discordClearChannelMessages(input.channel_name, parseInt(input.limit, 10) || 500);
       case 'read_channel_messages':
@@ -2808,6 +2937,90 @@ function checkFileExists(relativePath: string): string {
   const target = String(relativePath || '').trim();
   if (!target) return 'Path is required.';
   const abs = safePath(target);
+  if (!fs.existsSync(abs)) return `NOT_FOUND ${target}`;
+  const stat = fs.statSync(abs);
+  if (stat.isDirectory()) return `EXISTS dir ${target}`;
+  if (stat.isFile()) return `EXISTS file ${target} (${stat.size} bytes)`;
+  return `EXISTS other ${target}`;
+}
+
+// ── Self-repair tools (asap-bot's own code) ──────────────────────────────
+//
+// Cortana and the operations-manager use these to read + edit the bot's
+// own source. REPO_ROOT points at the user-facing app (asap-app) for
+// specialists; SELF_REPO_ROOT points at the bot's own checkout. The
+// duplicate small wrappers stay narrow on purpose — same file ops, just
+// resolved against the bot repo root.
+
+function readSelfFile(relativePath: string, offsetRaw?: number, maxBytesRaw?: number): string {
+  const abs = safePathSelf(relativePath);
+  if (!fs.existsSync(abs)) return `File not found: ${relativePath}`;
+  const stat = fs.statSync(abs);
+  if (stat.size > MAX_WRITE_SIZE) {
+    return `File too large (${Math.round(stat.size / 1024)} KB). Read specific sections or use search_self_files instead.`;
+  }
+  const content = fs.readFileSync(abs, 'utf-8');
+  const offset = Number.isFinite(offsetRaw as number) && (offsetRaw as number) > 0
+    ? Math.min(content.length, Math.floor(offsetRaw as number))
+    : 0;
+  const maxBytes = resolveAdaptiveReadMaxBytes(maxBytesRaw);
+  if (offset >= content.length) return `[Reached end of file. Size=${content.length} chars. offset=${offset}]`;
+  const end = Math.min(content.length, offset + maxBytes);
+  const page = content.slice(offset, end);
+  if (end >= content.length) return page;
+  const remaining = content.length - end;
+  return `${page}\n\n[Showing chars ${offset}-${end} of ${content.length}. ${remaining} chars remaining. Use offset=${end} to continue.]`;
+}
+
+function editSelfFile(relativePath: string, oldString: string, newString: string): string {
+  const abs = safePathSelf(relativePath);
+  if (!fs.existsSync(abs)) return `File not found: ${relativePath}`;
+  const content = fs.readFileSync(abs, 'utf-8');
+  const count = content.split(oldString).length - 1;
+  if (count === 0) return `String not found in ${relativePath}: "${oldString.slice(0, 80)}${oldString.length > 80 ? '…' : ''}"`;
+  if (count > 1) return `String appears ${count} times in ${relativePath}; provide more surrounding context to make it unique.`;
+  const updated = content.replace(oldString, newString);
+  fs.writeFileSync(abs, updated, 'utf-8');
+  return `Edited ${relativePath} (1 replacement, ${updated.length} bytes total).`;
+}
+
+function searchSelfFiles(pattern: string, include?: string): string {
+  if (!pattern) return 'Pattern is required.';
+  const includeGlobs = include ? [include] : [];
+  const rgArgs = [
+    '-n', '-i', '-e', pattern, '--max-count', '50',
+    '--glob', '!node_modules/**',
+    '--glob', '!.git/**',
+    '--glob', '!dist/**',
+    ...includeGlobs.flatMap((g) => ['--glob', g]),
+    '.',
+  ];
+  try {
+    const out = execFileSync('rg', rgArgs, {
+      cwd: SELF_REPO_ROOT, timeout: 10_000, maxBuffer: 512 * 1024, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    const trimmed = String(out || '').trim();
+    return trimmed ? trimmed.split('\n').slice(0, 200).join('\n') : `No matches in asap-bot for: ${pattern}`;
+  } catch (err: any) {
+    if (err?.status === 1) return `No matches in asap-bot for: ${pattern}`;
+    return `search_self_files failed: ${err?.message || err}`;
+  }
+}
+
+function listSelfDirectory(relativePath: string): string {
+  const abs = safePathSelf(relativePath || '.');
+  if (!fs.existsSync(abs)) return `Directory not found: ${relativePath}`;
+  const entries = fs.readdirSync(abs, { withFileTypes: true });
+  return entries
+    .map((e) => `${e.isDirectory() ? 'd' : 'f'} ${e.name}`)
+    .sort()
+    .join('\n') || '(empty)';
+}
+
+function checkSelfFileExists(relativePath: string): string {
+  const target = String(relativePath || '').trim();
+  if (!target) return 'Path is required.';
+  const abs = safePathSelf(target);
   if (!fs.existsSync(abs)) return `NOT_FOUND ${target}`;
   const stat = fs.statSync(abs);
   if (stat.isDirectory()) return `EXISTS dir ${target}`;

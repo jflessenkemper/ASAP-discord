@@ -226,19 +226,26 @@ describe('tools — tool definitions', () => {
 });
 
 describe('tools — agent access control', () => {
+  // Self-repair tools (read_self_file etc.) are gated to Cortana + ops-manager
+  // only — every other "full access" agent gets REPO_TOOLS minus those 5.
+  const SELF_REPAIR_TOOL_COUNT = 5;
+
   describe('getToolsForAgent()', () => {
-    it('returns full tools for developer', () => {
+    it('returns full tools (minus self-repair) for developer', () => {
       const tools = getToolsForAgent('developer');
-      expect(tools.length).toBe(REPO_TOOLS.length);
+      expect(tools.length).toBe(REPO_TOOLS.length - SELF_REPAIR_TOOL_COUNT);
     });
 
-    it('returns full tools for devops', () => {
-      expect(getToolsForAgent('devops').length).toBe(REPO_TOOLS.length);
+    it('returns full tools (minus self-repair) for devops', () => {
+      expect(getToolsForAgent('devops').length).toBe(REPO_TOOLS.length - SELF_REPAIR_TOOL_COUNT);
     });
 
-    it('returns Cortana tools for executive-assistant', () => {
+    it('returns Cortana tools for executive-assistant — including self-repair', () => {
       const tools = getToolsForAgent('executive-assistant');
       expect(tools.length).toBe(RILEY_TOOLS.length);
+      const names = new Set(tools.map((t) => (t as { name: string }).name));
+      expect(names.has('read_self_file')).toBe(true);
+      expect(names.has('edit_self_file')).toBe(true);
     });
 
     it('returns review tools for qa', () => {
@@ -260,7 +267,7 @@ describe('tools — agent access control', () => {
 
     it('returns compact tools when compactPrompt=true', () => {
       const tools = getToolsForAgent('developer', true);
-      expect(tools.length).toBe(REPO_TOOLS.length);
+      expect(tools.length).toBe(REPO_TOOLS.length - SELF_REPAIR_TOOL_COUNT);
       // Should be compact format
       for (const tool of tools as any[]) {
         expect(tool.description.length).toBeLessThanOrEqual(140);
@@ -272,7 +279,7 @@ describe('tools — agent access control', () => {
     it('returns Set of tool names', () => {
       const names = getAllowedToolNamesForAgent('developer');
       expect(names).toBeInstanceOf(Set);
-      expect(names.size).toBe(REPO_TOOLS.length);
+      expect(names.size).toBe(REPO_TOOLS.length - SELF_REPAIR_TOOL_COUNT);
     });
 
     it('review agents have fewer tools', () => {
