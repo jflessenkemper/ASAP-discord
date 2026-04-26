@@ -1113,9 +1113,9 @@ async function runVoiceBridgeNoActiveCallCheck(groupchat: TextChannel, selfId: s
   return { name: 'voice_bridge_no_active_call', passed: false, detail: 'No bridge response observed', critical: false };
 }
 
-async function runVoiceBridgeActiveCallCheck(groupchat: TextChannel, rileyMention: string, selfId: string, timeoutMs: number): Promise<ExtraCheckResult> {
+async function runVoiceBridgeActiveCallCheck(groupchat: TextChannel, cortanaMention: string, selfId: string, timeoutMs: number): Promise<ExtraCheckResult> {
   const token = `VOICE_ACTIVE_${Date.now().toString().slice(-6)}`;
-  const startMsg = await groupchat.send(`${rileyMention} [smoke test:voice-active] Start a voice call now and confirm with token ${token}.`);
+  const startMsg = await groupchat.send(`${cortanaMention} [smoke test:voice-active] Start a voice call now and confirm with token ${token}.`);
 
   const started = Date.now();
   let sawStart = false;
@@ -1135,7 +1135,7 @@ async function runVoiceBridgeActiveCallCheck(groupchat: TextChannel, rileyMentio
   }
 
   const bridge = await runVoiceBridgeNoActiveCallCheck(groupchat, selfId, Math.min(timeoutMs, 45000));
-  await groupchat.send(`${rileyMention} [smoke test:voice-active] End call now.`).catch(() => {});
+  await groupchat.send(`${cortanaMention} [smoke test:voice-active] End call now.`).catch(() => {});
 
   return {
     name: 'voice_bridge_active_call',
@@ -1155,7 +1155,7 @@ async function runVoiceBridgeActiveCallCheck(groupchat: TextChannel, rileyMentio
  */
 async function runVoiceRoundTripCheck(
   groupchat: TextChannel,
-  rileyMention: string,
+  cortanaMention: string,
   selfId: string,
   timeoutMs: number,
 ): Promise<ExtraCheckResult> {
@@ -1163,7 +1163,7 @@ async function runVoiceRoundTripCheck(
   const stepTimeout = Math.min(timeoutMs, 60_000);
 
   // Step 1: Ask Cortana to join voice
-  const joinMsg = await groupchat.send(`${rileyMention} join voice`);
+  const joinMsg = await groupchat.send(`${cortanaMention} join voice`);
   const joinStart = Date.now();
   let joinConfirmed = false;
 
@@ -1188,7 +1188,7 @@ async function runVoiceRoundTripCheck(
 
   if (!joinConfirmed) {
     // Cleanup: try to end call just in case
-    await groupchat.send(`${rileyMention} leave voice`).catch(() => {});
+    await groupchat.send(`${cortanaMention} leave voice`).catch(() => {});
     return { name: 'voice_round_trip', passed: false, detail: 'Cortana did not confirm joining voice within timeout', critical: false };
   }
 
@@ -1219,7 +1219,7 @@ async function runVoiceRoundTripCheck(
   }
 
   // Step 4: Cleanup — ask Cortana to leave voice
-  await groupchat.send(`${rileyMention} leave voice`).catch(() => {});
+  await groupchat.send(`${cortanaMention} leave voice`).catch(() => {});
   await sleep(2000);
 
   if (!resultDetail) {
@@ -1301,7 +1301,7 @@ async function runFreeformObservation(
   groupchat: TextChannel,
   allChannels: TextChannel[],
   prompt: string,
-  rileyMention: string,
+  cortanaMention: string,
   selfId: string,
   timeoutMs: number,
   pollIntervalMs: number,
@@ -1311,7 +1311,7 @@ async function runFreeformObservation(
   const observations: string[] = [];
 
   // Post the freeform prompt
-  const fullPrompt = prompt.includes('@') ? prompt : `${rileyMention} ${prompt}`;
+  const fullPrompt = prompt.includes('@') ? prompt : `${cortanaMention} ${prompt}`;
   console.log('\n=== Freeform Observation Mode ===');
   console.log(`Prompt: ${fullPrompt}`);
   console.log(`Timeout: ${timeoutMs / 1000}s`);
@@ -1839,7 +1839,7 @@ async function run(): Promise<void> {
   }
 
   if (requireLiveRouter) {
-    const routerMention = roleMentions.get('executive-assistant') || '@riley';
+    const routerMention = roleMentions.get('executive-assistant') || '@cortana';
     const health = await verifyLiveRouter(groupchat, routerMention, client.user!.id, routerHealthTimeoutMs);
     if (!health.ok) {
       await client.destroy();
@@ -1854,7 +1854,7 @@ async function run(): Promise<void> {
       groupchat,
       candidateChannels,
       freeformPrompt,
-      roleMentions.get('executive-assistant') || '@riley',
+      roleMentions.get('executive-assistant') || '@cortana',
       client.user!.id,
       freeformTimeoutMs,
       pollIntervalMs,
@@ -1989,8 +1989,8 @@ async function run(): Promise<void> {
     const phase1Failed = results.length - phase1Passed;
     console.log(`\n  Phase 1 complete: ${phase1Passed} passed, ${phase1Failed} failed in ${phase1Elapsed}s (${monitor?.totalEvents ?? 0} events captured)`);
     console.log('  Verifying bot responsiveness before Phase 2...');
-    const rileyMentionGate = roleMentions.get('executive-assistant') || '@riley';
-    const phase2Gate = await verifyLiveRouter(groupchat, rileyMentionGate, client.user!.id, 30_000);
+    const cortanaMentionGate = roleMentions.get('executive-assistant') || '@cortana';
+    const phase2Gate = await verifyLiveRouter(groupchat, cortanaMentionGate, client.user!.id, 30_000);
     if (!phase2Gate.ok) {
       console.warn('  ⚠ Bot unresponsive after Phase 1 — waiting 15s before continuing');
       await sleep(15_000);
@@ -2045,7 +2045,7 @@ async function run(): Promise<void> {
     if (heavyToolTests.length > 0) {
       // ── Health-check gate between Phase 2 and Phase 3 ──
       console.log('\n  Verifying bot responsiveness before Phase 3...');
-      const phase3Gate = await verifyLiveRouter(groupchat, rileyMentionGate, client.user!.id, 30_000);
+      const phase3Gate = await verifyLiveRouter(groupchat, cortanaMentionGate, client.user!.id, 30_000);
       if (!phase3Gate.ok) {
         console.warn('  ⚠ Bot unresponsive after Phase 2 — waiting 15s before continuing');
         await sleep(15_000);
@@ -2113,16 +2113,16 @@ async function run(): Promise<void> {
 
   if (runVoiceActive) {
     process.stdout.write('Testing voice bridge (active call flow) ... ');
-    const rileyMention = roleMentions.get('executive-assistant') || '@riley';
-    const r = await runVoiceBridgeActiveCallCheck(groupchat, rileyMention, client.user!.id, Math.min(timeoutMs, 120000));
+    const cortanaMention = roleMentions.get('executive-assistant') || '@cortana';
+    const r = await runVoiceBridgeActiveCallCheck(groupchat, cortanaMention, client.user!.id, Math.min(timeoutMs, 120000));
     extras.push(r);
     console.log(`${r.passed ? 'PASS' : 'FAIL'} | ${r.detail}`);
   }
 
   if (runVoiceRoundTrip) {
     process.stdout.write('Testing voice round-trip (join → TTS → leave) ... ');
-    const rileyMention = roleMentions.get('executive-assistant') || '@riley';
-    const r = await runVoiceRoundTripCheck(groupchat, rileyMention, client.user!.id, Math.min(timeoutMs, 120000));
+    const cortanaMention = roleMentions.get('executive-assistant') || '@cortana';
+    const r = await runVoiceRoundTripCheck(groupchat, cortanaMention, client.user!.id, Math.min(timeoutMs, 120000));
     extras.push(r);
     console.log(`${r.passed ? 'PASS' : 'FAIL'} | ${r.detail}`);
   }

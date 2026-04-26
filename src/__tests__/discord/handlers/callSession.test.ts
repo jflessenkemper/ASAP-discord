@@ -39,7 +39,7 @@ jest.mock('../../../discord/agents', () => ({
     id: 'executive-assistant',
     name: 'Cortana',
     emoji: '📋',
-    avatarUrl: 'https://example.com/riley.png',
+    avatarUrl: 'https://example.com/cortana.png',
     voice: 'Achernar',
   }),
   AgentId: {},
@@ -681,7 +681,7 @@ describe('callSession', () => {
       const result = await injectVoiceTranscriptForTesting({
         userId: '123',
         username: 'User',
-        text: 'send to text riley: please check the deployment status',
+        text: 'send to text cortana: please check the deployment status',
       });
       expect(result.ok).toBe(true);
 

@@ -8,8 +8,8 @@ function normalizeDirectedPrompt(prompt: string): string {
     .trim();
 }
 
-function isDirectRileyPrompt(prompt: string): boolean {
-  return /^(?:hey|hi|yo)?\s*(?:cortana|riley|asap)\b[\s,!:;-]*/i.test(prompt);
+function isDirectCortanaPrompt(prompt: string): boolean {
+  return /^(?:hey|hi|yo)?\s*(?:cortana|cortana|asap)\b[\s,!:;-]*/i.test(prompt);
 }
 
 function isLikelyWorkspaceTask(prompt: string): boolean {
@@ -25,7 +25,7 @@ export function shouldKeepGroupchatPromptInChannel(agentIds: string[], userMessa
   if (normalized.length > 180) return false;
   if (normalized.split(/\s+/).length > DIRECT_GROUPCHAT_SHORT_PROMPT_MAX_WORDS) return false;
   if (isLikelyWorkspaceTask(normalized)) return false;
-  return isDirectRileyPrompt(normalized) || agentIds.length === 0;
+  return isDirectCortanaPrompt(normalized) || agentIds.length === 0;
 }
 
 export function shouldEchoDirectedResponseToGroupchat(agentIds: string[], userMessage: string): boolean {

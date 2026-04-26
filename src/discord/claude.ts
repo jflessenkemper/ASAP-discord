@@ -8,7 +8,7 @@ import { ensureGoogleCredentials, getAccessTokenViaGcloud } from '../services/go
 import {
   DEFAULT_CODING_MODEL,
   DEFAULT_FAST_MODEL,
-  RILEY_PLANNING_MODEL,
+  CORTANA_PLANNING_MODEL,
   VOICE_FAST_MODEL,
   USE_VERTEX_ANTHROPIC,
   VERTEX_PROJECT_ID,
@@ -21,7 +21,7 @@ import {
 } from '../services/modelConfig';
 
 import { logAgentEvent } from './activityLog';
-import { AgentConfig, getRileyPersonality, getRileyMemory, getOwnerName } from './agents';
+import { AgentConfig, getCortanaPersonality, getCortanaMemory, getOwnerName } from './agents';
 import { getOrCreateContentCache } from './contextCache';
 import { classifyInput, classifyOutput, sanitizeOutputForSecrets } from './guardrails';
 import { isLowSignalCompletion } from './handlers/responseNormalization';
@@ -193,7 +193,7 @@ export function getPinnedModelForTask(agentId: string, userMessage: string): str
   if (override) return override;
   if (VERTEX_OPUS_ONLY_MODE) return DEFAULT_CODING_MODEL;
   if (FORCE_OPUS_FOR_CODE_WORK && isCodeEditIntent(userMessage)) return DEFAULT_CODING_MODEL;
-  if (agentId === 'executive-assistant' || agentId === 'operations-manager') return RILEY_PLANNING_MODEL;
+  if (agentId === 'executive-assistant' || agentId === 'operations-manager') return CORTANA_PLANNING_MODEL;
   return null;
 }
 
@@ -230,10 +230,10 @@ function shouldFallbackToOpus(modelName: string): boolean {
  * Tool access can be constrained by agent role via tools.ts policy.
  */
 
-const RILEY_AUTO_APPROVE_BUDGET = process.env.RILEY_AUTO_APPROVE_BUDGET !== 'false';
-const RILEY_AUTO_APPROVE_BUDGET_INCREMENT = parseFloat(process.env.CORTANA_AUTO_APPROVE_BUDGET_INCREMENT_USD || process.env.RILEY_AUTO_APPROVE_BUDGET_INCREMENT_USD || '5');
-const RILEY_AUTO_APPROVE_BUDGET_MAX_PASSES = parseInt(process.env.CORTANA_AUTO_APPROVE_BUDGET_MAX_PASSES || process.env.RILEY_AUTO_APPROVE_BUDGET_MAX_PASSES || '4', 10);
-const RILEY_TOKEN_OVERRUN_ALLOWANCE = parseInt(process.env.CORTANA_TOKEN_OVERRUN_ALLOWANCE || process.env.RILEY_TOKEN_OVERRUN_ALLOWANCE || '2000000', 10);
+const CORTANA_AUTO_APPROVE_BUDGET = process.env.CORTANA_AUTO_APPROVE_BUDGET !== 'false';
+const CORTANA_AUTO_APPROVE_BUDGET_INCREMENT = parseFloat(process.env.CORTANA_AUTO_APPROVE_BUDGET_INCREMENT_USD || process.env.CORTANA_AUTO_APPROVE_BUDGET_INCREMENT_USD || '5');
+const CORTANA_AUTO_APPROVE_BUDGET_MAX_PASSES = parseInt(process.env.CORTANA_AUTO_APPROVE_BUDGET_MAX_PASSES || process.env.CORTANA_AUTO_APPROVE_BUDGET_MAX_PASSES || '4', 10);
+const CORTANA_TOKEN_OVERRUN_ALLOWANCE = parseInt(process.env.CORTANA_TOKEN_OVERRUN_ALLOWANCE || process.env.CORTANA_TOKEN_OVERRUN_ALLOWANCE || '2000000', 10);
 
 type AnyTool = { name: string; description: string; input_schema: any };
 
@@ -1438,7 +1438,7 @@ const MAX_TOOL_ROUNDS = parseToolRoundLimit(process.env.MAX_TOOL_ROUNDS, '0');
 const MAX_TOOL_ROUNDS_DEVELOPER = parseToolRoundLimit(process.env.MAX_TOOL_ROUNDS_DEVELOPER, '0');
 const MAX_TOOL_ROUNDS_EXECUTIVE = parseToolRoundLimit(process.env.MAX_TOOL_ROUNDS_EXECUTIVE, '0');
 /** Optional one-time extra Cortana pass. Default ON (+10 rounds) so Cortana can finish orchestration. */
-const RILEY_AUTO_TOOL_EXTENSION = parseToolRoundLimit(process.env.RILEY_AUTO_TOOL_EXTENSION, '0');
+const CORTANA_AUTO_TOOL_EXTENSION = parseToolRoundLimit(process.env.CORTANA_AUTO_TOOL_EXTENSION, '0');
 /** Maximum history messages to send per request (excludes current user message) */
 const MAX_CONTEXT_MESSAGES = parseInt(process.env.MAX_CONTEXT_MESSAGES || '10', 10);
 /** Soft cap for history character volume sent per request */
@@ -2512,7 +2512,7 @@ export async function agentRespond(
     onPartialText?: (partialText: string) => Promise<void>;
     onToolStart?: (toolName: string, summary: string) => Promise<void>;
     toolRoundBoost?: number;
-    rileyAutoToolApprovalUsed?: boolean;
+    cortanaAutoToolApprovalUsed?: boolean;
     safetyCapSynthesisUsed?: boolean;
     disableTools?: boolean;
     priority?: 'normal' | 'voice' | 'background';
@@ -2614,8 +2614,8 @@ export async function agentRespond(
   }
 
   if (isBudgetExceeded()) {
-    if (RILEY_AUTO_APPROVE_BUDGET && autoBudgetPassesUsed < RILEY_AUTO_APPROVE_BUDGET_MAX_PASSES) {
-      const approved = approveAdditionalBudget(RILEY_AUTO_APPROVE_BUDGET_INCREMENT);
+    if (CORTANA_AUTO_APPROVE_BUDGET && autoBudgetPassesUsed < CORTANA_AUTO_APPROVE_BUDGET_MAX_PASSES) {
+      const approved = approveAdditionalBudget(CORTANA_AUTO_APPROVE_BUDGET_INCREMENT);
       autoBudgetPassesUsed += 1;
       logAgentEvent(
         agent.id,
@@ -2636,18 +2636,18 @@ export async function agentRespond(
   const { remaining, spent, limit } = getRemainingBudget();
   const { used: tokenUsed, remaining: tokenRemaining, limit: tokenLimit } = getClaudeTokenStatus();
 
-  const rileyCoordination = agent.id === 'executive-assistant' ? `
+  const cortanaCoordination = agent.id === 'executive-assistant' ? `
 AGENT COORDINATION: Coordinate agents via Discord mentions in your response text. The system parses and routes automatically.
 Prefer exact role mentions supplied in the live conversation context. If no exact mention tokens are provided, use canonical handles like @max, @sophie, @kane, @raj, @elena, @kai, @jude, @liv, @harper, @mia, and @leo.
 CRITICAL: Do NOT use send_channel_message — use Discord mentions for agent coordination.
     DEFAULT: Execute directly whenever possible. Mention specialists only for focused review, verification, or domain-specific help.
 ` : '';
 
-  const budgetGovernance = RILEY_AUTO_APPROVE_BUDGET
-    ? `\n- Budget autopilot enabled ($${RILEY_AUTO_APPROVE_BUDGET_INCREMENT.toFixed(2)} increments). Keep working unless hard budget block after auto-approval.\n`
+  const budgetGovernance = CORTANA_AUTO_APPROVE_BUDGET
+    ? `\n- Budget autopilot enabled ($${CORTANA_AUTO_APPROVE_BUDGET_INCREMENT.toFixed(2)} increments). Keep working unless hard budget block after auto-approval.\n`
     : `\n- On budget limit: pause, explain needed increase, wait for ${getOwnerName()} approval.\n`;
 
-  const workerBudgetGovernance = RILEY_AUTO_APPROVE_BUDGET
+  const workerBudgetGovernance = CORTANA_AUTO_APPROVE_BUDGET
     ? `\n- Budget autopilot active. Only stop for budget if Cortana confirms hard block.\n`
     : `\n- Cortana is token master. Ask Cortana (not Jordan) for budget/credits.\n`;
 
@@ -2695,12 +2695,12 @@ UPGRADES CHANNEL:
 - Flag token waste or Discord UX friction when noticed.
 `;
 
-  const rileyContext = agent.id === 'executive-assistant' || agent.id === 'operations-manager'
+  const cortanaContext = agent.id === 'executive-assistant' || agent.id === 'operations-manager'
     ? (() => {
         const parts: string[] = [];
-        const personality = getRileyPersonality();
+        const personality = getCortanaPersonality();
         if (personality) parts.push(`<personality>\n${personality}\n</personality>`);
-        const memory = getRileyMemory();
+        const memory = getCortanaMemory();
         if (memory) parts.push(`<persistent_memory>\n${memory}\n</persistent_memory>`);
         return parts.length ? '\n' + parts.join('\n') + '\n' : '';
       })()
@@ -2715,12 +2715,12 @@ UPGRADES CHANNEL:
     : '';
 
   const systemPrompt = `${agent.systemPrompt}
-${rileyContext}
+${cortanaContext}
 <project_context>
 ${getProjectContextForAgent(agent.id)}
 </project_context>${learnedPatterns}${userRecentActivity}
 
-You are "${agent.name}" responding in Discord.${rileyCoordination}
+You are "${agent.name}" responding in Discord.${cortanaCoordination}
 RULES: Argus 220 words (code exempt). Lead with the useful part. 60-120 words normal; 1-3 sentences for simple asks.${toolsSection}
 Any human in Discord can request work. Jordan approval only for budget increases.
 Format: 1) action taken, 2) key result, 3) next step/blocker. Skip structure for simple asks.
@@ -3100,12 +3100,12 @@ ${getLatestSmokeHealthLine()}`;
   ]);
 
   for (let round = 0; round < maxToolRounds; round++) {
-    const tokenStatus = getClaudeTokenLimitState(RILEY_TOKEN_OVERRUN_ALLOWANCE);
+    const tokenStatus = getClaudeTokenLimitState(CORTANA_TOKEN_OVERRUN_ALLOWANCE);
     const tokenHardExceeded = tokenStatus.overHardLimit;
 
     if (isBudgetExceeded()) {
-      if (RILEY_AUTO_APPROVE_BUDGET && autoBudgetPassesUsed < RILEY_AUTO_APPROVE_BUDGET_MAX_PASSES) {
-        const approved = approveAdditionalBudget(RILEY_AUTO_APPROVE_BUDGET_INCREMENT);
+      if (CORTANA_AUTO_APPROVE_BUDGET && autoBudgetPassesUsed < CORTANA_AUTO_APPROVE_BUDGET_MAX_PASSES) {
+        const approved = approveAdditionalBudget(CORTANA_AUTO_APPROVE_BUDGET_INCREMENT);
         autoBudgetPassesUsed += 1;
         logAgentEvent(
           agent.id,
@@ -3477,8 +3477,8 @@ ${getLatestSmokeHealthLine()}`;
     }
   }
 
-  if (!hasUnlimitedToolRounds(maxToolRounds) && agent.id === 'executive-assistant' && !options?.rileyAutoToolApprovalUsed && RILEY_AUTO_TOOL_EXTENSION > 0) {
-    const extension = Math.max(1, RILEY_AUTO_TOOL_EXTENSION);
+  if (!hasUnlimitedToolRounds(maxToolRounds) && agent.id === 'executive-assistant' && !options?.cortanaAutoToolApprovalUsed && CORTANA_AUTO_TOOL_EXTENSION > 0) {
+    const extension = Math.max(1, CORTANA_AUTO_TOOL_EXTENSION);
     logAgentEvent(agent.id, 'response', `Cortana started one extra tool pass (+${extension} rounds)`);
     return agentRespond(
       agent,
@@ -3488,7 +3488,7 @@ ${getLatestSmokeHealthLine()}`;
       {
         ...options,
         toolRoundBoost: extension,
-        rileyAutoToolApprovalUsed: true,
+        cortanaAutoToolApprovalUsed: true,
       }
     );
   }

@@ -121,7 +121,7 @@ describe('usage', () => {
     });
 
     it('is case insensitive', () => {
-      expect(toAgentTag('RILEY')).toBe('executive-assistant');
+      expect(toAgentTag('CORTANA')).toBe('executive-assistant');
       expect(toAgentTag('ace')).toBe('executive-assistant');
     });
   });

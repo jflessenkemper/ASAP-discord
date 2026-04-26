@@ -1,7 +1,7 @@
 # Helper Patterns Registry
 
 Extracted helpers that replace repeated inline code. **Use these instead of raw patterns.**
-Riley: read this file during `identify-blocker` and `dedup-discipline` checks to enforce compliance.
+Cortana: read this file during `identify-blocker` and `dedup-discipline` checks to enforce compliance.
 
 ## Error Handling
 
@@ -24,4 +24,4 @@ Riley: read this file during `identify-blocker` and `dedup-discipline` checks to
 ## General Deduplication Rule
 
 > If a code pattern appears **3 or more times**, extract it into a shared helper.
-> Document the helper in this file so Riley can enforce it.
+> Document the helper in this file so Cortana can enforce it.

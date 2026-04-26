@@ -131,10 +131,10 @@ describe('telephony', () => {
 
   describe('getConferenceTwiML()', () => {
     it('returns TwiML with conference room name', () => {
-      const xml = getConferenceTwiML('riley-call-123');
+      const xml = getConferenceTwiML('cortana-call-123');
       expect(xml).toContain('<?xml version="1.0"');
       expect(xml).toContain('<Conference');
-      expect(xml).toContain('riley-call-123');
+      expect(xml).toContain('cortana-call-123');
       expect(xml).toContain('<Dial>');
     });
   });

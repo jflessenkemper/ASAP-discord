@@ -137,7 +137,7 @@ export DISCORD_SMOKE_POST_SUCCESS_RESET_AND_ANNOUNCE="false"
 export DISCORD_SMOKE_REQUIRE_LIVE_ROUTER="true"
 # Bumped from 25s → 60s (the upper bound the tester allows). Cold-start dev
 # instances are fully initialized by now but the first user message still has
-# to propagate through Riley → memory → reply, which eats several seconds.
+# to propagate through Cortana → memory → reply, which eats several seconds.
 export DISCORD_SMOKE_ROUTER_HEALTH_TIMEOUT_MS="${DISCORD_SMOKE_ROUTER_HEALTH_TIMEOUT_MS:-60000}"
 npm run -s discord:test:fast
 

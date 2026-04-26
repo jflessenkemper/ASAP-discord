@@ -154,8 +154,8 @@ describe('test-definitions', () => {
       for (const t of AGENT_CAPABILITY_TESTS) {
         countByAgent.set(t.id, (countByAgent.get(t.id) || 0) + 1);
       }
-      const rileyCount = countByAgent.get('executive-assistant') || 0;
-      expect(rileyCount).toBeGreaterThan(20);
+      const cortanaCount = countByAgent.get('executive-assistant') || 0;
+      expect(cortanaCount).toBeGreaterThan(20);
     });
   });
 

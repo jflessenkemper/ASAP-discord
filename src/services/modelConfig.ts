@@ -30,7 +30,7 @@ function unique(values: string[]): string[] {
   return out;
 }
 
-export type ModelRole = 'coding' | 'fast' | 'secondary-fast' | 'voice-fast' | 'guardrails' | 'job-draft' | 'riley-planning';
+export type ModelRole = 'coding' | 'fast' | 'secondary-fast' | 'voice-fast' | 'guardrails' | 'job-draft' | 'cortana-planning';
 
 export const DEFAULT_CODING_MODEL = firstEnv(
   ['CODING_AGENT_MODEL', 'ANTHROPIC_CODING_MODEL'],
@@ -62,8 +62,8 @@ export const JOB_DRAFT_MODEL = firstEnv(
   DEFAULT_FAST_MODEL,
 );
 
-export const RILEY_PLANNING_MODEL = firstEnv(
-  ['RILEY_PLANNING_MODEL'],
+export const CORTANA_PLANNING_MODEL = firstEnv(
+  ['CORTANA_PLANNING_MODEL'],
   DEFAULT_FAST_MODEL,
 );
 
@@ -74,7 +74,7 @@ export const MODEL_BY_ROLE: Record<ModelRole, string> = {
   'voice-fast': VOICE_FAST_MODEL,
   guardrails: GUARDRAILS_MODEL,
   'job-draft': JOB_DRAFT_MODEL,
-  'riley-planning': RILEY_PLANNING_MODEL,
+  'cortana-planning': CORTANA_PLANNING_MODEL,
 };
 
 export const ANTHROPIC_HEALTHCHECK_MODELS = unique(csvEnv(

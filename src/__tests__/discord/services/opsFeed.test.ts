@@ -35,7 +35,7 @@ describe('opsFeed', () => {
   describe('formatOpsLine()', () => {
     it('formats a basic info line', () => {
       const line = formatOpsLine({
-        actor: 'riley',
+        actor: 'cortana',
         scope: 'cost:request',
         metric: 'gemini-2.5-flash',
         delta: 'in=1000 out=500',
@@ -44,7 +44,7 @@ describe('opsFeed', () => {
       });
       expect(line).toContain('🟢');
       expect(line).toContain('severity=info');
-      expect(line).toContain('agent=riley');
+      expect(line).toContain('agent=cortana');
       expect(line).toContain('scope=cost:request');
       expect(line).toContain('metric=gemini-2.5-flash');
       expect(line).toContain('delta=in=1000 out=500');
@@ -225,7 +225,7 @@ describe('opsFeed', () => {
 
     it('handles empty delta', () => {
       const line = formatToolAuditHuman({
-        actor: 'riley',
+        actor: 'cortana',
         scope: 'tool-audit',
         metric: 'list_files',
         delta: '',
@@ -237,7 +237,7 @@ describe('opsFeed', () => {
 
     it('handles "none" delta', () => {
       const line = formatToolAuditHuman({
-        actor: 'riley',
+        actor: 'cortana',
         scope: 'tool-audit',
         metric: 'list_files',
         delta: 'none',
@@ -248,7 +248,7 @@ describe('opsFeed', () => {
 
     it('handles "batched" delta', () => {
       const line = formatToolAuditHuman({
-        actor: 'riley',
+        actor: 'cortana',
         scope: 'tool-audit',
         metric: 'list_files',
         delta: 'batched',

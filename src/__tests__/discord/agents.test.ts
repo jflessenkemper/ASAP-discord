@@ -26,8 +26,8 @@ import {
   getAgentByChannelName,
   setAgentRoleId,
   getAgentRoleId,
-  getRileyPersonality,
-  getRileyMemory,
+  getCortanaPersonality,
+  getCortanaMemory,
   AGENT_IDS,
 } from '../../discord/agents';
 
@@ -97,7 +97,7 @@ describe('agents', () => {
 
     it('resolves by handle', () => {
       expect(resolveAgentId('ace')).toBe('executive-assistant');
-      expect(resolveAgentId('riley')).toBe('executive-assistant');
+      expect(resolveAgentId('cortana')).toBe('executive-assistant');
     });
 
     it('resolves by alias', () => {
@@ -108,7 +108,7 @@ describe('agents', () => {
 
     it('resolves with @ prefix', () => {
       expect(resolveAgentId('@ace')).toBe('executive-assistant');
-      expect(resolveAgentId('@@riley')).toBe('executive-assistant');
+      expect(resolveAgentId('@@cortana')).toBe('executive-assistant');
     });
 
     it('resolves case-insensitively', () => {
@@ -174,7 +174,7 @@ describe('agents', () => {
       const aliases = getAgentAliases('executive-assistant');
       expect(aliases).toContain('executive-assistant');
       expect(aliases).toContain('cortana');
-      expect(aliases).toContain('riley');
+      expect(aliases).toContain('cortana');
       expect(aliases).toContain('developer');
       expect(aliases).toContain('dev');
     });
@@ -227,13 +227,13 @@ describe('agents', () => {
     });
   });
 
-  describe('getRileyPersonality / getRileyMemory', () => {
+  describe('getCortanaPersonality / getCortanaMemory', () => {
     it('returns null when .github dir not found', () => {
-      expect(getRileyPersonality()).toBeNull();
+      expect(getCortanaPersonality()).toBeNull();
     });
 
     it('returns null for memory when .github dir not found', () => {
-      expect(getRileyMemory()).toBeNull();
+      expect(getCortanaMemory()).toBeNull();
     });
   });
 });

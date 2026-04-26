@@ -45,8 +45,8 @@ const AGENT_REGISTRY = [
   { id: 'devops',              name: 'Hephaestus (DevOps)',        handle: 'hephaestus', roleName: 'Hephaestus', aliases: ['devops', 'ops', 'jude', 'hephaestus'],                                                                         emoji: '🚀',  color: 0x4338CA, voice: 'Vale',      channelName: '🚀-devops' },
   { id: 'copywriter',          name: 'Calliope (Copywriter)',      handle: 'calliope',   roleName: 'Calliope',   aliases: ['copywriter', 'copy', 'liv', 'calliope'],                                                                       emoji: '✍️',  color: 0x0F766E, voice: 'Zephyr',    channelName: '✍️-copywriter' },
   { id: 'lawyer',              name: 'Themis (Lawyer)',            handle: 'themis',     roleName: 'Themis',     aliases: ['lawyer', 'legal', 'harper', 'themis'],                                                                         emoji: '⚖️',  color: 0x14532D, voice: 'Sulafat',   channelName: '⚖️-lawyer' },
-  { id: 'executive-assistant', name: 'Cortana (Executive Assistant)', handle: 'cortana', roleName: 'Cortana',    aliases: ['executive-assistant', 'executive', 'assistant', 'riley', 'cortana', 'developer', 'dev', 'ace'],               emoji: '📋', color: 0x1D4ED8, voice: 'RileyEL',   channelName: '📋-executive-assistant' },
-  { id: 'operations-manager',  name: 'Cortana (Operations Manager)', handle: 'cortana-ops', roleName: 'Cortana Ops', aliases: ['operations-manager', 'ops-manager', 'riley-ops', 'cortana-ops', 'self-improvement-manager', 'ops-steward'], emoji: '🛰️', color: 0x2F7A49, voice: 'RileyEL', channelName: '🛰️-operations-manager' },
+  { id: 'executive-assistant', name: 'Cortana (Executive Assistant)', handle: 'cortana', roleName: 'Cortana',    aliases: ['executive-assistant', 'executive', 'assistant', 'cortana', 'cortana', 'developer', 'dev', 'ace'],               emoji: '📋', color: 0x1D4ED8, voice: 'CortanaEL',   channelName: '📋-executive-assistant' },
+  { id: 'operations-manager',  name: 'Cortana (Operations Manager)', handle: 'cortana-ops', roleName: 'Cortana Ops', aliases: ['operations-manager', 'ops-manager', 'cortana-ops', 'cortana-ops', 'self-improvement-manager', 'ops-steward'], emoji: '🛰️', color: 0x2F7A49, voice: 'CortanaEL', channelName: '🛰️-operations-manager' },
   { id: 'ios-engineer',        name: 'Artemis (iOS Engineer)',     handle: 'artemis',    roleName: 'Artemis',    aliases: ['ios-engineer', 'ios', 'mia', 'artemis'],                                                                       emoji: '🍎',  color: 0xF97316, voice: 'Enceladus', channelName: '🍎-ios-engineer' },
   { id: 'android-engineer',    name: 'Prometheus (Android Engineer)', handle: 'prometheus', roleName: 'Prometheus', aliases: ['android-engineer', 'android', 'leo', 'prometheus'],                                                         emoji: '🤖',  color: 0x16A34A, voice: 'Iapetus',   channelName: '🤖-android-engineer' },
 ] as const;
@@ -97,17 +97,17 @@ function loadSystemPrompt(agentId: string): string {
 }
 
 let personalityCache: string | null | undefined;
-export function getRileyPersonality(): string | null {
+export function getCortanaPersonality(): string | null {
   if (personalityCache === undefined) {
-    personalityCache = loadFileFromGithub('riley-personality.md');
+    personalityCache = loadFileFromGithub('cortana-personality.md');
   }
   return personalityCache;
 }
 
-/** Extract owner_name from riley-personality.md. Falls back to env var or 'Jordan'. */
+/** Extract owner_name from cortana-personality.md. Falls back to env var or 'Jordan'. */
 export function getOwnerName(): string {
   if (process.env.OWNER_NAME) return process.env.OWNER_NAME;
-  const personality = getRileyPersonality();
+  const personality = getCortanaPersonality();
   if (personality) {
     const match = personality.match(/^owner_name:\s*(.+)$/m);
     if (match) return match[1].trim();
@@ -115,10 +115,10 @@ export function getOwnerName(): string {
   return 'Jordan';
 }
 
-/** Extract owner_email from riley-personality.md. Falls back to env var. */
+/** Extract owner_email from cortana-personality.md. Falls back to env var. */
 export function getOwnerEmail(): string {
   if (process.env.OWNER_EMAIL) return process.env.OWNER_EMAIL;
-  const personality = getRileyPersonality();
+  const personality = getCortanaPersonality();
   if (personality) {
     const match = personality.match(/^owner_email:\s*(.+)$/m);
     if (match) return match[1].trim();
@@ -127,9 +127,9 @@ export function getOwnerEmail(): string {
 }
 
 let memoryCache: string | null | undefined;
-export function getRileyMemory(): string | null {
+export function getCortanaMemory(): string | null {
   if (memoryCache === undefined) {
-    memoryCache = loadFileFromGithub('riley-memory.md');
+    memoryCache = loadFileFromGithub('cortana-memory.md');
   }
   return memoryCache;
 }

@@ -7,8 +7,8 @@ Quick reference for the current bot-first codebase.
 ```
 .github/
   agents/               Specialist agent system prompts (*.agent.md)
-  riley-personality.md  Riley's voice, owner identity, and operating style
-  riley-memory.md       Riley's persistent guidance and preferences
+  cortana-personality.md  Cortana's voice, owner identity, and operating style
+  cortana-memory.md       Cortana's persistent guidance and preferences
   PROJECT_CONTEXT.md    Repo/product context injected into prompts
   REPO_MAP.md           This file
   HELPER_PATTERNS.md    Registry of shared helpers and dedup rules
@@ -34,7 +34,7 @@ ASAP-discord is now primarily a Discord-operated automation system with:
 - Discord orchestration and specialist agents
 - a small Express surface for health, metrics, debug logs, GitHub/build webhooks, and Twilio webhooks
 - bot memory, activity logging, tracing, and diagnostics
-- career-ops and job-search tooling for Riley
+- career-ops and job-search tooling for Cortana
 
 The old marketplace route tree and legacy marketplace tables are no longer part of the active runtime.
 
@@ -42,7 +42,7 @@ The old marketplace route tree and legacy marketplace tables are no longer part 
 
 | File | Purpose |
 |------|---------|
-| `src/discord/agents.ts` | Static agent registry, dynamic agent lifecycle, Riley personality/owner metadata |
+| `src/discord/agents.ts` | Static agent registry, dynamic agent lifecycle, Cortana personality/owner metadata |
 | `src/discord/claude.ts` | LLM orchestration, prompt construction, tool loop, budget handling |
 | `src/discord/tools.ts` | Main tool registry and execution dispatch |
 | `src/discord/tester.ts` | Smoke-test runner, readiness scoring, category mapping |
@@ -115,9 +115,9 @@ Edit `src/discord/tools.ts`:
 
 Create a new sequential SQL file in `src/db/migrations/`. Do not modify historical migration files.
 
-### Update Riley behavior
+### Update Cortana behavior
 
-- Personality and owner metadata: `.github/riley-personality.md`
+- Personality and owner metadata: `.github/cortana-personality.md`
 - Shared repo/product guidance: `.github/PROJECT_CONTEXT.md`
 - Specialist prompts: `.github/agents/*.agent.md`
 

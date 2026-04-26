@@ -1969,7 +1969,7 @@ export const REVIEW_TOOLS = REPO_TOOLS.filter((t) => REVIEW_TOOL_NAMES.has(t.nam
  * self-improve, review open PRs, and implement upgrades autonomously.
  * Deploy and merge are gated by tests+typecheck enforcement at the tool level.
  */
-const RILEY_TOOL_NAMES = new Set([
+const CORTANA_TOOL_NAMES = new Set([
   'read_file', 'search_files', 'list_directory', 'check_file_exists', 'fetch_url',
   'memory_read', 'memory_write', 'memory_append', 'memory_list',
   'repo_memory_index', 'repo_memory_search', 'repo_memory_add_oss',
@@ -1992,7 +1992,7 @@ const RILEY_TOOL_NAMES = new Set([
   // ── Cortana self-repair: read + edit her own bot codebase ──
   'read_self_file', 'search_self_files', 'edit_self_file', 'list_self_directory', 'check_self_file_exists',
 ]);
-export const RILEY_TOOLS = REPO_TOOLS;
+export const CORTANA_TOOLS = REPO_TOOLS;
 
 type PromptTool = {
   name: string;
@@ -2034,10 +2034,10 @@ function compactToolForPrompt(tool: any): PromptTool {
  */
 export const PROMPT_REPO_TOOLS: PromptTool[] = REPO_TOOLS.map(compactToolForPrompt);
 export const PROMPT_REVIEW_TOOLS: PromptTool[] = REVIEW_TOOLS.map(compactToolForPrompt);
-export const PROMPT_RILEY_TOOLS: PromptTool[] = PROMPT_REPO_TOOLS;
+export const PROMPT_CORTANA_TOOLS: PromptTool[] = PROMPT_REPO_TOOLS;
 
 const STRICT_AGENT_TOOL_ACCESS = String(process.env.STRICT_AGENT_TOOL_ACCESS ?? 'true').toLowerCase() !== 'false';
-const RILEY_AGENT_ID = 'executive-assistant';
+const CORTANA_AGENT_ID = 'executive-assistant';
 const FULL_TOOL_ACCESS_AGENT_IDS = new Set(['executive-assistant', 'operations-manager', 'devops', 'ios-engineer', 'android-engineer']);
 const REVIEW_TOOL_ACCESS_AGENT_IDS = new Set([
   'qa',
@@ -2073,7 +2073,7 @@ function getRawToolsForAgent(agentId: string): readonly (typeof REPO_TOOLS[numbe
   if (!STRICT_AGENT_TOOL_ACCESS) return filterSelfRepairTools(REPO_TOOLS, id);
   if (id === 'developer' || id === 'dev' || id === 'ace') return filterSelfRepairTools(REPO_TOOLS, id);
   if (FULL_TOOL_ACCESS_AGENT_IDS.has(id)) return filterSelfRepairTools(REPO_TOOLS, id);
-  if (id === RILEY_AGENT_ID) return REPO_TOOLS;
+  if (id === CORTANA_AGENT_ID) return REPO_TOOLS;
   if (REVIEW_TOOL_ACCESS_AGENT_IDS.has(id)) return REVIEW_TOOLS;
   // Unknown agents default to review-grade least privilege.
   return REVIEW_TOOLS;

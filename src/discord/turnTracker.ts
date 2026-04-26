@@ -6,7 +6,7 @@
  * one "thinking" message plus separate tool-chain messages per agent.
  *
  * Lifecycle:
- *   const t = await beginTurn(channel, rileyAgent);
+ *   const t = await beginTurn(channel, cortanaAgent);
  *   t.setPhase('executive-assistant', 'planning', 'thinking about it');
  *   t.addTool('executive-assistant', 'search_files', 'src/foo', 'start');
  *   t.setPhase('qa', 'working', 'running smoke tests', maxAgent);

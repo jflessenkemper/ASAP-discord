@@ -75,7 +75,7 @@ import { errMsg } from '../../utils/errors';
 import { envIntFirst, envBoolFirst } from '../../utils/env';
 import { buildLoopHealthCompactSummary, buildLoopHealthDetailedReport, recordLoopHealth } from '../loopHealth';
 import { buildLoggingEngineReport, runLoggingEngine } from '../loggingEngine';
-import { buildGroupchatDecisionAttention, buildGroupchatSingleUserNotice, buildTextStatusSummary } from '../rileyInteraction';
+import { buildGroupchatDecisionAttention, buildGroupchatSingleUserNotice, buildTextStatusSummary } from '../cortanaInteraction';
 
 
 type ToolChainMessage = {
@@ -88,8 +88,8 @@ type ToolChainMessage = {
 
 const TOOL_CHAIN_EDIT_DEBOUNCE_MS = parseInt(process.env.TOOL_CHAIN_EDIT_DEBOUNCE_MS || '400', 10);
 const toolChainMessages = new Map<string, ToolChainMessage>();
-const rileyStallNoticeAt = new Map<string, number>();
-const RILEY_STALL_NOTICE_COOLDOWN_MS = envIntFirst(['CORTANA_STALL_NOTICE_COOLDOWN_MS', 'RILEY_STALL_NOTICE_COOLDOWN_MS'], 120000);
+const cortanaStallNoticeAt = new Map<string, number>();
+const CORTANA_STALL_NOTICE_COOLDOWN_MS = envIntFirst(['CORTANA_STALL_NOTICE_COOLDOWN_MS', 'CORTANA_STALL_NOTICE_COOLDOWN_MS'], 120000);
 
 /** Record a tool start/completion for Copilot-style live chain display. */
 function updateToolChain(
@@ -196,14 +196,14 @@ let claudeNotificationsBoundChannelId: string | null = null;
 const MAX_PARALLEL_SUBAGENTS = parseInt(process.env.MAX_PARALLEL_SUBAGENTS || '3', 10);
 const SUBAGENT_MAX_TOKENS = parseInt(process.env.SUBAGENT_MAX_TOKENS || '900', 10);
 const GROUPCHAT_PROCESS_TIMEOUT_MS = parseInt(process.env.GROUPCHAT_PROCESS_TIMEOUT_MS || '480000', 10);
-const RILEY_NO_RESPONSE_TIMEOUT_MS = envIntFirst(['CORTANA_NO_RESPONSE_TIMEOUT_MS', 'RILEY_NO_RESPONSE_TIMEOUT_MS'], 180000);
-const RILEY_PROGRESS_PING_MS = envIntFirst(
-  ['CORTANA_PROGRESS_PING_MS', 'RILEY_PROGRESS_PING_MS'],
-  Math.max(20_000, Math.floor(RILEY_NO_RESPONSE_TIMEOUT_MS * 0.6)),
+const CORTANA_NO_RESPONSE_TIMEOUT_MS = envIntFirst(['CORTANA_NO_RESPONSE_TIMEOUT_MS', 'CORTANA_NO_RESPONSE_TIMEOUT_MS'], 180000);
+const CORTANA_PROGRESS_PING_MS = envIntFirst(
+  ['CORTANA_PROGRESS_PING_MS', 'CORTANA_PROGRESS_PING_MS'],
+  Math.max(20_000, Math.floor(CORTANA_NO_RESPONSE_TIMEOUT_MS * 0.6)),
 );
 const SELF_IMPROVEMENT_WORKER_POLL_MS = Math.max(2_000, parseInt(process.env.SELF_IMPROVEMENT_WORKER_POLL_MS || '5000', 10));
 const SELF_IMPROVEMENT_WORKER_ERROR_COOLDOWN_MS = Math.max(5_000, parseInt(process.env.SELF_IMPROVEMENT_WORKER_ERROR_COOLDOWN_MS || '60000', 10));
-const GOAL_WATCHDOG_TOKEN_OVERRUN_ALLOWANCE = Math.max(0, envIntFirst(['CORTANA_TOKEN_OVERRUN_ALLOWANCE', 'RILEY_TOKEN_OVERRUN_ALLOWANCE'], 2000000));
+const GOAL_WATCHDOG_TOKEN_OVERRUN_ALLOWANCE = Math.max(0, envIntFirst(['CORTANA_TOKEN_OVERRUN_ALLOWANCE', 'CORTANA_TOKEN_OVERRUN_ALLOWANCE'], 2000000));
 
 const GOAL_STALL_TIMEOUT_MS = parseInt(process.env.GOAL_STALL_TIMEOUT_MS || '420000', 10);
 const GOAL_STALL_CHECK_INTERVAL_MS = parseInt(process.env.GOAL_STALL_CHECK_INTERVAL_MS || '60000', 10);
@@ -218,7 +218,7 @@ const AUTO_REBUILD_ERROR_COOLDOWN_MS = parseInt(process.env.AUTO_REBUILD_ERROR_C
 const URL_ACTION_COOLDOWN_MS = parseInt(process.env.URL_ACTION_COOLDOWN_MS || '1800000', 10);
 const GROUPCHAT_DUPLICATE_WINDOW_MS = parseInt(process.env.GROUPCHAT_DUPLICATE_WINDOW_MS || '10000', 10);
 /** Maximum continuation cycles for multi-step tasks before stopping. */
-const MAX_CONTINUATION_CYCLES = envIntFirst(['CORTANA_MAX_CONTINUATION_CYCLES', 'RILEY_MAX_CONTINUATION_CYCLES'], 3);
+const MAX_CONTINUATION_CYCLES = envIntFirst(['CORTANA_MAX_CONTINUATION_CYCLES', 'CORTANA_MAX_CONTINUATION_CYCLES'], 3);
 const APP_SERVER_ROOT = (fs.existsSync(path.join(process.cwd(), 'package.json')) && fs.existsSync(path.join(process.cwd(), 'src')))
   ? process.cwd()
   : path.resolve(__dirname, '../../..');
@@ -296,7 +296,7 @@ function markGoalProgress(status?: string): void {
   goalState.markProgress(status);
 }
 
-function inferRileyStatus(text: string, completionClaimed: boolean, completionVerified: boolean): 'fixed' | 'partially fixed' | 'blocked' {
+function inferCortanaStatus(text: string, completionClaimed: boolean, completionVerified: boolean): 'fixed' | 'partially fixed' | 'blocked' {
   const normalized = String(text || '').toLowerCase();
   if (/\bblocked\b|\bverification pending\b|\bfailed\b|\berror\b/.test(normalized)) return 'blocked';
   // For multi-step goals, suppress premature "fixed" status.
@@ -341,14 +341,68 @@ function hasMultiStepEvidence(text: string): boolean {
  * the console on every turn — that did nothing observable and was CPU +
  * regex churn, so it's gone.
  */
-function enforceRileyResponseContract(
+/**
+ * Detect short conversational pings that don't warrant a goal/workspace.
+ * Examples: "Cortana", "hi", "ok", "thanks", "are you there".
+ *
+ * Heuristics:
+ *   - <= 6 words AND
+ *   - no imperative verb (do/run/check/fix/build/show/explain/…) AND
+ *   - not a question that names a concrete subject
+ *
+ * The agent name itself ("Cortana") is treated as a pure ping.
+ */
+const NO_OP_IMPERATIVE_RE = /\b(?:do|run|check|fix|implement|deploy|investigate|diagnose|build|write|edit|create|delete|add|remove|update|read|search|find|show|tell|explain|summari[sz]e|list|why|how|what|where|when|review|test|verify|launch|scan|generate|patch)\b/i;
+function isNoOpUserPing(content: string): boolean {
+  const stripped = String(content || '')
+    .replace(/<@[!&]?\d+>/g, ' ')
+    .replace(/[^\w\s'’?!.,-]/g, ' ')
+    .trim();
+  if (!stripped) return true;
+  const wordCount = stripped.split(/\s+/).filter(Boolean).length;
+  if (wordCount > 6) return false;
+  if (NO_OP_IMPERATIVE_RE.test(stripped)) return false;
+  const lower = stripped.toLowerCase();
+  if (/^(?:cortana|hi|hello|hey|yo|sup|ok|okay|thanks?|thank you|cool|nice|great|got it|sounds good|are you there|you up|you online|ping)\b/.test(lower)) return true;
+  // Plain agent-name mentions or single-word handles are pings.
+  if (wordCount <= 2 && /^[a-z][\w-]*$/.test(lower.replace(/[?!.,]/g, ''))) return true;
+  return false;
+}
+
+/** Tools that count as "actually changing code" for the no-tool-no-fix gate. */
+const EDIT_TOOL_NAMES = new Set([
+  'edit_file', 'write_file', 'batch_edit',
+  'edit_self_file', 'create_pull_request', 'gcp_deploy', 'deploy_app',
+]);
+
+function isEditToolName(name: string): boolean {
+  return EDIT_TOOL_NAMES.has(String(name || '').trim().toLowerCase());
+}
+
+function enforceCortanaResponseContract(
   text: string,
-  _completionClaimed: boolean,
+  completionClaimed: boolean,
   _completionVerified: boolean,
+  opts?: { editToolUsedThisTurn?: boolean },
 ): string {
   const normalized = String(text || '').trim();
   if (!normalized) return normalized;
   if (shouldSkipContractEnforcement(normalized)) return normalized;
+
+  // No-tool-no-fix gate: if Cortana is claiming completion ("fixed"/"done")
+  // for a code-y goal but didn't actually call an edit tool this turn AND
+  // didn't cite a file path in the response, downgrade to "in progress" and
+  // surface why. Stops her from saying "I dug deep into the voice code" with
+  // an empty fixLocations and no actual change. (Behaviour seen in the
+  // April 2026 voice-chat experiment.)
+  if (completionClaimed && opts && opts.editToolUsedThisTurn === false) {
+    const cited = /(?:^|[\s(])(?:[A-Za-z0-9_./-]+\.(?:ts|tsx|js|jsx|json|md|sql|py|sh|css|scss|html))\b/i.test(normalized);
+    if (!cited) {
+      const note = '\n\n⚠️ **No code change observed this turn.** I claimed "fixed" but didn\'t call an edit tool or name a concrete file. Downgrading to *in progress* — re-attempt with `edit_file` / `edit_self_file` and cite the path.';
+      return normalized + note;
+    }
+  }
+
   const hasContract = /\bstatus\s*:/i.test(normalized)
     && /\broot cause\s*:/i.test(normalized)
     && /\bfix location\s*:/i.test(normalized)
@@ -360,7 +414,7 @@ function enforceRileyResponseContract(
   return stripped || normalized;
 }
 
-async function emitRileyStallAlert(
+async function emitCortanaStallAlert(
   workspaceChannel: WebhookCapableChannel,
   groupchat: TextChannel,
   goal: string,
@@ -368,11 +422,11 @@ async function emitRileyStallAlert(
 ): Promise<boolean> {
   const key = goal.trim().toLowerCase().slice(0, 240) || 'none';
   const now = Date.now();
-  const prev = rileyStallNoticeAt.get(key) || 0;
-  if (now - prev < RILEY_STALL_NOTICE_COOLDOWN_MS) {
+  const prev = cortanaStallNoticeAt.get(key) || 0;
+  if (now - prev < CORTANA_STALL_NOTICE_COOLDOWN_MS) {
     return false;
   }
-  rileyStallNoticeAt.set(key, now);
+  cortanaStallNoticeAt.set(key, now);
 
   const seconds = Math.round(timeoutMs / 1000);
   const msg = `⚠️ No Cortana response after ${seconds}s for this goal. Investigating stall and retrying safeguards.`;
@@ -397,7 +451,7 @@ async function sendAutopilotAudit(
   detail: string,
   extra?: { action?: string; buildId?: string; attempt?: number }
 ): Promise<void> {
-  const riley = getAgent('executive-assistant' as AgentId);
+  const cortana = getAgent('executive-assistant' as AgentId);
   const goal = compactAuditField(goalState.goal || 'none', 64);
   const status = compactAuditField(goalState.status || 'n/a', 48);
 
@@ -422,12 +476,12 @@ async function sendAutopilotAudit(
   const attemptNote = Number.isFinite(extra?.attempt) ? ` — attempt ${extra!.attempt}` : '';
   const line = `🛰️ Autopilot — ${event}${actionNote}${attemptNote}: ${prettyDetail}`;
 
-  if (!riley) {
+  if (!cortana) {
     await groupchat.send(line).catch(() => {});
     return;
   }
   try {
-    await sendWebhookMessage(groupchat, { content: line, username: `${riley.emoji} ${riley.name}`, avatarURL: riley.avatarUrl });
+    await sendWebhookMessage(groupchat, { content: line, username: `${cortana.emoji} ${cortana.name}`, avatarURL: cortana.avatarUrl });
   } catch {
     await groupchat.send(line).catch(() => {});
   }
@@ -438,15 +492,15 @@ function ensureClaudeNotifications(groupchat: TextChannel): void {
   claudeNotificationsBoundChannelId = groupchat.id;
 
   const sendSystemNotice = (content: string) => {
-    const riley = getAgent('executive-assistant' as AgentId);
+    const cortana = getAgent('executive-assistant' as AgentId);
     const send = async () => {
       const targetChannel = getAgentWorkChannel('executive-assistant', groupchat);
-      if (riley) {
+      if (cortana) {
         try {
           await sendWebhookMessage(targetChannel, {
             content,
-            username: `${riley.emoji} ${riley.name}`,
-            avatarURL: riley.avatarUrl,
+            username: `${cortana.emoji} ${cortana.name}`,
+            avatarURL: cortana.avatarUrl,
           });
           return;
         } catch {
@@ -465,7 +519,7 @@ function ensureClaudeNotifications(groupchat: TextChannel): void {
 function inferImplicitActionTags(text: string): string {
   const tags = new Set<string>();
   const normalized = text.toLowerCase();
-  const allowInfraActions = envBoolFirst(['CORTANA_ALLOW_IMPLICIT_INFRA_ACTIONS', 'RILEY_ALLOW_IMPLICIT_INFRA_ACTIONS']);
+  const allowInfraActions = envBoolFirst(['CORTANA_ALLOW_IMPLICIT_INFRA_ACTIONS', 'CORTANA_ALLOW_IMPLICIT_INFRA_ACTIONS']);
 
   const deployRequested = /(build triggered|triggered build|deploying|deployment triggered|rolling out|release started)/i.test(normalized);
   const deployNegated = /\b(?:do not|don't|dont|won't|wont|not|skip|without|avoid|no)\b[^.!?\n]{0,24}\b(?:deploy|deployment|roll\s*out|release)\b/i.test(normalized);
@@ -661,9 +715,9 @@ async function parkGoalWatchdog(groupchat: TextChannel, blocker: GoalWatchdogBlo
 
   const workspaceChannel = await resolveGoalWorkspaceChannel(groupchat);
   if (workspaceChannel) {
-    const riley = getAgent('executive-assistant' as AgentId);
-    if (riley) {
-      await sendAgentMessage(workspaceChannel, riley, blocker.workspaceMessage).catch(() => {});
+    const cortana = getAgent('executive-assistant' as AgentId);
+    if (cortana) {
+      await sendAgentMessage(workspaceChannel, cortana, blocker.workspaceMessage).catch(() => {});
     }
   }
 }
@@ -689,7 +743,7 @@ async function autoResumeParkedGoal(groupchat: TextChannel): Promise<void> {
     { action: 'resume' },
   ).catch(() => {});
 
-  handleRileyMessage(
+  handleCortanaMessage(
     `[System auto-resume] The previous blocker has cleared for this goal: "${goalState.goal}". Previous pause note: ${pauseDetail}. Summarize current state in one short paragraph, then continue from the next unfinished step without repeating completed work.`,
     'System',
     undefined,
@@ -733,7 +787,7 @@ async function runGoalWatchdogTick(groupchat: TextChannel): Promise<void> {
     { attempt: goalState.recoveryAttempts }
   ).catch(() => {});
 
-  handleRileyMessage(
+  handleCortanaMessage(
     `[System auto-recovery] This goal appears stalled: "${goalState.goal}". Summarize current state in one short paragraph, execute any pending deploy/screenshots/urls actions now using explicit [ACTION:...] tags, and continue without waiting for user follow-up. If the work is actually complete, post a short wrap-up in the workspace thread and include [ACTION:CLOSE_THREAD].`,
     'System',
     undefined,
@@ -786,7 +840,7 @@ async function clearThreadStatusMessages(channel: TextChannel): Promise<number> 
 export async function postThreadStatusSnapshotNow(reason = 'hourly'): Promise<void> {
   if (!threadStatusChannel || !threadStatusSourceChannel) return;
 
-  const riley = getAgent('executive-assistant' as AgentId);
+  const cortana = getAgent('executive-assistant' as AgentId);
   const timestamp = new Date().toLocaleString('en-AU', { timeZone: 'Australia/Sydney' });
   const label = reason === 'hourly' ? '🕐 Hourly' : '📋 Manual';
   const currentGoal = goalState.goal
@@ -797,11 +851,11 @@ export async function postThreadStatusSnapshotNow(reason = 'hourly'): Promise<vo
 
   await clearThreadStatusMessages(threadStatusChannel).catch(() => {});
 
-  if (riley) {
+  if (cortana) {
     await sendWebhookMessage(threadStatusChannel, {
       content: content.slice(0, 1900),
-      username: `${riley.emoji} ${riley.name}`,
-      avatarURL: riley.avatarUrl,
+      username: `${cortana.emoji} ${cortana.name}`,
+      avatarURL: cortana.avatarUrl,
     }).catch(async () => {
       await threadStatusChannel?.send(content.slice(0, 1900)).catch(() => {});
     });
@@ -940,7 +994,7 @@ async function syncGoalSequence(groupchat: TextChannel): Promise<void> {
 function buildGoalThreadDescriptor(senderName: string, content: string): string {
   const sender = sanitizeThreadName(senderName).replace(/\s+/g, '-').toLowerCase() || 'user';
   // Extract a concise task-oriented preview by stripping filler words
-  const FILLER = new Set(['hey', 'hi', 'hello', 'please', 'can', 'you', 'could', 'would', 'riley', 'the', 'a', 'an', 'i', 'we', 'need', 'want', 'to', 'me', 'my', 'our', 'this', 'that', 'it', 'is', 'for', 'on', 'in', 'of', 'and', 'or', 'with', 'some', 'just', 'also']);
+  const FILLER = new Set(['hey', 'hi', 'hello', 'please', 'can', 'you', 'could', 'would', 'cortana', 'the', 'a', 'an', 'i', 'we', 'need', 'want', 'to', 'me', 'my', 'our', 'this', 'that', 'it', 'is', 'for', 'on', 'in', 'of', 'and', 'or', 'with', 'some', 'just', 'also']);
   const words = sanitizeThreadName(content).split(' ').filter(Boolean);
   const meaningful = words.filter(w => !FILLER.has(w.toLowerCase()));
   const preview = (meaningful.length >= 3 ? meaningful : words).slice(0, 6).join(' ');
@@ -1047,7 +1101,7 @@ async function closeGoalWorkspace(
         lastAutoRebuildErrorAt = now;
         lastAutoRebuildErrorKey = dedupeKey;
       }
-      void postAgentErrorLog('riley:auto-deploy', 'Auto rebuild on thread close failed', { detail: msg, level: 'warn' });
+      void postAgentErrorLog('cortana:auto-deploy', 'Auto rebuild on thread close failed', { detail: msg, level: 'warn' });
     }
   }
 }
@@ -1080,7 +1134,7 @@ async function maybeReviewThreadForClosure(groupchat: TextChannel): Promise<void
     { action: 'CHECK_CLOSE_THREAD' }
   ).catch(() => {});
 
-  await handleRileyMessage(
+  await handleCortanaMessage(
     `[System thread-close review] Review the current workspace thread for "${goalState.goal}". If the work is fully complete and no more follow-up is required, post one concise final update in the workspace thread and include [ACTION:CLOSE_THREAD]. If anything is still pending or blocked, say exactly what remains and keep the thread open.`,
     'System',
     undefined,
@@ -1410,9 +1464,9 @@ function detectDirectVoiceAction(text: string): 'join' | 'leave' | null {
   const joinVerb = /\b(?:join|start|open|connect|enter|hop\s+in(?:to)?|jump\s+in(?:to)?)\b/i.test(normalized);
   const leaveVerb = /\b(?:leave|end|stop|disconnect|hang\s*up|drop)\b/i.test(normalized);
   const voiceTarget = /\b(?:voice|vc|call|voice\s+chat|voice\s+channel|the\s+call|in\s+the\s+call)\b/i.test(normalized);
-  const addressesRiley = /\b(?:riley|asap)\b/i.test(normalized);
-  const directJoinCall = addressesRiley && /\bjoin\b/i.test(normalized) && /\bcall\b/i.test(normalized);
-  const directLeaveCall = addressesRiley && /\b(?:leave|end|disconnect|hang\s*up|drop)\b/i.test(normalized) && /\bcall\b/i.test(normalized);
+  const addressesCortana = /\b(?:cortana|asap)\b/i.test(normalized);
+  const directJoinCall = addressesCortana && /\bjoin\b/i.test(normalized) && /\bcall\b/i.test(normalized);
+  const directLeaveCall = addressesCortana && /\b(?:leave|end|disconnect|hang\s*up|drop)\b/i.test(normalized) && /\bcall\b/i.test(normalized);
 
   if ((joinVerb && voiceTarget) || directJoinCall) return 'join';
   if ((leaveVerb && (voiceTarget || /^(?:leave|end call|hang up|disconnect)$/i.test(normalized))) || directLeaveCall) return 'leave';
@@ -1422,7 +1476,7 @@ function detectDirectVoiceAction(text: string): 'join' | 'leave' | null {
 function getSpeechBridgeText(text: string): string | null {
   const normalized = stripMentionsForIntent(text);
   if (!normalized) return null;
-  const match = normalized.match(/^(?:riley\s+)?(?:tester\s+)?(?:say|voice|speak)\s*(?::|-)\s*(.{1,260})$/i);
+  const match = normalized.match(/^(?:cortana\s+)?(?:tester\s+)?(?:say|voice|speak)\s*(?::|-)\s*(.{1,260})$/i);
   if (!match) return null;
   return String(match[1] || '').trim() || null;
 }
@@ -1434,7 +1488,7 @@ function isLikelyVoiceCommandIntent(text: string): boolean {
 
   const hasVoiceTarget = /\b(?:voice|vc|voice\s+chat|voice\s+channel|call)\b/.test(normalized);
   const hasVoiceVerb = /\b(?:join|start|open|connect|enter|hop\s+in|jump\s+in|leave|end|stop|disconnect|hang\s*up|drop)\b/.test(normalized);
-  const hasAssistantCue = /\b(?:riley|asap)\b/.test(normalized);
+  const hasAssistantCue = /\b(?:cortana|asap)\b/.test(normalized);
 
   if (hasVoiceTarget && hasVoiceVerb && hasAssistantCue) return true;
 
@@ -1474,7 +1528,7 @@ async function handleDirectVoiceActionIfRequested(message: Message, content: str
     return true;
   }
 
-  const testerPromptMatch = stripped.match(/^(?:hey|hi|yo)?\s*(?:riley|asap)?\s*[,!:;-]?\s*(?:please\s+)?(?:inject|simulate|test)\s+(?:voice|transcript)\s*(?::|-)\s*(.{1,260})$/i);
+  const testerPromptMatch = stripped.match(/^(?:hey|hi|yo)?\s*(?:cortana|asap)?\s*[,!:;-]?\s*(?:please\s+)?(?:inject|simulate|test)\s+(?:voice|transcript)\s*(?::|-)\s*(.{1,260})$/i);
   if (testerPromptMatch) {
     const injectionEnabled = String(process.env.VOICE_TEST_INJECTION_ENABLED || 'false').toLowerCase() === 'true';
     const isAuthorized = isTesterBotId(message.author.id) || injectionEnabled;
@@ -1541,7 +1595,7 @@ function detectDirectOpsAction(text: string): 'status' | 'limits' | 'threads' | 
   const words = normalized.split(/\s+/).filter(Boolean);
   if (words.length > 30 || normalized.length > 260) return null;
 
-  const lead = String.raw`^(?:hey|hi|yo)?\s*(?:riley|asap)?\s*[,!:;-]?\s*(?:please\s+)?(?:can you\s+|could you\s+|will you\s+)?`;
+  const lead = String.raw`^(?:hey|hi|yo)?\s*(?:cortana|asap)?\s*[,!:;-]?\s*(?:please\s+)?(?:can you\s+|could you\s+|will you\s+)?`;
   const statusPattern = new RegExp(`${lead}(?:status|what(?:'| i)?s\\s+the\\s+status|update\\s+status|current\\s+goal)\\??$`, 'i');
   const limitsPattern = new RegExp(`${lead}(?:limits|usage|budget|spend|costs|token\\s+usage|show\\s+limits|show\\s+usage)\\??$`, 'i');
   const threadsPattern = new RegExp(`${lead}(?:threads|thread\\s+status|open\\s+threads|workspace\\s+threads)\\??$`, 'i');
@@ -1558,10 +1612,10 @@ function detectDirectOpsAction(text: string): 'status' | 'limits' | 'threads' | 
   return null;
 }
 
-async function sendQuickRileyMessage(groupchat: TextChannel, content: string): Promise<void> {
-  const riley = getAgent('executive-assistant' as AgentId);
-  if (riley) {
-    await sendAgentMessage(groupchat, riley, content);
+async function sendQuickCortanaMessage(groupchat: TextChannel, content: string): Promise<void> {
+  const cortana = getAgent('executive-assistant' as AgentId);
+  if (cortana) {
+    await sendAgentMessage(groupchat, cortana, content);
     return;
   }
   await groupchat.send(content).catch(() => {});
@@ -1855,7 +1909,7 @@ async function maybeSendGroupchatSingleUserNotice(groupchat: TextChannel): Promi
   const now = Date.now();
   if (now - lastGroupchatSingleUserNoticeAt < GROUPCHAT_SINGLE_USER_NOTICE_COOLDOWN_MS) return;
   lastGroupchatSingleUserNoticeAt = now;
-  await sendQuickRileyMessage(groupchat, buildGroupchatSingleUserNotice(activeGroupchatOwner?.displayName));
+  await sendQuickCortanaMessage(groupchat, buildGroupchatSingleUserNotice(activeGroupchatOwner?.displayName));
 }
 
 async function handleDirectOpsActionIfRequested(content: string, groupchat: TextChannel): Promise<boolean> {
@@ -1863,7 +1917,7 @@ async function handleDirectOpsActionIfRequested(content: string, groupchat: Text
   if (!action) return false;
 
   if (action === 'help') {
-    await sendQuickRileyMessage(
+    await sendQuickCortanaMessage(
       groupchat,
       '⚡ Quick actions: `status`, `loops`, `logs`, `limits`, `threads`, `join voice`, `leave voice`, `cleanup`, `smoke`, `health`.'
     );
@@ -1871,7 +1925,7 @@ async function handleDirectOpsActionIfRequested(content: string, groupchat: Text
   }
 
   if (action === 'status') {
-    await sendQuickRileyMessage(
+    await sendQuickCortanaMessage(
       groupchat,
       buildTextStatusSummary(getStatusSummary() || '📋 No active tasks.', buildLoopHealthCompactSummary())
     );
@@ -1879,7 +1933,7 @@ async function handleDirectOpsActionIfRequested(content: string, groupchat: Text
   }
 
   if (action === 'loops') {
-    await sendQuickRileyMessage(groupchat, buildLoopHealthDetailedReport());
+    await sendQuickCortanaMessage(groupchat, buildLoopHealthDetailedReport());
     return true;
   }
 
@@ -1888,19 +1942,19 @@ async function handleDirectOpsActionIfRequested(content: string, groupchat: Text
     if (channels) {
       await runLoggingEngine(channels).catch(() => {});
     }
-    await sendQuickRileyMessage(groupchat, buildLoggingEngineReport());
+    await sendQuickCortanaMessage(groupchat, buildLoggingEngineReport());
     return true;
   }
 
   if (action === 'limits') {
     await refreshLiveBillingData().catch(() => {});
-    await sendQuickRileyMessage(groupchat, getUsageReport());
+    await sendQuickCortanaMessage(groupchat, getUsageReport());
     return true;
   }
 
   const report = await buildThreadStatusReport(groupchat);
   await postThreadStatusSnapshotNow('manual').catch(() => {});
-  await sendQuickRileyMessage(groupchat, report);
+  await sendQuickCortanaMessage(groupchat, report);
   return true;
 }
 
@@ -2013,9 +2067,9 @@ export async function handleGroupchatMessage(
     // The tester subprocess just needs ANY bot/webhook reply to pass the health check.
     const stripped = content.replace(/<@[!&]?\d+>\s*/g, '').trim();
     if (/^status$/i.test(stripped)) {
-      const riley = getAgent('executive-assistant' as AgentId);
-      if (riley) {
-        void sendAgentMessage(groupchat, riley, '📋 Current Goal: Smoke test in progress. Status: active.').catch(() => {});
+      const cortana = getAgent('executive-assistant' as AgentId);
+      if (cortana) {
+        void sendAgentMessage(groupchat, cortana, '📋 Current Goal: Smoke test in progress. Status: active.').catch(() => {});
         console.log('[smoke-guard] Sent fast status response for health check');
       }
       return;
@@ -2029,7 +2083,19 @@ export async function handleGroupchatMessage(
   }
 
   if (isDuplicateGroupchatMessage(message, content)) {
-    await sendQuickRileyMessage(groupchat, '⏳ I already received that request and I am still processing it.');
+    await sendQuickCortanaMessage(groupchat, '⏳ I already received that request and I am still processing it.');
+    return;
+  }
+
+  // No-op ping: a short conversational message with no imperative verb (just
+  // "Cortana", "hi", "ok"). These got escalated to full goals + watchdog
+  // recovery cycles in the April 2026 logs, burning tokens on no real task.
+  // Acknowledge briefly and exit before any workspace/goal machinery starts.
+  if (isNoOpUserPing(content)) {
+    const cortana = getAgent('executive-assistant' as AgentId);
+    if (cortana) {
+      await sendAgentMessage(groupchat, cortana, "I'm here — what would you like me to do?").catch(() => {});
+    }
     return;
   }
 
@@ -2049,7 +2115,7 @@ export async function handleGroupchatMessage(
     return;
   }
   if (isLikelyVoiceCommandIntent(content)) {
-    await sendQuickRileyMessage(groupchat, '📞 Voice command detected. Say "Cortana join voice call" or "Cortana leave voice call" and I will handle it directly without opening a workspace thread.');
+    await sendQuickCortanaMessage(groupchat, '📞 Voice command detected. Say "Cortana join voice call" or "Cortana leave voice call" and I will handle it directly without opening a workspace thread.');
     markGoalProgress('📞 Voice intent handled without workspace thread');
     return;
   }
@@ -2093,10 +2159,10 @@ export async function handleGroupchatMessage(
         const now = Date.now();
         if (now - lastGroupchatTimeoutNoticeAt >= GROUPCHAT_TIMEOUT_NOTICE_COOLDOWN_MS) {
           lastGroupchatTimeoutNoticeAt = now;
-          const riley = getAgent('executive-assistant' as AgentId);
+          const cortana = getAgent('executive-assistant' as AgentId);
           const timeoutNotice = '⏳ I hit a runtime timeout while processing that request. I canceled the stalled run to avoid duplicate loops. Please retry with a tighter prompt or request one action at a time.';
-          if (riley) {
-            await sendAgentMessage(groupchat, riley, timeoutNotice).catch(() => {});
+          if (cortana) {
+            await sendAgentMessage(groupchat, cortana, timeoutNotice).catch(() => {});
           } else {
             await groupchat.send(timeoutNotice).catch(() => {});
           }
@@ -2144,17 +2210,17 @@ async function handleSmokeTestPrompt(content: string, groupchat: TextChannel): P
 
   // Smoke tests always run through Cortana directly so the tester sees one
   // stable execution path and doesn't depend on internal delegation.
-  const riley = getAgent('executive-assistant' as AgentId);
-  if (!riley) return;
+  const cortana = getAgent('executive-assistant' as AgentId);
+  if (!cortana) return;
 
-  const rileyMemory = getMemoryContext('executive-assistant');
+  const cortanaMemory = getMemoryContext('executive-assistant');
   const contextMessage = `[smoke-test]: ${content}`;
 
   console.log(`[smoke-guard] Calling agentRespond for: "${content.slice(0, 60)}"`);
 
   const rawResponse = await agentRespond(
-    riley,
-    [...rileyMemory],
+    cortana,
+    [...cortanaMemory],
     contextMessage,
     undefined,
     {
@@ -2196,8 +2262,8 @@ async function handleSmokeTestPrompt(content: string, groupchat: TextChannel): P
   for (const chunk of chunks) {
     await sendWebhookMessage(groupchat, {
       content: chunk,
-      username: `${riley.emoji} ${riley.name}`,
-      avatarURL: riley.avatarUrl,
+      username: `${cortana.emoji} ${cortana.name}`,
+      avatarURL: cortana.avatarUrl,
     });
   }
   console.log(`[smoke-guard] Posted response to groupchat (${response.length} chars)`);
@@ -2230,7 +2296,7 @@ async function processGroupchatMessage(
   }
 
   if (isLikelyVoiceCommandIntent(content)) {
-    await sendQuickRileyMessage(groupchat, '📞 Voice command detected. Say "Cortana join voice call" or "Cortana leave voice call" and I will handle it directly without opening a workspace thread.');
+    await sendQuickCortanaMessage(groupchat, '📞 Voice command detected. Say "Cortana join voice call" or "Cortana leave voice call" and I will handle it directly without opening a workspace thread.');
     markGoalProgress('📞 Voice intent handled without workspace thread');
     return;
   }
@@ -2239,14 +2305,14 @@ async function processGroupchatMessage(
   const approvedAmount = parseBudgetApproval(content);
   if (approvedAmount !== null) {
     const workspaceChannel = await getWorkspaceChannel();
-    const riley = getAgent('executive-assistant' as AgentId);
+    const cortana = getAgent('executive-assistant' as AgentId);
     const result = approveAdditionalBudget(Number.isFinite(approvedAmount) ? approvedAmount : undefined);
     await refreshUsageDashboard().catch(() => {});
 
-    if (riley) {
+    if (cortana) {
       await sendAgentMessage(
         workspaceChannel,
-        riley,
+        cortana,
         `Budget approval recorded. I added $${result.added.toFixed(2)} of extra budget for today, so the new limit is $${result.limit.toFixed(2)}. We've spent $${result.spent.toFixed(2)} so far and have $${result.remaining.toFixed(2)} remaining.`
       );
     }
@@ -2257,10 +2323,10 @@ async function processGroupchatMessage(
       } else {
         markGoalProgress('▶️ Resuming after budget approval');
       }
-      await withRileyResponseWatchdog(
+      await withCortanaResponseWatchdog(
         workspaceChannel,
         groupchat,
-        handleRileyMessage(
+        handleCortanaMessage(
         `Budget approval has been granted by ${senderName}. Resume the paused work on this goal: ${goalState.goal}`,
         senderName,
         message.member || undefined,
@@ -2285,10 +2351,10 @@ async function processGroupchatMessage(
     if (uniqueMentions.length === 1 && uniqueMentions[0] === 'executive-assistant') {
       goalState.setGoal(content);
       const targetChannel = keepInGroupchat ? groupchat : await getWorkspaceChannel();
-      await withRileyResponseWatchdog(
+      await withCortanaResponseWatchdog(
         targetChannel,
         groupchat,
-        handleRileyMessage(content, senderName, message.member || undefined, groupchat, signal, targetChannel, {
+        handleCortanaMessage(content, senderName, message.member || undefined, groupchat, signal, targetChannel, {
           allowDirectGroupchat: keepInGroupchat,
           imageBlocks,
         }),
@@ -2297,19 +2363,19 @@ async function processGroupchatMessage(
       const normalized = `${content}\n\n[System: Cortana should execute directly when possible and involve specialists only when needed.]`;
       goalState.setGoal(normalized);
       const workspaceChannel = await getWorkspaceChannel();
-      await withRileyResponseWatchdog(
+      await withCortanaResponseWatchdog(
         workspaceChannel,
         groupchat,
-        handleRileyMessage(normalized, senderName, message.member || undefined, groupchat, signal, workspaceChannel, { imageBlocks }),
+        handleCortanaMessage(normalized, senderName, message.member || undefined, groupchat, signal, workspaceChannel, { imageBlocks }),
       );
     }
   } else {
     goalState.setGoal(content);
     const targetChannel = keepInGroupchat ? groupchat : await getWorkspaceChannel();
-    await withRileyResponseWatchdog(
+    await withCortanaResponseWatchdog(
       targetChannel,
       groupchat,
-      handleRileyMessage(content, senderName, message.member || undefined, groupchat, signal, targetChannel, {
+      handleCortanaMessage(content, senderName, message.member || undefined, groupchat, signal, targetChannel, {
         allowDirectGroupchat: keepInGroupchat,
         imageBlocks,
       }),
@@ -2317,14 +2383,14 @@ async function processGroupchatMessage(
   }
 }
 
-async function withRileyResponseWatchdog(
+async function withCortanaResponseWatchdog(
   workspaceChannel: WebhookCapableChannel,
   groupchat: TextChannel,
   work: Promise<void>,
 ): Promise<void> {
   // Outer watchdog: if Cortana never emits visible output for a goal, post a
   // clear stalled-run alert so operators are not left with silent threads.
-  if (!Number.isFinite(RILEY_NO_RESPONSE_TIMEOUT_MS) || RILEY_NO_RESPONSE_TIMEOUT_MS <= 0) {
+  if (!Number.isFinite(CORTANA_NO_RESPONSE_TIMEOUT_MS) || CORTANA_NO_RESPONSE_TIMEOUT_MS <= 0) {
     await work;
     return;
   }
@@ -2333,16 +2399,16 @@ async function withRileyResponseWatchdog(
   const timer = setTimeout(() => {
     fired = true;
     const goal = goalState.goal || 'none';
-    void emitRileyStallAlert(workspaceChannel, groupchat, goal, RILEY_NO_RESPONSE_TIMEOUT_MS)
+    void emitCortanaStallAlert(workspaceChannel, groupchat, goal, CORTANA_NO_RESPONSE_TIMEOUT_MS)
       .then((posted) => {
         if (!posted) return;
-        void postAgentErrorLog('riley:watchdog', 'No Cortana response observed for goal', {
+        void postAgentErrorLog('cortana:watchdog', 'No Cortana response observed for goal', {
           agentId: 'executive-assistant',
-          detail: `goal=${goal} timeoutMs=${RILEY_NO_RESPONSE_TIMEOUT_MS}`,
+          detail: `goal=${goal} timeoutMs=${CORTANA_NO_RESPONSE_TIMEOUT_MS}`,
           level: 'warn',
         });
       });
-  }, RILEY_NO_RESPONSE_TIMEOUT_MS);
+  }, CORTANA_NO_RESPONSE_TIMEOUT_MS);
 
   try {
     await work;
@@ -2452,24 +2518,24 @@ async function runVerificationCycle(
  */
 async function runContinuationCycles(
   seed: {
-    riley: AgentConfig;
+    cortana: AgentConfig;
     goal: string;
     displayResponse: string;
     chainResult: { summary?: string };
     groupchat: TextChannel;
     workspaceChannel: WebhookCapableChannel;
-    rileyWorkChannel: WebhookCapableChannel;
+    cortanaWorkChannel: WebhookCapableChannel;
     signal?: AbortSignal;
   },
 ): Promise<void> {
-  const { riley, groupchat, workspaceChannel, rileyWorkChannel, signal } = seed;
+  const { cortana, groupchat, workspaceChannel, cortanaWorkChannel, signal } = seed;
   let { displayResponse, chainResult } = seed;
   let prevFingerprint = displayResponse.trim().slice(0, 240).toLowerCase();
 
   for (let cycle = 2; cycle <= MAX_CONTINUATION_CYCLES; cycle++) {
     if (signal?.aborted) break;
 
-    const lastStatus = inferRileyStatus(
+    const lastStatus = inferCortanaStatus(
       displayResponse + ' ' + (chainResult.summary || ''),
       isCompletionClaim(displayResponse),
       true, // verification is separate from continuation logic
@@ -2494,16 +2560,16 @@ async function runContinuationCycles(
 
     markGoalProgress(`🔄 Continuation cycle ${cycle}/${MAX_CONTINUATION_CYCLES}...`);
 
-    const rileyMemoryCtx = getMemoryContext('executive-assistant');
-    const continuationResponse = await agentRespond(riley, [...rileyMemoryCtx, ...groupHistory], continuationPrompt, async (toolName, summary) => {
-      updateToolChain(rileyWorkChannel, riley, toolName, summary, 'done');
+    const cortanaMemoryCtx = getMemoryContext('executive-assistant');
+    const continuationResponse = await agentRespond(cortana, [...cortanaMemoryCtx, ...groupHistory], continuationPrompt, async (toolName, summary) => {
+      updateToolChain(cortanaWorkChannel, cortana, toolName, summary, 'done');
     }, {
       signal,
       outputMode: 'machine_json',
       machineEnvelopeRaw: true,
       threadKey: `groupchat:${workspaceChannel.id}`,
       onToolStart: async (toolName, summary) => {
-        updateToolChain(rileyWorkChannel, riley, toolName, summary, 'start');
+        updateToolChain(cortanaWorkChannel, cortana, toolName, summary, 'start');
       },
     });
 
@@ -2535,7 +2601,7 @@ async function runContinuationCycles(
     groupHistory.push({ role: 'assistant', content: `[Cortana]: ${continuationResponse}` });
     persistGroupHistory();
 
-    await sendAgentMessage(workspaceChannel, riley, contRendered);
+    await sendAgentMessage(workspaceChannel, cortana, contRendered);
 
     displayResponse = contRendered;
     chainResult = await handleAgentChain(continuationResponse, groupchat, workspaceChannel, signal);
@@ -2543,7 +2609,7 @@ async function runContinuationCycles(
   }
 }
 
-async function handleRileyMessage(
+async function handleCortanaMessage(
   userMessage: string,
   senderName: string,
   member: GuildMember | undefined,
@@ -2556,12 +2622,12 @@ async function handleRileyMessage(
     workspaceChannel = await ensureGoalWorkspace(groupchat, senderName || 'system', userMessage || 'request');
   }
 
-  const riley = getAgent('executive-assistant' as AgentId);
-  if (!riley) return;
-  const rileyWorkChannel = getAgentWorkChannel('executive-assistant', groupchat);
+  const cortana = getAgent('executive-assistant' as AgentId);
+  if (!cortana) return;
+  const cortanaWorkChannel = getAgentWorkChannel('executive-assistant', groupchat);
 
   let stopTyping: () => void = () => {};
-  let hasVisibleRileyResponse = false;
+  let hasVisibleCortanaResponse = false;
   let noResponseTimer: NodeJS.Timeout | null = null;
   let progressTimer: NodeJS.Timeout | null = null;
   try {
@@ -2570,33 +2636,33 @@ async function handleRileyMessage(
     // Unified turn tracker: single message Cortana owns, nested sub-lines per
     // specialist as they activate. setThinkingMessage is kept as a no-op
     // fallback for code paths that still reference it.
-    const turn = await beginTurn(workspaceChannel, riley);
+    const turn = await beginTurn(workspaceChannel, cortana);
     activeTurnByChannel.set(workspaceChannel.id, turn);
 
     // Progress + stall timers fold their signal into the unified turn message
     // (via turn.setPhase) rather than posting separate "⏳ still working" lines
     // that the user then has to scroll past.
     progressTimer = setTimeout(() => {
-      if (hasVisibleRileyResponse || signal?.aborted) return;
-      const seconds = Math.round(Math.max(0, RILEY_PROGRESS_PING_MS) / 1000);
+      if (hasVisibleCortanaResponse || signal?.aborted) return;
+      const seconds = Math.round(Math.max(0, CORTANA_PROGRESS_PING_MS) / 1000);
       turn.setPhase('executive-assistant', 'working', `still working · ${seconds}s`);
-    }, Math.max(5_000, RILEY_PROGRESS_PING_MS));
+    }, Math.max(5_000, CORTANA_PROGRESS_PING_MS));
 
     noResponseTimer = setTimeout(() => {
-      if (hasVisibleRileyResponse || signal?.aborted) return;
+      if (hasVisibleCortanaResponse || signal?.aborted) return;
       const goal = goalState.goal || 'none';
-      void emitRileyStallAlert(workspaceChannel, groupchat, goal, RILEY_NO_RESPONSE_TIMEOUT_MS)
+      void emitCortanaStallAlert(workspaceChannel, groupchat, goal, CORTANA_NO_RESPONSE_TIMEOUT_MS)
         .then((posted) => {
           if (!posted) return;
-          void postAgentErrorLog('riley:timeout', 'No Cortana response within timeout', {
+          void postAgentErrorLog('cortana:timeout', 'No Cortana response within timeout', {
             agentId: 'executive-assistant',
-            detail: `goal=${goal} timeoutMs=${RILEY_NO_RESPONSE_TIMEOUT_MS}`,
+            detail: `goal=${goal} timeoutMs=${CORTANA_NO_RESPONSE_TIMEOUT_MS}`,
             level: 'warn',
           });
         });
-    }, RILEY_NO_RESPONSE_TIMEOUT_MS);
+    }, CORTANA_NO_RESPONSE_TIMEOUT_MS);
 
-    const rileyMemory = getMemoryContext('executive-assistant');
+    const cortanaMemory = getMemoryContext('executive-assistant');
     const contextMessage = `[${senderName}]: ${userMessage}`;
     const specialistGuide = buildAgentMentionGuide(['qa', 'ux-reviewer', 'security-auditor', 'api-reviewer', 'dba', 'performance', 'devops', 'copywriter', 'lawyer', 'ios-engineer', 'android-engineer']);
     const cjkPattern = /[\u4e00-\u9fff\u3400-\u4dbf]/;
@@ -2611,11 +2677,22 @@ async function handleRileyMessage(
       : `\n\n[Execution contract: execute directly whenever possible. Involve specialists only when a focused review or domain-specific help is needed. Available specialists: ${specialistGuide}.]`;
     const threadCloseGuide = `\n\n[Keep the workspace thread updated briefly. Include [ACTION:CLOSE_THREAD] only when the task is fully complete.]`;
     const decisionGuide = '\n\n[Decision policy: only ask the user for MAJOR decisions (prod risk, security/privacy, rollback/no-rollback, schema/data-loss risk, spend increase, legal/compliance impact). For routine implementation choices, decide and proceed. In #groupchat, when a major decision is needed, address the user directly and the system will tag them. Use the decisions channel for queued/offline decisions, not for live voice.]';
-    const contextMessageWithLang = `${textLangHint ? `${contextMessage}${textLangHint}` : contextMessage}${mentionGuide}${threadCloseGuide}${decisionGuide}`;
+    // Per-turn self-repair hint: if the user is asking about something that
+    // lives in the bot's own runtime (voice, tools, message routing, the bot
+    // itself), nudge Cortana to use the *_self_* tool family. This sits
+    // ATTACHED to the user message so it survives memory compression
+    // (which strips the static system prompt's appendix sections).
+    const SELF_REPAIR_KEYWORDS_RE = /\b(voice|stt|tts|elevenlabs|webhook|tool dispatch|message routing|tool wiring|the bot|her own code|self.repair|asap.bot)\b/i;
+    const selfRepairHint = SELF_REPAIR_KEYWORDS_RE.test(userMessage)
+      ? `\n\n[Bot-runtime hint: this lives in /opt/asap-bot. Use \`read_self_file\` / \`search_self_files\` first; do not claim "fixed" without an \`edit_self_file\` call.]`
+      : '';
+    const contextMessageWithLang = `${textLangHint ? `${contextMessage}${textLangHint}` : contextMessage}${mentionGuide}${threadCloseGuide}${decisionGuide}${selfRepairHint}`;
 
-    const response = await agentRespond(riley, [...rileyMemory, ...groupHistory], contextMessageWithLang, async (toolName, summary) => {
-      turn.addTool('executive-assistant', toolName, summary, 'done', riley);
-      updateToolChain(rileyWorkChannel, riley, toolName, summary, 'done');
+    let editToolUsedThisTurn = false;
+    const response = await agentRespond(cortana, [...cortanaMemory, ...groupHistory], contextMessageWithLang, async (toolName, summary) => {
+      if (isEditToolName(toolName)) editToolUsedThisTurn = true;
+      turn.addTool('executive-assistant', toolName, summary, 'done', cortana);
+      updateToolChain(cortanaWorkChannel, cortana, toolName, summary, 'done');
     }, {
       signal,
       outputMode: 'machine_json',
@@ -2623,8 +2700,8 @@ async function handleRileyMessage(
       threadKey: `groupchat:${workspaceChannel.id}`,
       imageBlocks: options?.imageBlocks,
       onToolStart: async (toolName, summary) => {
-        turn.addTool('executive-assistant', toolName, summary, 'start', riley);
-        updateToolChain(rileyWorkChannel, riley, toolName, summary, 'start');
+        turn.addTool('executive-assistant', toolName, summary, 'start', cortana);
+        updateToolChain(cortanaWorkChannel, cortana, toolName, summary, 'start');
       },
     });
 
@@ -2680,10 +2757,11 @@ async function handleRileyMessage(
     // Use the actual verification result instead of re-scanning text for "blocked"/"verification pending"
     // which would false-positive on our appended verification note.
     const statusBlocked = !completionVerified || /\bblocked\b/i.test(displayResponse.replace(/⏳.*verification pending.*/i, ''));
-    displayResponse = enforceRileyResponseContract(
+    displayResponse = enforceCortanaResponseContract(
       displayResponse,
       completionClaimed && !statusBlocked,
       completionVerified && !statusBlocked,
+      { editToolUsedThisTurn },
     );
 
     if (shouldQueueDecisionReview(displayResponse)) {
@@ -2699,13 +2777,13 @@ async function handleRileyMessage(
     if (signal?.aborted) return;
 
     if (!signal?.aborted && displayResponse) {
-      hasVisibleRileyResponse = true;
+      hasVisibleCortanaResponse = true;
       // Fold the final answer into the same unified message Cortana has been
       // updating for this turn. The tracker marks itself finalized.
       const finalized = await turn.finalize(displayResponse);
       if (!finalized) {
         // Fallback: tracker failed — post the normal way.
-        await sendAgentMessage(workspaceChannel, riley, displayResponse);
+        await sendAgentMessage(workspaceChannel, cortana, displayResponse);
       }
 
       if (workspaceChannel.id !== groupchat.id && (statusBlocked || (completionClaimed && completionVerified && shouldMirrorCompletionToGroupchat(displayResponse, workspaceChannel, groupchat)))) {
@@ -2714,7 +2792,7 @@ async function handleRileyMessage(
           blocked: statusBlocked,
         });
         if (compact) {
-          await sendAgentMessage(groupchat, riley, compact);
+          await sendAgentMessage(groupchat, cortana, compact);
         }
       }
     }
@@ -2725,13 +2803,13 @@ async function handleRileyMessage(
 
     if (isMultiStepGoal(goalState.goal || userMessage) && !signal?.aborted) {
       await runContinuationCycles({
-        riley,
+        cortana,
         goal: goalState.goal || userMessage,
         displayResponse,
         chainResult,
         groupchat,
         workspaceChannel,
-        rileyWorkChannel,
+        cortanaWorkChannel,
         signal,
       });
     }
@@ -2743,19 +2821,19 @@ async function handleRileyMessage(
     // Full stack goes to #🚨-agent-errors via postAgentErrorLog — the detail
     // is useful there. The user-facing message stays short and non-scary:
     // no stack, no code block, just an acknowledgment + retry hint.
-    void postAgentErrorLog('riley:groupchat', 'Cortana orchestration error', {
+    void postAgentErrorLog('cortana:groupchat', 'Cortana orchestration error', {
       agentId: 'executive-assistant',
       detail: errMsg,
     });
     try {
-      hasVisibleRileyResponse = true;
+      hasVisibleCortanaResponse = true;
       await sendWebhookMessage(workspaceChannel, {
         content: '⚠️ Something went sideways on my end. Give me a moment — try again or rephrase.',
-        username: `${riley.emoji} ${riley.name}`,
-        avatarURL: riley.avatarUrl,
+        username: `${cortana.emoji} ${cortana.name}`,
+        avatarURL: cortana.avatarUrl,
       });
     } catch {
-      const fallback = ('send' in workspaceChannel) ? workspaceChannel : rileyWorkChannel;
+      const fallback = ('send' in workspaceChannel) ? workspaceChannel : cortanaWorkChannel;
       await fallback.send('⚠️ Something went sideways on my end. Give me a moment — try again or rephrase.').catch(() => {});
     }
   } finally {
@@ -2777,7 +2855,7 @@ async function handleRileyMessage(
  * Internal bridge: accept a voice-call instruction and run it through Cortana's
  * normal text orchestration flow (workspace thread + agent chain).
  */
-export async function handoffVoiceInstructionToRileyText(
+export async function handoffVoiceInstructionToCortanaText(
   instruction: string,
   senderName: string,
   groupchat: TextChannel
@@ -2786,7 +2864,7 @@ export async function handoffVoiceInstructionToRileyText(
   if (!cleanInstruction) return;
 
   const workspaceChannel = await ensureGoalWorkspace(groupchat, senderName || 'Voice', cleanInstruction);
-  await handleRileyMessage(
+  await handleCortanaMessage(
     `[Voice handoff from ${senderName || 'Voice user'}]: ${cleanInstruction}`,
     senderName || 'Voice user',
     undefined,
@@ -2800,12 +2878,12 @@ export async function handoffVoiceInstructionToRileyText(
  * Internal bridge: dispatch an upgrade implementation task to Cortana's
  * normal orchestration flow. Called by the upgrades triage loop.
  */
-export async function dispatchUpgradeToRiley(
+export async function dispatchUpgradeToCortana(
   upgradeDescription: string,
   groupchat: TextChannel
 ): Promise<void> {
   const prompt = `[Upgrades triage — auto-dispatch] The following upgrade has been accepted by multiple agents and is ready for implementation. Review it and either implement it directly or involve the right specialist:\n\n${upgradeDescription}`;
-  await handleRileyMessage(prompt, 'system', undefined, groupchat);
+  await handleCortanaMessage(prompt, 'system', undefined, groupchat);
 }
 
 /**
@@ -2822,7 +2900,7 @@ export async function askCortanaAboutMessage(
 ): Promise<void> {
   const content = (quotedContent || '(no text)').slice(0, 1600);
   const prompt = `[Context-menu ask] ${askedBy} right-clicked a message from @${quotedAuthor} and asked you to take a look. Summarize what it means, flag anything noteworthy, and propose a next step if any.\n\n---\n${content}\n---`;
-  await handleRileyMessage(prompt, askedBy || 'user', undefined, groupchat);
+  await handleCortanaMessage(prompt, askedBy || 'user', undefined, groupchat);
 }
 
 /**
@@ -2838,7 +2916,7 @@ export async function dispatchReactionReply(
 ): Promise<void> {
   const content = (quotedContent || '').slice(0, 800);
   const prompt = `[Reaction reply] ${reactedBy} reacted "${answer}" to your question. Treat this as their answer and continue.\n\nYour question was:\n---\n${content}\n---`;
-  await handleRileyMessage(prompt, reactedBy || 'user', undefined, groupchat);
+  await handleCortanaMessage(prompt, reactedBy || 'user', undefined, groupchat);
 }
 
 /**
@@ -2854,17 +2932,17 @@ async function executeActions(
   const actionRe = /\[\s*action:(\w+)(?::([^\]]*))?\]/gi;
   const actions = [...response.matchAll(actionRe)];
 
-  const riley = getAgent('executive-assistant' as AgentId);
+  const cortana = getAgent('executive-assistant' as AgentId);
 
   /** Send a message as Cortana via webhook, fallback to bot if webhook fails */
-  async function sendAsRiley(msg: string): Promise<void> {
+  async function sendAsCortana(msg: string): Promise<void> {
     const safeMsg = workspaceChannel.id === groupchat.id
       ? String(msg || '').replace(/https?:\/\/\S+/gi, '[see #url]')
       : msg;
 
-    if (riley) {
+    if (cortana) {
       try {
-        await sendWebhookMessage(workspaceChannel, { content: safeMsg, username: `${riley.emoji} ${riley.name}`, avatarURL: riley.avatarUrl });
+        await sendWebhookMessage(workspaceChannel, { content: safeMsg, username: `${cortana.emoji} ${cortana.name}`, avatarURL: cortana.avatarUrl });
         return;
       } catch (err) {
         console.warn('Webhook send failed for Cortana action response:', errMsg(err));
@@ -2875,8 +2953,8 @@ async function executeActions(
       await workspaceChannel.send(safeMsg).catch(() => {});
       return;
     }
-    const rileyChannel = getAgentWorkChannel('executive-assistant', groupchat);
-    await rileyChannel.send(safeMsg).catch(() => {});
+    const cortanaChannel = getAgentWorkChannel('executive-assistant', groupchat);
+    await cortanaChannel.send(safeMsg).catch(() => {});
   }
 
   for (const [, action, param] of actions) {
@@ -2886,13 +2964,13 @@ async function executeActions(
           const channels = getBotChannels();
           if (!channels) break;
           if (isCallActive()) {
-            await sendAsRiley('📞 Already in a voice call.');
+            await sendAsCortana('📞 Already in a voice call.');
             break;
           }
           if (member) {
             await startCall(channels.voiceChannel, groupchat, channels.callLog, member);
           } else {
-            await sendAsRiley('📞 I need you to be in the server to join VC.');
+            await sendAsCortana('📞 I need you to be in the server to join VC.');
           }
           break;
         }
@@ -2900,7 +2978,7 @@ async function executeActions(
           if (isCallActive()) {
             await endCall();
           } else {
-            await sendAsRiley('No active voice call to leave.');
+            await sendAsCortana('No active voice call to leave.');
           }
           break;
         }
@@ -2912,7 +2990,7 @@ async function executeActions(
               action: 'DEPLOY',
               buildId,
             });
-            await sendAsRiley(
+            await sendAsCortana(
               `🚀 **Build triggered**\nBuild ID: \`${buildId}\`\n[View logs](${logUrl})`
             );
             const channels = getBotChannels();
@@ -2925,32 +3003,32 @@ async function executeActions(
               );
             }
           } catch (err) {
-            await sendAsRiley(`❌ Deploy failed: ${errMsg(err)}`);
+            await sendAsCortana(`❌ Deploy failed: ${errMsg(err)}`);
           }
           break;
         }
         case 'SCREENSHOTS': {
           const appUrl = process.env.FRONTEND_URL || 'https://asap-489910.australia-southeast1.run.app';
           captureAndPostScreenshots(appUrl, param || 'manual').catch((err) => {
-            sendAsRiley(`❌ Screenshot capture failed: ${errMsg(err)}`).catch(() => {});
+            sendAsCortana(`❌ Screenshot capture failed: ${errMsg(err)}`).catch(() => {});
           });
           markGoalProgress('📸 Screenshot capture started');
           await sendAutopilotAudit(groupchat, 'action_executed', 'Screenshot capture workflow started.', {
             action: 'SCREENSHOTS',
           });
-          await sendAsRiley('📸 Capturing screenshots...');
+          await sendAsCortana('📸 Capturing screenshots...');
           break;
         }
         case 'URLS': {
           const linkIntent = /\b(url|urls|link|links|asap links|app url|share url|cloud run|cloud build)\b/i.test(String(userMessage || goalState.goal || ''));
           if (!linkIntent && String(param || '').trim().toLowerCase() !== 'force') {
-            await sendAsRiley('🔗 Skipped link posting because no explicit link request was detected.');
+            await sendAsCortana('🔗 Skipped link posting because no explicit link request was detected.');
             break;
           }
 
           const now = Date.now();
           if (now - lastUrlsActionAt < URL_ACTION_COOLDOWN_MS) {
-            await sendAsRiley('🔗 Links were posted recently. Skipping duplicate link blast in groupchat.');
+            await sendAsCortana('🔗 Links were posted recently. Skipping duplicate link blast in groupchat.');
             break;
           }
           lastUrlsActionAt = now;
@@ -2972,56 +3050,56 @@ async function executeActions(
           const channels = getBotChannels();
           if (channels?.url) {
             await channels.url.send(linksMessage).catch(() => {});
-            await sendAsRiley('🔗 Posted updated links in #url.');
+            await sendAsCortana('🔗 Posted updated links in #url.');
           } else {
-            await sendAsRiley('🔗 Links are ready, but #url is unavailable right now.');
+            await sendAsCortana('🔗 Links are ready, but #url is unavailable right now.');
           }
           break;
         }
         case 'STATUS': {
           const summary = getStatusSummary();
-          await sendAsRiley(summary || '📋 No active tasks.');
+          await sendAsCortana(summary || '📋 No active tasks.');
           break;
         }
         case 'THREADS': {
           markGoalProgress('🧵 Reviewing workspace threads');
           const report = await buildThreadStatusReport(groupchat);
           await postThreadStatusSnapshotNow('manual').catch(() => {});
-          await sendAsRiley(report);
+          await sendAsCortana(report);
           break;
         }
         case 'HEALTH': {
           markGoalProgress('🩺 Running app health check');
-          await sendAsRiley(await buildDeploymentHealthReport());
+          await sendAsCortana(await buildDeploymentHealthReport());
           break;
         }
         case 'REGRESSION': {
-          await sendAsRiley(buildRegressionReport(param));
+          await sendAsCortana(buildRegressionReport(param));
           break;
         }
         case 'SMOKE': {
           markGoalProgress('🧪 Running smoke check');
-          await sendAsRiley(await runSmokeSummary(param));
+          await sendAsCortana(await runSmokeSummary(param));
           break;
         }
         case 'LIMITS': {
           await refreshLiveBillingData().catch(() => {});
           const report = getUsageReport();
           markGoalProgress('📊 Usage report posted');
-          await sendAsRiley(report);
+          await sendAsCortana(report);
           break;
         }
         case 'UNFUSE': {
           clearGeminiQuotaFuse();
           const status = getGeminiQuotaFuseStatus();
           markGoalProgress('🧯 Cleared local Gemini quota fuse');
-          await sendAsRiley(`🧯 Cleared local Gemini quota/rate fuse. blocked=${status.blocked ? 'yes' : 'no'}.`);
+          await sendAsCortana(`🧯 Cleared local Gemini quota/rate fuse. blocked=${status.blocked ? 'yes' : 'no'}.`);
           break;
         }
         case 'CONTEXT': {
           const report = `${getContextEfficiencyReport()}\n\n${getContextRuntimeReport()}`;
           markGoalProgress('🧠 Context report posted');
-          await sendAsRiley(report);
+          await sendAsCortana(report);
           break;
         }
         case 'CLEANUP': {
@@ -3035,9 +3113,9 @@ async function executeActions(
             const clipped = options.requestedCount > options.targetCount
               ? ` Requested ${options.requestedCount}, capped at ${options.targetCount} for safety.`
               : '';
-            await sendAsRiley(`🧽 Cleaned up ${removed} noisy messages in groupchat from ${options.descriptor}.${clipped}`);
+            await sendAsCortana(`🧽 Cleaned up ${removed} noisy messages in groupchat from ${options.descriptor}.${clipped}`);
           } catch (err) {
-            await sendAsRiley(`❌ Groupchat cleanup failed: ${errMsg(err)}`);
+            await sendAsCortana(`❌ Groupchat cleanup failed: ${errMsg(err)}`);
           }
           break;
         }
@@ -3046,7 +3124,7 @@ async function executeActions(
           groupHistory.splice(0);
           clearMemory('groupchat');
           markGoalProgress('🧹 Context cleared');
-          await sendAsRiley('🧹 Conversation context cleared.');
+          await sendAsCortana('🧹 Conversation context cleared.');
           break;
         }
         case 'ROLLBACK': {
@@ -3054,9 +3132,9 @@ async function executeActions(
             try {
               const result = await rollbackToRevision(param);
               markGoalProgress('↩️ Rollback complete');
-              await sendAsRiley(result);
+              await sendAsCortana(result);
             } catch (err) {
-              await sendAsRiley(`❌ Rollback failed: ${errMsg(err)}`);
+              await sendAsCortana(`❌ Rollback failed: ${errMsg(err)}`);
             }
           } else {
             try {
@@ -3068,9 +3146,9 @@ async function executeActions(
                 const active = r.name === current ? ' ← **active**' : '';
                 return `\`${r.name}\` — ${date} (${tag})${active}`;
               }).join('\n');
-              await sendAsRiley(`📦 **Cloud Run Revisions**\n\n${list}`);
+              await sendAsCortana(`📦 **Cloud Run Revisions**\n\n${list}`);
             } catch (err) {
-              await sendAsRiley(`❌ Failed to list revisions: ${errMsg(err)}`);
+              await sendAsCortana(`❌ Failed to list revisions: ${errMsg(err)}`);
             }
           }
           break;
@@ -3080,7 +3158,7 @@ async function executeActions(
           const list = Array.from(agents.values())
             .map((a) => `${a.emoji} **${a.name}**`)
             .join('\n');
-          await sendAsRiley(`**ASAP Agent Team**\n\n${list}`);
+          await sendAsCortana(`**ASAP Agent Team**\n\n${list}`);
           break;
         }
         case 'CLOSE_THREAD': {
@@ -3092,7 +3170,7 @@ async function executeActions(
               // Auto-trigger web harness before refusing to close
               const appUrl = process.env.FRONTEND_URL || 'https://asap-489910.australia-southeast1.run.app';
               try {
-                await sendAsRiley('📸 Auto-capturing web harness verification before closing...');
+                await sendAsCortana('📸 Auto-capturing web harness verification before closing...');
                 await captureAndPostScreenshots(appUrl, `close-verify ${(goalState.goal || '').slice(0, 40)}`, {
                   targetChannel: workspaceChannel as TextChannel,
                   clearTargetChannel: false,
@@ -3103,21 +3181,21 @@ async function executeActions(
               }
             }
             if (!hasEvidence) {
-              await sendAsRiley('🛑 Cannot close this thread yet. Runtime verification evidence is missing. Web harness capture was attempted but may have failed — check the app URL is reachable.');
+              await sendAsCortana('🛑 Cannot close this thread yet. Runtime verification evidence is missing. Web harness capture was attempted but may have failed — check the app URL is reachable.');
               break;
             }
           }
-          await sendAsRiley('🧵 Closing this workspace thread now that the task is complete.');
+          await sendAsCortana('🧵 Closing this workspace thread now that the task is complete.');
           await closeGoalWorkspace(groupchat, workspaceChannel, 'Closed by Cortana action');
           break;
         }
         case 'CALL': {
           if (!isTelephonyAvailable()) {
-            await sendAsRiley('📞 Phone system not configured (missing Twilio credentials).');
+            await sendAsCortana('📞 Phone system not configured (missing Twilio credentials).');
             break;
           }
           if (!param) {
-            await sendAsRiley('📞 No phone number specified. Cortana, include a number with [ACTION:CALL:number].');
+            await sendAsCortana('📞 No phone number specified. Cortana, include a number with [ACTION:CALL:number].');
             break;
           }
           const verifiedNumbers = (process.env.TWILIO_VERIFIED_NUMBERS || '0436012231')
@@ -3126,24 +3204,24 @@ async function executeActions(
             .filter(Boolean);
           const phoneNumber = param.trim();
           if (!verifiedNumbers.includes(phoneNumber)) {
-            await sendAsRiley(`📞 ${phoneNumber} is not in the verified list for this Twilio account. Verified numbers: ${verifiedNumbers.join(', ')}`);
+            await sendAsCortana(`📞 ${phoneNumber} is not in the verified list for this Twilio account. Verified numbers: ${verifiedNumbers.join(', ')}`);
             break;
           }
           try {
             await makeOutboundCall(phoneNumber, "Hey Jordan, it's Cortana! You asked me to give you a call.");
-            await sendAsRiley(`📞 Calling ${phoneNumber}...`);
+            await sendAsCortana(`📞 Calling ${phoneNumber}...`);
           } catch (err) {
-            await sendAsRiley(`❌ Call failed: ${errMsg(err)}`);
+            await sendAsCortana(`❌ Call failed: ${errMsg(err)}`);
           }
           break;
         }
         case 'TEST_CALL': {
           if (!isTelephonyAvailable()) {
-            await sendAsRiley('📞 Phone system not configured (missing Twilio credentials).');
+            await sendAsCortana('📞 Phone system not configured (missing Twilio credentials).');
             break;
           }
           if (!param) {
-            await sendAsRiley('📞 No phone number specified. Use [ACTION:TEST_CALL:number].');
+            await sendAsCortana('📞 No phone number specified. Use [ACTION:TEST_CALL:number].');
             break;
           }
           const verifiedNumbers = (process.env.TWILIO_VERIFIED_NUMBERS || '0436012231')
@@ -3152,24 +3230,24 @@ async function executeActions(
             .filter(Boolean);
           const phoneNumber = param.trim();
           if (!verifiedNumbers.includes(phoneNumber)) {
-            await sendAsRiley(`📞 ${phoneNumber} is not in the verified list for this Twilio account. Verified numbers: ${verifiedNumbers.join(', ')}`);
+            await sendAsCortana(`📞 ${phoneNumber} is not in the verified list for this Twilio account. Verified numbers: ${verifiedNumbers.join(', ')}`);
             break;
           }
           try {
             await makeAsapTesterCall(phoneNumber);
-            await sendAsRiley(`🧪📞 ASAPTester voice check calling ${phoneNumber}...`);
+            await sendAsCortana(`🧪📞 ASAPTester voice check calling ${phoneNumber}...`);
           } catch (err) {
-            await sendAsRiley(`❌ ASAPTester test call failed: ${errMsg(err)}`);
+            await sendAsCortana(`❌ ASAPTester test call failed: ${errMsg(err)}`);
           }
           break;
         }
         case 'CONFERENCE': {
           if (!isTelephonyAvailable()) {
-            await sendAsRiley('📞 Phone system not configured (missing Twilio credentials).');
+            await sendAsCortana('📞 Phone system not configured (missing Twilio credentials).');
             break;
           }
           if (!param) {
-            await sendAsRiley('📞 No phone numbers specified. Cortana, include numbers with [ACTION:CONFERENCE:num1,num2].');
+            await sendAsCortana('📞 No phone numbers specified. Cortana, include numbers with [ACTION:CONFERENCE:num1,num2].');
             break;
           }
           const verifiedNumbers = new Set(
@@ -3184,14 +3262,14 @@ async function executeActions(
             .filter(Boolean);
           const numbers = requested.filter((n) => verifiedNumbers.has(n));
           if (numbers.length === 0) {
-            await sendAsRiley(`📞 None of the requested numbers are verified for this Twilio account. Verified numbers: ${[...verifiedNumbers].join(', ')}`);
+            await sendAsCortana(`📞 None of the requested numbers are verified for this Twilio account. Verified numbers: ${[...verifiedNumbers].join(', ')}`);
             break;
           }
           try {
             const confName = await startConferenceCall(numbers);
-            await sendAsRiley(`📞 **Conference call started** — ${confName}\nCalling: ${numbers.join(', ')} + Cortana`);
+            await sendAsCortana(`📞 **Conference call started** — ${confName}\nCalling: ${numbers.join(', ')} + Cortana`);
           } catch (err) {
-            await sendAsRiley(`❌ Conference failed: ${errMsg(err)}`);
+            await sendAsCortana(`❌ Conference failed: ${errMsg(err)}`);
           }
           break;
         }
@@ -3212,18 +3290,18 @@ const DIRECTED_AGENT_IDS = new Set<string>([
   'ios-engineer', 'android-engineer',
 ]);
 
-const RILEY_USE_ALL_AGENTS = process.env.RILEY_USE_ALL_AGENTS === 'true';
-const RILEY_DIRECT_SPECIALISTS = false;
-const RILEY_ACE_ERROR_RECOVERY = process.env.RILEY_ACE_ERROR_RECOVERY === 'true';
+const CORTANA_USE_ALL_AGENTS = process.env.CORTANA_USE_ALL_AGENTS === 'true';
+const CORTANA_DIRECT_SPECIALISTS = false;
+const CORTANA_ACE_ERROR_RECOVERY = process.env.CORTANA_ACE_ERROR_RECOVERY === 'true';
 
 function parseDirectives(text: string): string[] {
   return parseMentionedAgentIds(text, DIRECTED_AGENT_IDS);
 }
 
-function shouldFanOutAllAgents(rileyResponse: string): boolean {
-  const text = rileyResponse.toLowerCase();
+function shouldFanOutAllAgents(cortanaResponse: string): boolean {
+  const text = cortanaResponse.toLowerCase();
   if (text.includes('no action needed') || text.includes('for awareness only')) return false;
-  if (/(only|just)\s+@(max|sophie|kane|raj|elena|kai|jude|liv|harper|mia|leo)\b/i.test(rileyResponse)) return false;
+  if (/(only|just)\s+@(max|sophie|kane|raj|elena|kai|jude|liv|harper|mia|leo)\b/i.test(cortanaResponse)) return false;
   return true;
 }
 
@@ -3249,7 +3327,7 @@ function isSubstantialDesignDeliverable(text: string): boolean {
   return htmlIndicators >= 3;
 }
 
-function summarizeExecutionForRiley(text: string): string {
+function summarizeExecutionForCortana(text: string): string {
   const content = String(text || '').trim();
   if (!content) return 'Execution completed; evidence is available in the workspace thread.';
 
@@ -3375,8 +3453,8 @@ async function hasRecentRuntimeVerificationEvidence(
   sinceTs: number
 ): Promise<boolean> {
   const channels = getBotChannels();
-  const rileyChannel = getAgentWorkChannel('executive-assistant', groupchat);
-  const candidates = [channels?.screenshots, workspaceChannel, rileyChannel].filter(Boolean);
+  const cortanaChannel = getAgentWorkChannel('executive-assistant', groupchat);
+  const candidates = [channels?.screenshots, workspaceChannel, cortanaChannel].filter(Boolean);
 
   try {
     for (const candidate of candidates) {
@@ -3477,26 +3555,26 @@ function hasBlockingVerificationFinding(findings: string[]): boolean {
 }
 
 async function recoverFromExecutionErrors(
-  rileyResponse: string,
+  cortanaResponse: string,
   errorLines: string[],
   groupchat: TextChannel,
   workspaceChannel: WebhookCapableChannel,
   signal?: AbortSignal
 ): Promise<{ findings: string[]; errors: string[] }> {
-  const riley = getAgent('executive-assistant' as AgentId);
-  if (!riley) return { findings: [], errors: ['Cortana: unavailable for recovery'] };
+  const cortana = getAgent('executive-assistant' as AgentId);
+  if (!cortana) return { findings: [], errors: ['Cortana: unavailable for recovery'] };
 
   try {
     if (signal?.aborted) return { findings: [], errors: [] };
     markGoalProgress('🧯 Cortana recovering execution errors...');
-    const rileyChannel = getAgentWorkChannel('executive-assistant', groupchat);
-    rileyChannel.sendTyping().catch(() => {});
+    const cortanaChannel = getAgentWorkChannel('executive-assistant', groupchat);
+    cortanaChannel.sendTyping().catch(() => {});
 
     const recoveryContext = [
       '[System execution recovery]: One or more specialist agents errored during execution.',
       '',
       'Original Cortana plan:',
-      rileyResponse,
+      cortanaResponse,
       '',
       'Reported errors:',
       ...errorLines.map((line) => `- ${line}`),
@@ -3509,7 +3587,7 @@ async function recoverFromExecutionErrors(
       '4) End with a short status: fixed, partially fixed, or blocked.',
     ].join('\n');
 
-    const recoveryResponse = await dispatchToAgent('executive-assistant', recoveryContext, rileyChannel, {
+    const recoveryResponse = await dispatchToAgent('executive-assistant', recoveryContext, cortanaChannel, {
       signal,
       maxTokens: Math.max(SUBAGENT_MAX_TOKENS, 2200),
       persistUserContent: `[Cortana execution recovery]: ${errorLines.join('; ').slice(0, 1200)}`,
@@ -3535,27 +3613,27 @@ async function recoverFromExecutionErrors(
   } catch (err) {
     const msg = err instanceof Error ? err.stack || err.message : 'Unknown';
     console.error('Cortana recovery error:', errMsg(err));
-    void postAgentErrorLog('riley:recovery', 'Cortana recovery error', { agentId: 'executive-assistant', detail: msg });
+    void postAgentErrorLog('cortana:recovery', 'Cortana recovery error', { agentId: 'executive-assistant', detail: msg });
     try {
       const wh = await getWebhook(workspaceChannel);
-      await wh.send({ content: '⚠️ Cortana had an error while recovering specialist failures.', username: `${riley.emoji} ${riley.name}`, avatarURL: riley.avatarUrl });
+      await wh.send({ content: '⚠️ Cortana had an error while recovering specialist failures.', username: `${cortana.emoji} ${cortana.name}`, avatarURL: cortana.avatarUrl });
     } catch {
     }
     return { findings: [], errors: ['Cortana: recovery error'] };
   }
 }
 async function runSpecialistFallback(
-  rileyResponse: string,
+  cortanaResponse: string,
   groupchat: TextChannel,
   workspaceChannel: WebhookCapableChannel,
   signal?: AbortSignal,
 ): Promise<{ findings: string[]; errors: string[] }> {
   const findings: string[] = [];
   const errors: string[] = [];
-  const inferredSpecialists = inferSpecialistsForContext(rileyResponse);
+  const inferredSpecialists = inferSpecialistsForContext(cortanaResponse);
   const fallbackAgents = [...new Set(inferredSpecialists)].slice(0, 2);
   if (fallbackAgents.length > 0) {
-    const autoSpecialistRun = await handleSubAgents(fallbackAgents, rileyResponse, groupchat, workspaceChannel, signal);
+    const autoSpecialistRun = await handleSubAgents(fallbackAgents, cortanaResponse, groupchat, workspaceChannel, signal);
     findings.push(...autoSpecialistRun.findings);
     errors.push(...autoSpecialistRun.errors);
   }
@@ -3567,35 +3645,35 @@ async function runSpecialistFallback(
  * Returns a summary of the chain outcome for use in continuation loops.
  */
 async function handleAgentChain(
-  rileyResponse: string,
+  cortanaResponse: string,
   groupchat: TextChannel,
   workspaceChannel: WebhookCapableChannel,
   signal?: AbortSignal
 ): Promise<{ summary: string; hadErrors: boolean; hadFileChanges: boolean }> {
   const result = { summary: '', hadErrors: false, hadFileChanges: false };
-  const directedAgents = parseDirectives(rileyResponse);
-  const wantsFullTeam = RILEY_USE_ALL_AGENTS && shouldFanOutAllAgents(rileyResponse);
+  const directedAgents = parseDirectives(cortanaResponse);
+  const wantsFullTeam = CORTANA_USE_ALL_AGENTS && shouldFanOutAllAgents(cortanaResponse);
   const effectiveAgents = wantsFullTeam
     ? [...DIRECTED_AGENT_IDS]
     : directedAgents;
   if (effectiveAgents.length === 0) return result;
   markGoalProgress('🧩 Coordinating specialist agents...');
 
-  const otherDirected = RILEY_DIRECT_SPECIALISTS ? effectiveAgents : [];
+  const otherDirected = CORTANA_DIRECT_SPECIALISTS ? effectiveAgents : [];
   const consolidatedFindings: string[] = [];
   const consolidatedErrors: string[] = [];
-  const rileyAlreadyCompletion = /(done|completed|complete|fixed|resolved|implemented|deployed|shipped|finished|ready)/i.test(rileyResponse);
-  const needsRuntimeEvidence = goalNeedsRuntimeVerification(`${goalState.goal || ''}\n${rileyResponse}`);
-  if (hasExecutionCompletionContract(rileyResponse)) {
-    result.summary = summarizeExecutionForRiley(rileyResponse);
+  const cortanaAlreadyCompletion = /(done|completed|complete|fixed|resolved|implemented|deployed|shipped|finished|ready)/i.test(cortanaResponse);
+  const needsRuntimeEvidence = goalNeedsRuntimeVerification(`${goalState.goal || ''}\n${cortanaResponse}`);
+  if (hasExecutionCompletionContract(cortanaResponse)) {
+    result.summary = summarizeExecutionForCortana(cortanaResponse);
   }
 
   if (otherDirected.length > 0) {
-    const direct = await handleSubAgents(otherDirected, rileyResponse, groupchat, workspaceChannel, signal);
+    const direct = await handleSubAgents(otherDirected, cortanaResponse, groupchat, workspaceChannel, signal);
     consolidatedFindings.push(...direct.findings);
     consolidatedErrors.push(...direct.errors);
   } else if (!signal?.aborted) {
-    const fallbackResult = await runSpecialistFallback(rileyResponse, groupchat, workspaceChannel, signal);
+    const fallbackResult = await runSpecialistFallback(cortanaResponse, groupchat, workspaceChannel, signal);
     consolidatedFindings.push(...fallbackResult.findings);
     consolidatedErrors.push(...fallbackResult.errors);
   }
@@ -3604,8 +3682,8 @@ async function handleAgentChain(
     consolidatedErrors.push('Verification is blocked based on specialist findings; completion remains blocked until verification passes.');
   }
 
-  if (RILEY_ACE_ERROR_RECOVERY && !signal?.aborted && consolidatedErrors.length > 0) {
-    const recovered = await recoverFromExecutionErrors(rileyResponse, consolidatedErrors, groupchat, workspaceChannel, signal);
+  if (CORTANA_ACE_ERROR_RECOVERY && !signal?.aborted && consolidatedErrors.length > 0) {
+    const recovered = await recoverFromExecutionErrors(cortanaResponse, consolidatedErrors, groupchat, workspaceChannel, signal);
     consolidatedFindings.push(...recovered.findings);
     consolidatedErrors.push(...recovered.errors);
   }
@@ -3618,9 +3696,9 @@ async function handleAgentChain(
     if (!hasEvidence) {
       const appUrl = process.env.FRONTEND_URL || 'https://asap-489910.australia-southeast1.run.app';
       try {
-        const riley = getAgent('executive-assistant' as AgentId);
-        if (riley) {
-          await sendAgentMessage(workspaceChannel, riley, '📸 Auto-capturing web harness verification screenshots...');
+        const cortana = getAgent('executive-assistant' as AgentId);
+        if (cortana) {
+          await sendAgentMessage(workspaceChannel, cortana, '📸 Auto-capturing web harness verification screenshots...');
         }
         await captureAndPostScreenshots(appUrl, `auto-verify ${goalState.goal?.slice(0, 40) || 'goal'}`, {
           targetChannel: workspaceChannel as TextChannel,
@@ -3634,26 +3712,26 @@ async function handleAgentChain(
     }
     if (!hasEvidence) {
       consolidatedErrors.push('Required runtime verification evidence is missing (screenshots or mobile harness/puppeteer output).');
-      const riley = getAgent('executive-assistant' as AgentId);
-      if (riley) {
-        await sendAgentMessage(workspaceChannel, riley, '🛑 Completion gate: runtime verification evidence is required but missing. I will keep this thread open until checkable proof is posted (screenshots or harness/puppeteer output).');
+      const cortana = getAgent('executive-assistant' as AgentId);
+      if (cortana) {
+        await sendAgentMessage(workspaceChannel, cortana, '🛑 Completion gate: runtime verification evidence is required but missing. I will keep this thread open until checkable proof is posted (screenshots or harness/puppeteer output).');
       }
     }
   }
 
   if (GROUPCHAT_SUMMARY_ONLY && !signal?.aborted && (consolidatedFindings.length > 0 || consolidatedErrors.length > 0)) {
-    const riley = getAgent('executive-assistant' as AgentId);
-    if (riley) {
+    const cortana = getAgent('executive-assistant' as AgentId);
+    if (cortana) {
       const consolidatedUpdate = buildConsolidatedAgentUpdate(consolidatedFindings, consolidatedErrors);
-      const watchdogSummary = !rileyAlreadyCompletion
+      const watchdogSummary = !cortanaAlreadyCompletion
         ? buildChainCompletionWatchdogMessage(consolidatedFindings, consolidatedErrors)
         : '';
       const workspaceSummary = [consolidatedUpdate, watchdogSummary].filter(Boolean).join('\n\n');
-      await sendAgentMessage(workspaceChannel, riley, workspaceSummary);
+      await sendAgentMessage(workspaceChannel, cortana, workspaceSummary);
 
       if (workspaceChannel.id !== groupchat.id) {
         const compact = buildCompactChainStatus(consolidatedFindings, consolidatedErrors);
-        await sendAgentMessage(groupchat, riley, compact);
+        await sendAgentMessage(groupchat, cortana, compact);
       }
     }
   }
@@ -3719,9 +3797,9 @@ async function handleSubAgents(
     // Push sub-agents into the unified turn tracker so the user sees one
     // message with nested per-agent sub-lines instead of a fresh status
     // post per specialist.
-    const riley = getAgent('executive-assistant');
+    const cortana = getAgent('executive-assistant');
     const activeTurn = activeTurnByChannel.get(workspaceChannel.id);
-    if (activeTurn && riley) {
+    if (activeTurn && cortana) {
       // Use short role names only (e.g. "Argus" not "🧪 Argus (QA)") so the
       // tracker header stays clean.
       const names = tierAgents
@@ -3732,7 +3810,7 @@ async function handleSubAgents(
         : names.length === 2
           ? `${names[0]} and ${names[1]}`
           : `${names.slice(0, -1).join(', ')}, and ${names[names.length - 1]}`;
-      activeTurn.setPhase('executive-assistant', 'planning', `consulting ${joined}`, riley);
+      activeTurn.setPhase('executive-assistant', 'planning', `consulting ${joined}`, cortana);
       for (const { id, agent } of tierAgents) {
         activeTurn.setPhase(id, 'queued', 'queued', agent);
       }
@@ -3755,7 +3833,7 @@ async function handleSubAgents(
         documentToChannel(id, `📥 Received task from groupchat. Working...`).catch(() => {});
 
         const handoffCtx = buildHandoffContext({
-          fromAgent: 'riley',
+          fromAgent: 'cortana',
           toAgent: id,
           traceId: `groupchat-${Date.now()}`,
           task: directiveExcerpt,
@@ -3860,7 +3938,7 @@ async function handleSubAgents(
   let opusSummary = await executeOpusPlan({
     executionId: `subagents:${Date.now()}`,
     goal: directiveContext.replace(/\s+/g, ' ').trim().slice(0, 200) || 'specialist follow-up',
-    requestedBy: 'riley',
+    requestedBy: 'cortana',
     specialistReports: reports,
   }, {
     onMilestone: (milestone) => {
@@ -3989,7 +4067,7 @@ export async function handleDecisionReply(
 
   const workspaceChannel = await ensureGoalWorkspace(groupchat, userName, `Decision response: ${content}`);
 
-  await handleRileyMessage(
+  await handleCortanaMessage(
     `[Decision response from ${userName} in #decisions]: ${content}`,
     userName,
     message.member || undefined,
@@ -4006,9 +4084,9 @@ export async function handleDecisionReply(
 async function postDecisionEmbed(
   targetChannel: TextChannel,
   groupchat: TextChannel,
-  rileyResponse: string
+  cortanaResponse: string
 ): Promise<void> {
-  const decisionText = String(rileyResponse || '');
+  const decisionText = String(cortanaResponse || '');
   if (!decisionText.trim()) return;
 
   const optionRe = /^[1-5]️?⃣?\s*[.):]\s*(.+)$/gm;
@@ -4099,16 +4177,16 @@ async function postDecisionEmbed(
       )
     );
 
-    const riley = getAgent('executive-assistant' as AgentId);
+    const cortana = getAgent('executive-assistant' as AgentId);
     const confirmText = `✅ **${userName}** chose: **${choice}**`;
 
     try {
       await btnInteraction.update({ components: [disabledRow] });
     } catch { /* ignore if already replied */ }
 
-    if (riley) {
+    if (cortana) {
       try {
-        await sendWebhookMessage(targetChannel, { content: confirmText, username: `${riley.emoji} ${riley.name}`, avatarURL: riley.avatarUrl });
+        await sendWebhookMessage(targetChannel, { content: confirmText, username: `${cortana.emoji} ${cortana.name}`, avatarURL: cortana.avatarUrl });
       } catch {
         await targetChannel.send(confirmText);
       }
@@ -4125,8 +4203,8 @@ async function postDecisionEmbed(
     if (isDefault) {
       try {
         const msg = `👍 Default confirmed — continuing with "${choice}".`;
-        if (riley) {
-          await sendWebhookMessage(targetChannel, { content: msg, username: `${riley.emoji} ${riley.name}`, avatarURL: riley.avatarUrl });
+        if (cortana) {
+          await sendWebhookMessage(targetChannel, { content: msg, username: `${cortana.emoji} ${cortana.name}`, avatarURL: cortana.avatarUrl });
         }
       } catch { /* best-effort ack */ }
       return;
@@ -4134,7 +4212,7 @@ async function postDecisionEmbed(
 
     const decisionMessage = `[Decision override] ${userName} selected "${choice}" instead of the default "${defaultLabel}". Adapt the in-flight plan accordingly — do not repeat work already done; only pivot what's different under this option.`;
     const workspaceChannel = await ensureGoalWorkspace(groupchat, userName, decisionMessage);
-    await handleRileyMessage(decisionMessage, userName, undefined, groupchat, undefined, workspaceChannel);
+    await handleCortanaMessage(decisionMessage, userName, undefined, groupchat, undefined, workspaceChannel);
   });
 
   collector.on('end', async (collected) => {

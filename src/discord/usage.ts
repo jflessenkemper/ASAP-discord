@@ -250,9 +250,9 @@ function disableUsageDb(reason: string): void {
 
 export function toAgentTag(agentLabel: string): string {
   const normalized = String(agentLabel || '').toLowerCase();
-  // Map both current Greek-pantheon names and legacy names (riley/max/etc.)
+  // Map both current Greek-pantheon names and legacy names (cortana/max/etc.)
   // to their stable agent IDs so logs and metrics keep working across the rename.
-  if (normalized.includes('cortana') || normalized.includes('riley') || normalized.includes('ace')) return 'executive-assistant';
+  if (normalized.includes('cortana') || normalized.includes('cortana') || normalized.includes('ace')) return 'executive-assistant';
   if (normalized.includes('argus') || normalized.includes('max')) return 'qa';
   if (normalized.includes('aphrodite') || normalized.includes('sophie')) return 'ux-reviewer';
   if (normalized.includes('athena') || normalized.includes('kane')) return 'security-auditor';

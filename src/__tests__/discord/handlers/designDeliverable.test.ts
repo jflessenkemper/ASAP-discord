@@ -10,14 +10,14 @@ import {
 } from '../../../discord/handlers/designDeliverable';
 
 describe('isDesignDeliverableDetailed', () => {
-  it('detects design spec in riley response', () => {
+  it('detects design spec in cortana response', () => {
     const result = isDesignDeliverableDetailed('Create a design spec for the dashboard', null);
     expect(result.match).toBe(true);
-    expect(result.rileyMatch).toBe(true);
+    expect(result.cortanaMatch).toBe(true);
     expect(result.goalMatch).toBe(false);
   });
 
-  it('detects html design in riley response', () => {
+  it('detects html design in cortana response', () => {
     const result = isDesignDeliverableDetailed('Build a design with HTML and CSS', null);
     expect(result.match).toBe(true);
   });
@@ -30,7 +30,7 @@ describe('isDesignDeliverableDetailed', () => {
   it('detects design in active goal', () => {
     const result = isDesignDeliverableDetailed('other text', 'Create a design spec');
     expect(result.match).toBe(true);
-    expect(result.rileyMatch).toBe(false);
+    expect(result.cortanaMatch).toBe(false);
     expect(result.goalMatch).toBe(true);
   });
 

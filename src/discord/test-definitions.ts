@@ -49,9 +49,9 @@ const RAW_AGENT_CAPABILITY_TESTS: AgentCapabilityTest[] = [
   {
     id: 'executive-assistant',
     category: 'orchestration',
-    capability: 'delegate-riley-qa',
+    capability: 'delegate-cortana-qa',
     prompt: 'In a single reply, explain that Cortana will execute the code work directly and involve QA for validation.',
-    expectAny: [/riley|execut|direct/i, /qa|max/i],
+    expectAny: [/cortana|execut|direct/i, /qa|max/i],
     requireTokenEcho: false,
     critical: false,
   },
@@ -60,7 +60,7 @@ const RAW_AGENT_CAPABILITY_TESTS: AgentCapabilityTest[] = [
     category: 'orchestration',
     capability: 'direct-execution-routing',
     prompt: 'You need security and QA help. Explain in one short reply that Cortana will execute directly and involve only the needed specialists for review and validation.',
-    expectAny: [/riley|direct|execut|specialist|delegat/i],
+    expectAny: [/cortana|direct|execut|specialist|delegat/i],
     expectNone: [/@kane|@max|@raj|@elena|@kai|@jude|@liv|@harper|@mia|@leo/i],
     requireTokenEcho: false,
     timeoutMs: 240_000,
@@ -222,7 +222,7 @@ const RAW_AGENT_CAPABILITY_TESTS: AgentCapabilityTest[] = [
     category: 'core',
     capability: 'action-agents',
     prompt: 'List all available agents on this team.',
-    expectAny: [/\[ACTION:AGENTS\]|riley|kane|max|qa|specialist|agent/i],
+    expectAny: [/\[ACTION:AGENTS\]|cortana|kane|max|qa|specialist|agent/i],
   },
   {
     id: 'executive-assistant',
@@ -412,7 +412,7 @@ const RAW_AGENT_CAPABILITY_TESTS: AgentCapabilityTest[] = [
     category: 'orchestration',
     capability: 'delegate-single-specialist',
     prompt: 'Say that Cortana will review the auth route directly and pull in the security specialist if needed.',
-    expectAny: [/riley|security|auth|review|specialist/i],
+    expectAny: [/cortana|security|auth|review|specialist/i],
     minBotRepliesAfterPrompt: 1,
     requireTokenEcho: false,
   },
@@ -602,7 +602,7 @@ const RAW_AGENT_CAPABILITY_TESTS: AgentCapabilityTest[] = [
     capability: 'thread-name-quality',
     prompt: 'Hey Cortana, can you please check if the search codebase tool is working correctly by searching for the main entry point?',
     expectAny: [/search|found|index|entry/i],
-    expectNone: [/hey.*riley.*can.*you.*please/i],
+    expectNone: [/hey.*cortana.*can.*you.*please/i],
     timeoutMs: 180_000,
   },
   {
@@ -664,7 +664,7 @@ const RAW_AGENT_CAPABILITY_TESTS: AgentCapabilityTest[] = [
     category: 'orchestration',
     capability: 'upgrades-act-on-top',
     prompt: 'Pick the highest-priority accepted upgrade from #upgrades and say Cortana will implement it directly.',
-    expectAny: [/riley|implement|direct|upgrade/i],
+    expectAny: [/cortana|implement|direct|upgrade/i],
     timeoutMs: 180_000,
   },
 
@@ -695,7 +695,7 @@ const RAW_AGENT_CAPABILITY_TESTS: AgentCapabilityTest[] = [
     id: 'executive-assistant',
     category: 'tool-proof',
     capability: 'create-branch-pr',
-    prompt: `Use your git_create_branch tool directly to create a branch called "riley/smoke-${Date.now()}". Then use edit_file to make a trivial change, run_command to commit and push, and create_pull_request to open a PR. Report the result.`,
+    prompt: `Use your git_create_branch tool directly to create a branch called "cortana/smoke-${Date.now()}". Then use edit_file to make a trivial change, run_command to commit and push, and create_pull_request to open a PR. Report the result.`,
     expectToolAudit: ['git_create_branch'],
     expectAny: [/branch|created|pull request|PR|pushed/i],
     timeoutMs: 240_000,
@@ -1526,7 +1526,7 @@ const RAW_AGENT_CAPABILITY_TESTS: AgentCapabilityTest[] = [
     category: 'orchestration',
     capability: 'multi-agent-chain',
     prompt: 'I need a security review of the auth routes. Explain that Cortana will inspect the auth code directly, then involve the security specialist for review, and report back the chain of actions taken.',
-    expectAny: [/riley|security|auth|review|finding|chain|specialist/i],
+    expectAny: [/cortana|security|auth|review|finding|chain|specialist/i],
     minBotRepliesAfterPrompt: 2,
     timeoutMs: 240_000,
     critical: false,
@@ -1754,7 +1754,7 @@ function normalizeLegacySmokePrompt(prompt: string): string {
   return String(prompt || '')
     .replace(/\bAce \(Developer\)\b/g, 'Cortana')
     .replace(/\bAce\b/g, 'Cortana')
-    .replace(/@ace/gi, '@riley')
+    .replace(/@ace/gi, '@cortana')
     .replace(/through Cortana only only/gi, 'through Cortana only');
 }
 

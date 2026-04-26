@@ -4,9 +4,9 @@ import {
   buildVoiceDecisionPolicy,
   DEFAULT_PRIMARY_DECISION_USER_ID,
   resolvePrimaryDecisionUserId,
-} from '../../discord/rileyInteraction';
+} from '../../discord/cortanaInteraction';
 
-describe('rileyInteraction', () => {
+describe('cortanaInteraction', () => {
   it('uses the configured primary decision user id when present', () => {
     expect(resolvePrimaryDecisionUserId('12345')).toBe('12345');
   });

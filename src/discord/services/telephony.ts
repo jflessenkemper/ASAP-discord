@@ -211,7 +211,7 @@ export function attachTelephonyWebSocket(server: HttpServer): void {
                 processing: false,
                 active: true,
                 conferenceName: confName,
-                ttsVoiceName: process.env.TELEPHONY_CORTANA_VOICE_NAME || process.env.TELEPHONY_RILEY_VOICE_NAME || 'RileyEL',
+                ttsVoiceName: process.env.TELEPHONY_CORTANA_VOICE_NAME || process.env.TELEPHONY_CORTANA_VOICE_NAME || 'CortanaEL',
               };
               activeSessions.set(callSid, newSession);
               await startSessionSTT(newSession);
@@ -320,10 +320,10 @@ async function handlePhoneInput(session: PhoneSession, text: string, language?: 
       return;
     }
 
-    const riley = getAgent('executive-assistant' as AgentId);
-    if (!riley) return;
+    const cortana = getAgent('executive-assistant' as AgentId);
+    if (!cortana) return;
 
-    const rileyMemory = getMemoryContext('executive-assistant');
+    const cortanaMemory = getMemoryContext('executive-assistant');
     const langHint = language && language !== 'en'
       ? `\nIMPORTANT: The caller is speaking ${language === 'zh' ? 'Mandarin Chinese' : language}. Respond in the SAME language.`
       : '';
@@ -344,8 +344,8 @@ If you need to take any actions (code changes, etc.), tell the caller you'll han
 Do NOT use markdown formatting — this is spoken audio.${langHint}`;
 
     const response = await agentRespond(
-      riley,
-      [...rileyMemory, ...session.conversationHistory],
+      cortana,
+      [...cortanaMemory, ...session.conversationHistory],
       context,
       undefined,
       {
@@ -465,7 +465,7 @@ export async function makeOutboundCall(toNumber: string, greeting?: string): Pro
     processing: false,
     active: true,
     conferenceName: null,
-    ttsVoiceName: process.env.TELEPHONY_CORTANA_VOICE_NAME || process.env.TELEPHONY_RILEY_VOICE_NAME || 'RileyEL',
+    ttsVoiceName: process.env.TELEPHONY_CORTANA_VOICE_NAME || process.env.TELEPHONY_CORTANA_VOICE_NAME || 'CortanaEL',
   };
   activeSessions.set(call.sid, session);
 
@@ -676,7 +676,7 @@ export async function startConferenceCall(
   }
 
   const wsUrl = SERVER_URL.replace(/^https?/, 'wss') + '/api/webhooks/twilio/stream';
-  const rileyTwiml = `<?xml version="1.0" encoding="UTF-8"?>
+  const cortanaTwiml = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Connect>
     <Stream url="${wsUrl}">
@@ -689,14 +689,14 @@ export async function startConferenceCall(
   </Dial>
 </Response>`;
 
-  const rileyCall = await client.calls.create({
+  const cortanaCall = await client.calls.create({
     to: TWILIO_PHONE_NUMBER,
     from: TWILIO_PHONE_NUMBER,
-    twiml: rileyTwiml,
+    twiml: cortanaTwiml,
   });
 
   const session: PhoneSession = {
-    callSid: rileyCall.sid,
+    callSid: cortanaCall.sid,
     streamSid: null,
     ws: null,
     direction: 'outbound',
@@ -710,9 +710,9 @@ export async function startConferenceCall(
     processing: false,
     active: true,
     conferenceName: confName,
-    ttsVoiceName: process.env.TELEPHONY_CORTANA_VOICE_NAME || process.env.TELEPHONY_RILEY_VOICE_NAME || 'RileyEL',
+    ttsVoiceName: process.env.TELEPHONY_CORTANA_VOICE_NAME || process.env.TELEPHONY_CORTANA_VOICE_NAME || 'CortanaEL',
   };
-  activeSessions.set(rileyCall.sid, session);
+  activeSessions.set(cortanaCall.sid, session);
 
   const nameList = numbers.map(n => {
     let norm = n.replace(/\s+/g, '');

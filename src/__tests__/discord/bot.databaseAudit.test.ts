@@ -60,7 +60,7 @@ jest.mock('../../discord/handlers/groupchat', () => ({
   setThreadStatusChannel: jest.fn(),
   handleDecisionReply: jest.fn(),
   handleGroupchatMessage: jest.fn(),
-  dispatchUpgradeToRiley: jest.fn(),
+  dispatchUpgradeToCortana: jest.fn(),
   getThreadStatusOpsLine: jest.fn(),
   startSelfImprovementQueueWorker: jest.fn(),
   stopSelfImprovementQueueWorker: jest.fn(),

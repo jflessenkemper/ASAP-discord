@@ -201,7 +201,7 @@ async function handleAgentMessageInner(
   if (!userMessage) return;
 
   const channel = message.channel as TextChannel;
-  const isCareerOpsRiley = agent.id === 'executive-assistant' && /career-ops/i.test(channel.name);
+  const isCareerOpsCortana = agent.id === 'executive-assistant' && /career-ops/i.test(channel.name);
   const completionToken = extractCompletionTokenFromPrompt(userMessage);
   const isCompletionCheckPrompt = !!completionToken && !!message.author?.bot;
 
@@ -226,7 +226,7 @@ async function handleAgentMessageInner(
     }).catch(() => {});
     return;
   }
-  if (isCareerOpsRiley) {
+  if (isCareerOpsCortana) {
     userMessage = `${userMessage}\n\n[Career Ops channel mode: respond directly for job-search workflow. Do not run deployment, health-check, smoke-test, or infra actions unless the user explicitly asks for them.]`;
   }
   await channel.sendTyping();
@@ -251,7 +251,7 @@ async function handleAgentMessageInner(
 
   try {
     const maxTokens = estimateTextMaxTokens(agent, userMessage);
-    const disableToolsForPrompt = isCareerOpsRiley || shouldDisableToolsForProfilePrompt(userMessage) || isCompletionCheckPrompt;
+    const disableToolsForPrompt = isCareerOpsCortana || shouldDisableToolsForProfilePrompt(userMessage) || isCompletionCheckPrompt;
     const cjkPattern = /[\u4e00-\u9fff\u3400-\u4dbf]/;
     const textLangHint = cjkPattern.test(userMessage)
       ? '\n\n[Language detected: Mandarin Chinese. Please reply in Mandarin Chinese (简体中文).]'

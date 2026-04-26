@@ -97,7 +97,7 @@ export async function listPendingDispatches(limit = 25): Promise<PendingUpgrade[
 
 /**
  * Serialize a pending upgrade row into the description string that
- * dispatchUpgradeToRiley expects. Matches the inline format the reaction
+ * dispatchUpgradeToCortana expects. Matches the inline format the reaction
  * handler uses, so replayed dispatches look identical to live ones.
  */
 export function formatUpgradeForDispatch(u: Pick<PendingUpgrade, 'requested_by' | 'issue' | 'suggested_fix' | 'impact'>): string {

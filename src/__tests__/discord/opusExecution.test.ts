@@ -28,7 +28,7 @@ describe('opusExecution', () => {
     const summary = await executeOpusPlan({
       executionId: 'exec-1',
       goal: 'Ship checkout fix',
-      requestedBy: 'riley',
+      requestedBy: 'cortana',
       specialistReports: [
         {
           agentId: 'developer',
@@ -75,7 +75,7 @@ describe('opusExecution', () => {
     const summary = await executeOpusPlan({
       executionId: 'exec-2',
       goal: 'Recover deployment',
-      requestedBy: 'riley',
+      requestedBy: 'cortana',
       specialistReports: [
         createAgentExecutionReport({
           agentId: 'devops',

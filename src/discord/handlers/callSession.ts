@@ -23,7 +23,7 @@ import {
 import { textToSpeech } from '../voice/tts';
 import { errMsg } from '../../utils/errors';
 import { recordLoopHealth } from '../loopHealth';
-import { buildVoiceDecisionPolicy, buildVoiceSingleSpeakerNotice } from '../rileyInteraction';
+import { buildVoiceDecisionPolicy, buildVoiceSingleSpeakerNotice } from '../cortanaInteraction';
 import { recordUserEvent } from '../userEvents';
 
 /** Heartbeat interval to detect stale connections (every 2 minutes) */
@@ -36,8 +36,8 @@ const VOICE_DISABLE_TRANSCRIPT_SUMMARY = String(process.env.VOICE_DISABLE_TRANSC
 function isVoiceStartupSelftestEnabled(): boolean {
   return String(process.env.VOICE_STARTUP_SELFTEST_ENABLED || 'false').toLowerCase() === 'true';
 }
-const VOICE_MAX_TOKENS_RILEY = parseInt(
-  process.env.VOICE_MAX_TOKENS_CORTANA || process.env.VOICE_MAX_TOKENS_RILEY || (VOICE_LOW_LATENCY_MODE ? '120' : '220'),
+const VOICE_MAX_TOKENS_CORTANA = parseInt(
+  process.env.VOICE_MAX_TOKENS_CORTANA || process.env.VOICE_MAX_TOKENS_CORTANA || (VOICE_LOW_LATENCY_MODE ? '120' : '220'),
   10,
 );
 const VOICE_TOOLS_ENABLED = String(process.env.VOICE_TOOLS_ENABLED || 'true').toLowerCase() === 'true';
@@ -54,9 +54,8 @@ const VOICE_CONTEXT_MAX_CHARS = parseInt(process.env.VOICE_CONTEXT_MAX_CHARS || 
 const VOICE_CONTEXT_MESSAGE_MAX_CHARS = parseInt(process.env.VOICE_CONTEXT_MESSAGE_MAX_CHARS || '550', 10);
 const VOICE_CONTEXT_SUMMARY_MAX_CHARS = parseInt(process.env.VOICE_CONTEXT_SUMMARY_MAX_CHARS || '900', 10);
 const VOICE_FILLER_ONLY_RE = /^(?:uh+|um+|hmm+|mm+|ah+|er+|uh huh|huh|hmm okay|okay|ok|yeah|yep|nah|nope)[.!?\s]*$/i;
-// Shared filler phrase list lives in voice/elevenlabs.ts so the boot-time
-// TTS cache warm-up and the call-time warm-phrase detection stay in sync.
-const RILEY_WARM_PHRASES = CORTANA_WARM_PHRASES;
+// CORTANA_WARM_PHRASES is imported above (one source of truth shared with
+// the boot-time TTS cache warm-up).
 const VOICE_TURN_WATCHDOG_MS = parseInt(process.env.VOICE_TURN_WATCHDOG_MS || '20000', 10);
 const VOICE_SINGLE_SPEAKER_NOTICE_COOLDOWN_MS = parseInt(process.env.VOICE_SINGLE_SPEAKER_NOTICE_COOLDOWN_MS || '15000', 10);
 const DEFAULT_TESTER_BOT_ID = '1487426371209789450';
@@ -272,7 +271,7 @@ async function handleVoiceCommand(
   transcription: VoiceTranscription,
   userText: string,
 ): Promise<void> {
-  const riley = getAgent('executive-assistant' as AgentId);
+  const cortana = getAgent('executive-assistant' as AgentId);
   let response: string;
 
   switch (command.type) {
@@ -342,11 +341,11 @@ async function handleVoiceCommand(
     session.transcript.push(`[${new Date().toLocaleTimeString()}] ${transcription.username}: ${userText}`);
     session.transcript.push(`[${new Date().toLocaleTimeString()}] Cortana (EA): ${response}`);
     await session.callLog.send(`🎤 **${transcription.username}**: ${userText}`).catch(() => {});
-    await session.callLog.send(`${riley?.emoji || '📋'} **Cortana**: ${response}`).catch(() => {});
+    await session.callLog.send(`${cortana?.emoji || '📋'} **Cortana**: ${response}`).catch(() => {});
   }
 
   // Speak the response
-  await speakPipelined(response, session.rileyVoiceName, new AbortController().signal, transcription.language);
+  await speakPipelined(response, session.cortanaVoiceName, new AbortController().signal, transcription.language);
 }
 
 function extractVoiceToTextHandoffInstruction(text: string): string | null {
@@ -354,10 +353,10 @@ function extractVoiceToTextHandoffInstruction(text: string): string | null {
   if (!normalized) return null;
 
   const explicitPatterns: RegExp[] = [
-    /(?:send|pass|forward)\s+(?:this\s+)?(?:to\s+)?(?:text\s+riley|riley\s+text|groupchat|the\s+text\s+channel)\s*[:,-]?\s*(.+)$/i,
-    /(?:text\s+riley|riley\s+text)\s*[:,-]\s*(.+)$/i,
-    /riley\s*(?:please\s*)?(?:create|open|start|add)\s*(?:a\s+)?(?:text\s+)?(?:task|todo|follow\s*up)\s*[:,-]?\s*(.+)$/i,
-    /riley\s*(?:please\s*)?(?:note|remember)\s*(?:this)?\s*(?:in\s+text|for\s+text)?\s*[:,-]?\s*(.+)$/i,
+    /(?:send|pass|forward)\s+(?:this\s+)?(?:to\s+)?(?:text\s+cortana|cortana\s+text|groupchat|the\s+text\s+channel)\s*[:,-]?\s*(.+)$/i,
+    /(?:text\s+cortana|cortana\s+text)\s*[:,-]\s*(.+)$/i,
+    /cortana\s*(?:please\s*)?(?:create|open|start|add)\s*(?:a\s+)?(?:text\s+)?(?:task|todo|follow\s*up)\s*[:,-]?\s*(.+)$/i,
+    /cortana\s*(?:please\s*)?(?:note|remember)\s*(?:this)?\s*(?:in\s+text|for\s+text)?\s*[:,-]?\s*(.+)$/i,
   ];
 
   for (const pattern of explicitPatterns) {
@@ -370,7 +369,7 @@ function extractVoiceToTextHandoffInstruction(text: string): string | null {
   return null;
 }
 
-async function handoffVoiceInstructionToTextRiley(
+async function handoffVoiceInstructionToTextCortana(
   session: CallSession,
   transcription: VoiceTranscription,
   instruction: string,
@@ -381,11 +380,11 @@ async function handoffVoiceInstructionToTextRiley(
 
   try {
     const mod = await import('./groupchat');
-    if (typeof mod.handoffVoiceInstructionToRileyText !== 'function') {
+    if (typeof mod.handoffVoiceInstructionToCortanaText !== 'function') {
       return false;
     }
 
-    await mod.handoffVoiceInstructionToRileyText(trimmed, transcription.username, session.groupchat);
+    await mod.handoffVoiceInstructionToCortanaText(trimmed, transcription.username, session.groupchat);
     await postVoiceStageLog('voice_text_handoff', `user=${transcription.username} chars=${trimmed.length}`);
     await sendAsAgent(session.groupchat, `📝 Voice handoff queued for Cortana text: "${trimmed.slice(0, 180)}"`);
     if (!VOICE_DISABLE_CALL_LOG) {
@@ -430,7 +429,7 @@ function createLiveSpeechStreamer(
   const normalizeSegment = (segment: string) =>
     segment.toLowerCase().replace(/\s+/g, ' ').replace(/[^a-z0-9\s]/g, '').trim();
 
-  const warmPhraseSet = new Set(RILEY_WARM_PHRASES.map(p => p.toLowerCase().replace(/[^a-z0-9\s]/g, '').trim()));
+  const warmPhraseSet = new Set(CORTANA_WARM_PHRASES.map(p => p.toLowerCase().replace(/[^a-z0-9\s]/g, '').trim()));
 
   const enqueue = (segment: string) => {
     const toSpeak = segment.trim();
@@ -496,7 +495,7 @@ export interface CallSession {
   startTime: Date;
   transcript: string[];
   conversationHistory: ConversationMessage[];
-  rileyChatSession: ReusableAgentChatSession;
+  cortanaChatSession: ReusableAgentChatSession;
   unsubscribers: Array<() => void>;
   voiceChannel: VoiceChannel;
   groupchat: TextChannel;
@@ -517,7 +516,7 @@ export interface CallSession {
   activeSpeakerUserId: string | null;
   activeSpeakerName: string | null;
   lastSpeakerPolicyNoticeAt: number;
-  rileyVoiceName: string;
+  cortanaVoiceName: string;
   previousBotNickname: string | null;
 }
 
@@ -635,15 +634,15 @@ export async function startCall(
 
   const testerVoiceId = process.env.ASAPTESTER_DISCORD_VOICE_ID || 'lsgXALPNLFUcQfT1dmP1';
   const isTesterInitiated = isTesterBotId(initiator.user.id);
-  const riley = getAgent('executive-assistant' as AgentId);
-  const selectedRileyVoice = isTesterInitiated ? testerVoiceId : (riley?.voice || 'Achernar');
+  const cortana = getAgent('executive-assistant' as AgentId);
+  const selectedCortanaVoice = isTesterInitiated ? testerVoiceId : (cortana?.voice || 'Achernar');
 
   // Set ASAPTester's identity to Cortana BEFORE joining voice so users see
   // "Cortana" in the voice channel from the moment the bot appears.
   const guildId = voiceChannel.guild.id;
   const previousBotNickname = await setTesterNickname(guildId, 'Cortana', 'ASAP voice call active');
-  if (riley?.avatarUrl) {
-    await setTesterAvatar(riley.avatarUrl);
+  if (cortana?.avatarUrl) {
+    await setTesterAvatar(cortana.avatarUrl);
   }
 
   const joinStartMs = Date.now();
@@ -672,7 +671,7 @@ export async function startCall(
     startTime: new Date(),
     transcript: [],
     conversationHistory: [],
-    rileyChatSession: { chat: null, modelName: null },
+    cortanaChatSession: { chat: null, modelName: null },
     unsubscribers: [],
     voiceChannel,
     groupchat,
@@ -693,7 +692,7 @@ export async function startCall(
     activeSpeakerUserId: null,
     activeSpeakerName: null,
     lastSpeakerPolicyNoticeAt: 0,
-    rileyVoiceName: selectedRileyVoice,
+    cortanaVoiceName: selectedCortanaVoice,
     previousBotNickname,
   };
 
@@ -808,7 +807,7 @@ export async function startCall(
     `started:${voiceChannel.id}`,
     `✅ **Voice call started**\n` +
       `Initiated by **${initiator.displayName}**\n` +
-      `${riley?.emoji || '📋'} **Cortana** is on the line and listening now.\n\n` +
+      `${cortana?.emoji || '📋'} **Cortana** is on the line and listening now.\n\n` +
       `Speak in **${voiceChannel.name}**. Say "leave" or ask Cortana to end the call.${sttNote}`
   );
 
@@ -817,7 +816,7 @@ export async function startCall(
     void (async () => {
       try {
         const checkAudio = await withTimeout(
-          textToSpeech(`Hello ${initiator.displayName}.`, selectedRileyVoice),
+          textToSpeech(`Hello ${initiator.displayName}.`, selectedCortanaVoice),
           VOICE_PREFLIGHT_TIMEOUT_MS,
           'TTS preflight'
         );
@@ -844,7 +843,7 @@ export async function startCall(
 
     await postVoiceStageLog('call_started', `channel=${voiceChannel.name} total_startup_ms=${Date.now() - callStartMs}`);
     recordLoopHealth('voice-session', 'ok', `call started channel=${voiceChannel.name}`);
-    primeElevenLabsVoiceCache(selectedRileyVoice, [...RILEY_WARM_PHRASES]).catch(() => {});
+    primeElevenLabsVoiceCache(selectedCortanaVoice, [...CORTANA_WARM_PHRASES]).catch(() => {});
     } finally {
       callStartInProgress = false;
     }
@@ -954,7 +953,7 @@ async function handleVoiceInput(transcription: VoiceTranscription): Promise<void
 
   const textHandoffInstruction = extractVoiceToTextHandoffInstruction(userText);
   if (textHandoffInstruction) {
-    await handoffVoiceInstructionToTextRiley(session, transcription, textHandoffInstruction);
+    await handoffVoiceInstructionToTextCortana(session, transcription, textHandoffInstruction);
   }
 
   // Voice command detection
@@ -1045,9 +1044,9 @@ async function handleVoiceInput(transcription: VoiceTranscription): Promise<void
     }
     if (!isCurrentTurn()) return;
 
-    const riley = getAgent('executive-assistant' as AgentId);
+    const cortana = getAgent('executive-assistant' as AgentId);
 
-    if (riley) {
+    if (cortana) {
       try {
       if (isElevenLabsConvaiEnabled()) {
         try {
@@ -1056,12 +1055,12 @@ async function handleVoiceInput(transcription: VoiceTranscription): Promise<void
           if (!firstTokenLogged && responseRaw.trim()) {
             firstTokenLogged = true;
             firstTokenMs = Date.now() - turnStartMs;
-            await postVoiceStageLog('riley_first_token', `turn=${turnId} token_ms=${firstTokenMs}`);
+            await postVoiceStageLog('cortana_first_token', `turn=${turnId} token_ms=${firstTokenMs}`);
           }
 
           const response = finalizeSpokenResponse(responseRaw);
           await postVoiceStageLog(
-            'riley_convai',
+            'cortana_convai',
             `turn=${turnId} convai_ms=${Date.now() - convaiStartMs} raw_chars=${responseRaw.length} final_chars=${response.length}`
           );
 
@@ -1073,11 +1072,11 @@ async function handleVoiceInput(transcription: VoiceTranscription): Promise<void
           });
           session.conversationHistory.push({ role: 'assistant', content: `[Cortana]: ${response}` });
 
-          const rileyLogAndMirror = VOICE_DISABLE_CALL_LOG
+          const cortanaLogAndMirror = VOICE_DISABLE_CALL_LOG
             ? Promise.resolve([])
             : Promise.allSettled([
-                session.callLog.send(`${riley.emoji} **${riley.name}**: ${response.slice(0, 1900)}`),
-                mirrorAgentResponse(riley.name, 'call-log', response),
+                session.callLog.send(`${cortana.emoji} **${cortana.name}**: ${response.slice(0, 1900)}`),
+                mirrorAgentResponse(cortana.name, 'call-log', response),
               ]);
           if (!VOICE_DISABLE_CALL_LOG) {
             session.transcript.push(
@@ -1087,37 +1086,37 @@ async function handleVoiceInput(transcription: VoiceTranscription): Promise<void
 
           if (!isCurrentTurn()) return;
 
-          const rileyTtsStartMs = Date.now();
+          const cortanaTtsStartMs = Date.now();
           await speakPipelined(
             response,
-            session.rileyVoiceName,
+            session.cortanaVoiceName,
             signal,
             transcription.language,
             () => {
               if (firstAudioLogged) return;
               firstAudioLogged = true;
               firstAudioMs = Date.now() - turnStartMs;
-              void postVoiceStageLog('riley_first_audio', `turn=${turnId} audio_ms=${firstAudioMs}`);
+              void postVoiceStageLog('cortana_first_audio', `turn=${turnId} audio_ms=${firstAudioMs}`);
             }
           );
-          await rileyLogAndMirror;
-          await postVoiceStageLog('riley_tts', `turn=${turnId} tts_play_ms=${Date.now() - rileyTtsStartMs}`);
+          await cortanaLogAndMirror;
+          await postVoiceStageLog('cortana_tts', `turn=${turnId} tts_play_ms=${Date.now() - cortanaTtsStartMs}`);
           return;
         } catch (convaiErr) {
           await postVoiceStageLog(
-            'riley_convai_failed',
+            'cortana_convai_failed',
             `turn=${turnId} error=${convaiErr instanceof Error ? convaiErr.message : 'Unknown'}`,
             'warn'
           );
         }
       }
 
-      const rileyMemory = compactVoiceHistoryForPrompt(getMemoryContext('executive-assistant').slice(-VOICE_MEMORY_MAX_MESSAGES));
+      const cortanaMemory = compactVoiceHistoryForPrompt(getMemoryContext('executive-assistant').slice(-VOICE_MEMORY_MAX_MESSAGES));
       const recentVoiceHistory = compactVoiceHistoryForPrompt(session.conversationHistory);
       const langHint = transcription.language && transcription.language !== 'en'
         ? `\n\nIMPORTANT: The speaker is using ${transcription.language === 'zh' ? 'Mandarin Chinese' : transcription.language}. Respond in the SAME language they spoke in. The TTS system supports multilingual output.`
         : '';
-      const rileyContext = `[Voice from ${transcription.username}]: ${userText}
+      const cortanaContext = `[Voice from ${transcription.username}]: ${userText}
 
 You are in a voice call. ${transcription.username} just spoke. Your job:
 1. Interpret what they want
@@ -1130,8 +1129,8 @@ ${buildVoiceDecisionPolicy()}
 Keep your spoken response very brief (normally 1-2 short sentences) — you're in a voice call, not a text chat.
 IMPORTANT: End on a complete sentence, never a fragment.${langHint}`;
 
-      const rileyStreamer = createLiveSpeechStreamer(
-        session.rileyVoiceName,
+      const cortanaStreamer = createLiveSpeechStreamer(
+        session.cortanaVoiceName,
         signal,
         isCurrentTurn,
         turnId,
@@ -1139,24 +1138,24 @@ IMPORTANT: End on a complete sentence, never a fragment.${langHint}`;
         () => {
           if (firstAudioLogged) return;
           firstAudioLogged = true;
-          void postVoiceStageLog('riley_first_audio', `turn=${turnId} audio_ms=${Date.now() - turnStartMs}`);
+          void postVoiceStageLog('cortana_first_audio', `turn=${turnId} audio_ms=${Date.now() - turnStartMs}`);
         }
       );
 
-      const rileyLlmStartMs = Date.now();
+      const cortanaLlmStartMs = Date.now();
       const responseRaw = await agentRespond(
-        riley,
-        [...rileyMemory, ...recentVoiceHistory],
-        rileyContext,
+        cortana,
+        [...cortanaMemory, ...recentVoiceHistory],
+        cortanaContext,
         VOICE_TOOLS_ENABLED ? async (toolName, summary) => {
           void postVoiceStageLog('tool_done', `turn=${turnId} tool=${toolName}`);
         } : undefined,
         {
           signal,
-          maxTokens: VOICE_TOOLS_ENABLED ? VOICE_TOOLS_MAX_TOKENS : VOICE_MAX_TOKENS_RILEY,
+          maxTokens: VOICE_TOOLS_ENABLED ? VOICE_TOOLS_MAX_TOKENS : VOICE_MAX_TOKENS_CORTANA,
           disableTools: !VOICE_TOOLS_ENABLED,
           priority: 'voice',
-          chatSession: session.rileyChatSession,
+          chatSession: session.cortanaChatSession,
           threadKey: `voice:${session.voiceChannel.id}`,
           onToolStart: VOICE_TOOLS_ENABLED ? async (toolName) => {
             void postVoiceStageLog('tool_start', `turn=${turnId} tool=${toolName}`);
@@ -1165,17 +1164,17 @@ IMPORTANT: End on a complete sentence, never a fragment.${langHint}`;
             if (!firstTokenLogged && partialText.trim()) {
               firstTokenLogged = true;
               firstTokenMs = Date.now() - turnStartMs;
-              await postVoiceStageLog('riley_first_token', `turn=${turnId} token_ms=${firstTokenMs}`);
+              await postVoiceStageLog('cortana_first_token', `turn=${turnId} token_ms=${firstTokenMs}`);
             }
-            await rileyStreamer.onPartialText(partialText);
+            await cortanaStreamer.onPartialText(partialText);
           },
         }
       );
       const response = finalizeSpokenResponse(responseRaw);
 
       await postVoiceStageLog(
-        'riley_llm',
-        `turn=${turnId} llm_ms=${Date.now() - rileyLlmStartMs} raw_chars=${responseRaw.length} final_chars=${response.length}`
+        'cortana_llm',
+        `turn=${turnId} llm_ms=${Date.now() - cortanaLlmStartMs} raw_chars=${responseRaw.length} final_chars=${response.length}`
       );
       if (!isCurrentTurn() || !response.trim()) return;
 
@@ -1185,11 +1184,11 @@ IMPORTANT: End on a complete sentence, never a fragment.${langHint}`;
       });
       session.conversationHistory.push({ role: 'assistant', content: `[Cortana]: ${response}` });
 
-      const rileyLogAndMirror = VOICE_DISABLE_CALL_LOG
+      const cortanaLogAndMirror = VOICE_DISABLE_CALL_LOG
         ? Promise.resolve([])
         : Promise.allSettled([
-            session.callLog.send(`${riley.emoji} **${riley.name}**: ${response.slice(0, 1900)}`),
-            mirrorAgentResponse(riley.name, 'call-log', response),
+            session.callLog.send(`${cortana.emoji} **${cortana.name}**: ${response.slice(0, 1900)}`),
+            mirrorAgentResponse(cortana.name, 'call-log', response),
           ]);
       if (!VOICE_DISABLE_CALL_LOG) {
         session.transcript.push(
@@ -1205,29 +1204,29 @@ IMPORTANT: End on a complete sentence, never a fragment.${langHint}`;
       if (!isCurrentTurn()) return;
 
       try {
-        const rileyTtsStartMs = Date.now();
-        const rileySpoke = await rileyStreamer.finalize(response);
-        await rileyLogAndMirror;
-        if ((!rileySpoke || !firstAudioLogged) && isCurrentTurn() && !signal.aborted) {
+        const cortanaTtsStartMs = Date.now();
+        const cortanaSpoke = await cortanaStreamer.finalize(response);
+        await cortanaLogAndMirror;
+        if ((!cortanaSpoke || !firstAudioLogged) && isCurrentTurn() && !signal.aborted) {
           await speakPipelined(
             response,
-            session.rileyVoiceName,
+            session.cortanaVoiceName,
             signal,
             transcription.language,
             () => {
               if (firstAudioLogged) return;
               firstAudioLogged = true;
               firstAudioMs = Date.now() - turnStartMs;
-              void postVoiceStageLog('riley_first_audio', `turn=${turnId} audio_ms=${firstAudioMs}`);
+              void postVoiceStageLog('cortana_first_audio', `turn=${turnId} audio_ms=${firstAudioMs}`);
             }
           );
         }
-        await postVoiceStageLog('riley_tts', `turn=${turnId} tts_play_ms=${Date.now() - rileyTtsStartMs}`);
+        await postVoiceStageLog('cortana_tts', `turn=${turnId} tts_play_ms=${Date.now() - cortanaTtsStartMs}`);
       } catch (ttsErr) {
         if (!isCurrentTurn()) return;
         console.error('TTS error for Cortana:', ttsErr instanceof Error ? ttsErr.message : 'Unknown');
         await postVoiceStageLog(
-          'riley_tts_failed',
+          'cortana_tts_failed',
           `turn=${turnId} error=${ttsErr instanceof Error ? ttsErr.message : 'Unknown'}`,
           'error'
         );
@@ -1244,7 +1243,7 @@ IMPORTANT: End on a complete sentence, never a fragment.${langHint}`;
         if (!isCurrentTurn()) return;
         if (isAbortLikeError(err)) return;
         console.error('Cortana voice error:', errMsg(err));
-        await postVoiceStageLog('riley_turn_failed', `turn=${turnId} error=${errMsg(err)}`, 'error');
+        await postVoiceStageLog('cortana_turn_failed', `turn=${turnId} error=${errMsg(err)}`, 'error');
         await sendAsAgent(session.groupchat, '⚠️ Cortana had an error processing voice input.');
       }
     } else {
@@ -1339,7 +1338,7 @@ export async function announceVoiceMember(
 
   try {
     const audio = await withTimeout(
-      textToSpeech(line, session.rileyVoiceName),
+      textToSpeech(line, session.cortanaVoiceName),
       VOICE_PREFLIGHT_TIMEOUT_MS,
       'TTS announce member',
     );

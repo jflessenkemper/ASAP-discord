@@ -17,12 +17,12 @@ describe('handoff', () => {
   describe('buildHandoffContext()', () => {
     it('builds minimal context', () => {
       const ctx = buildHandoffContext({
-        fromAgent: 'riley',
+        fromAgent: 'cortana',
         toAgent: 'ace',
         traceId: 'abc123',
         task: 'Fix the login bug',
       });
-      expect(ctx.fromAgent).toBe('riley');
+      expect(ctx.fromAgent).toBe('cortana');
       expect(ctx.toAgent).toBe('ace');
       expect(ctx.traceId).toBe('abc123');
       expect(ctx.task).toBe('Fix the login bug');
@@ -34,7 +34,7 @@ describe('handoff', () => {
 
     it('includes conversation summary in context', () => {
       const ctx = buildHandoffContext({
-        fromAgent: 'riley',
+        fromAgent: 'cortana',
         toAgent: 'ace',
         traceId: 'abc',
         task: 'task',
@@ -45,7 +45,7 @@ describe('handoff', () => {
 
     it('includes files modified in context', () => {
       const ctx = buildHandoffContext({
-        fromAgent: 'riley',
+        fromAgent: 'cortana',
         toAgent: 'ace',
         traceId: 'abc',
         task: 'task',
@@ -58,7 +58,7 @@ describe('handoff', () => {
 
     it('includes tools used in context', () => {
       const ctx = buildHandoffContext({
-        fromAgent: 'riley',
+        fromAgent: 'cortana',
         toAgent: 'ace',
         traceId: 'abc',
         task: 'task',
@@ -71,7 +71,7 @@ describe('handoff', () => {
 
     it('formats filesModified in relevantContext', () => {
       const ctx = buildHandoffContext({
-        fromAgent: 'riley',
+        fromAgent: 'cortana',
         toAgent: 'ace',
         traceId: 'abc',
         task: 'task',
@@ -82,7 +82,7 @@ describe('handoff', () => {
 
     it('formats toolsUsed in relevantContext', () => {
       const ctx = buildHandoffContext({
-        fromAgent: 'riley',
+        fromAgent: 'cortana',
         toAgent: 'ace',
         traceId: 'abc',
         task: 'task',
@@ -93,7 +93,7 @@ describe('handoff', () => {
 
     it('applies custom priority', () => {
       const ctx = buildHandoffContext({
-        fromAgent: 'riley',
+        fromAgent: 'cortana',
         toAgent: 'ace',
         traceId: 'abc',
         task: 'task',
@@ -104,7 +104,7 @@ describe('handoff', () => {
 
     it('passes constraints and expectedOutput', () => {
       const ctx = buildHandoffContext({
-        fromAgent: 'riley',
+        fromAgent: 'cortana',
         toAgent: 'ace',
         traceId: 'abc',
         task: 'task',
@@ -119,20 +119,20 @@ describe('handoff', () => {
   describe('formatHandoffPrompt()', () => {
     it('formats minimal handoff', () => {
       const ctx = buildHandoffContext({
-        fromAgent: 'riley',
+        fromAgent: 'cortana',
         toAgent: 'ace',
         traceId: 'tr123',
         task: 'Fix login',
       });
       const prompt = formatHandoffPrompt(ctx);
-      expect(prompt).toContain('[Handoff from riley]');
+      expect(prompt).toContain('[Handoff from cortana]');
       expect(prompt).toContain('Task: Fix login');
       expect(prompt).toContain('Trace: tr123');
     });
 
     it('includes priority when not normal', () => {
       const ctx = buildHandoffContext({
-        fromAgent: 'riley',
+        fromAgent: 'cortana',
         toAgent: 'ace',
         traceId: 'tr',
         task: 'Urgent fix',
@@ -143,7 +143,7 @@ describe('handoff', () => {
 
     it('omits priority when normal', () => {
       const ctx = buildHandoffContext({
-        fromAgent: 'riley',
+        fromAgent: 'cortana',
         toAgent: 'ace',
         traceId: 'tr',
         task: 'task',
@@ -153,7 +153,7 @@ describe('handoff', () => {
 
     it('includes parent goal', () => {
       const ctx = buildHandoffContext({
-        fromAgent: 'riley',
+        fromAgent: 'cortana',
         toAgent: 'ace',
         traceId: 'tr',
         task: 'task',
@@ -164,7 +164,7 @@ describe('handoff', () => {
 
     it('includes constraints list', () => {
       const ctx = buildHandoffContext({
-        fromAgent: 'riley',
+        fromAgent: 'cortana',
         toAgent: 'ace',
         traceId: 'tr',
         task: 'task',
@@ -281,7 +281,7 @@ describe('handoff', () => {
 
     it('returns true for single handoff', () => {
       const ctx = buildHandoffContext({
-        fromAgent: 'riley',
+        fromAgent: 'cortana',
         toAgent: 'ace',
         traceId: 'tr',
         task: 'task',
@@ -292,11 +292,11 @@ describe('handoff', () => {
 
     it('returns true when no file overlap', () => {
       const a = buildHandoffContext({
-        fromAgent: 'riley', toAgent: 'ace', traceId: 'tr', task: 'task',
+        fromAgent: 'cortana', toAgent: 'ace', traceId: 'tr', task: 'task',
         filesModified: ['a.ts'],
       });
       const b = buildHandoffContext({
-        fromAgent: 'riley', toAgent: 'max', traceId: 'tr', task: 'task',
+        fromAgent: 'cortana', toAgent: 'max', traceId: 'tr', task: 'task',
         filesModified: ['b.ts'],
       });
       expect(canRunInParallel([a, b])).toBe(true);
@@ -304,11 +304,11 @@ describe('handoff', () => {
 
     it('returns false when files overlap', () => {
       const a = buildHandoffContext({
-        fromAgent: 'riley', toAgent: 'ace', traceId: 'tr', task: 'task',
+        fromAgent: 'cortana', toAgent: 'ace', traceId: 'tr', task: 'task',
         filesModified: ['shared.ts'],
       });
       const b = buildHandoffContext({
-        fromAgent: 'riley', toAgent: 'max', traceId: 'tr', task: 'task',
+        fromAgent: 'cortana', toAgent: 'max', traceId: 'tr', task: 'task',
         filesModified: ['shared.ts'],
       });
       expect(canRunInParallel([a, b])).toBe(false);
@@ -316,10 +316,10 @@ describe('handoff', () => {
 
     it('returns true when filesModified is undefined', () => {
       const a = buildHandoffContext({
-        fromAgent: 'riley', toAgent: 'ace', traceId: 'tr', task: 'task',
+        fromAgent: 'cortana', toAgent: 'ace', traceId: 'tr', task: 'task',
       });
       const b = buildHandoffContext({
-        fromAgent: 'riley', toAgent: 'max', traceId: 'tr', task: 'task',
+        fromAgent: 'cortana', toAgent: 'max', traceId: 'tr', task: 'task',
       });
       expect(canRunInParallel([a, b])).toBe(true);
     });
@@ -328,7 +328,7 @@ describe('handoff', () => {
   describe('formatHandoffPrompt() coverage', () => {
     it('includes relevantContext items in prompt output', () => {
       const ctx = buildHandoffContext({
-        fromAgent: 'riley',
+        fromAgent: 'cortana',
         toAgent: 'ace',
         traceId: 'tr',
         task: 'Fix bug',
@@ -345,7 +345,7 @@ describe('handoff', () => {
 
     it('includes expectedOutput in prompt output', () => {
       const ctx = buildHandoffContext({
-        fromAgent: 'riley',
+        fromAgent: 'cortana',
         toAgent: 'ace',
         traceId: 'tr',
         task: 'Write tests',
@@ -359,7 +359,7 @@ describe('handoff', () => {
   describe('buildHandoffContext branch coverage', () => {
     it('skips filesModified when empty array', () => {
       const ctx = buildHandoffContext({
-        fromAgent: 'riley', toAgent: 'ace', traceId: 'tr', task: 'task',
+        fromAgent: 'cortana', toAgent: 'ace', traceId: 'tr', task: 'task',
         filesModified: [],
       });
       expect(ctx.relevantContext).not.toEqual(
@@ -369,7 +369,7 @@ describe('handoff', () => {
 
     it('skips toolsUsed when empty array', () => {
       const ctx = buildHandoffContext({
-        fromAgent: 'riley', toAgent: 'ace', traceId: 'tr', task: 'task',
+        fromAgent: 'cortana', toAgent: 'ace', traceId: 'tr', task: 'task',
         toolsUsed: [],
       });
       expect(ctx.relevantContext).not.toEqual(

@@ -64,10 +64,10 @@ jest.mock('../../discord/ui/constants', () => ({
 import {
   REPO_TOOLS,
   REVIEW_TOOLS,
-  RILEY_TOOLS,
+  CORTANA_TOOLS,
   PROMPT_REPO_TOOLS,
   PROMPT_REVIEW_TOOLS,
-  PROMPT_RILEY_TOOLS,
+  PROMPT_CORTANA_TOOLS,
   getToolsForAgent,
   getAllowedToolNamesForAgent,
   agentCanUseTool,
@@ -160,9 +160,9 @@ describe('tools — tool definitions', () => {
     });
   });
 
-  describe('RILEY_TOOLS', () => {
+  describe('CORTANA_TOOLS', () => {
     it('includes coordination tools', () => {
-      const names = new Set(RILEY_TOOLS.map(t => t.name));
+      const names = new Set(CORTANA_TOOLS.map(t => t.name));
       expect(names.has('read_file')).toBe(true);
       expect(names.has('list_threads')).toBe(true);
       expect(names.has('send_channel_message')).toBe(true);
@@ -170,7 +170,7 @@ describe('tools — tool definitions', () => {
     });
 
     it('includes Cortana autonomy tools', () => {
-      const names = new Set(RILEY_TOOLS.map(t => t.name));
+      const names = new Set(CORTANA_TOOLS.map(t => t.name));
       expect(names.has('write_file')).toBe(true);
       expect(names.has('edit_file')).toBe(true);
       expect(names.has('run_command')).toBe(true);
@@ -181,12 +181,12 @@ describe('tools — tool definitions', () => {
     });
 
     it('includes budget tool', () => {
-      const names = new Set(RILEY_TOOLS.map(t => t.name));
+      const names = new Set(CORTANA_TOOLS.map(t => t.name));
       expect(names.has('set_daily_budget')).toBe(true);
     });
 
     it('includes token control tools', () => {
-      const names = new Set(RILEY_TOOLS.map(t => t.name));
+      const names = new Set(CORTANA_TOOLS.map(t => t.name));
       expect(names.has('set_daily_claude_token_limit')).toBe(true);
       expect(names.has('set_conversation_token_limit')).toBe(true);
       expect(names.has('reset_conversation_token_window')).toBe(true);
@@ -202,8 +202,8 @@ describe('tools — tool definitions', () => {
       expect(PROMPT_REVIEW_TOOLS.length).toBe(REVIEW_TOOLS.length);
     });
 
-    it('PROMPT_RILEY_TOOLS has same count as RILEY_TOOLS', () => {
-      expect(PROMPT_RILEY_TOOLS.length).toBe(RILEY_TOOLS.length);
+    it('PROMPT_CORTANA_TOOLS has same count as CORTANA_TOOLS', () => {
+      expect(PROMPT_CORTANA_TOOLS.length).toBe(CORTANA_TOOLS.length);
     });
 
     it('compact tools have shorter descriptions (first sentence only)', () => {
@@ -242,7 +242,7 @@ describe('tools — agent access control', () => {
 
     it('returns Cortana tools for executive-assistant — including self-repair', () => {
       const tools = getToolsForAgent('executive-assistant');
-      expect(tools.length).toBe(RILEY_TOOLS.length);
+      expect(tools.length).toBe(CORTANA_TOOLS.length);
       const names = new Set(tools.map((t) => (t as { name: string }).name));
       expect(names.has('read_self_file')).toBe(true);
       expect(names.has('edit_self_file')).toBe(true);

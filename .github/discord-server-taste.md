@@ -1,6 +1,6 @@
 # Discord Server — Taste & Recreation Guide
 
-This file is the single source of truth for how the ASAP Discord server should look, feel, and function. If you (Riley) ever need to recreate the server from scratch or verify it matches Jordan's preferences, follow this document exactly.
+This file is the single source of truth for how the ASAP Discord server should look, feel, and function. If you (Cortana) ever need to recreate the server from scratch or verify it matches Jordan's preferences, follow this document exactly.
 
 ---
 
@@ -21,8 +21,8 @@ The personal category name is dynamic: `👤-{DISCORD_OWNER_NAME}-personal` (env
 
 | Channel | Topic | Welcome Message |
 |---------|-------|-----------------|
-| `💬-groupchat` | 💬 Talk to Riley naturally. She coordinates everything. | **ASAP Command Center** — Riley is your point of contact. She executes directly, brings in specialists when needed, and can join voice, deploy, screenshot, and coordinate the team. You can also @mention any specialist role directly. |
-| `📋-decisions` | 📋 Riley queues decisions here while you sleep. Reply to any decision to continue the work. | **Decisions Queue** — When the team hits a decision point overnight, Riley posts here. Reply with your answer — Riley picks it up. Click a button to choose from listed options. |
+| `💬-groupchat` | 💬 Talk to Cortana naturally. She coordinates everything. | **ASAP Command Center** — Cortana is your point of contact. She executes directly, brings in specialists when needed, and can join voice, deploy, screenshot, and coordinate the team. You can also @mention any specialist role directly. |
+| `📋-decisions` | 📋 Cortana queues decisions here while you sleep. Reply to any decision to continue the work. | **Decisions Queue** — When the team hits a decision point overnight, Cortana posts here. Reply with your answer — Cortana picks it up. Click a button to choose from listed options. |
 | `📋-call-log` | 📋 Automatic transcripts and summaries of voice calls | Voice call transcripts and summaries post here. |
 | `📸-screenshots` | 📸 Automated screenshots of every app screen after each build (iPhone 17 Pro Max) | Build screenshot updates post here as one-line entries. |
 | `🔗-url` | 🔗 Live app URL and build links — updated on every deploy | App URL + Cloud Build + Cloud Run links (auto-refreshed). |
@@ -48,9 +48,9 @@ All ops channels live under the **Operations** category and have a **channel con
 | `🆙-upgrades` | 🆙 Agent-proposed upgrades: better ways of working, blockers to remove, and worthwhile capability enhancements | owner=system; cadence=daily-triage; stale=48h | Agents can post upgrade ideas, blockers to remove, and automation/tooling enhancements here for Jordan to approve. |
 | `📊-limits` | 📊 Gemini/GCP usage, quotas, and estimated spend — refreshed every 5 minutes | owner=jude; cadence=5m; stale=20m | _(no welcome message)_ |
 | `💸-cost` | 💸 Per-action spend feed by agent (model, tokens, estimated USD) | owner=jude; cadence=on-request; stale=24h | One-line agent cost feed posts here. |
-| `💻-terminal` | 💻 Live feed of all tool calls made by agents — file ops, git, commands, searches | owner=riley; cadence=on-tool-call; stale=2h | One-line tool activity feed posts here. |
-| `🧯-voice-errors` | 🧯 Voice runtime errors and per-stage latency logs (ms) for live debugging | owner=system; cadence=on-error; stale=7d | **Voice Runtime Logs** — Live voice pipeline telemetry and failures. Stages: STT, Riley LLM, TTS/playback, sub-agent fan-out, total turn latency. |
-| `🚨-agent-errors` | 🚨 Central runtime and agent error feed for postmortems and rapid fixes | owner=system; cadence=on-error; stale=7d | **Agent Runtime Errors** — Centralized Riley, sub-agent, tooling, and automation failures for later diagnosis and cleanup. |
+| `💻-terminal` | 💻 Live feed of all tool calls made by agents — file ops, git, commands, searches | owner=cortana; cadence=on-tool-call; stale=2h | One-line tool activity feed posts here. |
+| `🧯-voice-errors` | 🧯 Voice runtime errors and per-stage latency logs (ms) for live debugging | owner=system; cadence=on-error; stale=7d | **Voice Runtime Logs** — Live voice pipeline telemetry and failures. Stages: STT, Cortana LLM, TTS/playback, sub-agent fan-out, total turn latency. |
+| `🚨-agent-errors` | 🚨 Central runtime and agent error feed for postmortems and rapid fixes | owner=system; cadence=on-error; stale=7d | **Agent Runtime Errors** — Centralized Cortana, sub-agent, tooling, and automation failures for later diagnosis and cleanup. |
 
 ---
 
@@ -58,8 +58,8 @@ All ops channels live under the **Operations** category and have a **channel con
 
 | Channel | Topic | Contract | Welcome Message |
 |---------|-------|----------|-----------------|
-| `💼-career-ops` | 💼 Career operations command center: role targets, pipeline, outreach, applications, and weekly goals | owner=jflessenkemper; cadence=daily; stale=14d | **Career Ops** — Use this channel to run your job search pipeline with Riley: role targeting, shortlist scoring, tailored CV generation, outreach drafts, and application tracking. |
-| `📋-job-applications` | 📋 Job approval queue — click Approve or Reject on each card · cards update after you choose | owner=jflessenkemper; cadence=on-demand; stale=14d | **Job Applications** — Riley scans & evaluates jobs in career-ops, posts best matches here as cards. Click Approve for auto-drafted cover letter & resume highlights. Click Reject to skip. Cards update after you choose. |
+| `💼-career-ops` | 💼 Career operations command center: role targets, pipeline, outreach, applications, and weekly goals | owner=jflessenkemper; cadence=daily; stale=14d | **Career Ops** — Use this channel to run your job search pipeline with Cortana: role targeting, shortlist scoring, tailored CV generation, outreach drafts, and application tracking. |
+| `📋-job-applications` | 📋 Job approval queue — click Approve or Reject on each card · cards update after you choose | owner=jflessenkemper; cadence=on-demand; stale=14d | **Job Applications** — Cortana scans & evaluates jobs in career-ops, posts best matches here as cards. Click Approve for auto-drafted cover letter & resume highlights. Click Reject to skip. Cards update after you choose. |
 
 ---
 
@@ -77,8 +77,8 @@ Each agent gets one text channel named `{emoji}-{agent-id}`. The topic is `{emoj
 | `⚡-performance` | Kai (Performance) | ⚡ | #0EA5E9 | Orus | Kai |
 | `🚀-devops` | Jude (DevOps) | 🚀 | #4338CA | Vale | Jude |
 | `✍️-copywriter` | Liv (Copywriter) | ✍️ | #0F766E | Zephyr | Liv |
-| `📋-executive-assistant` | Riley (Executive Assistant) | 📋 | #1D4ED8 | RileyEL | Riley |
-| `🛰️-operations-manager` | Riley (Operations Manager) | 🛰️ | #2F7A49 | RileyEL | Riley Ops |
+| `📋-executive-assistant` | Cortana (Executive Assistant) | 📋 | #1D4ED8 | CortanaEL | Cortana |
+| `🛰️-operations-manager` | Cortana (Operations Manager) | 🛰️ | #2F7A49 | CortanaEL | Cortana Ops |
 | `⚖️-lawyer` | Harper (Lawyer) | ⚖️ | #14532D | Sulafat | Harper |
 | `🍎-ios-engineer` | Mia (iOS Engineer) | 🍎 | #F97316 | Enceladus | Mia |
 | `🤖-android-engineer` | Leo (Android Engineer) | 🤖 | #16A34A | Iapetus | Leo |
@@ -146,7 +146,7 @@ Some channels embed a machine-readable contract in their topic suffix:
 owner={who manages it}; cadence={how often it updates}; stale={when silence is suspicious}
 ```
 
-This helps Riley detect stale feeds and flag them.
+This helps Cortana detect stale feeds and flag them.
 
 ---
 
@@ -167,7 +167,7 @@ Setting `RESET_CHANNELS=true` deletes all managed channels and categories, then 
 
 ---
 
-## Key Aesthetics (from Riley's personality)
+## Key Aesthetics (from Cortana's personality)
 
 1. **Channel structure is sacred.** Never delete channels Jordan and you created together. "Reset" means clear messages, not delete channels.
 2. **Emoji prefixes are deliberate.** Every channel has one. Maintain this convention.

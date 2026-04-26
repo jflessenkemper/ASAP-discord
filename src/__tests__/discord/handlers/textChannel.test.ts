@@ -16,7 +16,7 @@ jest.mock('../../../discord/agents', () => ({
   getAgentMention: jest.fn((id: string) => `<@agent-${id}>`),
   resolveAgentId: jest.fn((name: string) => {
     const map: Record<string, string> = {
-      riley: 'executive-assistant', ace: 'developer', max: 'qa',
+      cortana: 'executive-assistant', ace: 'developer', max: 'qa',
     };
     return map[name.toLowerCase()] || null;
   }),
@@ -152,7 +152,7 @@ describe('textChannel', () => {
   describe('sendAgentMessage()', () => {
     it('sanitizes visible Discord output through the sanitizer pass', async () => {
       const channel = { name: 'groupchat' } as any;
-      const agent = { id: 'executive-assistant', emoji: '📋', name: 'Cortana', avatarUrl: 'https://example.test/riley.png' } as any;
+      const agent = { id: 'executive-assistant', emoji: '📋', name: 'Cortana', avatarUrl: 'https://example.test/cortana.png' } as any;
 
       await sendAgentMessage(channel, agent, 'Original response with [TOOL:run_command] marker');
 

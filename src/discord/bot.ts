@@ -27,7 +27,7 @@ import {
   setThreadStatusChannel,
   handleDecisionReply,
   handleGroupchatMessage,
-  dispatchUpgradeToRiley,
+  dispatchUpgradeToCortana,
   dispatchReactionReply,
   getThreadStatusOpsLine,
   startSelfImprovementQueueWorker,
@@ -355,7 +355,7 @@ export async function runUpgradesTriage(channels: BotChannels): Promise<void> {
 
     const actionable = top.find((e) => e.label === 'accepted' && e.count >= 2);
     if (actionable && channels.groupchat) {
-      await dispatchUpgradeToRiley(actionable.sample, channels.groupchat).catch((err) => {
+      await dispatchUpgradeToCortana(actionable.sample, channels.groupchat).catch((err) => {
         console.warn('Upgrades auto-dispatch failed:', errMsg(err));
       });
       // Create a durable self-improvement job so the upgrade is tracked even if the groupchat dispatch is lost
@@ -539,7 +539,7 @@ async function claimDiscordMessage(messageId: string): Promise<boolean> {
 function getTesterSpeechBridgeText(content: string): string | null {
   const normalized = String(content || '').trim();
   if (!normalized) return null;
-  const match = normalized.match(/^(?:riley\s+)?(?:tester\s+)?(?:say|voice|speak)\s*(?::|-)\s*(.{1,260})$/i);
+  const match = normalized.match(/^(?:cortana\s+)?(?:tester\s+)?(?:say|voice|speak)\s*(?::|-)\s*(.{1,260})$/i);
   if (!match) return null;
   return match[1].trim() || null;
 }
@@ -739,7 +739,7 @@ export async function startBot(): Promise<void> {
 
           if (hasFails && !goalState.isActive()) {
             const failSummary = `Post-merge smoke test regression from PR #${prNumber}.\nAffected categories: ${[...categories].join(', ')}\n\n${summary}`;
-            void dispatchUpgradeToRiley(failSummary, configuredChannels.groupchat).catch((err) => {
+            void dispatchUpgradeToCortana(failSummary, configuredChannels.groupchat).catch((err) => {
               console.warn(`[smoke-auto] Cortana dispatch failed:`, errMsg(err));
             });
           }
@@ -768,7 +768,7 @@ export async function startBot(): Promise<void> {
         for (const row of pending) {
           const body = formatUpgradeForDispatch(row);
           try {
-            await dispatchUpgradeToRiley(body, configuredChannels.groupchat);
+            await dispatchUpgradeToCortana(body, configuredChannels.groupchat);
             await markUpgradeDispatched(row.id);
           } catch (err) {
             console.warn(`[upgrade-replay] dispatch ${row.id} failed:`, errMsg(err));
@@ -929,9 +929,9 @@ export async function startBot(): Promise<void> {
       }
 
       if (channelId === botChannels.careerOps.id) {
-        const riley = getAgent('executive-assistant');
-        if (riley) {
-          await handleAgentMessage(message, riley);
+        const cortana = getAgent('executive-assistant');
+        if (cortana) {
+          await handleAgentMessage(message, cortana);
         }
         return;
       }
@@ -1057,7 +1057,7 @@ export async function startBot(): Promise<void> {
                   })
                 : text.replace(/^\[UPGRADE CARD\]\s*<@!?\d+>\s*—\s*/, '').trim();
               try {
-                await dispatchUpgradeToRiley(dispatchBody, groupchat);
+                await dispatchUpgradeToCortana(dispatchBody, groupchat);
                 if (rowId) await markUpgradeDispatched(rowId);
               } catch (err) {
                 console.warn('[upgrade-approval] dispatch failed:', errMsg(err));

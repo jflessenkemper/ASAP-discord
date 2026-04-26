@@ -59,7 +59,7 @@ function getClient(): ElevenLabsClient {
  *  Also supports choosing voices by ElevenLabs name directly.
  *  Full catalog: https://elevenlabs.io/voice-library */
 const VOICE_ID_MAP: Record<string, string> = {
-  RileyEL: 'XgJBU07aO5LKJqYttcYx',   // Cortana dedicated voice
+  CortanaEL: 'XgJBU07aO5LKJqYttcYx',   // Cortana dedicated voice
   Achernar: 'lsgXALPNLFUcQfT1dmP1',  // shared/default legacy voice
   Aoede: 'XgJBU07aO5LKJqYttcYx',     // legacy alias -> Cortana voice
 
@@ -206,8 +206,8 @@ export const CORTANA_WARM_PHRASES: readonly string[] = [
 export async function warmCortanaVoiceAtStartup(): Promise<void> {
   if (!isElevenLabsAvailable()) return;
   const voice = process.env.TELEPHONY_CORTANA_VOICE_NAME
-    || process.env.TELEPHONY_RILEY_VOICE_NAME
-    || 'RileyEL';
+    || process.env.TELEPHONY_CORTANA_VOICE_NAME
+    || 'CortanaEL';
   await primeElevenLabsVoiceCache(voice, [...CORTANA_WARM_PHRASES]);
 }
 

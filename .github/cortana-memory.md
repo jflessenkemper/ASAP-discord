@@ -1,6 +1,6 @@
-# Riley — Persistent Memory
+# Cortana — Persistent Memory
 
-This file is Riley's starting knowledge base. Riley can update it via memory tools as she learns more. It captures the state of the Discord server, Jordan's preferences, and operational conventions.
+This file is Cortana's starting knowledge base. Cortana can update it via memory tools as she learns more. It captures the state of the Discord server, Jordan's preferences, and operational conventions.
 
 ## Discord Server — Channel Map
 
@@ -15,8 +15,8 @@ This file is Riley's starting knowledge base. Riley can update it via memory too
 ### Agent Workspaces (one per agent)
 | Channel | Agent |
 |---------|-------|
-| #📋-executive-assistant | Riley — planning, coordination, scratchpad |
-| #🛰️-operations-manager | Riley Ops — self-improvement maintenance, loops, ops stewardship |
+| #📋-executive-assistant | Cortana — planning, coordination, scratchpad |
+| #🛰️-operations-manager | Cortana Ops — self-improvement maintenance, loops, ops stewardship |
 | #🧪-qa | Max — test runs, bug reports |
 | #🎨-ux-reviewer | Sophie — UX reviews, accessibility |
 | #🔒-security-auditor | Kane — security audits |
@@ -33,7 +33,7 @@ This file is Riley's starting knowledge base. Riley can update it via memory too
 | Channel | Purpose |
 |---------|---------|
 | #💻-terminal | Live terminal output from bot commands |
-| #🔁-loops | Independent loop runs, start/finish status, and Riley-facing loop reports |
+| #🔁-loops | Independent loop runs, start/finish status, and Cortana-facing loop reports |
 | #🚨-agent-errors | Runtime errors, unhandled exceptions |
 | #📋-agent-audit | Structured audit log (tool calls, model swaps) |
 | #🧪-smoke-tests | Smoke test results and reports |
@@ -49,7 +49,7 @@ This file is Riley's starting knowledge base. Riley can update it via memory too
 | Channel | Purpose |
 |---------|---------|
 | #🏠-jordans-space | Jordan's private workspace |
-| #🏡-rileys-space | Riley's private workspace and scratchpad |
+| #🏡-cortanas-space | Cortana's private workspace and scratchpad |
 
 ### Career Ops
 | Channel | Purpose |
@@ -79,8 +79,8 @@ This file is Riley's starting knowledge base. Riley can update it via memory too
 
 | Agent | Style | Key Trait |
 |-------|-------|-----------|
-| Riley | Direct, execution-first | Plans quickly, executes, and only pulls in specialists when useful |
-| Riley Ops | Operational, persistent | Keeps loops, memory, and ops channels healthy |
+| Cortana | Direct, execution-first | Plans quickly, executes, and only pulls in specialists when useful |
+| Cortana Ops | Operational, persistent | Keeps loops, memory, and ops channels healthy |
 | Max | Aggressive, detail-obsessed | Breaks things systematically, then writes tests |
 | Sophie | User-advocate | Pushes for accessibility and design quality |
 | Kane | Paranoid (in a good way) | Finds security holes others miss |
@@ -99,11 +99,11 @@ This file is Riley's starting knowledge base. Riley can update it via memory too
 - **Gemini quota fuse**: The quota fuse can block ALL models (including Anthropic) if not correctly scoped. Set DISABLE_GEMINI_QUOTA_FUSE=true when using Anthropic exclusively.
 - **Startup scripts + secrets**: Never use `set -x` in startup scripts that fetch secrets — it leaks them into logs.
 - **Install gating**: Verify a sentinel module (e.g., `dotenv/config`) in addition to `node_modules` dir + commit SHA.
-- **Model defaults**: Riley uses Sonnet for planning and management. Use Opus for execution/completion work only when the task risk or depth justifies it.
+- **Model defaults**: Cortana uses Sonnet for planning and management. Use Opus for execution/completion work only when the task risk or depth justifies it.
 
 ## Current State
 
-- **Default model**: Claude Sonnet for Riley management, Claude Opus for selective execution/completion passes
+- **Default model**: Claude Sonnet for Cortana management, Claude Opus for selective execution/completion passes
 - **Anthropic API**: Check credits before operations
 - **Smoke tests**: 155+ test definitions, 18 readiness keys, 3 profiles (readiness/matrix/full)
 - **Bot status**: PM2 managed on asap-bot-vm

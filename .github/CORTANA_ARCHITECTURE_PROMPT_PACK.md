@@ -1,6 +1,6 @@
-# Riley Architecture Prompt Pack
+# Cortana Architecture Prompt Pack
 
-Use this pack to test the current ASAP Discord architecture through Riley.
+Use this pack to test the current ASAP Discord architecture through Cortana.
 
 This is not a synthetic unit test. It is an operator-level validation pack designed to prove that the main runtime behaviors work together in a live Discord environment.
 
@@ -8,8 +8,8 @@ This is not a synthetic unit test. It is an operator-level validation pack desig
 
 This pack is designed to exercise or verify:
 
-1. Riley Haiku as the primary text and voice interface for user-facing conversation.
-2. Riley Sonnet escalation only when real work needs to be planned and executed.
+1. Cortana Haiku as the primary text and voice interface for user-facing conversation.
+2. Cortana Sonnet escalation only when real work needs to be planned and executed.
 3. Tool-backed execution across code, GitHub, database, cloud, Discord, and lifecycle surfaces.
 4. Loop visibility: status, loops, health, monitoring surfaces, and explicit loop reports in the Operations loop channel.
 5. Decision handling in groupchat and the queued/offline decision path.
@@ -42,15 +42,15 @@ Before using these prompts, make sure:
 
 ## Prompt 1: Master Text Drill
 
-Paste this to Riley in `#💬-groupchat`.
+Paste this to Cortana in `#💬-groupchat`.
 
 ```text
-Riley, run a full architecture validation drill for the current ASAP Discord runtime.
+Cortana, run a full architecture validation drill for the current ASAP Discord runtime.
 
 Treat this as a real operator request, not a theoretical explanation.
 
 Goal:
-Plan and begin a small but realistic improvement to the ASAP system: improve the public-facing README and architecture guidance for a new operator so it is easier to understand what Riley, Riley Ops, the specialists, the loops, and the voice mode actually do.
+Plan and begin a small but realistic improvement to the ASAP system: improve the public-facing README and architecture guidance for a new operator so it is easier to understand what Cortana, Cortana Ops, the specialists, the loops, and the voice mode actually do.
 
 Your job in this drill:
 1. Break the work into numbered steps.
@@ -73,31 +73,31 @@ Important constraints:
 
 ### Expected Success Signals
 
-1. Riley Haiku behaves as the front door and does not answer only as a passive explainer.
-2. Riley creates a clear numbered plan.
-3. Riley escalates to Sonnet for real work and only brings in specialists where their domain expertise is actually needed.
-4. Riley exposes status and loop-health information in plain language.
-5. Riley can point to the dedicated Operations loop channel when discussing loop activity.
-6. Riley references cost, budget, limits, or token efficiency where relevant.
-7. Riley distinguishes direct proof from indirect proof.
-8. If a major decision is needed, Riley asks for it directly in groupchat instead of hiding it.
+1. Cortana Haiku behaves as the front door and does not answer only as a passive explainer.
+2. Cortana creates a clear numbered plan.
+3. Cortana escalates to Sonnet for real work and only brings in specialists where their domain expertise is actually needed.
+4. Cortana exposes status and loop-health information in plain language.
+5. Cortana can point to the dedicated Operations loop channel when discussing loop activity.
+6. Cortana references cost, budget, limits, or token efficiency where relevant.
+7. Cortana distinguishes direct proof from indirect proof.
+8. If a major decision is needed, Cortana asks for it directly in groupchat instead of hiding it.
 
 ### Failure Signals
 
-1. Riley only gives a static essay about the architecture.
-2. Riley punts routine implementation entirely to specialists instead of owning execution directly.
-3. Riley cannot surface status, loops, the loop-report channel, or ops-aware progress.
-4. Riley claims to have tested voice or merge-trigger behavior without live evidence.
-5. Riley ignores budget, cost, or runtime risk framing.
+1. Cortana only gives a static essay about the architecture.
+2. Cortana punts routine implementation entirely to specialists instead of owning execution directly.
+3. Cortana cannot surface status, loops, the loop-report channel, or ops-aware progress.
+4. Cortana claims to have tested voice or merge-trigger behavior without live evidence.
+5. Cortana ignores budget, cost, or runtime risk framing.
 
 ---
 
 ## Prompt 2: Live Voice Drill
 
-Say this to Riley during an active voice session.
+Say this to Cortana during an active voice session.
 
 ```text
-Riley, this is a live voice architecture test.
+Cortana, this is a live voice architecture test.
 
 I want you to do three things in voice only:
 1. Tell me briefly what you think the current top-priority system task should be.
@@ -111,18 +111,18 @@ After I respond, continue the conversation the same way so we can prove voice gu
 
 ### Expected Success Signals
 
-1. Riley Haiku answers briefly and naturally.
-2. Riley suggests a concrete next step instead of speaking vaguely.
-3. If a major decision is needed, Riley asks directly in voice.
-4. Riley does not defer live-call decisions to the decisions channel.
+1. Cortana Haiku answers briefly and naturally.
+2. Cortana suggests a concrete next step instead of speaking vaguely.
+3. If a major decision is needed, Cortana asks directly in voice.
+4. Cortana does not defer live-call decisions to the decisions channel.
 5. Voice-related logs or call telemetry should be observable in the relevant ops surfaces.
 6. If a loop is triggered during the voice session, the loop report should still be visible in the loop channel rather than disappearing into voice-only state.
 
 ### Failure Signals
 
-1. Riley responds with long text-chat style paragraphs.
-2. Riley pushes the decision into the decisions channel during the call.
-3. Riley does not suggest an actual next action.
+1. Cortana responds with long text-chat style paragraphs.
+2. Cortana pushes the decision into the decisions channel during the call.
+3. Cortana does not suggest an actual next action.
 4. The voice session appears disconnected from ops visibility or loop tracking.
 5. Voice work produces no observable loop or ops trace where one should exist.
 
@@ -130,10 +130,10 @@ After I respond, continue the conversation the same way so we can prove voice gu
 
 ## Prompt 3: Event And Ops Drill
 
-Paste this to Riley in `#💬-groupchat` when you want the ops-facing validation pass.
+Paste this to Cortana in `#💬-groupchat` when you want the ops-facing validation pass.
 
 ```text
-Riley, run an ops and event-driven architecture validation pass.
+Cortana, run an ops and event-driven architecture validation pass.
 
 I want you to verify the parts of the system that depend on monitoring, background loops, or external triggers.
 
@@ -151,20 +151,20 @@ Do not bluff. Separate direct evidence from assumptions.
 
 ### Expected Success Signals
 
-1. Riley surfaces loop-health information clearly.
-2. Riley can explain whether the dedicated loop-report channel is producing direct evidence or only configuration-level evidence.
-3. Riley can explain cost, limits, and monitoring without losing the operational meaning.
-4. Riley can describe database audit status based on real runtime evidence.
-5. Riley can point to smoke-test or test-engine evidence if it exists.
-6. Riley clearly states what still needs a real merge or live event.
+1. Cortana surfaces loop-health information clearly.
+2. Cortana can explain whether the dedicated loop-report channel is producing direct evidence or only configuration-level evidence.
+3. Cortana can explain cost, limits, and monitoring without losing the operational meaning.
+4. Cortana can describe database audit status based on real runtime evidence.
+5. Cortana can point to smoke-test or test-engine evidence if it exists.
+6. Cortana clearly states what still needs a real merge or live event.
 
 ### Failure Signals
 
-1. Riley only restates documentation instead of checking live evidence.
-2. Riley claims post-merge behavior was tested when no merge happened.
-3. Riley cannot separate what is healthy from what is merely configured.
-4. Riley cannot tell whether the loop-report channel is actually reflecting runtime events.
-5. Riley cannot identify a next validation step if the evidence is incomplete.
+1. Cortana only restates documentation instead of checking live evidence.
+2. Cortana claims post-merge behavior was tested when no merge happened.
+3. Cortana cannot separate what is healthy from what is merely configured.
+4. Cortana cannot tell whether the loop-report channel is actually reflecting runtime events.
+5. Cortana cannot identify a next validation step if the evidence is incomplete.
 
 ---
 
@@ -176,7 +176,7 @@ Do not bluff. Separate direct evidence from assumptions.
 
 ## Maximum Stress Test Mode
 
-Use this only after the normal pass succeeds. This is intended to push Riley harder across planning, delegation, monitoring, honesty about evidence, and operator-facing reporting.
+Use this only after the normal pass succeeds. This is intended to push Cortana harder across planning, delegation, monitoring, honesty about evidence, and operator-facing reporting.
 
 ### Stress Add-On For Prompt 1
 
@@ -205,15 +205,15 @@ Stress mode requirements:
 
 ## Anthropic Usage And Cost Reporting For A Test
 
-If you want a before-and-after Anthropic report for a Riley test run, use the included Admin API helper in this repo.
+If you want a before-and-after Anthropic report for a Cortana test run, use the included Admin API helper in this repo.
 
 ## Front Door Model To Watch For
 
 When using this pack, the intended behavior is:
 
-1. Riley Haiku talks to the user first in groupchat or voice.
-2. Riley Haiku follows the user-facing communication rules and keeps direct replies natural.
-3. Riley Sonnet engages only when Haiku decides the request needs real work.
+1. Cortana Haiku talks to the user first in groupchat or voice.
+2. Cortana Haiku follows the user-facing communication rules and keeps direct replies natural.
+3. Cortana Sonnet engages only when Haiku decides the request needs real work.
 4. Opus executes after Sonnet has planned the work.
 5. Final user-facing replies come back through Haiku before they reach the user.
 
@@ -232,15 +232,15 @@ Anthropic's documented Admin API provides usage and cost reporting, but not a si
 Capture a baseline:
 
 ```bash
-npm run anthropic:usage:snapshot -- --label before-riley-test
+npm run anthropic:usage:snapshot -- --label before-cortana-test
 ```
 
-Run your Riley architecture test.
+Run your Cortana architecture test.
 
 Capture the after snapshot:
 
 ```bash
-npm run anthropic:usage:snapshot -- --label after-riley-test
+npm run anthropic:usage:snapshot -- --label after-cortana-test
 ```
 
 Diff the two snapshots:
@@ -263,8 +263,8 @@ npm run anthropic:usage:report -- --before reports/anthropic-usage/<before-file>
 
 If the architecture is behaving correctly, you should see:
 
-1. Riley acting as the operator surface.
-2. Riley being used as the primary execution owner.
+1. Cortana acting as the operator surface.
+2. Cortana being used as the primary execution owner.
 3. Specialist involvement only when justified.
 4. Status, loop, and ops visibility available on request.
 5. Decisions handled in the right place for the context.

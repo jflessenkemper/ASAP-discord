@@ -1,8 +1,8 @@
 /**
  * Tiny helpers for reading env vars with legacy-name fallbacks.
  *
- * Used during the Riley → Cortana migration: preferred CORTANA_* vars take
- * precedence; the RILEY_* names still work so existing deploys don't break.
+ * Used during the Cortana → Cortana migration: preferred CORTANA_* vars take
+ * precedence; the CORTANA_* names still work so existing deploys don't break.
  */
 
 /** Return the first defined env var from the list, else the default. */

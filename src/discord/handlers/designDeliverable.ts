@@ -9,23 +9,23 @@ const SPECIALIST_IDS = [
   'copywriter', 'lawyer', 'qa', 'ux-reviewer', 'ios-engineer', 'android-engineer',
 ] as const;
 
-export function isDesignDeliverableDetailed(rileyResponse: string, activeGoal: string | null): {
+export function isDesignDeliverableDetailed(cortanaResponse: string, activeGoal: string | null): {
   match: boolean;
-  rileyMatch: boolean;
+  cortanaMatch: boolean;
   goalMatch: boolean;
 } {
-  const rileyMatch = DESIGN_DELIVERABLE_RE.test(rileyResponse);
+  const cortanaMatch = DESIGN_DELIVERABLE_RE.test(cortanaResponse);
   const goalMatch = DESIGN_DELIVERABLE_RE.test(activeGoal || '');
-  return { match: rileyMatch || goalMatch, rileyMatch, goalMatch };
+  return { match: cortanaMatch || goalMatch, cortanaMatch, goalMatch };
 }
 
 export function shouldSkipContractEnforcement(text: string): boolean {
   return DESIGN_SKIP_CONTRACT_RE.test(text);
 }
 
-export function buildAceDesignContext(rileyResponse: string): string {
+export function buildAceDesignContext(cortanaResponse: string): string {
   const mentionGuide = buildAgentMentionGuide(SPECIALIST_IDS);
-  return `[Cortana directed you]: ${rileyResponse}\n\n` +
+  return `[Cortana directed you]: ${cortanaResponse}\n\n` +
     `Own execution yourself first. Only bring in extra specialists if they are truly needed. ` +
     `If you do delegate, use the exact Discord mentions from this guide: ${mentionGuide}.\n\n` +
     `This is a design deliverable task. You MUST create the file(s) using the write_file tool. ` +
@@ -36,9 +36,9 @@ export function buildAceDesignContext(rileyResponse: string): string {
     `Do NOT use Result/Evidence/Risk format. Do NOT reply with just "Done".`;
 }
 
-export function buildAceStandardContext(rileyResponse: string): string {
+export function buildAceStandardContext(cortanaResponse: string): string {
   const mentionGuide = buildAgentMentionGuide(SPECIALIST_IDS);
-  return `[Cortana directed you]: ${rileyResponse}\n\n` +
+  return `[Cortana directed you]: ${cortanaResponse}\n\n` +
     `Own execution yourself first. Only bring in extra specialists if they are truly needed. ` +
     `If you do delegate, use the exact Discord mentions from this guide: ${mentionGuide}.\n\n` +
     `After making code changes: create a branch, commit, push, create a PR, then merge the PR using merge_pull_request. ` +

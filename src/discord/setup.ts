@@ -416,7 +416,7 @@ export async function setupChannels(guild: Guild): Promise<BotChannels> {
     catMain,
     '📋 Automatic transcripts and summaries of voice calls',
     '📋 Voice call transcripts and summaries post here.',
-    { owner: 'riley', cadence: 'on-call', staleAlert: '7d' }
+    { owner: 'cortana', cadence: 'on-call', staleAlert: '7d' }
   );
 
   const limits = await ensureText(
@@ -440,7 +440,7 @@ export async function setupChannels(guild: Guild): Promise<BotChannels> {
     catMain,
     '📸 Automated screenshots of every app screen after each build (iPhone 17 Pro Argus)',
     '📸 Build screenshot updates post here as one-line entries.',
-    { owner: 'riley', cadence: 'on-deploy', staleAlert: '7d' }
+    { owner: 'cortana', cadence: 'on-deploy', staleAlert: '7d' }
   );
 
   const appUrl = resolvePublicAppUrl();
@@ -458,7 +458,7 @@ export async function setupChannels(guild: Guild): Promise<BotChannels> {
     catOps,
     '💻 Live feed of all tool calls made by agents — file ops, git, commands, searches',
     '💻 One-line tool activity feed posts here.',
-    { owner: 'riley', cadence: 'on-tool-call', staleAlert: '2h' }
+    { owner: 'cortana', cadence: 'on-tool-call', staleAlert: '2h' }
   );
 
   const voiceErrors = await ensureText(

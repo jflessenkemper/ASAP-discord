@@ -26,7 +26,7 @@ Quick-reference for test coverage across the bot codebase. One `read_file` to fi
 
 ## Test Engine
 
-Riley has two test layers:
+Cortana has two test layers:
 1. **Jest unit tests** (`npx jest`) — fast, offline, mock-based. Covers logic and structure. This map tracks these.
 2. **Smoke tests** (`npm run discord:test:dist`) — live Discord integration tests. Defined in `test-definitions.ts`. Not tracked here.
 
@@ -151,7 +151,7 @@ Riley has two test layers:
 |--------|------------|-------|-----------|
 | ❌ | `scripts/clean-channels.mjs` | — | `__tests__/scripts/clean-channels.test.ts` |
 | ❌ | `scripts/generate-avatars.ts` | — | `__tests__/scripts/generate-avatars.test.ts` |
-| ❌ | `scripts/riley-chat.mjs` | — | `__tests__/scripts/riley-chat.test.ts` |
+| ❌ | `scripts/cortana-chat.mjs` | — | `__tests__/scripts/cortana-chat.test.ts` |
 | ❌ | `scripts/send-to-thread.mjs` | — | `__tests__/scripts/send-to-thread.test.ts` |
 
 ## Config Files
@@ -168,9 +168,9 @@ Riley has two test layers:
 
 ## Priority Order for Closing Gaps
 
-Focus on **bot code** first — this is what Riley uses to self-improve via the testing engine.
+Focus on **bot code** first — this is what Cortana uses to self-improve via the testing engine.
 
-### Tier 1 — Core Bot Logic (highest impact for Riley's self-improvement)
+### Tier 1 — Core Bot Logic (highest impact for Cortana's self-improvement)
 1. `discord/claude.ts` (3616 lines, 13%) — LLM core, tool loop, model routing
 2. `discord/tools.ts` (4290 lines, 13%) — all tool definitions
 3. `discord/memory.ts` (437 lines, 39%) — persistent memory CRUD
@@ -224,9 +224,9 @@ After adding tests, regenerate coverage numbers:
 npx jest --coverage --coverageReporters=json-summary
 ```
 
-Then update this file with the new percentages, or ask Riley to run:
+Then update this file with the new percentages, or ask Cortana to run:
 ```
-Riley, update the test map with current coverage numbers.
+Cortana, update the test map with current coverage numbers.
 ```
 
 ## Rules

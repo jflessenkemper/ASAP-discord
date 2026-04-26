@@ -31,7 +31,7 @@ GOAL_PROMPT='Build a Design System showcase page at the /design route of the ASA
 6. All text and copy used across the app — onboarding text, error messages, button labels, empty states
 7. Mobile-responsive layout
 
-Riley — coordinate ALL 13 agents:
+Cortana — coordinate ALL 13 agents:
 - Ace: build the /design route, page component, and all UI element demos
 - Sophie: review UX, glassmorphism quality, spacing, contrast ratios, accessibility
 - Liv: write all showcase copy — section headers, descriptions, placeholder text

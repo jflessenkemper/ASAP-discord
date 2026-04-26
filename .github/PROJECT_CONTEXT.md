@@ -1,11 +1,11 @@
 # ASAP Project Context
 
-> This file is loaded into every agent's context. Riley can update it via the `memory_write` tool.
+> This file is loaded into every agent's context. Cortana can update it via the `memory_write` tool.
 > Last updated: 2026-03-27
 
 ## What is ASAP?
 
-ASAP-discord is a Discord-operated automation and career-ops system. Riley is the front door and primary executor, Riley Ops stewards the self-improvement engine and ops surfaces, and the runtime manages Discord workflows, voice sessions, GitHub/build webhooks, diagnostics, and a job-search pipeline for the owner.
+ASAP-discord is a Discord-operated automation and career-ops system. Cortana is the front door and primary executor, Cortana Ops stewards the self-improvement engine and ops surfaces, and the runtime manages Discord workflows, voice sessions, GitHub/build webhooks, diagnostics, and a job-search pipeline for the owner.
 
 ## Tech Stack
 
@@ -13,8 +13,8 @@ ASAP-discord is a Discord-operated automation and career-ops system. Riley is th
 - **Database**: PostgreSQL (Cloud SQL, `australia-southeast1`)
 - **Hosting**: Google Cloud Run (service: `asap`, region: `australia-southeast1`)
 - **CI/CD**: Cloud Build (manual trigger via `gcloud builds submit`)
-- **AI**: Anthropic Claude (Sonnet for Riley planning/management, Opus for execution/completion where needed), Gemini (text and supporting runtime features), ElevenLabs (voice TTS, batch STT, and realtime STT)
-- **Discord**: 13-agent bot system coordinated by Riley
+- **AI**: Anthropic Claude (Sonnet for Cortana planning/management, Opus for execution/completion where needed), Gemini (text and supporting runtime features), ElevenLabs (voice TTS, batch STT, and realtime STT)
+- **Discord**: 13-agent bot system coordinated by Cortana
 - **Career Ops**: job scan/evaluation/drafting/submission workflow stored in PostgreSQL
 
 ## Database Tables
@@ -78,8 +78,8 @@ src/
 
 | Agent | ID | Model | Role |
 |-------|----|-------|------|
-| Riley | `executive-assistant` | Sonnet | Front door, planner, direct executor, and specialist coordinator |
-| Riley Ops | `operations-manager` | Sonnet | Self-improvement steward, loop maintainer, and ops-channel worker |
+| Cortana | `executive-assistant` | Sonnet | Front door, planner, direct executor, and specialist coordinator |
+| Cortana Ops | `operations-manager` | Sonnet | Self-improvement steward, loop maintainer, and ops-channel worker |
 | Max | `qa` | Sonnet | QA tester |
 | Sophie | `ux-reviewer` | Sonnet | UX reviewer |
 | Kane | `security-auditor` | Sonnet | Security auditor |
@@ -111,5 +111,5 @@ src/
 - **Token limit**: 8M tokens/day default (`DAILY_LIMIT_GEMINI_LLM_TOKENS`, legacy: `DAILY_LIMIT_CLAUDE_TOKENS`).
 - **Budget awareness**: Every agent sees remaining budget in their system prompt.
 - **Low-budget mode**: When <$0.50 remaining, agents get an explicit efficiency warning.
-- **Tool subsets**: Review agents get a restricted read/diagnostic toolset. Mutating repo and mutating GCP tools are limited to full-tool agents (Riley, Riley Ops, Jude, Mia, Leo).
+- **Tool subsets**: Review agents get a restricted read/diagnostic toolset. Mutating repo and mutating GCP tools are limited to full-tool agents (Cortana, Cortana Ops, Jude, Mia, Leo).
 - **Concurrency**: Gemini scheduler defaults to max 5 concurrent requests with pacing/lanes to reduce 429 bursts.
