@@ -60,6 +60,9 @@ function getClient(): ElevenLabsClient {
  *  Full catalog: https://elevenlabs.io/voice-library */
 const VOICE_ID_MAP: Record<string, string> = {
   CortanaEL: 'XgJBU07aO5LKJqYttcYx',   // Cortana dedicated voice
+  RileyEL: 'XgJBU07aO5LKJqYttcYx',     // legacy alias — same voice id as CortanaEL,
+                                         // kept so existing prod env (TELEPHONY_RILEY_VOICE_NAME=RileyEL)
+                                         // continues to resolve after the rename.
   Achernar: 'lsgXALPNLFUcQfT1dmP1',  // shared/default legacy voice
   Aoede: 'XgJBU07aO5LKJqYttcYx',     // legacy alias -> Cortana voice
 
@@ -206,7 +209,7 @@ export const CORTANA_WARM_PHRASES: readonly string[] = [
 export async function warmCortanaVoiceAtStartup(): Promise<void> {
   if (!isElevenLabsAvailable()) return;
   const voice = process.env.TELEPHONY_CORTANA_VOICE_NAME
-    || process.env.TELEPHONY_CORTANA_VOICE_NAME
+    || process.env.TELEPHONY_RILEY_VOICE_NAME
     || 'CortanaEL';
   await primeElevenLabsVoiceCache(voice, [...CORTANA_WARM_PHRASES]);
 }

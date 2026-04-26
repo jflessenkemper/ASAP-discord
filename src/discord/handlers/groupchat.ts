@@ -89,7 +89,7 @@ type ToolChainMessage = {
 const TOOL_CHAIN_EDIT_DEBOUNCE_MS = parseInt(process.env.TOOL_CHAIN_EDIT_DEBOUNCE_MS || '400', 10);
 const toolChainMessages = new Map<string, ToolChainMessage>();
 const cortanaStallNoticeAt = new Map<string, number>();
-const CORTANA_STALL_NOTICE_COOLDOWN_MS = envIntFirst(['CORTANA_STALL_NOTICE_COOLDOWN_MS', 'CORTANA_STALL_NOTICE_COOLDOWN_MS'], 120000);
+const CORTANA_STALL_NOTICE_COOLDOWN_MS = envIntFirst(['CORTANA_STALL_NOTICE_COOLDOWN_MS', 'RILEY_STALL_NOTICE_COOLDOWN_MS'], 120000);
 
 /** Record a tool start/completion for Copilot-style live chain display. */
 function updateToolChain(
@@ -196,14 +196,14 @@ let claudeNotificationsBoundChannelId: string | null = null;
 const MAX_PARALLEL_SUBAGENTS = parseInt(process.env.MAX_PARALLEL_SUBAGENTS || '3', 10);
 const SUBAGENT_MAX_TOKENS = parseInt(process.env.SUBAGENT_MAX_TOKENS || '900', 10);
 const GROUPCHAT_PROCESS_TIMEOUT_MS = parseInt(process.env.GROUPCHAT_PROCESS_TIMEOUT_MS || '480000', 10);
-const CORTANA_NO_RESPONSE_TIMEOUT_MS = envIntFirst(['CORTANA_NO_RESPONSE_TIMEOUT_MS', 'CORTANA_NO_RESPONSE_TIMEOUT_MS'], 180000);
+const CORTANA_NO_RESPONSE_TIMEOUT_MS = envIntFirst(['CORTANA_NO_RESPONSE_TIMEOUT_MS', 'RILEY_NO_RESPONSE_TIMEOUT_MS'], 180000);
 const CORTANA_PROGRESS_PING_MS = envIntFirst(
-  ['CORTANA_PROGRESS_PING_MS', 'CORTANA_PROGRESS_PING_MS'],
+  ['CORTANA_PROGRESS_PING_MS', 'RILEY_PROGRESS_PING_MS'],
   Math.max(20_000, Math.floor(CORTANA_NO_RESPONSE_TIMEOUT_MS * 0.6)),
 );
 const SELF_IMPROVEMENT_WORKER_POLL_MS = Math.max(2_000, parseInt(process.env.SELF_IMPROVEMENT_WORKER_POLL_MS || '5000', 10));
 const SELF_IMPROVEMENT_WORKER_ERROR_COOLDOWN_MS = Math.max(5_000, parseInt(process.env.SELF_IMPROVEMENT_WORKER_ERROR_COOLDOWN_MS || '60000', 10));
-const GOAL_WATCHDOG_TOKEN_OVERRUN_ALLOWANCE = Math.max(0, envIntFirst(['CORTANA_TOKEN_OVERRUN_ALLOWANCE', 'CORTANA_TOKEN_OVERRUN_ALLOWANCE'], 2000000));
+const GOAL_WATCHDOG_TOKEN_OVERRUN_ALLOWANCE = Math.max(0, envIntFirst(['CORTANA_TOKEN_OVERRUN_ALLOWANCE', 'RILEY_TOKEN_OVERRUN_ALLOWANCE'], 2000000));
 
 const GOAL_STALL_TIMEOUT_MS = parseInt(process.env.GOAL_STALL_TIMEOUT_MS || '420000', 10);
 const GOAL_STALL_CHECK_INTERVAL_MS = parseInt(process.env.GOAL_STALL_CHECK_INTERVAL_MS || '60000', 10);
@@ -218,7 +218,7 @@ const AUTO_REBUILD_ERROR_COOLDOWN_MS = parseInt(process.env.AUTO_REBUILD_ERROR_C
 const URL_ACTION_COOLDOWN_MS = parseInt(process.env.URL_ACTION_COOLDOWN_MS || '1800000', 10);
 const GROUPCHAT_DUPLICATE_WINDOW_MS = parseInt(process.env.GROUPCHAT_DUPLICATE_WINDOW_MS || '10000', 10);
 /** Maximum continuation cycles for multi-step tasks before stopping. */
-const MAX_CONTINUATION_CYCLES = envIntFirst(['CORTANA_MAX_CONTINUATION_CYCLES', 'CORTANA_MAX_CONTINUATION_CYCLES'], 3);
+const MAX_CONTINUATION_CYCLES = envIntFirst(['CORTANA_MAX_CONTINUATION_CYCLES', 'RILEY_MAX_CONTINUATION_CYCLES'], 3);
 const APP_SERVER_ROOT = (fs.existsSync(path.join(process.cwd(), 'package.json')) && fs.existsSync(path.join(process.cwd(), 'src')))
   ? process.cwd()
   : path.resolve(__dirname, '../../..');
@@ -354,7 +354,11 @@ function hasMultiStepEvidence(text: string): boolean {
  */
 const NO_OP_IMPERATIVE_RE = /\b(?:do|run|check|fix|implement|deploy|investigate|diagnose|build|write|edit|create|delete|add|remove|update|read|search|find|show|tell|explain|summari[sz]e|list|why|how|what|where|when|review|test|verify|launch|scan|generate|patch)\b/i;
 function isNoOpUserPing(content: string): boolean {
-  const stripped = String(content || '')
+  const raw = String(content || '');
+  // URLs / Discord links are real instructions even with short surrounding
+  // text ("Cortana do this <link>"). Don't classify those as pings.
+  if (/https?:\/\/\S+|discord\.com\/channels\//i.test(raw)) return false;
+  const stripped = raw
     .replace(/<@[!&]?\d+>/g, ' ')
     .replace(/[^\w\s'’?!.,-]/g, ' ')
     .trim();
@@ -519,7 +523,7 @@ function ensureClaudeNotifications(groupchat: TextChannel): void {
 function inferImplicitActionTags(text: string): string {
   const tags = new Set<string>();
   const normalized = text.toLowerCase();
-  const allowInfraActions = envBoolFirst(['CORTANA_ALLOW_IMPLICIT_INFRA_ACTIONS', 'CORTANA_ALLOW_IMPLICIT_INFRA_ACTIONS']);
+  const allowInfraActions = envBoolFirst(['CORTANA_ALLOW_IMPLICIT_INFRA_ACTIONS', 'RILEY_ALLOW_IMPLICIT_INFRA_ACTIONS']);
 
   const deployRequested = /(build triggered|triggered build|deploying|deployment triggered|rolling out|release started)/i.test(normalized);
   const deployNegated = /\b(?:do not|don't|dont|won't|wont|not|skip|without|avoid|no)\b[^.!?\n]{0,24}\b(?:deploy|deployment|roll\s*out|release)\b/i.test(normalized);

@@ -37,7 +37,7 @@ function isVoiceStartupSelftestEnabled(): boolean {
   return String(process.env.VOICE_STARTUP_SELFTEST_ENABLED || 'false').toLowerCase() === 'true';
 }
 const VOICE_MAX_TOKENS_CORTANA = parseInt(
-  process.env.VOICE_MAX_TOKENS_CORTANA || process.env.VOICE_MAX_TOKENS_CORTANA || (VOICE_LOW_LATENCY_MODE ? '120' : '220'),
+  process.env.VOICE_MAX_TOKENS_CORTANA || process.env.VOICE_MAX_TOKENS_RILEY || (VOICE_LOW_LATENCY_MODE ? '120' : '220'),
   10,
 );
 const VOICE_TOOLS_ENABLED = String(process.env.VOICE_TOOLS_ENABLED || 'true').toLowerCase() === 'true';
