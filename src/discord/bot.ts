@@ -643,6 +643,17 @@ export async function startBot(): Promise<void> {
       setDiscordGuild(guild);
       setAgentChannelResolver((agentId: string) => configuredChannels.agentChannels.get(agentId) || null);
       setDecisionsChannel(configuredChannels.decisions);
+
+      // Boot-time visibility for the active voice route. The bot prefers
+      // ElevenLabs Conversational AI (Convai handles LLM + TTS itself) when
+      // ELEVENLABS_CONVAI_ENABLED + ELEVENLABS_CONVAI_AGENT_ID are set.
+      // Otherwise it falls back to ElevenLabs STT → Claude → ElevenLabs TTS.
+      try {
+        const { isElevenLabsConvaiEnabled } = await import('./voice/elevenlabsConvai');
+        const route = isElevenLabsConvaiEnabled() ? 'convai' : 'claude+elevenlabs-tts';
+        const agentIdSuffix = (process.env.ELEVENLABS_CONVAI_AGENT_ID || '').slice(-8);
+        console.log(`[voice] route=${route}${route === 'convai' && agentIdSuffix ? ` agent=…${agentIdSuffix}` : ''}`);
+      } catch { /* best-effort */ }
       setThreadStatusChannel(configuredChannels.threadStatus, configuredChannels.groupchat);
       if (isTelephonyAvailable()) {
         setTelephonyChannels(configuredChannels.callLog, configuredChannels.groupchat);

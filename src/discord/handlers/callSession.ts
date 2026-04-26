@@ -91,6 +91,12 @@ export function setVoiceErrorChannel(channel: TextChannel | null): void {
 }
 
 async function postVoiceStageLog(stage: string, detail: string, level: 'info' | 'warn' | 'error' = 'info'): Promise<void> {
+  // Mirror to stdout so the active voice route + per-turn timing is visible
+  // in pm2 logs without needing to open the Discord ops channel. Helped
+  // diagnose which path (convai vs claude+TTS) was actually serving turns.
+  const consoleFn = level === 'error' ? console.error : level === 'warn' ? console.warn : console.log;
+  consoleFn(`[voice-stage] ${stage} ${detail}`);
+
   if (!VOICE_STAGE_LOGS_ENABLED || !voiceErrorChannel) return;
   const action = level === 'error'
     ? 'restart voice pipeline and inspect credentials'
@@ -1108,6 +1114,14 @@ async function handleVoiceInput(transcription: VoiceTranscription): Promise<void
             `turn=${turnId} error=${convaiErr instanceof Error ? convaiErr.message : 'Unknown'}`,
             'warn'
           );
+          // Hard mode: VOICE_REQUIRE_CONVAI=true means the user has explicitly
+          // chosen the Convai pipeline and does NOT want a silent fallback to
+          // Claude+local-TTS (which doubles inference cost and changes the
+          // voice characteristics). End the turn cleanly and let the user
+          // see the error in #voice-errors instead.
+          if (String(process.env.VOICE_REQUIRE_CONVAI || 'false').toLowerCase() === 'true') {
+            return;
+          }
         }
       }
 
