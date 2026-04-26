@@ -785,23 +785,39 @@ export async function startCall(
     listenerHandle.onAgentTurn(async (text, audio /* , _language */) => {
       if (!activeSession?.active) return;
       const cortana = getAgent('executive-assistant' as AgentId);
+      const session = activeSession;
       try {
         const trimmed = (text || '').trim();
         if (cortana && trimmed) {
-          // Mirror to memory + call-log so the conversation isn't invisible
-          // to the rest of the system.
-          activeSession.conversationHistory.push({ role: 'assistant', content: `[Cortana]: ${trimmed}` });
+          session.conversationHistory.push({ role: 'assistant', content: `[Cortana]: ${trimmed}` });
           if (!VOICE_DISABLE_CALL_LOG) {
-            void activeSession.callLog.send(`${cortana.emoji} **${cortana.name}**: ${trimmed.slice(0, 1900)}`).catch(() => {});
-            activeSession.transcript.push(`[${new Date().toLocaleTimeString()}] Cortana (Convai): ${trimmed}`);
+            void session.callLog.send(`${cortana.emoji} **${cortana.name}**: ${trimmed.slice(0, 1900)}`).catch(() => {});
+            session.transcript.push(`[${new Date().toLocaleTimeString()}] Cortana (Convai): ${trimmed}`);
           }
         }
+
         if (audio.length > 0) {
           await speakInTesterVCWithOptions(audio, {
             onPlaybackStart: () => {
               void postVoiceStageLog('cortana_convai_play', `bytes=${audio.length}`);
             },
           });
+          return;
+        }
+
+        // Convai delivered text but no audio (agent voice not configured?
+        // audio output disabled in agent settings? unrecognised event
+        // shape?). Fall back to local ElevenLabs TTS so the caller still
+        // hears the reply rather than dead air.
+        if (cortana && trimmed) {
+          void postVoiceStageLog('cortana_convai_audio_missing', `chars=${trimmed.length}; falling back to local TTS`, 'warn');
+          await speakPipelined(
+            trimmed,
+            session.cortanaVoiceName,
+            undefined,
+            undefined,
+            () => { void postVoiceStageLog('cortana_tts', `reason=convai_no_audio`); },
+          );
         }
       } catch (err) {
         if (!isAbortLikeError(err)) {

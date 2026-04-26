@@ -116,9 +116,11 @@ export async function openConvaiCallSession(
       }
       if (!currentTurnText && currentTurnAudio.length === 0) return;
       const text = currentTurnText;
+      const audioChunkCount = currentTurnAudio.length;
       const audio = currentTurnAudio.length > 0 ? Buffer.concat(currentTurnAudio) : Buffer.alloc(0);
       currentTurnText = '';
       currentTurnAudio.length = 0;
+      console.log(`[convai-stream] turn finalized text_chars=${text.length} audio_chunks=${audioChunkCount} audio_bytes=${audio.length}`);
       try {
         events.onAgentTurn?.(text, audio);
       } catch (err) {
@@ -181,12 +183,24 @@ export async function openConvaiCallSession(
       resolve(session);
     });
 
+    let eventLogCount = 0;
+    const EVENT_LOG_LIMIT = 30;
+
     ws.on('message', (raw) => {
       let parsed: any;
       try { parsed = JSON.parse(String(raw)); } catch { return; }
       if (!parsed) return;
 
       const eventType = String(parsed.type || parsed.message_type || '').toLowerCase();
+
+      // Debug: log the first 30 event types per session so unhandled
+      // variants (audio under a new field name, etc.) show up in pm2 logs
+      // without flooding for the rest of the call.
+      if (eventLogCount < EVENT_LOG_LIMIT) {
+        eventLogCount += 1;
+        const topKeys = Object.keys(parsed).slice(0, 6).join(',');
+        console.log(`[convai-stream] event=${eventType || 'unknown'} keys=${topKeys}`);
+      }
 
       if (eventType === 'ping') {
         sendNow({ type: 'pong', event_id: parsed?.event_id || parsed?.ping_event?.event_id });
