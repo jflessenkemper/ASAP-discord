@@ -776,6 +776,46 @@ export async function startCall(
   activeSession.unsubscribers.push(listenerHandle.unsubscribe);
   activeListenerHandle = listenerHandle;
 
+  // Convai-streaming path: audio replies arrive via the listener instead
+  // of a separate per-turn handoff. Pipe them straight to Discord; the
+  // legacy `handleVoiceInput → getElevenLabsConvaiReplyWithAudio` route is
+  // skipped automatically because handleVoiceInput will see no need to
+  // call the per-turn function (the agent already replied).
+  if (listenerHandle.onAgentTurn) {
+    listenerHandle.onAgentTurn(async (text, audio /* , _language */) => {
+      if (!activeSession?.active) return;
+      const cortana = getAgent('executive-assistant' as AgentId);
+      try {
+        const trimmed = (text || '').trim();
+        if (cortana && trimmed) {
+          // Mirror to memory + call-log so the conversation isn't invisible
+          // to the rest of the system.
+          activeSession.conversationHistory.push({ role: 'assistant', content: `[Cortana]: ${trimmed}` });
+          if (!VOICE_DISABLE_CALL_LOG) {
+            void activeSession.callLog.send(`${cortana.emoji} **${cortana.name}**: ${trimmed.slice(0, 1900)}`).catch(() => {});
+            activeSession.transcript.push(`[${new Date().toLocaleTimeString()}] Cortana (Convai): ${trimmed}`);
+          }
+        }
+        if (audio.length > 0) {
+          await speakInTesterVCWithOptions(audio, {
+            onPlaybackStart: () => {
+              void postVoiceStageLog('cortana_convai_play', `bytes=${audio.length}`);
+            },
+          });
+        }
+      } catch (err) {
+        if (!isAbortLikeError(err)) {
+          console.warn('[convai-stream] playback failed:', errMsg(err));
+          void postVoiceStageLog(
+            'cortana_convai_play_failed',
+            `error=${err instanceof Error ? err.message : 'Unknown'}`,
+            'warn',
+          );
+        }
+      }
+    });
+  }
+
   const onSpeakingStart = (userId: string) => {
     if (!activeSession?.active) return;
     const member = voiceChannel.members.get(userId);
@@ -957,6 +997,23 @@ async function handleVoiceInput(transcription: VoiceTranscription): Promise<void
     }).catch(() => {});
   }
 
+  // Mirror user transcript to memory + call-log so it's visible alongside
+  // Cortana's replies. (When Convai-streaming is active, the reply is
+  // emitted by the listener, not here, so without this the user's side of
+  // the conversation would be invisible.)
+  session.conversationHistory.push({ role: 'user', content: `[Voice from ${transcription.username}]: ${userText}` });
+  if (!VOICE_DISABLE_CALL_LOG) {
+    void session.callLog.send(`🗣️ **${transcription.username}**: ${userText.slice(0, 1900)}`).catch(() => {});
+    session.transcript.push(`[${new Date().toLocaleTimeString()}] ${transcription.username}: ${userText}`);
+  }
+
+  // Convai-streaming mode: Convai is already producing the agent reply via
+  // the listener's onAgentTurn callback. Skip the legacy per-turn handoff
+  // (which would cost a second WS round-trip + duplicate the reply).
+  // Voice commands and text handoffs still need to run for keywords like
+  // "Cortana leave voice call" — keep those gates active.
+  const convaiStreaming = activeListenerHandle?.onAgentTurn !== undefined;
+
   const textHandoffInstruction = extractVoiceToTextHandoffInstruction(userText);
   if (textHandoffInstruction) {
     await handoffVoiceInstructionToTextCortana(session, transcription, textHandoffInstruction);
@@ -966,6 +1023,13 @@ async function handleVoiceInput(transcription: VoiceTranscription): Promise<void
   const voiceCommand = detectVoiceCommand(userText);
   if (voiceCommand) {
     await handleVoiceCommand(session, voiceCommand, transcription, userText);
+    return;
+  }
+
+  // Convai-streaming path: agent reply is being streamed back via the
+  // listener's onAgentTurn handler in startCall. Stop here — running the
+  // per-turn handoff below would double the reply.
+  if (convaiStreaming) {
     return;
   }
 

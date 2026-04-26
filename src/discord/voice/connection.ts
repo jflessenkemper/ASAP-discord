@@ -16,6 +16,7 @@ import { VoiceBasedChannel, GuildMember } from 'discord.js';
 import prism from 'prism-media';
 
 import { startElevenLabsRealtimeTranscription, ElevenLabsRealtimeSession, isElevenLabsRealtimeAvailable } from './elevenlabsRealtime';
+import { openConvaiCallSession, isConvaiStreamingAvailable, ConvaiCallSession } from './convaiCallSession';
 import { transcribeVoiceDetailed } from './tts';
 import { errMsg } from '../../utils/errors';
 import { isTesterBotId } from '../../utils/botIdentity';
@@ -687,6 +688,18 @@ export function listenToUserElevenLabsRealtime(
  * Listen to all members using the best available STT.
  * Uses ElevenLabs realtime STT when available, otherwise ElevenLabs batch STT.
  */
+export interface SmartListenerHandle {
+  unsubscribe: () => void;
+  /** Pre-init STT session for a member joining the channel (avoids cold start). */
+  preInitMember: (member: GuildMember) => void;
+  /**
+   * Set when the active path is Convai streaming (audio in + audio out
+   * over one WS). callSession listens for agent turns here so it can
+   * play the audio directly without re-running TTS.
+   */
+  onAgentTurn?: (cb: (text: string, audio: Buffer, language?: string) => void) => void;
+}
+
 export function listenToAllMembersSmart(
   connection: VoiceConnection,
   voiceChannel: VoiceBasedChannel,
@@ -694,6 +707,16 @@ export function listenToAllMembersSmart(
   onSpeechStart?: (member: GuildMember) => void
 ): SmartListenerHandle {
   const preference = getSttProviderPreference();
+
+  // Preferred path: long-lived Convai streaming WS — Convai handles VAD,
+  // STT, LLM, and TTS server-side. Audio frames stream in; agent text +
+  // audio stream back. Skips the Scribe → Claude → TTS round-trip and
+  // saves a full WS per turn. Disable with VOICE_CONVAI_STREAMING=false.
+  const convaiStreamingDisabled = String(process.env.VOICE_CONVAI_STREAMING || 'true').toLowerCase() === 'false';
+  if (!convaiStreamingDisabled && isConvaiStreamingAvailable()) {
+    console.log('Using ElevenLabs Convai streaming for voice (audio in + audio out)');
+    return listenToAllMembersConvaiStreaming(connection, voiceChannel, onTranscription, onSpeechStart);
+  }
 
   if (preference === 'elevenlabs' && VOICE_REALTIME_MODE && isElevenLabsRealtimeAvailable()) {
     console.log('Using ElevenLabs real-time STT for voice transcription');
@@ -706,10 +729,142 @@ export function listenToAllMembersSmart(
   return { unsubscribe: batchUnsub, preInitMember: () => {} };
 }
 
-export interface SmartListenerHandle {
-  unsubscribe: () => void;
-  /** Pre-init STT session for a member joining the channel (avoids cold start). */
-  preInitMember: (member: GuildMember) => void;
+/**
+ * Convai-streaming path: one long-lived WS for the whole call. Every
+ * member's PCM audio gets routed into the same Convai session. Convai
+ * does VAD + STT + LLM + TTS server-side and emits agent text + audio
+ * frames back. Multi-speaker note: Convai treats all incoming audio as
+ * one speaker; if multiple humans talk simultaneously the agent's
+ * transcript will read as a single mixed stream. Acceptable trade-off
+ * for the typical 1:1 voice flow.
+ */
+function listenToAllMembersConvaiStreaming(
+  connection: VoiceConnection,
+  voiceChannel: VoiceBasedChannel,
+  onTranscription: (transcription: VoiceTranscription) => void,
+  onSpeechStart?: (member: GuildMember) => void,
+): SmartListenerHandle {
+  let destroyed = false;
+  let convaiSession: ConvaiCallSession | null = null;
+  const subscriberCleanups: Array<() => void> = [];
+  const listening = new Set<string>();
+  const memberById = new Map<string, GuildMember>();
+  let agentTurnCb: ((text: string, audio: Buffer, language?: string) => void) | null = null;
+  let lastSpeechStartAt = 0;
+
+  function attachMemberAudio(member: GuildMember): void {
+    if (destroyed || listening.has(member.id)) return;
+    if (!isTranscribableMember(member)) return;
+    listening.add(member.id);
+    memberById.set(member.id, member);
+
+    const subscribe = () => {
+      if (destroyed) return;
+      const subscription = connection.receiver.subscribe(member.id, {
+        end: { behavior: EndBehaviorType.AfterInactivity, duration: getAdaptiveSilenceDuration(member.id) },
+      });
+      let decoder: Transform;
+      try {
+        decoder = createOpusDecoder();
+      } catch (err) {
+        console.error(`Convai opus decoder error for ${member.displayName}:`, errMsg(err));
+        return;
+      }
+      subscription.pipe(decoder);
+      let speechNotified = false;
+      decoder.on('data', (chunk: Buffer) => {
+        if (!speechNotified) {
+          speechNotified = true;
+          // Throttle onSpeechStart callbacks across members so callers
+          // (typing indicators etc.) don't get spammed by every chunk.
+          if (Date.now() - lastSpeechStartAt > 250) {
+            lastSpeechStartAt = Date.now();
+            onSpeechStart?.(member);
+          }
+        }
+        if (!destroyed && convaiSession?.isOpen) {
+          convaiSession.sendUserAudio(chunk);
+        }
+      });
+      decoder.on('end', () => {
+        if (!destroyed) setTimeout(() => { if (!destroyed) subscribe(); }, 120);
+      });
+      decoder.on('error', (err: Error) => {
+        console.warn(`Convai decoder error for ${member.displayName}:`, err.message);
+        if (!destroyed) setTimeout(() => { if (!destroyed) subscribe(); }, 250);
+      });
+      subscription.on('end', () => decoder.end());
+      subscription.on('error', () => decoder.end());
+
+      subscriberCleanups.push(() => {
+        try { subscription.destroy(); } catch { /* ignore */ }
+        try { decoder.destroy(); } catch { /* ignore */ }
+      });
+    };
+
+    subscribe();
+  }
+
+  // Open the Convai WS up front so audio chunks have a place to land.
+  void openConvaiCallSession({
+    onUserTranscript: (text, language) => {
+      if (destroyed) return;
+      // Convai doesn't tell us *which* member spoke. Best-effort: pick the
+      // most recent active member, otherwise the first one we know about.
+      const member = [...memberById.values()][0];
+      onTranscription({
+        userId: member?.id || 'convai',
+        username: member?.displayName || 'Caller',
+        text,
+        timestamp: new Date(),
+        language,
+        sttProvider: 'elevenlabs',
+      });
+    },
+    onAgentTurn: (text, audio) => {
+      if (destroyed) return;
+      try { agentTurnCb?.(text, audio); } catch (err) { console.warn('[convai-stream] agentTurn cb threw:', errMsg(err)); }
+    },
+    onError: (err) => {
+      console.warn(`[convai-stream] error: ${err.message}`);
+    },
+    onClose: () => {
+      // Convai socket closed; if the call is still active, future audio
+      // chunks will be silently dropped. callSession will end the call
+      // soon enough on its own.
+    },
+  })
+    .then((session) => {
+      if (destroyed) { session.close(); return; }
+      convaiSession = session;
+      // Attach member audio AFTER the WS is open so we don't drop chunks.
+      for (const [, member] of voiceChannel.members) attachMemberAudio(member);
+    })
+    .catch((err) => {
+      console.error('[convai-stream] failed to open session, falling back is required:', errMsg(err));
+    });
+
+  // Catch members joining mid-call.
+  const onSpeaking = (userId: string) => {
+    if (destroyed) return;
+    const member = voiceChannel.members.get(userId);
+    if (!member) return;
+    attachMemberAudio(member);
+  };
+  connection.receiver.speaking.on('start', onSpeaking);
+
+  return {
+    unsubscribe: () => {
+      destroyed = true;
+      connection.receiver.speaking.off('start', onSpeaking);
+      for (const cleanup of subscriberCleanups) cleanup();
+      subscriberCleanups.length = 0;
+      convaiSession?.close();
+      convaiSession = null;
+    },
+    preInitMember: (member: GuildMember) => attachMemberAudio(member),
+    onAgentTurn: (cb) => { agentTurnCb = cb; },
+  };
 }
 
 function listenToAllMembersElevenLabsRealtime(
