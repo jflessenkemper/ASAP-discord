@@ -99,6 +99,7 @@ jest.mock('../../../discord/voice/elevenlabs', () => ({
 
 jest.mock('../../../discord/voice/elevenlabsConvai', () => ({
   getElevenLabsConvaiReply: jest.fn().mockResolvedValue('ConvAI response'),
+  getElevenLabsConvaiReplyWithAudio: jest.fn().mockResolvedValue({ text: 'ConvAI response', audio: Buffer.alloc(0) }),
   isElevenLabsConvaiEnabled: jest.fn().mockReturnValue(false),
 }));
 
@@ -746,8 +747,8 @@ describe('callSession', () => {
         text: 'Hello via ConvAI path',
       });
 
-      const { getElevenLabsConvaiReply } = require('../../../discord/voice/elevenlabsConvai');
-      expect(getElevenLabsConvaiReply).toHaveBeenCalled();
+      const { getElevenLabsConvaiReplyWithAudio } = require('../../../discord/voice/elevenlabsConvai');
+      expect(getElevenLabsConvaiReplyWithAudio).toHaveBeenCalled();
 
       await endCall();
       (isElevenLabsConvaiEnabled as jest.Mock).mockReturnValue(false);

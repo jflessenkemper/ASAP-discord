@@ -13,7 +13,7 @@ import { postDiagnostic, mirrorAgentResponse, mirrorVoiceTranscript } from '../s
 import { getWebhook } from '../services/webhooks';
 import { listenToAllMembersSmart, SmartListenerHandle, VoiceTranscription } from '../voice/connection';
 import { isElevenLabsAvailable, primeElevenLabsVoiceCache, CORTANA_WARM_PHRASES } from '../voice/elevenlabs';
-import { getElevenLabsConvaiReply, isElevenLabsConvaiEnabled } from '../voice/elevenlabsConvai';
+import { getElevenLabsConvaiReply, getElevenLabsConvaiReplyWithAudio, isElevenLabsConvaiEnabled } from '../voice/elevenlabsConvai';
 import { isElevenLabsRealtimeAvailable } from '../voice/elevenlabsRealtime';
 import {
   joinTesterVoiceChannel, leaveTesterVoiceChannel, speakAsTesterInVoice,
@@ -1057,7 +1057,7 @@ async function handleVoiceInput(transcription: VoiceTranscription): Promise<void
       if (isElevenLabsConvaiEnabled()) {
         try {
           const convaiStartMs = Date.now();
-          const responseRaw = await getElevenLabsConvaiReply(userText, transcription.language);
+          const { text: responseRaw, audio: convaiAudio } = await getElevenLabsConvaiReplyWithAudio(userText, transcription.language);
           if (!firstTokenLogged && responseRaw.trim()) {
             firstTokenLogged = true;
             firstTokenMs = Date.now() - turnStartMs;
@@ -1065,9 +1065,10 @@ async function handleVoiceInput(transcription: VoiceTranscription): Promise<void
           }
 
           const response = finalizeSpokenResponse(responseRaw);
+          const audioReady = convaiAudio.length > 0;
           await postVoiceStageLog(
             'cortana_convai',
-            `turn=${turnId} convai_ms=${Date.now() - convaiStartMs} raw_chars=${responseRaw.length} final_chars=${response.length}`
+            `turn=${turnId} convai_ms=${Date.now() - convaiStartMs} raw_chars=${responseRaw.length} final_chars=${response.length} audio_bytes=${convaiAudio.length}`
           );
 
           if (!isCurrentTurn() || !response.trim()) return;
@@ -1093,20 +1094,39 @@ async function handleVoiceInput(transcription: VoiceTranscription): Promise<void
           if (!isCurrentTurn()) return;
 
           const cortanaTtsStartMs = Date.now();
-          await speakPipelined(
-            response,
-            session.cortanaVoiceName,
-            signal,
-            transcription.language,
-            () => {
-              if (firstAudioLogged) return;
-              firstAudioLogged = true;
-              firstAudioMs = Date.now() - turnStartMs;
-              void postVoiceStageLog('cortana_first_audio', `turn=${turnId} audio_ms=${firstAudioMs}`);
+          const onPlaybackStart = () => {
+            if (firstAudioLogged) return;
+            firstAudioLogged = true;
+            firstAudioMs = Date.now() - turnStartMs;
+            void postVoiceStageLog('cortana_first_audio', `turn=${turnId} audio_ms=${firstAudioMs}`);
+          };
+
+          if (audioReady) {
+            // Convai already produced audio in the same WS round-trip;
+            // play it straight to Discord and skip our second TTS pass.
+            // ffmpeg in createAudioResource handles the format negotiation.
+            try {
+              await speakInTesterVCWithOptions(convaiAudio, { signal, onPlaybackStart });
+              await postVoiceStageLog('cortana_convai_play', `turn=${turnId} play_ms=${Date.now() - cortanaTtsStartMs} bytes=${convaiAudio.length}`);
+            } catch (playErr) {
+              // Convai audio failed to play (codec mismatch?) — fall back
+              // to local TTS on the text we already have so the caller
+              // still hears something.
+              await postVoiceStageLog(
+                'cortana_convai_play_failed',
+                `turn=${turnId} error=${playErr instanceof Error ? playErr.message : 'Unknown'}; falling back to local TTS`,
+                'warn'
+              );
+              await speakPipelined(response, session.cortanaVoiceName, signal, transcription.language, onPlaybackStart);
+              await postVoiceStageLog('cortana_tts', `turn=${turnId} tts_play_ms=${Date.now() - cortanaTtsStartMs}`);
             }
-          );
+          } else {
+            // Convai didn't return audio (agent configured text-only?) —
+            // run our own TTS as before. Keeps backward compatibility.
+            await speakPipelined(response, session.cortanaVoiceName, signal, transcription.language, onPlaybackStart);
+            await postVoiceStageLog('cortana_tts', `turn=${turnId} tts_play_ms=${Date.now() - cortanaTtsStartMs} reason=no_convai_audio`);
+          }
           await cortanaLogAndMirror;
-          await postVoiceStageLog('cortana_tts', `turn=${turnId} tts_play_ms=${Date.now() - cortanaTtsStartMs}`);
           return;
         } catch (convaiErr) {
           await postVoiceStageLog(
