@@ -58,7 +58,12 @@ let convaiClient: import('elevenlabs').ElevenLabsClient | null = null;
 
 const ELEVENLABS_CONVAI_AGENT_ID = String(process.env.ELEVENLABS_CONVAI_AGENT_ID || '').trim();
 const SIGNED_URL_TIMEOUT_MS = parseInt(process.env.ELEVENLABS_CONVAI_TIMEOUT_MS || '12000', 10);
-const TURN_INACTIVITY_MS = Math.max(150, parseInt(process.env.CONVAI_TURN_INACTIVITY_MS || '350', 10));
+const TURN_INACTIVITY_MS = Math.max(150, parseInt(process.env.CONVAI_TURN_INACTIVITY_MS || '500', 10));
+// Server-side VAD: how long ConvAI waits after the user stops speaking before
+// treating the silence as end-of-turn.  Default 300 ms is too aggressive for
+// natural conversational pauses — bumped to 700 ms to avoid "clipping" where
+// Cortana starts responding to a half-finished sentence.
+const CONVAI_TURN_SILENCE_MS = Math.max(200, parseInt(process.env.CONVAI_TURN_SILENCE_MS || '700', 10));
 
 async function getClient(): Promise<import('elevenlabs').ElevenLabsClient> {
   if (!convaiClient) {
@@ -222,11 +227,22 @@ export async function openConvaiCallSession(
     ws.on('open', () => {
       opened = true;
       clearTimeout(initTimeout);
-      // Init frame — language hint helps the server-side STT.
+      // Init frame — language hint + turn-detection tuning.
+      // `silence_duration_ms` controls how long the server waits after the
+      // user stops making sound before it commits the turn.  A higher value
+      // avoids the "clipping" bug where Cortana starts talking before the
+      // user finishes their sentence.
       sendNow({
         type: 'conversation_initiation_client_data',
         conversation_initiation_client_data: {
           dynamic_variables: { caller_language: String(language || 'en').slice(0, 8) },
+          conversation_config_override: {
+            turn: {
+              mode: 'turn',
+              turn_timeout: 16,              // seconds before ConvAI assumes the call is idle
+              silence_duration_ms: CONVAI_TURN_SILENCE_MS,
+            },
+          },
         },
       });
       while (sendQueue.length > 0 && ws.readyState === WebSocket.OPEN) {
