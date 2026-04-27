@@ -1,3 +1,4 @@
+import { spawn } from 'child_process';
 import { PassThrough, Readable } from 'stream';
 
 import {
@@ -384,24 +385,34 @@ export function streamRawPcmToTesterVC(
   const channels = options.channels || 1;
 
   const input = new PassThrough();
-  const ffmpeg = new prism.FFmpeg({
-    args: [
-      "-analyzeduration", "0",
-      "-loglevel", "error",
-      "-f", "s16le",
-      "-ar", String(sampleRate),
-      "-ac", String(channels),
-      "-i", "pipe:0",
-      "-f", "s16le",
-      "-ar", "48000",
-      "-ac", "2",
-      "pipe:1",
-    ],
+  // We CANNOT use prism.FFmpeg here — it prepends `-i -` to the args so
+  // input format hints (`-f s16le -ar 16000 -ac 1`) end up AFTER the
+  // input declaration where ffmpeg treats them as OUTPUT options. Result:
+  // ffmpeg auto-detects raw PCM as "Invalid data" and emits zero bytes.
+  // That's the silent-playback bug Jordan reported on 2026-04-27.
+  // Spawn ffmpeg directly so we control argument order.
+  const proc = spawn('ffmpeg', [
+    '-analyzeduration', '0',
+    '-loglevel', 'error',
+    '-f', 's16le',
+    '-ar', String(sampleRate),
+    '-ac', String(channels),
+    '-i', 'pipe:0',
+    '-f', 's16le',
+    '-ar', '48000',
+    '-ac', '2',
+    'pipe:1',
+  ], { stdio: ['pipe', 'pipe', 'pipe'] });
+
+  proc.stderr.on('data', (chunk: Buffer) => {
+    const txt = chunk.toString().trim();
+    if (txt) console.warn(`[pcm-stream] ffmpeg stderr: ${txt.slice(0, 200)}`);
   });
+  proc.on('error', (err) => console.warn('[pcm-stream] ffmpeg spawn error:', errMsg(err)));
 
-  input.pipe(ffmpeg);
+  input.pipe(proc.stdin);
 
-  const resource = createAudioResource(ffmpeg as unknown as Readable, {
+  const resource = createAudioResource(proc.stdout, {
     inputType: StreamType.Raw,
   });
 
@@ -436,7 +447,7 @@ export function streamRawPcmToTesterVC(
         if (!ended) {
           ended = true;
           input.end();
-          try { ffmpeg.destroy(); } catch { /* ignore */ }
+          try { proc.kill("SIGTERM"); } catch { /* ignore */ }
           stopTesterVCPlayback();
         }
       },
@@ -460,7 +471,7 @@ export function streamRawPcmToTesterVC(
       if (ended) return;
       ended = true;
       try { input.end(); } catch { /* ignore */ }
-      try { ffmpeg.destroy(); } catch { /* ignore */ }
+      try { proc.kill("SIGTERM"); } catch { /* ignore */ }
       stopTesterVCPlayback();
     },
     playbackStarted,
