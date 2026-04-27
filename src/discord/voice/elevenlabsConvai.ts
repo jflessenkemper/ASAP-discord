@@ -1,7 +1,39 @@
+import { Buffer } from 'buffer';
 import { ElevenLabsClient } from 'elevenlabs';
 import WebSocket from 'ws';
 
 import { withTimeout } from '../../utils/withTimeout';
+
+/**
+ * Wrap raw PCM 16-bit mono audio in a WAV header so ffmpeg / discord.js can
+ * detect the format when played via StreamType.Arbitrary.
+ * ElevenLabs ConvAI returns pcm_16000 (16 kHz, 16-bit, mono) by default.
+ */
+function pcm16MonoToWav(pcm: Buffer, sampleRate = 16000): Buffer {
+  const channels = 1;
+  const bitsPerSample = 16;
+  const blockAlign = channels * (bitsPerSample / 8);
+  const byteRate = sampleRate * blockAlign;
+  const dataSize = pcm.length;
+  const riffSize = 36 + dataSize;
+
+  const header = Buffer.alloc(44);
+  header.write('RIFF', 0);
+  header.writeUInt32LE(riffSize, 4);
+  header.write('WAVE', 8);
+  header.write('fmt ', 12);
+  header.writeUInt32LE(16, 16);
+  header.writeUInt16LE(1, 20);
+  header.writeUInt16LE(channels, 22);
+  header.writeUInt32LE(sampleRate, 24);
+  header.writeUInt32LE(byteRate, 28);
+  header.writeUInt16LE(blockAlign, 30);
+  header.writeUInt16LE(bitsPerSample, 32);
+  header.write('data', 36);
+  header.writeUInt32LE(dataSize, 40);
+
+  return Buffer.concat([header, pcm]);
+}
 
 let convaiClient: ElevenLabsClient | null = null;
 
@@ -161,10 +193,12 @@ async function streamReplyViaSignedUrlSocket(
         }
       } catch { /* ignore */ }
       if (err) reject(err);
-      else resolve({
-        text: collectedText,
-        audio: audioChunks.length > 0 ? Buffer.concat(audioChunks) : Buffer.alloc(0),
-      });
+      else {
+        const rawPcm = audioChunks.length > 0 ? Buffer.concat(audioChunks) : Buffer.alloc(0);
+        // Wrap raw PCM in WAV so discord.js / ffmpeg can auto-detect the format
+        const audio = rawPcm.length > 0 ? pcm16MonoToWav(rawPcm) : Buffer.alloc(0);
+        resolve({ text: collectedText, audio });
+      }
     };
 
     timeout = setTimeout(() => {

@@ -23,11 +23,42 @@ import WebSocket from 'ws';
 
 import { errMsg } from '../../utils/errors';
 
+/**
+ * Wrap raw PCM 16-bit mono audio in a WAV header so ffmpeg / discord.js can
+ * detect the format when played via StreamType.Arbitrary.
+ * ElevenLabs ConvAI returns pcm_16000 (16 kHz, 16-bit, mono) by default.
+ */
+function pcm16MonoToWav(pcm: Buffer, sampleRate = 16000): Buffer {
+  const channels = 1;
+  const bitsPerSample = 16;
+  const blockAlign = channels * (bitsPerSample / 8);
+  const byteRate = sampleRate * blockAlign;
+  const dataSize = pcm.length;
+  const riffSize = 36 + dataSize;
+
+  const header = Buffer.alloc(44);
+  header.write('RIFF', 0);
+  header.writeUInt32LE(riffSize, 4);
+  header.write('WAVE', 8);
+  header.write('fmt ', 12);
+  header.writeUInt32LE(16, 16);       // PCM sub-chunk size
+  header.writeUInt16LE(1, 20);        // audio format = PCM
+  header.writeUInt16LE(channels, 22);
+  header.writeUInt32LE(sampleRate, 24);
+  header.writeUInt32LE(byteRate, 28);
+  header.writeUInt16LE(blockAlign, 30);
+  header.writeUInt16LE(bitsPerSample, 32);
+  header.write('data', 36);
+  header.writeUInt32LE(dataSize, 40);
+
+  return Buffer.concat([header, pcm]);
+}
+
 let convaiClient: import('elevenlabs').ElevenLabsClient | null = null;
 
 const ELEVENLABS_CONVAI_AGENT_ID = String(process.env.ELEVENLABS_CONVAI_AGENT_ID || '').trim();
 const SIGNED_URL_TIMEOUT_MS = parseInt(process.env.ELEVENLABS_CONVAI_TIMEOUT_MS || '12000', 10);
-const TURN_INACTIVITY_MS = Math.max(200, parseInt(process.env.CONVAI_TURN_INACTIVITY_MS || '800', 10));
+const TURN_INACTIVITY_MS = Math.max(150, parseInt(process.env.CONVAI_TURN_INACTIVITY_MS || '350', 10));
 
 async function getClient(): Promise<import('elevenlabs').ElevenLabsClient> {
   if (!convaiClient) {
@@ -117,10 +148,13 @@ export async function openConvaiCallSession(
       if (!currentTurnText && currentTurnAudio.length === 0) return;
       const text = currentTurnText;
       const audioChunkCount = currentTurnAudio.length;
-      const audio = currentTurnAudio.length > 0 ? Buffer.concat(currentTurnAudio) : Buffer.alloc(0);
+      const rawPcm = currentTurnAudio.length > 0 ? Buffer.concat(currentTurnAudio) : Buffer.alloc(0);
+      // Wrap raw PCM in a WAV header so discord.js / ffmpeg can auto-detect
+      // the format when playing via StreamType.Arbitrary.
+      const audio = rawPcm.length > 0 ? pcm16MonoToWav(rawPcm) : Buffer.alloc(0);
       currentTurnText = '';
       currentTurnAudio.length = 0;
-      console.log(`[convai-stream] turn finalized text_chars=${text.length} audio_chunks=${audioChunkCount} audio_bytes=${audio.length}`);
+      console.log(`[convai-stream] turn finalized text_chars=${text.length} audio_chunks=${audioChunkCount} audio_bytes=${audio.length} (wav-wrapped from ${rawPcm.length} pcm bytes)`);
       try {
         events.onAgentTurn?.(text, audio);
       } catch (err) {
