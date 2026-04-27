@@ -818,7 +818,9 @@ function listenToAllMembersConvaiStreaming(
   }
 
   // Open the Convai WS up front so audio chunks have a place to land.
-  void openConvaiCallSession({
+  // Extracted into a named function so we can reconnect on session drop.
+  function openSession(): void {
+    void openConvaiCallSession({
     onUserTranscript: (text, language) => {
       if (destroyed) return;
       // Convai doesn't tell us *which* member spoke. Best-effort: pick the
@@ -857,20 +859,29 @@ function listenToAllMembersConvaiStreaming(
       console.warn(`[convai-stream] error: ${err.message}`);
     },
     onClose: () => {
-      // Convai socket closed; if the call is still active, future audio
-      // chunks will be silently dropped. callSession will end the call
-      // soon enough on its own.
+      convaiSession = null;
+      if (!destroyed) {
+        console.warn('[convai-stream] session closed while call active — reconnecting in 1s');
+        setTimeout(() => { if (!destroyed) openSession(); }, 1000);
+      }
     },
   })
     .then((session) => {
       if (destroyed) { session.close(); return; }
       convaiSession = session;
+      console.log('[convai-stream] session opened successfully');
       // Attach member audio AFTER the WS is open so we don't drop chunks.
       for (const [, member] of voiceChannel.members) attachMemberAudio(member);
     })
     .catch((err) => {
-      console.error('[convai-stream] failed to open session, falling back is required:', errMsg(err));
+      console.error('[convai-stream] failed to open session:', errMsg(err));
+      if (!destroyed) {
+        console.warn('[convai-stream] retrying session open in 3s');
+        setTimeout(() => { if (!destroyed) openSession(); }, 3000);
+      }
     });
+  }
+  openSession();
 
   // Catch members joining mid-call.
   const onSpeaking = (userId: string) => {
