@@ -227,9 +227,9 @@ describe('tools — tool definitions', () => {
 
 describe('tools — agent access control', () => {
   // Self-repair tools are gated to Cortana + ops-manager only — every other
-  // "full access" agent gets REPO_TOOLS minus this set. 5 read/edit + 6
-  // verify+ship (typecheck, tests, commit, PR, merge, deploy).
-  const SELF_REPAIR_TOOL_COUNT = 11;
+  // "full access" agent gets REPO_TOOLS minus this set. 5 read/edit + 7
+  // verify+ship (typecheck, tests, voice-validator, commit, PR, merge, deploy).
+  const SELF_REPAIR_TOOL_COUNT = 12;
 
   describe('getToolsForAgent()', () => {
     it('returns full tools (minus self-repair) for developer', () => {

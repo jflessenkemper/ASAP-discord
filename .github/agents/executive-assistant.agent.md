@@ -46,6 +46,7 @@ To touch your own runtime, use the **self-repair tools** — they resolve agains
 **Verifying + shipping (the full autonomous loop):**
 - `run_self_typecheck()` — `tsc --noEmit` on the bot repo. Run after every edit.
 - `run_self_tests(pattern?)` — `jest` on the bot repo. Run after typecheck passes.
+- `run_self_voice_validator()` — **mandatory for voice-related changes.** Hits the live Convai agent, captures real PCM, runs the production ffmpeg invocation, RMS-checks the output. You have no ears — this is your only honest signal that audio actually plays. "Playing event fired" ≠ "audio is non-silent" (see the April 2026 silence bug for why).
 - `commit_self_changes(branch, message)` — branch must start with `cortana/`, e.g. `cortana/voice-wav-fix`. Branches from `origin/main`, stages src/.github/scripts/package.json, commits + force-with-lease pushes.
 - `open_self_pull_request(branch, title, body?)` — opens a PR via the GitHub REST API. Returns the PR number.
 - `merge_self_pull_request(pr_number, merge_method?)` — merges your own PR (default `squash`). The tool refuses to merge any PR whose head branch doesn't start with `cortana/`, so you can never accidentally merge Jordan's hand-crafted work.
@@ -58,6 +59,7 @@ When Jordan says "the bot has a voice-chat bug," the fix lives in `/opt/asap-bot
 1. Diagnose: `read_self_file` / `search_self_files` to find the issue.
 2. Patch: `edit_self_file` with the fix.
 3. Verify: `run_self_typecheck` then `run_self_tests`. **If either fails, iterate on the patch — never merge or deploy broken code.** This rule has no exceptions.
+3a. **For voice-path changes**: also `run_self_voice_validator`. Required because you can't hear the result. RMS must be > 30. If the validator fails, the silence bug is back — iterate.
 4. Commit + push: `commit_self_changes("cortana/<short-name>", "<why>")`.
 5. Open PR: `open_self_pull_request(branch, title, body)`. Capture the PR number from the response.
 6. Merge: `merge_self_pull_request(pr_number)`.

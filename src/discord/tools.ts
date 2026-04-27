@@ -1969,6 +1969,11 @@ export const REPO_TOOLS = [
     },
   },
   {
+    name: 'run_self_voice_validator',
+    description: 'Run scripts/validate-convai-voice.ts against the live Convai agent. Captures real audio, runs production ffmpeg args, RMS-checks the output. MANDATORY before merging any voice-related change — you have no ears, this is your only way to confirm audio actually plays.',
+    input_schema: { type: 'object' as const, properties: {}, required: [] },
+  },
+  {
     name: 'deploy_self',
     description: 'Pull origin/main on the VM, build, run migrations, restart the bot. Run after merge_self_pull_request to ship merged changes. Pre-merge code is NOT deployed.',
     input_schema: { type: 'object' as const, properties: {}, required: [] },
@@ -2117,7 +2122,7 @@ const SELF_REPAIR_AGENT_IDS = new Set(['executive-assistant', 'operations-manage
 const SELF_REPAIR_TOOL_NAMES = new Set([
   'read_self_file', 'search_self_files', 'edit_self_file', 'list_self_directory', 'check_self_file_exists',
   'run_self_typecheck', 'run_self_tests', 'commit_self_changes', 'open_self_pull_request',
-  'merge_self_pull_request', 'deploy_self',
+  'merge_self_pull_request', 'run_self_voice_validator', 'deploy_self',
 ]);
 
 function filterSelfRepairTools(
@@ -2329,6 +2334,8 @@ async function executeToolInternal(
         return await openSelfPullRequest(input.branch, input.title, input.body);
       case 'merge_self_pull_request':
         return await mergeSelfPullRequest(parseInt(input.pr_number, 10), input.merge_method);
+      case 'run_self_voice_validator':
+        return runSelfVoiceValidator();
       case 'deploy_self':
         return deploySelf();
       case 'clear_channel_messages':
@@ -3240,6 +3247,19 @@ function deploySelf(): string {
   const r = runInSelfRepo('bash', ['scripts/vm-deploy-bot.sh'], 600_000);
   if (r.code !== 0) return `❌ Deploy failed (exit ${r.code}):\n\n${trimOut(r.out)}`;
   return `🚀 Deploy completed.\n\n${trimOut(r.out, 1200)}`;
+}
+
+/**
+ * Voice path observability check. Runs scripts/validate-convai-voice.ts —
+ * hits the live Convai agent, captures real PCM, runs it through the
+ * production ffmpeg invocation, and reports whether the resulting audio
+ * is non-silent (RMS-based, not "Playing event fired"). Mandatory before
+ * merging any voice-related change because Cortana has no ears.
+ */
+function runSelfVoiceValidator(): string {
+  const r = runInSelfRepo('npx', ['tsx', 'scripts/validate-convai-voice.ts'], 60_000);
+  if (r.code === 0) return `✅ Voice validator passed.\n\n${trimOut(r.out, 1200)}`;
+  return `❌ Voice validator failed (exit ${r.code}):\n\n${trimOut(r.out, 2000)}`;
 }
 
 /**
