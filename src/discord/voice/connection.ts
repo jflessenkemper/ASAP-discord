@@ -754,6 +754,7 @@ function listenToAllMembersConvaiStreaming(
 ): SmartListenerHandle {
   let destroyed = false;
   let convaiSession: ConvaiCallSession | null = null;
+  let convaiReady = false;
   const subscriberCleanups: Array<() => void> = [];
   const listening = new Set<string>();
   const memberById = new Map<string, GuildMember>();
@@ -857,19 +858,50 @@ function listenToAllMembersConvaiStreaming(
       console.warn(`[convai-stream] error: ${err.message}`);
     },
     onClose: () => {
-      // Convai socket closed; if the call is still active, future audio
-      // chunks will be silently dropped. callSession will end the call
-      // soon enough on its own.
+      // Convai socket closed — mark as not ready so the per-turn path
+      // re-activates for any future transcriptions. Without this, if
+      // Convai drops mid-call the user hears silence forever.
+      convaiReady = false;
+      console.warn('[convai-stream] session closed — per-turn fallback path now active');
     },
   })
     .then((session) => {
       if (destroyed) { session.close(); return; }
       convaiSession = session;
+      convaiReady = true;
+      console.log('[convai-stream] session opened successfully — streaming active');
       // Attach member audio AFTER the WS is open so we don't drop chunks.
       for (const [, member] of voiceChannel.members) attachMemberAudio(member);
     })
     .catch((err) => {
-      console.error('[convai-stream] failed to open session, falling back is required:', errMsg(err));
+      console.error('[convai-stream] failed to open session:', errMsg(err));
+      console.warn('[convai-stream] Convai unavailable — starting fallback STT so speech still gets transcribed');
+      // convaiReady stays false — handle won't expose onAgentTurn etc.,
+      // so callSession.handleVoiceInput will fall through to the
+      // per-turn Claude + TTS path instead of early-returning.
+      //
+      // But we still need STT to transcribe the user's speech — start
+      // the ElevenLabs realtime or batch listener as a fallback.
+      if (!destroyed) {
+        try {
+          if (VOICE_REALTIME_MODE && isElevenLabsRealtimeAvailable()) {
+            console.log('[convai-stream] fallback: starting ElevenLabs realtime STT');
+            for (const [, member] of voiceChannel.members) {
+              if (!isTranscribableMember(member)) continue;
+              if (listening.has(member.id)) continue;
+              listening.add(member.id);
+              const unsub = listenToUserElevenLabsRealtime(connection, member, onTranscription, onSpeechStart);
+              subscriberCleanups.push(unsub);
+            }
+          } else {
+            console.log('[convai-stream] fallback: starting batch STT');
+            const batchUnsub = listenToAllMembers(connection, voiceChannel, onTranscription, onSpeechStart);
+            subscriberCleanups.push(batchUnsub);
+          }
+        } catch (fallbackErr) {
+          console.error('[convai-stream] fallback STT also failed:', errMsg(fallbackErr));
+        }
+      }
     });
 
   // Catch members joining mid-call.
@@ -891,11 +923,16 @@ function listenToAllMembersConvaiStreaming(
       convaiSession = null;
     },
     preInitMember: (member: GuildMember) => attachMemberAudio(member),
-    onAgentTurn: (cb) => { agentTurnCb = cb; },
-    onAgentAudioChunk: (cb) => { agentAudioChunkCb = cb; },
-    onAgentText: (cb) => { agentTextCb = cb; },
-    onAgentTurnEnd: (cb) => { agentTurnEndCb = cb; },
-    onUserInterruption: (cb) => { userInterruptionCb = cb; },
+    // These getters ensure callSession only sees Convai callbacks when
+    // the session actually opened. If openConvaiCallSession failed,
+    // convaiReady stays false and these remain undefined, so
+    // handleVoiceInput won't early-return — it'll fall through to the
+    // per-turn Claude + TTS path.
+    get onAgentTurn() { return convaiReady ? ((cb: (text: string, audio: Buffer, language?: string) => void) => { agentTurnCb = cb; }) : undefined; },
+    get onAgentAudioChunk() { return convaiReady ? ((cb: (pcm: Buffer) => void) => { agentAudioChunkCb = cb; }) : undefined; },
+    get onAgentText() { return convaiReady ? ((cb: (text: string) => void) => { agentTextCb = cb; }) : undefined; },
+    get onAgentTurnEnd() { return convaiReady ? ((cb: () => void) => { agentTurnEndCb = cb; }) : undefined; },
+    get onUserInterruption() { return convaiReady ? ((cb: () => void) => { userInterruptionCb = cb; }) : undefined; },
   };
 }
 
