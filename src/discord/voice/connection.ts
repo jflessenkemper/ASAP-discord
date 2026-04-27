@@ -204,9 +204,9 @@ const MAX_AUDIO_BUFFER = 5 * 1024 * 1024;
 const VOICE_MIN_AUDIO_BYTES = parseInt(process.env.VOICE_MIN_AUDIO_BYTES || '48000', 10);
 const VOICE_SHORT_BUFFER_COALESCE_WINDOW_MS = Math.max(500, parseInt(process.env.VOICE_SHORT_BUFFER_COALESCE_WINDOW_MS || '2500', 10));
 const MAX_REALTIME_SESSION_RETRIES = parseInt(process.env.MAX_ELEVENLABS_REALTIME_SESSION_RETRIES || process.env.MAX_DEEPGRAM_SESSION_RETRIES || '3', 10);
-const VOICE_ENDPOINT_SILENCE_BASE_MS = parseInt(process.env.VOICE_ENDPOINT_SILENCE_BASE_MS || '600', 10);
-const VOICE_ENDPOINT_SILENCE_MIN_MS = parseInt(process.env.VOICE_ENDPOINT_SILENCE_MIN_MS || '650', 10);
-const VOICE_ENDPOINT_SILENCE_MAX_MS = parseInt(process.env.VOICE_ENDPOINT_SILENCE_MAX_MS || '1400', 10);
+const VOICE_ENDPOINT_SILENCE_BASE_MS = parseInt(process.env.VOICE_ENDPOINT_SILENCE_BASE_MS || '400', 10);
+const VOICE_ENDPOINT_SILENCE_MIN_MS = parseInt(process.env.VOICE_ENDPOINT_SILENCE_MIN_MS || '350', 10);
+const VOICE_ENDPOINT_SILENCE_MAX_MS = parseInt(process.env.VOICE_ENDPOINT_SILENCE_MAX_MS || '1000', 10);
 const VOICE_ENDPOINT_STATE_TTL_MS = Math.max(300_000, parseInt(process.env.VOICE_ENDPOINT_STATE_TTL_MS || '1800000', 10));
 const VOICE_ENDPOINT_CLEANUP_INTERVAL_MS = Math.max(60_000, parseInt(process.env.VOICE_ENDPOINT_CLEANUP_INTERVAL_MS || '120000', 10));
 
@@ -770,51 +770,41 @@ function listenToAllMembersConvaiStreaming(
     listening.add(member.id);
     memberById.set(member.id, member);
 
-    const subscribe = () => {
-      if (destroyed) return;
-      const subscription = connection.receiver.subscribe(member.id, {
-        end: { behavior: EndBehaviorType.AfterInactivity, duration: getAdaptiveSilenceDuration(member.id) },
-      });
-      let decoder: Transform;
-      try {
-        decoder = createOpusDecoder();
-      } catch (err) {
-        console.error(`Convai opus decoder error for ${member.displayName}:`, errMsg(err));
-        return;
+    // ConvAI streaming path: use Manual end behavior so the subscription
+    // stays open for the entire call. ConvAI handles VAD server-side —
+    // we just pipe a continuous audio stream. This eliminates the 600ms+
+    // silence gap + 120-250ms re-subscribe delay that the batch STT path
+    // needs, cutting round-trip latency by ~800ms.
+    const subscription = connection.receiver.subscribe(member.id, {
+      end: { behavior: EndBehaviorType.Manual },
+    });
+    let decoder: Transform;
+    try {
+      decoder = createOpusDecoder();
+    } catch (err) {
+      console.error(`Convai opus decoder error for ${member.displayName}:`, errMsg(err));
+      return;
+    }
+    subscription.pipe(decoder);
+    decoder.on('data', (chunk: Buffer) => {
+      // Throttle onSpeechStart callbacks so callers (typing indicators)
+      // don't get spammed. 250ms gate is enough for UI responsiveness.
+      if (Date.now() - lastSpeechStartAt > 250) {
+        lastSpeechStartAt = Date.now();
+        onSpeechStart?.(member);
       }
-      subscription.pipe(decoder);
-      let speechNotified = false;
-      decoder.on('data', (chunk: Buffer) => {
-        if (!speechNotified) {
-          speechNotified = true;
-          // Throttle onSpeechStart callbacks across members so callers
-          // (typing indicators etc.) don't get spammed by every chunk.
-          if (Date.now() - lastSpeechStartAt > 250) {
-            lastSpeechStartAt = Date.now();
-            onSpeechStart?.(member);
-          }
-        }
-        if (!destroyed && convaiSession?.isOpen) {
-          convaiSession.sendUserAudio(chunk);
-        }
-      });
-      decoder.on('end', () => {
-        if (!destroyed) setTimeout(() => { if (!destroyed) subscribe(); }, 120);
-      });
-      decoder.on('error', (err: Error) => {
-        console.warn(`Convai decoder error for ${member.displayName}:`, err.message);
-        if (!destroyed) setTimeout(() => { if (!destroyed) subscribe(); }, 250);
-      });
-      subscription.on('end', () => decoder.end());
-      subscription.on('error', () => decoder.end());
+      if (!destroyed && convaiSession?.isOpen) {
+        convaiSession.sendUserAudio(chunk);
+      }
+    });
+    decoder.on('error', (err: Error) => {
+      console.warn(`Convai decoder error for ${member.displayName}:`, err.message);
+    });
 
-      subscriberCleanups.push(() => {
-        try { subscription.destroy(); } catch { /* ignore */ }
-        try { decoder.destroy(); } catch { /* ignore */ }
-      });
-    };
-
-    subscribe();
+    subscriberCleanups.push(() => {
+      try { subscription.destroy(); } catch { /* ignore */ }
+      try { decoder.destroy(); } catch { /* ignore */ }
+    });
   }
 
   // Open the Convai WS up front so audio chunks have a place to land.

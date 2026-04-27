@@ -453,12 +453,18 @@ export function streamRawPcmToTesterVC(
   player.on(AudioPlayerStatus.Playing, onPlaying);
   player.on("error", onError);
 
+  const cleanupListeners = () => {
+    player.off(AudioPlayerStatus.Playing, onPlaying);
+    player.off("error", onError);
+  };
+
   if (options.signal) {
     options.signal.addEventListener(
       "abort",
       () => {
         if (!ended) {
           ended = true;
+          cleanupListeners();
           input.end();
           try { proc.kill("SIGTERM"); } catch { /* ignore */ }
           stopTesterVCPlayback();
@@ -478,11 +484,13 @@ export function streamRawPcmToTesterVC(
     end() {
       if (ended) return;
       ended = true;
+      cleanupListeners();
       input.end();
     },
     abort() {
       if (ended) return;
       ended = true;
+      cleanupListeners();
       try { input.end(); } catch { /* ignore */ }
       try { proc.kill("SIGTERM"); } catch { /* ignore */ }
       stopTesterVCPlayback();
