@@ -2652,19 +2652,30 @@ async function handleCortanaMessage(
       turn.setPhase('executive-assistant', 'working', `still working · ${seconds}s`);
     }, Math.max(5_000, CORTANA_PROGRESS_PING_MS));
 
-    noResponseTimer = setTimeout(() => {
-      if (hasVisibleCortanaResponse || signal?.aborted) return;
-      const goal = goalState.goal || 'none';
-      void emitCortanaStallAlert(workspaceChannel, groupchat, goal, CORTANA_NO_RESPONSE_TIMEOUT_MS)
-        .then((posted) => {
-          if (!posted) return;
-          void postAgentErrorLog('cortana:timeout', 'No Cortana response within timeout', {
-            agentId: 'executive-assistant',
-            detail: `goal=${goal} timeoutMs=${CORTANA_NO_RESPONSE_TIMEOUT_MS}`,
-            level: 'warn',
+    // The watchdog used to fire whenever no VISIBLE message had landed in
+    // CORTANA_NO_RESPONSE_TIMEOUT_MS — but legitimate long work (multi-tool
+    // investigations, big test runs) is silent for minutes and was getting
+    // false-flagged as stalled. Now it watches *active progress*: any tool
+    // call (start or complete) resets the timer. Real stalls — agent crashed,
+    // no LLM response, no tool activity — still fire after the full window.
+    const armWatchdog = (): void => {
+      if (noResponseTimer) clearTimeout(noResponseTimer);
+      noResponseTimer = setTimeout(() => {
+        if (hasVisibleCortanaResponse || signal?.aborted) return;
+        const goal = goalState.goal || 'none';
+        void emitCortanaStallAlert(workspaceChannel, groupchat, goal, CORTANA_NO_RESPONSE_TIMEOUT_MS)
+          .then((posted) => {
+            if (!posted) return;
+            void postAgentErrorLog('cortana:timeout', 'No Cortana response within timeout', {
+              agentId: 'executive-assistant',
+              detail: `goal=${goal} timeoutMs=${CORTANA_NO_RESPONSE_TIMEOUT_MS}`,
+              level: 'warn',
+            });
           });
-        });
-    }, CORTANA_NO_RESPONSE_TIMEOUT_MS);
+      }, CORTANA_NO_RESPONSE_TIMEOUT_MS);
+    };
+    const kickWatchdog = (): void => { armWatchdog(); };
+    armWatchdog();
 
     const cortanaMemory = getMemoryContext('executive-assistant');
     const contextMessage = `[${senderName}]: ${userMessage}`;
@@ -2695,6 +2706,7 @@ async function handleCortanaMessage(
     let editToolUsedThisTurn = false;
     const response = await agentRespond(cortana, [...cortanaMemory, ...groupHistory], contextMessageWithLang, async (toolName, summary) => {
       if (isEditToolName(toolName)) editToolUsedThisTurn = true;
+      kickWatchdog();
       turn.addTool('executive-assistant', toolName, summary, 'done', cortana);
       updateToolChain(cortanaWorkChannel, cortana, toolName, summary, 'done');
     }, {
@@ -2704,6 +2716,7 @@ async function handleCortanaMessage(
       threadKey: `groupchat:${workspaceChannel.id}`,
       imageBlocks: options?.imageBlocks,
       onToolStart: async (toolName, summary) => {
+        kickWatchdog();
         turn.addTool('executive-assistant', toolName, summary, 'start', cortana);
         updateToolChain(cortanaWorkChannel, cortana, toolName, summary, 'start');
       },
