@@ -18,6 +18,7 @@ import { isElevenLabsRealtimeAvailable } from '../voice/elevenlabsRealtime';
 import {
   joinTesterVoiceChannel, leaveTesterVoiceChannel, speakAsTesterInVoice,
   getTesterVoiceConnection, stopTesterVCPlayback, speakInTesterVC, speakInTesterVCWithOptions,
+  streamRawPcmToTesterVC, type PcmStreamHandle,
   setTesterNickname, restoreTesterNickname, setTesterAvatar, restoreTesterAvatar,
 } from '../voice/testerClient';
 import { textToSpeech } from '../voice/tts';
@@ -781,8 +782,71 @@ export async function startCall(
   // legacy `handleVoiceInput → getElevenLabsConvaiReplyWithAudio` route is
   // skipped automatically because handleVoiceInput will see no need to
   // call the per-turn function (the agent already replied).
-  if (listenerHandle.onAgentTurn) {
-    listenerHandle.onAgentTurn(async (text, audio /* , _language */) => {
+  // Streaming Convai → Discord audio path. Each PCM chunk from Convai is
+  // piped immediately through ffmpeg (with explicit `-f s16le -ar 16000
+  // -ac 1` input args, no WAV auto-detect) and on to the Discord audio
+  // player. Eliminates the per-turn buffer wait + the WAV-header silence
+  // bug. onAgentText logs the final text once; onAgentTurnEnd closes
+  // the ffmpeg pipe so the next turn opens a fresh one.
+  if (listenerHandle.onAgentAudioChunk && listenerHandle.onAgentText && listenerHandle.onAgentTurnEnd) {
+    let pcmStream: PcmStreamHandle | null = null;
+    let turnFirstChunkAt = 0;
+
+    listenerHandle.onAgentAudioChunk((chunk) => {
+      if (!activeSession?.active) return;
+      try {
+        if (!pcmStream) {
+          turnFirstChunkAt = Date.now();
+          pcmStream = streamRawPcmToTesterVC({ sampleRate: 16000, channels: 1 });
+          pcmStream.playbackStarted
+            .then(() => {
+              void postVoiceStageLog('cortana_convai_play', `first_chunk_to_play_ms=${Date.now() - turnFirstChunkAt}`);
+            })
+            .catch((err) => {
+              void postVoiceStageLog('cortana_convai_play_failed', `error=${err instanceof Error ? err.message : 'Unknown'}`, 'warn');
+              pcmStream = null;
+            });
+        }
+        pcmStream.write(chunk);
+      } catch (err) {
+        if (!isAbortLikeError(err)) {
+          console.warn('[convai-stream] write chunk failed:', errMsg(err));
+        }
+      }
+    });
+
+    listenerHandle.onAgentText((text) => {
+      if (!activeSession?.active) return;
+      const cortana = getAgent('executive-assistant' as AgentId);
+      const session = activeSession;
+      const trimmed = (text || '').trim();
+      if (!cortana || !trimmed) return;
+      session.conversationHistory.push({ role: 'assistant', content: `[Cortana]: ${trimmed}` });
+      if (!VOICE_DISABLE_CALL_LOG) {
+        void session.callLog.send(`${cortana.emoji} **${cortana.name}**: ${trimmed.slice(0, 1900)}`).catch(() => {});
+        session.transcript.push(`[${new Date().toLocaleTimeString()}] Cortana (Convai): ${trimmed}`);
+      }
+    });
+
+    listenerHandle.onAgentTurnEnd(() => {
+      if (pcmStream) {
+        try { pcmStream.end(); } catch { /* ignore */ }
+        pcmStream = null;
+      }
+    });
+
+    if (listenerHandle.onUserInterruption) {
+      listenerHandle.onUserInterruption(() => {
+        if (pcmStream) {
+          try { pcmStream.abort(); } catch { /* ignore */ }
+          pcmStream = null;
+        }
+      });
+    }
+  } else if (listenerHandle.onAgentTurn) {
+    // Legacy buffered fallback (only used if streaming callbacks aren't
+    // available — kept for forward-compat with future listener variants).
+    listenerHandle.onAgentTurn(async (text, audio) => {
       if (!activeSession?.active) return;
       const cortana = getAgent('executive-assistant' as AgentId);
       const session = activeSession;
@@ -795,38 +859,17 @@ export async function startCall(
             session.transcript.push(`[${new Date().toLocaleTimeString()}] Cortana (Convai): ${trimmed}`);
           }
         }
-
         if (audio.length > 0) {
           await speakInTesterVCWithOptions(audio, {
-            onPlaybackStart: () => {
-              void postVoiceStageLog('cortana_convai_play', `bytes=${audio.length}`);
-            },
+            onPlaybackStart: () => { void postVoiceStageLog('cortana_convai_play', `bytes=${audio.length}`); },
           });
-          return;
-        }
-
-        // Convai delivered text but no audio (agent voice not configured?
-        // audio output disabled in agent settings? unrecognised event
-        // shape?). Fall back to local ElevenLabs TTS so the caller still
-        // hears the reply rather than dead air.
-        if (cortana && trimmed) {
-          void postVoiceStageLog('cortana_convai_audio_missing', `chars=${trimmed.length}; falling back to local TTS`, 'warn');
-          await speakPipelined(
-            trimmed,
-            session.cortanaVoiceName,
-            undefined,
-            undefined,
-            () => { void postVoiceStageLog('cortana_tts', `reason=convai_no_audio`); },
-          );
+        } else if (cortana && trimmed) {
+          await speakPipelined(trimmed, session.cortanaVoiceName, undefined, undefined,
+            () => { void postVoiceStageLog('cortana_tts', `reason=convai_no_audio`); });
         }
       } catch (err) {
         if (!isAbortLikeError(err)) {
-          console.warn('[convai-stream] playback failed:', errMsg(err));
-          void postVoiceStageLog(
-            'cortana_convai_play_failed',
-            `error=${err instanceof Error ? err.message : 'Unknown'}`,
-            'warn',
-          );
+          void postVoiceStageLog('cortana_convai_play_failed', `error=${err instanceof Error ? err.message : 'Unknown'}`, 'warn');
         }
       }
     });

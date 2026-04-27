@@ -93,9 +93,23 @@ export interface ConvaiCallEvents {
   /**
    * One full agent turn — text + concatenated audio bytes ready to feed
    * Discord's audio player. Fired when an inactivity gap or new turn
-   * boundary signals the agent has finished speaking.
+   * boundary signals the agent has finished speaking. Use this if you
+   * want a single buffer per turn (legacy WAV-wrap path).
    */
   onAgentTurn?: (text: string, audio: Buffer) => void;
+  /**
+   * NEW: streaming audio frames as they arrive from Convai. Fires once
+   * per audio_event with raw 16-bit signed-LE PCM at 16 kHz mono.
+   * Lower latency than buffering per turn, lets the consumer pipe
+   * directly into ffmpeg.
+   */
+  onAgentAudioChunk?: (pcmChunk: Buffer) => void;
+  /** Fired when the agent text reply is final (no more text expected this turn). */
+  onAgentText?: (text: string) => void;
+  /** Fired when a turn ends (inactivity gap or interruption). */
+  onAgentTurnEnd?: () => void;
+  /** Fired on user interruption/barge-in events from Convai. */
+  onUserInterruption?: () => void;
   onError?: (err: Error) => void;
   onClose?: () => void;
 }
@@ -159,6 +173,11 @@ export async function openConvaiCallSession(
         events.onAgentTurn?.(text, audio);
       } catch (err) {
         console.warn('[convai-stream] onAgentTurn handler threw:', errMsg(err));
+      }
+      try {
+        events.onAgentTurnEnd?.();
+      } catch (err) {
+        console.warn('[convai-stream] onAgentTurnEnd handler threw:', errMsg(err));
       }
     };
 
@@ -260,8 +279,10 @@ export async function openConvaiCallSession(
         return;
       }
 
-      // Agent text reply — typically arrives once before the audio chunks.
-      if (eventType.includes('agent_response') && !eventType.includes('audio')) {
+      // Agent text reply (final). Convai also sends `agent_chat_response_part`
+      // events with chunks of streamed text — we don't bother re-assembling
+      // those, the final agent_response event has the complete reply.
+      if (eventType.includes('agent_response') && !eventType.includes('audio') && !eventType.includes('part')) {
         const replyText = String(
           parsed.agent_response_event?.agent_response
           || parsed.agent_response_correction_event?.corrected_agent_response
@@ -269,6 +290,10 @@ export async function openConvaiCallSession(
           || ''
         ).trim();
         if (replyText && !currentTurnText) currentTurnText = replyText;
+        if (replyText) {
+          try { events.onAgentText?.(replyText); }
+          catch (err) { console.warn('[convai-stream] onAgentText threw:', errMsg(err)); }
+        }
         scheduleTurnFinalize();
         return;
       }
@@ -281,13 +306,18 @@ export async function openConvaiCallSession(
         || '';
       if (typeof audioB64 === 'string' && audioB64.length > 0) {
         try {
-          currentTurnAudio.push(Buffer.from(audioB64, 'base64'));
+          const chunk = Buffer.from(audioB64, 'base64');
+          currentTurnAudio.push(chunk);
+          // Emit immediately for streaming consumers (low latency path).
+          try { events.onAgentAudioChunk?.(chunk); }
+          catch (err) { console.warn('[convai-stream] onAgentAudioChunk threw:', errMsg(err)); }
           scheduleTurnFinalize();
         } catch { /* ignore bad b64 */ }
         return;
       }
 
-      // User interrupted — drop whatever agent turn we were buffering.
+      // User interrupted — drop whatever agent turn we were buffering and
+      // notify the streaming consumer so it can stop ffmpeg playback.
       if (eventType.includes('interruption')) {
         currentTurnText = '';
         currentTurnAudio.length = 0;
@@ -295,6 +325,8 @@ export async function openConvaiCallSession(
           clearTimeout(turnInactivityTimer);
           turnInactivityTimer = null;
         }
+        try { events.onUserInterruption?.(); }
+        catch (err) { console.warn('[convai-stream] onUserInterruption threw:', errMsg(err)); }
       }
     });
 

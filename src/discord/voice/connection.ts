@@ -698,6 +698,14 @@ export interface SmartListenerHandle {
    * play the audio directly without re-running TTS.
    */
   onAgentTurn?: (cb: (text: string, audio: Buffer, language?: string) => void) => void;
+  /** Live PCM chunk (16 kHz mono s16le) — fires per audio_event from Convai. */
+  onAgentAudioChunk?: (cb: (pcmChunk: Buffer) => void) => void;
+  /** Final agent text once Convai finishes generating it (per turn). */
+  onAgentText?: (cb: (text: string) => void) => void;
+  /** Fires when the agent's current turn ends (inactivity gap). */
+  onAgentTurnEnd?: (cb: () => void) => void;
+  /** Convai detected the user interrupted the agent. */
+  onUserInterruption?: (cb: () => void) => void;
 }
 
 export function listenToAllMembersSmart(
@@ -750,6 +758,10 @@ function listenToAllMembersConvaiStreaming(
   const listening = new Set<string>();
   const memberById = new Map<string, GuildMember>();
   let agentTurnCb: ((text: string, audio: Buffer, language?: string) => void) | null = null;
+  let agentAudioChunkCb: ((pcm: Buffer) => void) | null = null;
+  let agentTextCb: ((text: string) => void) | null = null;
+  let agentTurnEndCb: (() => void) | null = null;
+  let userInterruptionCb: (() => void) | null = null;
   let lastSpeechStartAt = 0;
 
   function attachMemberAudio(member: GuildMember): void {
@@ -825,6 +837,22 @@ function listenToAllMembersConvaiStreaming(
       if (destroyed) return;
       try { agentTurnCb?.(text, audio); } catch (err) { console.warn('[convai-stream] agentTurn cb threw:', errMsg(err)); }
     },
+    onAgentAudioChunk: (chunk) => {
+      if (destroyed) return;
+      try { agentAudioChunkCb?.(chunk); } catch (err) { console.warn('[convai-stream] agentAudioChunk cb threw:', errMsg(err)); }
+    },
+    onAgentText: (text) => {
+      if (destroyed) return;
+      try { agentTextCb?.(text); } catch (err) { console.warn('[convai-stream] agentText cb threw:', errMsg(err)); }
+    },
+    onAgentTurnEnd: () => {
+      if (destroyed) return;
+      try { agentTurnEndCb?.(); } catch (err) { console.warn('[convai-stream] agentTurnEnd cb threw:', errMsg(err)); }
+    },
+    onUserInterruption: () => {
+      if (destroyed) return;
+      try { userInterruptionCb?.(); } catch (err) { console.warn('[convai-stream] userInterruption cb threw:', errMsg(err)); }
+    },
     onError: (err) => {
       console.warn(`[convai-stream] error: ${err.message}`);
     },
@@ -864,6 +892,10 @@ function listenToAllMembersConvaiStreaming(
     },
     preInitMember: (member: GuildMember) => attachMemberAudio(member),
     onAgentTurn: (cb) => { agentTurnCb = cb; },
+    onAgentAudioChunk: (cb) => { agentAudioChunkCb = cb; },
+    onAgentText: (cb) => { agentTextCb = cb; },
+    onAgentTurnEnd: (cb) => { agentTurnEndCb = cb; },
+    onUserInterruption: (cb) => { userInterruptionCb = cb; },
   };
 }
 

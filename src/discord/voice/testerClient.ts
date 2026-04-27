@@ -1,4 +1,4 @@
-import { Readable } from 'stream';
+import { PassThrough, Readable } from 'stream';
 
 import {
   entersState,
@@ -12,6 +12,7 @@ import {
   StreamType,
 } from '@discordjs/voice';
 import { Client, GatewayIntentBits, Guild, VoiceBasedChannel } from 'discord.js';
+import prism from 'prism-media';
 
 import { textToSpeech } from './tts';
 import { errMsg } from '../../utils/errors';
@@ -342,4 +343,126 @@ export async function restoreTesterAvatar(): Promise<void> {
   } catch (err) {
     console.warn(`Failed to restore tester avatar: ${errMsg(err)}`);
   }
+}
+
+
+/**
+ * Streaming PCM player for the Convai voice path.
+ *
+ * Convai sends raw 16-bit signed-LE PCM at 16 kHz mono in many small chunks
+ * across one agent turn. The previous WAV-wrap-then-play approach worked in
+ * theory but ffmpeg auto-detection via StreamType.Arbitrary was reading the
+ * header inconsistently — playback "started" (so onPlaybackStart fired) but
+ * silence came out the other end.
+ *
+ * This player skips auto-detect entirely:
+ *   1. Caller opens a stream, gets `write(chunk)` and `end()`.
+ *   2. Each PCM chunk is piped to ffmpeg with explicit `-f s16le -ar 16000
+ *      -ac 1` input args, transcoded to 48 kHz stereo s16le, fed to the
+ *      Discord audio player as StreamType.Raw.
+ *   3. Audio plays as soon as the first chunk lands — no per-turn buffering,
+ *      so the round-trip latency drops by however long the inactivity timer
+ *      was (now 0).
+ *
+ * Returns a handle the caller can write chunks to and end when the agent
+ * turn finishes (or aborts on barge-in).
+ */
+export interface PcmStreamHandle {
+  write(chunk: Buffer): void;
+  end(): void;
+  abort(): void;
+  readonly playbackStarted: Promise<void>;
+}
+
+export function streamRawPcmToTesterVC(
+  options: { sampleRate?: number; channels?: number; signal?: AbortSignal } = {},
+): PcmStreamHandle {
+  if (!testerVoiceConnection || !testerAudioPlayer) {
+    throw new Error("ASAPTester is not connected to voice (cannot stream PCM).");
+  }
+  const sampleRate = options.sampleRate || 16000;
+  const channels = options.channels || 1;
+
+  const input = new PassThrough();
+  const ffmpeg = new prism.FFmpeg({
+    args: [
+      "-analyzeduration", "0",
+      "-loglevel", "error",
+      "-f", "s16le",
+      "-ar", String(sampleRate),
+      "-ac", String(channels),
+      "-i", "pipe:0",
+      "-f", "s16le",
+      "-ar", "48000",
+      "-ac", "2",
+      "pipe:1",
+    ],
+  });
+
+  input.pipe(ffmpeg);
+
+  const resource = createAudioResource(ffmpeg as unknown as Readable, {
+    inputType: StreamType.Raw,
+  });
+
+  let playingResolve: () => void = () => {};
+  let playingReject: (err: Error) => void = () => {};
+  const playbackStarted = new Promise<void>((res, rej) => {
+    playingResolve = res;
+    playingReject = rej;
+  });
+
+  const player = testerAudioPlayer;
+  if (!player) throw new Error("Tester audio player not available");
+
+  let started = false;
+  let ended = false;
+  const onPlaying = () => {
+    if (started) return;
+    started = true;
+    playingResolve();
+  };
+  const onError = (err: Error) => {
+    console.warn("[pcm-stream] player error:", errMsg(err));
+    playingReject(err);
+  };
+  player.on(AudioPlayerStatus.Playing, onPlaying);
+  player.on("error", onError);
+
+  if (options.signal) {
+    options.signal.addEventListener(
+      "abort",
+      () => {
+        if (!ended) {
+          ended = true;
+          input.end();
+          try { ffmpeg.destroy(); } catch { /* ignore */ }
+          stopTesterVCPlayback();
+        }
+      },
+      { once: true },
+    );
+  }
+
+  player.play(resource);
+
+  return {
+    write(chunk: Buffer) {
+      if (ended) return;
+      input.write(chunk);
+    },
+    end() {
+      if (ended) return;
+      ended = true;
+      input.end();
+    },
+    abort() {
+      if (ended) return;
+      ended = true;
+      try { input.end(); } catch { /* ignore */ }
+      try { ffmpeg.destroy(); } catch { /* ignore */ }
+      stopTesterVCPlayback();
+    },
+    playbackStarted,
+  };
 }
