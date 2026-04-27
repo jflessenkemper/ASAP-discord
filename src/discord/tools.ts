@@ -1916,6 +1916,52 @@ export const REPO_TOOLS = [
     },
   },
   {
+    name: 'run_self_typecheck',
+    description: 'Run `tsc --noEmit` on the BOT repo (asap-bot). Use after edit_self_file to confirm types still check before opening a PR.',
+    input_schema: { type: 'object' as const, properties: {}, required: [] },
+  },
+  {
+    name: 'run_self_tests',
+    description: 'Run `jest` on the BOT repo (asap-bot). Use after edit_self_file to verify the change. Optional pattern narrows test paths.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        pattern: { type: 'string', description: 'Optional --testPathPatterns string (e.g. "voice|callSession").' },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'commit_self_changes',
+    description: 'Stage + commit + push your edit_self_file changes to a feature branch on the BOT repo. Branch must start with "cortana/". Run typecheck + tests first.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        branch: { type: 'string', description: 'Branch name, must start with "cortana/" (e.g. "cortana/voice-wav-fix").' },
+        message: { type: 'string', description: 'Commit message — explain WHY, not just WHAT. 10–5000 chars.' },
+      },
+      required: ['branch', 'message'],
+    },
+  },
+  {
+    name: 'open_self_pull_request',
+    description: 'Open a PR against the BOT repo main branch from a Cortana feature branch. Call after commit_self_changes succeeds.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        branch: { type: 'string', description: 'Source branch (must already exist remotely).' },
+        title: { type: 'string', description: 'PR title (≥10 chars, summary of the fix).' },
+        body: { type: 'string', description: 'Optional PR body. Default explains it\'s a Cortana self-repair PR.' },
+      },
+      required: ['branch', 'title'],
+    },
+  },
+  {
+    name: 'deploy_self',
+    description: 'Pull origin/main on the VM, build, run migrations, restart the bot. Only run after Jordan merges your PR — pre-merge code is NOT deployed.',
+    input_schema: { type: 'object' as const, properties: {}, required: [] },
+  },
+  {
     name: 'report_blocker',
     description:
       'Report a blocker that is preventing you from completing a task — a missing tool, missing capability, unclear scope, or an external dependency you can\'t satisfy. Posts a structured upgrade request to #🆙-upgrades so Cortana can draft a proposal for Jordan to approve. Use this instead of silently giving up.',
@@ -2058,6 +2104,7 @@ const REVIEW_TOOL_ACCESS_AGENT_IDS = new Set([
 const SELF_REPAIR_AGENT_IDS = new Set(['executive-assistant', 'operations-manager']);
 const SELF_REPAIR_TOOL_NAMES = new Set([
   'read_self_file', 'search_self_files', 'edit_self_file', 'list_self_directory', 'check_self_file_exists',
+  'run_self_typecheck', 'run_self_tests', 'commit_self_changes', 'open_self_pull_request', 'deploy_self',
 ]);
 
 function filterSelfRepairTools(
@@ -2259,6 +2306,16 @@ async function executeToolInternal(
         return listSelfDirectory(input.path);
       case 'check_self_file_exists':
         return checkSelfFileExists(input.path);
+      case 'run_self_typecheck':
+        return runSelfTypecheck();
+      case 'run_self_tests':
+        return runSelfTests(input.pattern);
+      case 'commit_self_changes':
+        return commitSelfChanges(input.branch, input.message);
+      case 'open_self_pull_request':
+        return await openSelfPullRequest(input.branch, input.title, input.body);
+      case 'deploy_self':
+        return deploySelf();
       case 'clear_channel_messages':
         return await discordClearChannelMessages(input.channel_name, parseInt(input.limit, 10) || 500);
       case 'read_channel_messages':
@@ -3026,6 +3083,148 @@ function checkSelfFileExists(relativePath: string): string {
   if (stat.isDirectory()) return `EXISTS dir ${target}`;
   if (stat.isFile()) return `EXISTS file ${target} (${stat.size} bytes)`;
   return `EXISTS other ${target}`;
+}
+
+// ── Self-repair: shell-out tools (build / test / commit / PR / deploy) ──
+//
+// Closes the autonomous loop: Cortana edits her own code with
+// edit_self_file, then verifies + ships without a human in the loop.
+// Each tool runs in SELF_REPO_ROOT so it never touches the user-app
+// checkout. Output is trimmed for prompt-friendliness.
+
+const SELF_SHELL_TIMEOUT_MS = Math.max(30_000, parseInt(process.env.SELF_SHELL_TIMEOUT_MS || '180000', 10));
+const SELF_SHELL_MAX_BUFFER = 4 * 1024 * 1024;
+
+function runInSelfRepo(cmd: string, args: readonly string[], timeoutMs = SELF_SHELL_TIMEOUT_MS): { code: number; out: string } {
+  try {
+    const out = execFileSync(cmd, args, {
+      cwd: SELF_REPO_ROOT,
+      timeout: timeoutMs,
+      maxBuffer: SELF_SHELL_MAX_BUFFER,
+      encoding: 'utf-8',
+      stdio: ['pipe', 'pipe', 'pipe'],
+      env: buildSafeCommandEnv(),
+    });
+    return { code: 0, out: String(out || '') };
+  } catch (err: any) {
+    const out = String((err?.stdout || '') + (err?.stderr || '') || err?.message || 'unknown error');
+    return { code: typeof err?.status === 'number' ? err.status : 1, out };
+  }
+}
+
+function trimOut(text: string, max = 3500): string {
+  const s = String(text || '').replace(/\u001b\[[0-9;]*m/g, '');
+  return s.length <= max ? s : `${s.slice(0, Math.floor(max * 0.55))}\n…(${s.length - max} chars trimmed)…\n${s.slice(-Math.floor(max * 0.4))}`;
+}
+
+function runSelfTypecheck(): string {
+  const r = runInSelfRepo('npx', ['tsc', '--noEmit', '--project', './tsconfig.json'], 240_000);
+  if (r.code === 0) return '✅ self typecheck clean.';
+  return `❌ self typecheck failed (exit ${r.code}):\n\n${trimOut(r.out)}`;
+}
+
+function runSelfTests(pattern?: string): string {
+  const args = ['jest', '--colors=false'];
+  if (pattern && pattern.trim()) args.push('--testPathPatterns', pattern.trim());
+  const r = runInSelfRepo('npx', args, 360_000);
+  // Jest prints summary at the end; we return tail of output.
+  if (r.code === 0) return `✅ self tests passed.\n\n${trimOut(r.out, 2000)}`;
+  return `❌ self tests failed (exit ${r.code}):\n\n${trimOut(r.out)}`;
+}
+
+function commitSelfChanges(branch: string, message: string): string {
+  const cleanBranch = String(branch || '').trim().replace(/[^A-Za-z0-9_./-]/g, '-').slice(0, 80);
+  if (!cleanBranch) return 'Error: branch is required (e.g. "cortana/voice-wav-fix").';
+  if (!cleanBranch.startsWith('cortana/')) return 'Error: branch must start with "cortana/" (so PRs are visibly Cortana-authored).';
+  const cleanMsg = String(message || '').trim();
+  if (cleanMsg.length < 10) return 'Error: commit message must be at least 10 chars.';
+  if (cleanMsg.length > 5000) return 'Error: commit message too long (>5000 chars).';
+
+  // 1) Make sure we're up to date with origin/main
+  const fetch = runInSelfRepo('git', ['fetch', 'origin', 'main'], 60_000);
+  if (fetch.code !== 0) return `Error: git fetch origin main failed:\n${trimOut(fetch.out, 800)}`;
+
+  // 2) Branch from origin/main (idempotent — overwrite if exists)
+  const checkout = runInSelfRepo('git', ['checkout', '-B', cleanBranch, 'origin/main'], 30_000);
+  if (checkout.code !== 0) return `Error: git checkout -B ${cleanBranch} failed:\n${trimOut(checkout.out, 800)}`;
+
+  // 3) Stage everything in src/, .github/, scripts/ — restrict so we never
+  // accidentally commit secrets or build artifacts.
+  for (const path of ['src', '.github', 'scripts', 'package.json', 'package-lock.json']) {
+    runInSelfRepo('git', ['add', '--', path], 30_000);
+  }
+
+  // 4) Verify there's actually something staged.
+  const diff = runInSelfRepo('git', ['diff', '--cached', '--stat'], 15_000);
+  if (!diff.out.trim()) return 'Error: nothing staged. Use edit_self_file first, then call commit_self_changes.';
+
+  // 5) Commit with a Cortana co-author footer.
+  const fullMsg = `${cleanMsg}\n\nCo-Authored-By: Cortana (self-repair) <noreply@anthropic.com>`;
+  const commit = runInSelfRepo('git', ['commit', '-m', fullMsg], 30_000);
+  if (commit.code !== 0) return `Error: git commit failed:\n${trimOut(commit.out, 800)}`;
+
+  // 6) Push.
+  const push = runInSelfRepo('git', ['push', '-u', 'origin', cleanBranch, '--force-with-lease'], 60_000);
+  if (push.code !== 0) return `Error: git push failed:\n${trimOut(push.out, 800)}`;
+
+  return `✅ Committed + pushed branch \`${cleanBranch}\`.\n\n${trimOut(diff.out, 800)}\n\n${trimOut(commit.out.split('\n').slice(0, 3).join('\n'), 200)}`;
+}
+
+async function openSelfPullRequest(branch: string, title: string, body?: string): Promise<string> {
+  const cleanBranch = String(branch || '').trim();
+  if (!cleanBranch) return 'Error: branch is required.';
+  const cleanTitle = String(title || '').trim();
+  if (cleanTitle.length < 10) return 'Error: title must be at least 10 chars.';
+  const cleanBody = String(body || '').trim() || `Self-repair PR opened by Cortana.\n\nReview the diff, then merge — vm-deploy-bot.sh will pull origin/main on the next deploy.`;
+
+  // The VM's `gh` CLI isn't installed, so call the GitHub REST API
+  // directly. Token comes from GITHUB_TOKEN env (Secret Manager) or, as
+  // a fallback, the embedded x-access-token in the git remote URL —
+  // whichever the operator has wired up.
+  let token = String(process.env.GITHUB_TOKEN || '').trim();
+  if (!token) {
+    const remote = runInSelfRepo('git', ['remote', 'get-url', 'origin'], 5_000);
+    const m = remote.out.match(/x-access-token:([^@]+)@/);
+    if (m) token = m[1].trim();
+  }
+  if (!token) return 'Error: GITHUB_TOKEN not configured and remote URL has no embedded token. Cannot open PR.';
+
+  // Determine owner/repo from the remote URL.
+  const remote = runInSelfRepo('git', ['remote', 'get-url', 'origin'], 5_000);
+  const repoMatch = remote.out.match(/github\.com[/:]([^/]+)\/([^/.\n]+)(?:\.git)?/);
+  if (!repoMatch) return `Error: could not parse owner/repo from origin URL:\n${trimOut(remote.out, 200)}`;
+  const owner = repoMatch[1];
+  const repo = repoMatch[2].replace(/\.git$/, '');
+
+  try {
+    const res = await fetch(`https://api.github.com/repos/${owner}/${repo}/pulls`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: 'application/vnd.github+json',
+        'X-GitHub-Api-Version': '2022-11-28',
+        'User-Agent': 'asap-bot-self-repair',
+      },
+      body: JSON.stringify({ title: cleanTitle, body: cleanBody, head: cleanBranch, base: 'main' }),
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      return `Error: GitHub API ${res.status}:\n${trimOut(JSON.stringify(json), 800)}`;
+    }
+    const url = String((json as any)?.html_url || '');
+    const number = (json as any)?.number;
+    return `✅ Opened PR #${number} for \`${cleanBranch}\`: ${url}`;
+  } catch (err) {
+    return `Error: GitHub API request failed: ${err instanceof Error ? err.message : String(err)}`;
+  }
+}
+
+function deploySelf(): string {
+  // Pulls origin/main on the VM, npm ci, tsc, npm run migrate, pm2 restart.
+  // Only main is deployed — Cortana's branches don't deploy until merged.
+  const r = runInSelfRepo('bash', ['scripts/vm-deploy-bot.sh'], 600_000);
+  if (r.code !== 0) return `❌ Deploy failed (exit ${r.code}):\n\n${trimOut(r.out)}`;
+  return `🚀 Deploy completed.\n\n${trimOut(r.out, 1200)}`;
 }
 
 /**
