@@ -412,6 +412,19 @@ export function streamRawPcmToTesterVC(
 
   input.pipe(proc.stdin);
 
+  // Lead-in silence padding. Discord's audio player + ffmpeg analysis +
+  // opus encoder all consume a few hundred ms after `player.play()` is
+  // called before the audible output actually streams to the channel.
+  // Without this, the first ~150 ms of every Convai turn arrives mid-
+  // syllable (Jordan's 2026-04-27 "abrupt half-way through the first
+  // word" report). Tunable via VOICE_LEAD_IN_SILENCE_MS.
+  const leadMs = Math.max(0, parseInt(process.env.VOICE_LEAD_IN_SILENCE_MS || '220', 10));
+  if (leadMs > 0) {
+    const silenceSamples = Math.floor((sampleRate * leadMs) / 1000);
+    const silenceBytes = silenceSamples * channels * 2; // s16le
+    if (silenceBytes > 0) input.write(Buffer.alloc(silenceBytes));
+  }
+
   const resource = createAudioResource(proc.stdout, {
     inputType: StreamType.Raw,
   });
