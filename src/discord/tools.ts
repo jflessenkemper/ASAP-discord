@@ -1957,8 +1957,20 @@ export const REPO_TOOLS = [
     },
   },
   {
+    name: 'merge_self_pull_request',
+    description: 'Merge one of YOUR OWN open self-repair PRs (head branch must start with "cortana/"). Use this after run_self_typecheck and run_self_tests pass. Default merge method: squash. Always call deploy_self afterwards to ship the change.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        pr_number: { type: 'number', description: 'The PR number returned by open_self_pull_request.' },
+        merge_method: { type: 'string', description: 'Optional: "squash" (default), "merge", or "rebase".' },
+      },
+      required: ['pr_number'],
+    },
+  },
+  {
     name: 'deploy_self',
-    description: 'Pull origin/main on the VM, build, run migrations, restart the bot. Only run after Jordan merges your PR — pre-merge code is NOT deployed.',
+    description: 'Pull origin/main on the VM, build, run migrations, restart the bot. Run after merge_self_pull_request to ship merged changes. Pre-merge code is NOT deployed.',
     input_schema: { type: 'object' as const, properties: {}, required: [] },
   },
   {
@@ -2104,7 +2116,8 @@ const REVIEW_TOOL_ACCESS_AGENT_IDS = new Set([
 const SELF_REPAIR_AGENT_IDS = new Set(['executive-assistant', 'operations-manager']);
 const SELF_REPAIR_TOOL_NAMES = new Set([
   'read_self_file', 'search_self_files', 'edit_self_file', 'list_self_directory', 'check_self_file_exists',
-  'run_self_typecheck', 'run_self_tests', 'commit_self_changes', 'open_self_pull_request', 'deploy_self',
+  'run_self_typecheck', 'run_self_tests', 'commit_self_changes', 'open_self_pull_request',
+  'merge_self_pull_request', 'deploy_self',
 ]);
 
 function filterSelfRepairTools(
@@ -2314,6 +2327,8 @@ async function executeToolInternal(
         return commitSelfChanges(input.branch, input.message);
       case 'open_self_pull_request':
         return await openSelfPullRequest(input.branch, input.title, input.body);
+      case 'merge_self_pull_request':
+        return await mergeSelfPullRequest(parseInt(input.pr_number, 10), input.merge_method);
       case 'deploy_self':
         return deploySelf();
       case 'clear_channel_messages':
@@ -3225,6 +3240,92 @@ function deploySelf(): string {
   const r = runInSelfRepo('bash', ['scripts/vm-deploy-bot.sh'], 600_000);
   if (r.code !== 0) return `❌ Deploy failed (exit ${r.code}):\n\n${trimOut(r.out)}`;
   return `🚀 Deploy completed.\n\n${trimOut(r.out, 1200)}`;
+}
+
+/**
+ * Resolve owner/repo + a usable GitHub token from the bot repo's git remote.
+ * Used by openSelfPullRequest and mergeSelfPullRequest. Centralized so the
+ * token-extraction fallback (env GITHUB_TOKEN → embedded x-access-token) is
+ * consistent across both call sites.
+ */
+function resolveGithubAuth(): { token: string; owner: string; repo: string; error?: string } {
+  let token = String(process.env.GITHUB_TOKEN || '').trim();
+  const remote = runInSelfRepo('git', ['remote', 'get-url', 'origin'], 5_000);
+  if (!token) {
+    const m = remote.out.match(/x-access-token:([^@]+)@/);
+    if (m) token = m[1].trim();
+  }
+  const repoMatch = remote.out.match(/github\.com[/:]([^/]+)\/([^/.\n]+)(?:\.git)?/);
+  if (!token) return { token: '', owner: '', repo: '', error: 'GITHUB_TOKEN not configured' };
+  if (!repoMatch) return { token: '', owner: '', repo: '', error: `unparseable origin URL: ${remote.out.slice(0, 200)}` };
+  return { token, owner: repoMatch[1], repo: repoMatch[2].replace(/\.git$/, '') };
+}
+
+async function mergeSelfPullRequest(prNumber: number, mergeMethod?: string): Promise<string> {
+  const num = Number(prNumber);
+  if (!Number.isInteger(num) || num <= 0) return 'Error: prNumber must be a positive integer.';
+  const method = (mergeMethod || 'squash').toLowerCase();
+  if (!['squash', 'merge', 'rebase'].includes(method)) {
+    return `Error: mergeMethod must be one of: squash, merge, rebase. Got: ${method}`;
+  }
+
+  const auth = resolveGithubAuth();
+  if (auth.error) return `Error: ${auth.error}. Cannot merge.`;
+  const { token, owner, repo } = auth;
+
+  // Pull the PR first so we can check the source branch + state.
+  const headers = {
+    Authorization: `Bearer ${token}`,
+    Accept: 'application/vnd.github+json',
+    'X-GitHub-Api-Version': '2022-11-28',
+    'User-Agent': 'asap-bot-self-repair',
+  };
+
+  let pr: any;
+  try {
+    const res = await fetch(`https://api.github.com/repos/${owner}/${repo}/pulls/${num}`, { headers });
+    if (!res.ok) {
+      return `Error: GET pull/${num} returned ${res.status}: ${trimOut(await res.text(), 400)}`;
+    }
+    pr = await res.json();
+  } catch (err) {
+    return `Error: GitHub API request failed: ${err instanceof Error ? err.message : String(err)}`;
+  }
+
+  // Safety rail #1: only Cortana-authored branches can be self-merged.
+  // Prevents her from merging Jordan's hand-crafted PRs without review.
+  const headRef = String(pr?.head?.ref || '');
+  if (!headRef.startsWith('cortana/')) {
+    return `Error: PR #${num} head branch is "${headRef}" — only branches starting with "cortana/" can be self-merged. Ask Jordan to review and merge this one manually.`;
+  }
+
+  // Safety rail #2: PR must be open + mergeable (no conflicts).
+  if (pr?.state !== 'open') return `Error: PR #${num} is ${pr?.state}, cannot merge.`;
+  if (pr?.merged) return `Error: PR #${num} is already merged.`;
+  if (pr?.mergeable === false) return `Error: PR #${num} is not mergeable (likely conflicts). Resolve, then re-run.`;
+
+  // Call the merge endpoint.
+  const sha = String(pr?.head?.sha || '');
+  try {
+    const res = await fetch(`https://api.github.com/repos/${owner}/${repo}/pulls/${num}/merge`, {
+      method: 'PUT',
+      headers: { ...headers, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        sha,
+        commit_title: `${pr.title} (#${num})`,
+        commit_message: `Self-merged by Cortana from branch ${headRef}.\n\n${pr.body || ''}`,
+        merge_method: method,
+      }),
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      return `Error: merge endpoint returned ${res.status}: ${trimOut(JSON.stringify(json), 600)}`;
+    }
+    const mergeSha = String((json as any)?.sha || 'unknown');
+    return `✅ Merged PR #${num} (${headRef}) via ${method}. main is now at ${mergeSha.slice(0, 12)}. Call deploy_self next.`;
+  } catch (err) {
+    return `Error: merge request failed: ${err instanceof Error ? err.message : String(err)}`;
+  }
 }
 
 /**
