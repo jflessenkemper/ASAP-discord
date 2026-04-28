@@ -837,8 +837,16 @@ export async function startCall(
 
     if (listenerHandle.onUserInterruption) {
       listenerHandle.onUserInterruption(() => {
+        // User talked over Cortana. Convai already stops emitting more
+        // agent audio for this turn at this point — calling pcmStream.abort()
+        // here would yank ffmpeg mid-sentence, which is what made replies
+        // sound chopped (Jordan's 2026-04-27 "I only hear half her sentence"
+        // report). Instead end the stream gracefully so the audio chunks
+        // already in flight to Discord finish playing, and the next turn
+        // (which Convai will start to address the user's interjection)
+        // opens a fresh pipe.
         if (pcmStream) {
-          try { pcmStream.abort(); } catch { /* ignore */ }
+          try { pcmStream.end(); } catch { /* ignore */ }
           pcmStream = null;
         }
       });

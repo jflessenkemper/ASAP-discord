@@ -763,6 +763,17 @@ function listenToAllMembersConvaiStreaming(
   let agentTurnEndCb: (() => void) | null = null;
   let userInterruptionCb: (() => void) | null = null;
   let lastSpeechStartAt = 0;
+  // Conversational turn-taking gate. Tracks when Convai last sent agent
+  // audio (i.e. when Cortana is mid-reply) and per-member user speech
+  // duration. Brief vocalizations ("uh-huh", breath, throat-clear) while
+  // the agent is speaking get suppressed so Convai doesn't treat them as
+  // interruption and chop Cortana's sentence. Sustained speech still
+  // forwards through as a real barge-in.
+  let lastAgentChunkAt = 0;
+  const userSpeechStartedAt = new Map<string, number>();
+  const BACKCHANNEL_BARGE_THRESHOLD_MS = Math.max(150, parseInt(process.env.CONVAI_BARGE_THRESHOLD_MS || '650', 10));
+  const AGENT_SPEAKING_GRACE_MS = Math.max(150, parseInt(process.env.CONVAI_AGENT_SPEAKING_GRACE_MS || '450', 10));
+  const BACKCHANNEL_SUPPRESS_ENABLED = String(process.env.CONVAI_BACKCHANNEL_SUPPRESS || 'true').toLowerCase() !== 'false';
 
   function attachMemberAudio(member: GuildMember): void {
     if (destroyed || listening.has(member.id)) return;
@@ -785,20 +796,37 @@ function listenToAllMembersConvaiStreaming(
       subscription.pipe(decoder);
       let speechNotified = false;
       decoder.on('data', (chunk: Buffer) => {
+        const now = Date.now();
         if (!speechNotified) {
           speechNotified = true;
-          // Throttle onSpeechStart callbacks across members so callers
-          // (typing indicators etc.) don't get spammed by every chunk.
-          if (Date.now() - lastSpeechStartAt > 250) {
-            lastSpeechStartAt = Date.now();
+          userSpeechStartedAt.set(member.id, now);
+          if (now - lastSpeechStartAt > 250) {
+            lastSpeechStartAt = now;
             onSpeechStart?.(member);
           }
         }
-        if (!destroyed && convaiSession?.isOpen) {
-          convaiSession.sendUserAudio(chunk);
+        if (destroyed || !convaiSession?.isOpen) return;
+
+        // Backchannel suppression: if Cortana is currently speaking and
+        // this user's vocalization is short (<BACKCHANNEL_BARGE_THRESHOLD
+        // ms total), don't forward to Convai. Stops "uh-huh" / breath
+        // sounds from triggering interruption events that chop Cortana's
+        // sentence. Sustained speech (real interjection) still gets
+        // through.
+        if (BACKCHANNEL_SUPPRESS_ENABLED) {
+          const agentSpeaking = now - lastAgentChunkAt < AGENT_SPEAKING_GRACE_MS;
+          if (agentSpeaking) {
+            const speechDur = now - (userSpeechStartedAt.get(member.id) || now);
+            if (speechDur < BACKCHANNEL_BARGE_THRESHOLD_MS) {
+              return; // Suppress — too brief to be a real barge-in.
+            }
+          }
         }
+
+        convaiSession.sendUserAudio(chunk);
       });
       decoder.on('end', () => {
+        userSpeechStartedAt.delete(member.id);
         if (!destroyed) setTimeout(() => { if (!destroyed) subscribe(); }, 120);
       });
       decoder.on('error', (err: Error) => {
@@ -839,6 +867,9 @@ function listenToAllMembersConvaiStreaming(
     },
     onAgentAudioChunk: (chunk) => {
       if (destroyed) return;
+      // Stamp every agent chunk so the backchannel-suppression gate above
+      // can tell whether Cortana is currently mid-reply.
+      lastAgentChunkAt = Date.now();
       try { agentAudioChunkCb?.(chunk); } catch (err) { console.warn('[convai-stream] agentAudioChunk cb threw:', errMsg(err)); }
     },
     onAgentText: (text) => {
