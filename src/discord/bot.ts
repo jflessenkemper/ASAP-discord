@@ -88,6 +88,7 @@ let memoryConsolidationTimer: ReturnType<typeof setInterval> | null = null;
 let databaseAuditTimer: ReturnType<typeof setInterval> | null = null;
 let loggingEngineTimer: ReturnType<typeof setInterval> | null = null;
 let anomalyDetectionTimer: ReturnType<typeof setInterval> | null = null;
+let ozBargainFeedTimer: ReturnType<typeof setInterval> | null = null;
 const staleAlertDedupe = new Map<string, number>();
 /** Tracks recovery attempts per feed to prevent infinite heal loops. */
 const staleHealAttempts = new Map<string, { count: number; lastAttemptAt: number }>();
@@ -482,84 +483,7 @@ function startOpsMonitors(channels: BotChannels): void {
         }).catch(() => {});
       }
     }).catch((err) => {
-      recordLoopHealth('memory-consolidation', 'error', errMsg(err));
-    });
-  }, 4 * 60 * 60 * 1000);
-  databaseAuditTimer = setInterval(() => {
-    void runDatabaseAudit(channels).catch(() => {});
-  }, DATABASE_AUDIT_INTERVAL_MS);
-  loggingEngineTimer = setInterval(() => {
-    void runLoggingEngine(channels).catch(() => {});
-  }, LOGGING_ENGINE_INTERVAL_MS);
-  anomalyDetectionTimer = setInterval(() => {
-    void detectAnomalies().then((anomalies) => {
-      if (anomalies.length > 0 && channels.agentErrors) {
-        const lines = anomalies.map(a => `${a.severity === 'error' ? '❌' : '⚠️'} **${a.type}**: ${a.detail}`);
-        channels.agentErrors.send(`🔍 **Anomaly Detection**\n${lines.join('\n')}`.slice(0, 1900)).catch(() => {});
-      }
-    }).catch(() => {});
-  }, LOGGING_ENGINE_INTERVAL_MS);
-
-  void runChannelHeartbeat(channels).catch(() => {});
-  void runLoggingEngine(channels).catch(() => {});
-  void runUpgradesTriage(channels).catch(() => {});
-  void runDatabaseAudit(channels).catch(() => {});
-  void detectAnomalies().catch(() => {});
-}
-
-
-
-async function ensureDedupeTable(): Promise<void> {
-  if (dedupeTableReady) return;
-  await pool.query(
-    `CREATE TABLE IF NOT EXISTS discord_message_dedupe (
-      message_id TEXT PRIMARY KEY,
-      claimed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    )`
-  );
-  dedupeTableReady = true;
-}
-
-async function claimDiscordMessage(messageId: string): Promise<boolean> {
-  await ensureDedupeTable();
-  const res = await pool.query(
-    'INSERT INTO discord_message_dedupe (message_id) VALUES ($1) ON CONFLICT DO NOTHING RETURNING message_id',
-    [messageId]
-  );
-
-  const now = Date.now();
-  if (now - lastDedupePruneAt > 60 * 60 * 1000) {
-    lastDedupePruneAt = now;
-    void pool.query("DELETE FROM discord_message_dedupe WHERE claimed_at < NOW() - INTERVAL '3 days'").catch(() => {});
-  }
-
-  return (res.rowCount || 0) > 0;
-}
-
-function getTesterSpeechBridgeText(content: string): string | null {
-  const normalized = String(content || '').trim();
-  if (!normalized) return null;
-  const match = normalized.match(/^(?:cortana\s+)?(?:tester\s+)?(?:say|voice|speak)\s*(?::|-)\s*(.{1,260})$/i);
-  if (!match) return null;
-  return match[1].trim() || null;
-}
-
-/**
- * Get the current bot channels (used by webhook route).
- */
-export function getBotChannels(): BotChannels | null {
-  return botChannels;
-}
-
-/**
- * Initialize and start the Discord bot.
- * Requires DISCORD_BOT_TOKEN and DISCORD_GUILD_ID environment variables.
- */
-export async function startBot(): Promise<void> {
-  const token = process.env.DISCORD_BOT_TOKEN;
-  const guildId = process.env.DISCORD_GUILD_ID;
-
-  if (!token) {
+undefined
     console.log('DISCORD_BOT_TOKEN not set — Discord bot disabled');
     return;
   }
