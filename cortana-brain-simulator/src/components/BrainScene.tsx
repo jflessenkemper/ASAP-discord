@@ -1,10 +1,11 @@
-import { useRef, useMemo } from 'react';
+import { useRef, useMemo, Suspense } from 'react';
 import { Canvas, useFrame } from '@react-three/fiber';
 import { OrbitControls, Stars } from '@react-three/drei';
 import * as THREE from 'three';
 import { REGIONS, CONNECTIONS } from '../data/regions';
 import { BrainRegion } from './BrainRegion';
 import { SignalEdge } from './SignalEdge';
+import { BrainShell } from './BrainShell';
 import { useBrainStore } from '../store';
 
 const CONN_TYPE_COLORS: Record<string, string> = {
@@ -70,13 +71,16 @@ export function BrainScene() {
       style={{ background: 'radial-gradient(ellipse at center, #0a1628 0%, #02060d 100%)' }}
       onPointerMissed={() => selectRegion(null)}
     >
-      <ambientLight intensity={0.35} />
+      <ambientLight intensity={0.55} />
       <pointLight position={[10, 10, 10]} intensity={0.7} color="#4ec9ff" />
       <pointLight position={[-10, -5, -10]} intensity={0.4} color="#a07fff" />
-      <Stars radius={80} depth={40} count={1500} factor={3} fade speed={0.5} />
+      <Stars radius={80} depth={40} count={400} factor={3} fade speed={0.3} />
 
       <Ticker />
 
+      <Suspense fallback={null}>
+        <BrainShell />
+      </Suspense>
       <StaticConnections />
       <ActiveSignals />
 

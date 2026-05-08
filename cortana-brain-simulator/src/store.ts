@@ -175,20 +175,33 @@ export const useBrainStore = create<BrainState>((set, get) => ({
 
   tick: () => {
     const now = performance.now();
-    set(s => {
+    const s = get();
+
+    // Bail if nothing to update — avoids hammering React with new refs every frame.
+    const idle =
+      s.active.size === 0 &&
+      s.signals.length === 0 &&
+      Math.abs(s.neuromod.da_tonic - NEUROMOD_BASELINE.da_tonic) < 0.001 &&
+      Math.abs(s.neuromod.da_phasic) < 0.001 &&
+      Math.abs(s.neuromod.ne - NEUROMOD_BASELINE.ne) < 0.001 &&
+      Math.abs(s.neuromod.ach - NEUROMOD_BASELINE.ach) < 0.001 &&
+      Math.abs(s.neuromod.ser - NEUROMOD_BASELINE.ser) < 0.001;
+    if (idle) return;
+
+    set(state => {
       // Expire active regions
       const next = new Map<RegionId, ActiveRegion>();
-      for (const [k, v] of s.active.entries()) {
+      for (const [k, v] of state.active.entries()) {
         const elapsed = now - v.startTime;
         if (elapsed < v.duration) {
           next.set(k, { ...v, intensity: 1 - elapsed / v.duration });
         }
       }
       // Expire signals
-      const sigs = s.signals.filter(sg => now - sg.startTime < sg.duration);
+      const sigs = state.signals.filter(sg => now - sg.startTime < sg.duration);
 
       // Decay neuromodulators back toward baseline
-      const nm = { ...s.neuromod };
+      const nm = { ...state.neuromod };
       const lerp = (cur: number, base: number, rate: number) =>
         cur + (base - cur) * rate;
       nm.da_tonic = lerp(nm.da_tonic, NEUROMOD_BASELINE.da_tonic, NEUROMOD_DECAY.da_tonic);
@@ -197,7 +210,11 @@ export const useBrainStore = create<BrainState>((set, get) => ({
       nm.ach = lerp(nm.ach, NEUROMOD_BASELINE.ach, NEUROMOD_DECAY.ach);
       nm.ser = lerp(nm.ser, NEUROMOD_BASELINE.ser, NEUROMOD_DECAY.ser);
 
-      return { active: next, signals: sigs, neuromod: nm };
+      // Reuse refs for unchanged collections to avoid spurious re-renders.
+      const activeNext = next.size === 0 && state.active.size === 0 ? state.active : next;
+      const sigsNext = sigs.length === 0 && state.signals.length === 0 ? state.signals : sigs;
+
+      return { active: activeNext, signals: sigsNext, neuromod: nm };
     });
   },
 
