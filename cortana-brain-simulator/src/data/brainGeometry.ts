@@ -110,11 +110,17 @@ function squish(geom: THREE.BufferGeometry, [sx, sy, sz]: [number, number, numbe
   pos.needsUpdate = true;
 }
 
+/** Ridged noise: turns soft bumps into sharp ridges (sulci between gyri). */
+function ridged(x: number, y: number, z: number): number {
+  return 1 - Math.abs(noise(x, y, z));
+}
+
 function displaceWithNoise(
   geom: THREE.BufferGeometry,
   freq: number,
   amp: number,
   seedKey: string,
+  anisoZ = 1.7,    // stretch noise along Z so ridges are elongated front-to-back
 ) {
   const pos = geom.attributes.position;
   const v = new THREE.Vector3();
@@ -126,13 +132,18 @@ function displaceWithNoise(
 
   for (let i = 0; i < pos.count; i++) {
     v.fromBufferAttribute(pos, i);
-    // Multi-octave noise: large lobes + finer gyri
-    const n1 = noise(v.x * freq + ox, v.y * freq + oy, v.z * freq + oz);
-    const n2 = noise(v.x * freq * 2.3 + ox, v.y * freq * 2.3 + oy, v.z * freq * 2.3 + oz);
-    const displacement = n1 * amp + n2 * amp * 0.4;
+    // Anisotropic ridged noise — elongates ridges along Z (gyri-like)
+    const x = v.x * freq + ox;
+    const y = v.y * freq + oy;
+    const z = (v.z * freq) / anisoZ + oz;
+    const r1 = ridged(x, y, z);
+    const r2 = ridged(x * 2.3, y * 2.3, z * 2.3) * 0.5;
+    const r3 = ridged(x * 4.5, y * 4.5, z * 4.5) * 0.2;
+    // Centre around 0 so ridges go both in/out
+    const ridges = (r1 + r2 + r3) / 1.7 - 0.5;
     // Push along outward direction (vertex position normalized)
     const len = v.length() || 1;
-    const factor = 1 + displacement;
+    const factor = 1 + ridges * amp * 2.0;
     v.setLength(len * factor);
     pos.setXYZ(i, v.x, v.y, v.z);
   }

@@ -4,6 +4,7 @@ import { OrbitControls, Stars } from '@react-three/drei';
 import * as THREE from 'three';
 import { REGIONS, CONNECTIONS } from '../data/regions';
 import { BrainRegion } from './BrainRegion';
+import { BrainHull } from './BrainHull';
 import { SignalEdge } from './SignalEdge';
 import { useBrainStore } from '../store';
 
@@ -77,6 +78,7 @@ export function BrainScene() {
 
       <Ticker />
 
+      <BrainHull />
       <StaticConnections />
       <ActiveSignals />
 
