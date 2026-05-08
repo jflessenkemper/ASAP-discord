@@ -313,6 +313,136 @@ export const CEREBELLAR_IDS: ReadonlySet<string> = new Set([
   'cerebellum', 'cerebellum_skill',
 ]);
 
+// ─────────────────────────────────────────────────────────────────────
+// Blocky brain — voxel grid partitioned among ALL region centers.
+// Fills a brain-shaped envelope (cerebrum + cerebellum + brainstem) with
+// small cubes; each cube is assigned to the closest region center, then
+// merged per region into one BufferGeometry. Renders as a chunky, lego-
+// like brain at rest; explodes into coherent per-region clusters.
+// ─────────────────────────────────────────────────────────────────────
+
+export function buildBlockyBrainPartition(
+  centers: Array<{ id: string; position: [number, number, number] }>,
+  cubeSize = 0.82,
+  fill = 0.98,
+): Map<string, PartitionedSlice> {
+  if (centers.length === 0) return new Map();
+
+  // Brain envelope: union of three primitives in scene coords
+  // (+X right, +Y up/dorsal, +Z anterior/front).
+  const inCerebrum = (x: number, y: number, z: number) => {
+    const dx = x / 5.0;
+    const dy = (y - 0.4) / 3.7;
+    const dz = z / 5.6;
+    return dx * dx + dy * dy + dz * dz <= 1;
+  };
+  const inCerebellum = (x: number, y: number, z: number) => {
+    const dx = x / 3.0;
+    const dy = (y + 2.5) / 1.5;
+    const dz = (z + 3.6) / 1.8;
+    return dx * dx + dy * dy + dz * dz <= 1;
+  };
+  const inBrainstem = (x: number, y: number, z: number) => {
+    const dx = x / 0.95;
+    const dy = (y + 2.2) / 1.5;
+    const dz = (z + 1.4) / 1.0;
+    return dx * dx + dy * dy + dz * dz <= 1;
+  };
+  const inBrain = (x: number, y: number, z: number) =>
+    inCerebrum(x, y, z) || inCerebellum(x, y, z) || inBrainstem(x, y, z);
+
+  // Bucket cube positions by closest region center
+  const buckets = new Map<string, Array<[number, number, number]>>();
+  for (const c of centers) buckets.set(c.id, []);
+
+  const minX = -5.5, maxX = 5.5;
+  const minY = -4.2, maxY = 4.5;
+  const minZ = -5.8, maxZ = 5.8;
+
+  for (let x = minX; x <= maxX; x += cubeSize) {
+    for (let y = minY; y <= maxY; y += cubeSize) {
+      for (let z = minZ; z <= maxZ; z += cubeSize) {
+        if (!inBrain(x, y, z)) continue;
+        let bestId = centers[0].id;
+        let bestD = Infinity;
+        for (const c of centers) {
+          const dx = x - c.position[0];
+          const dy = y - c.position[1];
+          const dz = z - c.position[2];
+          const d = dx * dx + dy * dy + dz * dz;
+          if (d < bestD) {
+            bestD = d;
+            bestId = c.id;
+          }
+        }
+        buckets.get(bestId)!.push([x, y, z]);
+      }
+    }
+  }
+
+  // Build merged geometry per region from a shared box template
+  const out = new Map<string, PartitionedSlice>();
+  const box = new THREE.BoxGeometry(cubeSize * fill, cubeSize * fill, cubeSize * fill);
+  if (box.getAttribute('uv')) box.deleteAttribute('uv');
+  const boxPos = box.attributes.position;
+  const boxNorm = box.attributes.normal;
+  const boxIdx = box.index!;
+  const vpb = boxPos.count;
+  const ipb = boxIdx.count;
+
+  for (const [id, cubes] of buckets) {
+    if (cubes.length === 0) continue;
+
+    // Centroid of the cube cluster
+    let cx = 0, cy = 0, cz = 0;
+    for (const [x, y, z] of cubes) { cx += x; cy += y; cz += z; }
+    cx /= cubes.length; cy /= cubes.length; cz /= cubes.length;
+
+    const positions = new Float32Array(cubes.length * vpb * 3);
+    const normals = new Float32Array(cubes.length * vpb * 3);
+    const indices = new Uint32Array(cubes.length * ipb);
+
+    let pIdx = 0, iIdx = 0, baseV = 0;
+    let maxR = 0;
+    for (const [x, y, z] of cubes) {
+      const lx = x - cx, ly = y - cy, lz = z - cz;
+      for (let i = 0; i < vpb; i++) {
+        const px = boxPos.getX(i) + lx;
+        const py = boxPos.getY(i) + ly;
+        const pz = boxPos.getZ(i) + lz;
+        positions[pIdx] = px;
+        positions[pIdx + 1] = py;
+        positions[pIdx + 2] = pz;
+        normals[pIdx] = boxNorm.getX(i);
+        normals[pIdx + 1] = boxNorm.getY(i);
+        normals[pIdx + 2] = boxNorm.getZ(i);
+        pIdx += 3;
+        const r = Math.hypot(px, py, pz);
+        if (r > maxR) maxR = r;
+      }
+      for (let i = 0; i < ipb; i++) {
+        indices[iIdx++] = boxIdx.getX(i) + baseV;
+      }
+      baseV += vpb;
+    }
+
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    g.setAttribute('normal', new THREE.BufferAttribute(normals, 3));
+    g.setIndex(new THREE.BufferAttribute(indices, 1));
+    g.computeBoundingSphere();
+
+    out.set(id, {
+      geometry: g,
+      centroid: new THREE.Vector3(cx, cy, cz),
+      scale: maxR,
+    });
+  }
+  box.dispose();
+
+  return out;
+}
+
 /** Build a single procedural cerebellum mesh that spans both halves, ready
  *  to be Voronoi-partitioned by `cerebellum` and `cerebellum_skill` centers. */
 export function buildCerebellumMesh(): THREE.BufferGeometry {

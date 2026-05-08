@@ -18,13 +18,6 @@ interface Props {
 const BRAIN_TISSUE = new THREE.Color('#c89c8a');
 const BRAIN_TISSUE_EMISSIVE = new THREE.Color('#3a1814');
 
-// Region IDs that are deep inside the brain (not on a surface). Hidden when
-// the brain is "solid" — only revealed during exploded view.
-const INTERIOR_IDS = new Set([
-  'hippocampus', 'amygdala', 'thalamus', 'basal_ganglia',
-  'workspace', 'dmn', 'cen',
-]);
-
 // Scratch colors so we don't allocate per frame
 const tmpColor = new THREE.Color();
 const tmpEmissive = new THREE.Color();
@@ -41,7 +34,6 @@ export function BrainRegion({ region, slice }: Props) {
   const explodeT = useBrainStore(s => s.explodeT);
   const selectRegion = useBrainStore(s => s.selectRegion);
 
-  const interior = INTERIOR_IDS.has(region.id);
   const regionColor = useMemo(() => new THREE.Color(region.color), [region.color]);
 
   // Build (or use provided) geometry. Prefer the partitioned slice.
@@ -99,16 +91,12 @@ export function BrainRegion({ region, slice }: Props) {
     mat.emissive.copy(tmpEmissive);
     mat.emissiveIntensity = (0.18 + intensity * 1.2 + (selected ? 0.3 : 0)) * (0.6 + 0.4 * explodeT);
 
-    // Interior regions: invisible at rest, fade in with explodeT
-    if (interior) {
-      mat.opacity = explodeT;
-      mat.transparent = explodeT < 0.99;
-    } else {
-      // Surface regions stay solid; only fade if dim (lazy-loaded modules)
-      const dimNow = !region.alwaysOn && !active && !swap;
-      mat.opacity = dimNow ? 0.65 : 1.0;
-      mat.transparent = dimNow;
-    }
+    // All regions are part of the solid brain envelope at rest.
+    // Lazy-loaded modules (alwaysOn=false) dim slightly when idle to hint
+    // "not resident".
+    const dimNow = !region.alwaysOn && !active && !swap;
+    mat.opacity = dimNow ? 0.7 : 1.0;
+    mat.transparent = dimNow;
 
     const glowMat = glowRef.current.material as THREE.MeshBasicMaterial;
     glowMat.opacity = (intensity * 0.32 + (selected ? 0.15 : 0)) * (0.4 + 0.6 * explodeT);

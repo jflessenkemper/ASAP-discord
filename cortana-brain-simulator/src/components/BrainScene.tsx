@@ -1,21 +1,12 @@
-import { useRef, useMemo, Suspense } from 'react';
+import { useRef, useMemo } from 'react';
 import { Canvas, useFrame } from '@react-three/fiber';
-import { OrbitControls, Stars, useGLTF } from '@react-three/drei';
+import { OrbitControls, Stars } from '@react-three/drei';
 import * as THREE from 'three';
 import { REGIONS, CONNECTIONS } from '../data/regions';
-import {
-  adaptCortex,
-  partitionMeshByCenters,
-  buildCerebellumMesh,
-  CORTICAL_IDS,
-  CEREBELLAR_IDS,
-  type PartitionedSlice,
-} from '../data/brainGeometry';
+import { buildBlockyBrainPartition } from '../data/brainGeometry';
 import { BrainRegion } from './BrainRegion';
 import { SignalEdge } from './SignalEdge';
 import { useBrainStore } from '../store';
-
-useGLTF.preload('/cortex.glb');
 
 const CONN_TYPE_COLORS: Record<string, string> = {
   sensory: '#ffd479',
@@ -75,45 +66,16 @@ function ActiveSignals() {
 }
 
 /**
- * Loads cortex.glb, adapts it to the scene frame, partitions it into slices
- * for each cortical region, partitions a procedural cerebellum mesh into the
- * two cerebellar regions, and renders one BrainRegion per region with the
- * appropriate geometry.
+ * Builds a blocky voxel brain (cerebrum + cerebellum + brainstem envelope),
+ * Voronoi-partitions the cubes among ALL region centers, and renders one
+ * BrainRegion per region. At rest the cubes pack into a rough brain
+ * silhouette; on explode each region's cluster flies out as a coherent chunk.
  */
 function BrainAnatomy() {
-  const gltf = useGLTF('/cortex.glb');
-
   const slices = useMemo(() => {
-    const map = new Map<string, PartitionedSlice>();
-
-    // Find the cortex mesh in the loaded GLB
-    let src: THREE.BufferGeometry | null = null;
-    gltf.scene.traverse(o => {
-      if (!src && (o as THREE.Mesh).isMesh) {
-        src = (o as THREE.Mesh).geometry as THREE.BufferGeometry;
-      }
-    });
-    if (!src) return map;
-
-    const cortex = adaptCortex(src);
-
-    // Partition cortex among the cortical regions
-    const corticalCenters = REGIONS
-      .filter(r => CORTICAL_IDS.has(r.id))
-      .map(r => ({ id: r.id, position: r.position }));
-    const cortexSlices = partitionMeshByCenters(cortex, corticalCenters);
-    for (const [id, s] of cortexSlices) map.set(id, s);
-
-    // Partition procedural cerebellum among cerebellum + cerebellum_skill
-    const cerebellumGeom = buildCerebellumMesh();
-    const cerebellarCenters = REGIONS
-      .filter(r => CEREBELLAR_IDS.has(r.id))
-      .map(r => ({ id: r.id, position: r.position }));
-    const cerebellarSlices = partitionMeshByCenters(cerebellumGeom, cerebellarCenters);
-    for (const [id, s] of cerebellarSlices) map.set(id, s);
-
-    return map;
-  }, [gltf]);
+    const centers = REGIONS.map(r => ({ id: r.id, position: r.position }));
+    return buildBlockyBrainPartition(centers);
+  }, []);
 
   return (
     <>
@@ -144,9 +106,7 @@ export function BrainScene() {
       <StaticConnections />
       <ActiveSignals />
 
-      <Suspense fallback={null}>
-        <BrainAnatomy />
-      </Suspense>
+      <BrainAnatomy />
 
       <OrbitControls
         ref={controlsRef}
