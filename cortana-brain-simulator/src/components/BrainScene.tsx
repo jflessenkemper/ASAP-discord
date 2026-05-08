@@ -1,4 +1,4 @@
-import { useRef, useMemo } from 'react';
+import { useRef, useMemo, Suspense } from 'react';
 import { Canvas, useFrame } from '@react-three/fiber';
 import { OrbitControls, Stars } from '@react-three/drei';
 import * as THREE from 'three';
@@ -78,7 +78,9 @@ export function BrainScene() {
 
       <Ticker />
 
-      <BrainHull />
+      <Suspense fallback={null}>
+        <BrainHull />
+      </Suspense>
       <StaticConnections />
       <ActiveSignals />
 
