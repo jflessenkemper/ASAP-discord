@@ -44,11 +44,12 @@ export interface BrainState {
   swapInProgress: boolean;  // are we mid-swap?
   totalActivations: number;
   faultsDetected: string[];
-  explode: number;          // 0 = anatomical, 1 = exploded view
+  exploded: boolean;        // toggle: false = solid anatomical brain, true = regions split apart
+  explodeT: number;         // animated 0..1 (lerps toward exploded ? 1 : 0)
 
   fireInput: (inputId: InputId) => void;
   selectRegion: (id: RegionId | null) => void;
-  setExplode: (v: number) => void;
+  setExploded: (v: boolean) => void;
   tick: () => void;             // called every animation frame to expire activations + decay neuromod
   reset: () => void;
 }
@@ -83,7 +84,8 @@ export const useBrainStore = create<BrainState>((set, get) => ({
   swapInProgress: false,
   totalActivations: 0,
   faultsDetected: [],
-  explode: 0,
+  exploded: false,
+  explodeT: 0,
 
   fireInput: (inputId: InputId) => {
     const activation = ACTIVATIONS[inputId];
@@ -176,16 +178,19 @@ export const useBrainStore = create<BrainState>((set, get) => ({
 
   selectRegion: (id) => set({ selectedRegion: id }),
 
-  setExplode: (v) => set({ explode: Math.max(0, Math.min(1, v)) }),
+  setExploded: (v) => set({ exploded: !!v }),
 
   tick: () => {
     const now = performance.now();
     const s = get();
 
     // Bail if nothing to update — avoids hammering React with new refs every frame.
+    const explodeTarget = s.exploded ? 1 : 0;
+    const explodeSettled = Math.abs(s.explodeT - explodeTarget) < 0.001;
     const idle =
       s.active.size === 0 &&
       s.signals.length === 0 &&
+      explodeSettled &&
       Math.abs(s.neuromod.da_tonic - NEUROMOD_BASELINE.da_tonic) < 0.001 &&
       Math.abs(s.neuromod.da_phasic) < 0.001 &&
       Math.abs(s.neuromod.ne - NEUROMOD_BASELINE.ne) < 0.001 &&
@@ -215,11 +220,15 @@ export const useBrainStore = create<BrainState>((set, get) => ({
       nm.ach = lerp(nm.ach, NEUROMOD_BASELINE.ach, NEUROMOD_DECAY.ach);
       nm.ser = lerp(nm.ser, NEUROMOD_BASELINE.ser, NEUROMOD_DECAY.ser);
 
+      // Animate explode toggle: ~0.6s to fully open / close
+      const target = state.exploded ? 1 : 0;
+      const explodeT = state.explodeT + (target - state.explodeT) * 0.06;
+
       // Reuse refs for unchanged collections to avoid spurious re-renders.
       const activeNext = next.size === 0 && state.active.size === 0 ? state.active : next;
       const sigsNext = sigs.length === 0 && state.signals.length === 0 ? state.signals : sigs;
 
-      return { active: activeNext, signals: sigsNext, neuromod: nm };
+      return { active: activeNext, signals: sigsNext, neuromod: nm, explodeT };
     });
   },
 
@@ -233,6 +242,7 @@ export const useBrainStore = create<BrainState>((set, get) => ({
     swapInProgress: false,
     totalActivations: 0,
     faultsDetected: [],
-    explode: s.explode,   // preserve user's view setting
+    exploded: s.exploded,    // preserve user's view setting
+    explodeT: s.explodeT,
   })),
 }));

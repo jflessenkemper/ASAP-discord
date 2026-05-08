@@ -142,50 +142,62 @@ button {
   background: rgba(12, 28, 51, 0.4);
 }
 
-.explode-label {
-  display: flex;
-  justify-content: space-between;
-  font-size: 10px;
-  letter-spacing: 0.2em;
-  color: var(--cyan);
-  margin-bottom: 6px;
-}
-
-.explode-pct {
-  color: var(--text);
-  font-variant-numeric: tabular-nums;
-  letter-spacing: 0;
-}
-
-.explode-slider {
+.explode-toggle {
   width: 100%;
-  -webkit-appearance: none;
-  appearance: none;
-  height: 3px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  background: rgba(12, 28, 51, 0.6);
+  border: 1px solid var(--border);
+  border-left: 2px solid var(--cyan-dim);
+  color: var(--text);
+  font-size: 11px;
+  letter-spacing: 0.2em;
+  border-radius: 2px;
+  transition: all 0.15s ease;
+  font-family: inherit;
+}
+
+.explode-toggle:hover {
+  background: rgba(78, 201, 255, 0.1);
+  border-color: var(--border-bright);
+  border-left-color: var(--cyan);
+  box-shadow: 0 0 10px rgba(78, 201, 255, 0.2);
+}
+
+.explode-toggle.on {
   background: rgba(78, 201, 255, 0.18);
-  border-radius: 1px;
-  outline: none;
-  cursor: pointer;
+  border-color: var(--cyan);
+  border-left-color: var(--cyan);
+  color: var(--cyan);
+  box-shadow: 0 0 10px rgba(78, 201, 255, 0.25);
 }
 
-.explode-slider::-webkit-slider-thumb {
-  -webkit-appearance: none;
-  width: 14px;
-  height: 14px;
-  background: var(--cyan);
+.explode-dot {
+  width: 8px;
+  height: 8px;
   border-radius: 50%;
-  cursor: pointer;
-  box-shadow: 0 0 8px var(--cyan-glow);
+  background: var(--text-dim);
+  box-shadow: none;
+  flex-shrink: 0;
+  transition: all 0.15s;
 }
 
-.explode-slider::-moz-range-thumb {
-  width: 14px;
-  height: 14px;
+.explode-toggle.on .explode-dot {
   background: var(--cyan);
-  border-radius: 50%;
-  cursor: pointer;
-  border: none;
-  box-shadow: 0 0 8px var(--cyan-glow);
+  box-shadow: 0 0 8px var(--cyan-glow), 0 0 14px var(--cyan-glow);
+}
+
+.explode-state {
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.15em;
+  color: var(--text-dim);
+}
+
+.explode-toggle.on .explode-state {
+  color: var(--cyan);
 }
 
 .input-list {

@@ -28,6 +28,7 @@ const CONN_TYPE_COLORS: Record<string, string> = {
 };
 
 function StaticConnections() {
+  const explodeT = useBrainStore(s => s.explodeT);
   const lines = useMemo(() => {
     return CONNECTIONS.map((c, i) => {
       const from = REGIONS.find(r => r.id === c.from)!;
@@ -41,12 +42,15 @@ function StaticConnections() {
     });
   }, []);
 
+  // Connections only make sense once the brain has split open — hide them otherwise.
+  if (explodeT < 0.05) return null;
+
   return (
     <>
       {lines.map(l => (
         <line key={l.key}>
           <primitive object={l.geometry} attach="geometry" />
-          <lineBasicMaterial color={l.color} transparent opacity={0.1} />
+          <lineBasicMaterial color={l.color} transparent opacity={0.18 * explodeT} />
         </line>
       ))}
     </>
