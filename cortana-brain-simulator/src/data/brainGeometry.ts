@@ -155,3 +155,192 @@ function hashString(s: string): number {
   for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0;
   return Math.abs(h);
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// Cortex mesh adapter + Voronoi partition into per-region slices
+// ─────────────────────────────────────────────────────────────────────
+
+/**
+ * Take a loaded MRI cortex mesh (in MRI patient coords, mm) and return a
+ * fresh BufferGeometry recentred + rescaled + reoriented to the simulator
+ * scene frame.
+ *   scene: +X right, +Y dorsal, +Z anterior
+ *   MRI:   +X right, +Y anterior, +Z superior
+ */
+export function adaptCortex(
+  src: THREE.BufferGeometry,
+  targetLongest = 11,
+): THREE.BufferGeometry {
+  const geom = src.clone();
+  geom.computeBoundingBox();
+  const bb = geom.boundingBox!;
+  const center = new THREE.Vector3();
+  bb.getCenter(center);
+  const size = new THREE.Vector3();
+  bb.getSize(size);
+  const longest = Math.max(size.x, size.y, size.z);
+  const scale = targetLongest / longest;
+
+  const pos = geom.attributes.position;
+  const v = new THREE.Vector3();
+  for (let i = 0; i < pos.count; i++) {
+    v.fromBufferAttribute(pos, i);
+    v.sub(center);
+    v.multiplyScalar(scale);
+    // MRI Z (superior) → scene Y (dorsal); MRI Y (anterior) → scene Z (anterior)
+    const sx = v.x;
+    const sy = v.z;
+    const sz = v.y;
+    pos.setXYZ(i, sx, sy, sz);
+  }
+  pos.needsUpdate = true;
+  if (geom.getAttribute('uv')) geom.deleteAttribute('uv');
+  geom.computeVertexNormals();
+  geom.computeBoundingSphere();
+  return geom;
+}
+
+export interface PartitionedSlice {
+  geometry: THREE.BufferGeometry;   // centered around origin (vertices are local)
+  centroid: THREE.Vector3;          // world position of slice (move mesh here)
+  scale: number;                    // bounding-sphere radius (label offset, glow size)
+}
+
+/**
+ * Voronoi-partition a mesh into per-region sub-meshes by closest-centroid.
+ * Each output slice is recentered so vertices are in local coords; mesh
+ * position should be set to the slice's centroid.
+ *
+ * Used to split the loaded cortex mesh into the 10 cortical regions, and
+ * (separately) to split a procedural cerebellum mesh in two.
+ */
+export function partitionMeshByCenters(
+  src: THREE.BufferGeometry,
+  centers: Array<{ id: string; position: [number, number, number] }>,
+): Map<string, PartitionedSlice> {
+  if (centers.length === 0) return new Map();
+
+  const pos = src.attributes.position;
+  const idx = src.index;
+  const triCount = idx ? idx.count / 3 : pos.count / 3;
+
+  const buckets = new Map<string, number[]>();
+  for (const c of centers) buckets.set(c.id, []);
+
+  const v0 = new THREE.Vector3();
+  const v1 = new THREE.Vector3();
+  const v2 = new THREE.Vector3();
+
+  for (let t = 0; t < triCount; t++) {
+    const a = idx ? idx.getX(t * 3) : t * 3;
+    const b = idx ? idx.getX(t * 3 + 1) : t * 3 + 1;
+    const c = idx ? idx.getX(t * 3 + 2) : t * 3 + 2;
+    v0.fromBufferAttribute(pos, a);
+    v1.fromBufferAttribute(pos, b);
+    v2.fromBufferAttribute(pos, c);
+
+    const cx = (v0.x + v1.x + v2.x) / 3;
+    const cy = (v0.y + v1.y + v2.y) / 3;
+    const cz = (v0.z + v1.z + v2.z) / 3;
+
+    let bestId = centers[0].id;
+    let bestD = Infinity;
+    for (const ctr of centers) {
+      const dx = cx - ctr.position[0];
+      const dy = cy - ctr.position[1];
+      const dz = cz - ctr.position[2];
+      const d = dx * dx + dy * dy + dz * dz;
+      if (d < bestD) {
+        bestD = d;
+        bestId = ctr.id;
+      }
+    }
+
+    const arr = buckets.get(bestId)!;
+    arr.push(v0.x, v0.y, v0.z, v1.x, v1.y, v1.z, v2.x, v2.y, v2.z);
+  }
+
+  const out = new Map<string, PartitionedSlice>();
+  for (const [id, verts] of buckets) {
+    if (verts.length === 0) continue;
+
+    // Compute centroid of this slice's vertices
+    let cx = 0, cy = 0, cz = 0;
+    const n = verts.length / 3;
+    for (let i = 0; i < verts.length; i += 3) {
+      cx += verts[i];
+      cy += verts[i + 1];
+      cz += verts[i + 2];
+    }
+    cx /= n;
+    cy /= n;
+    cz /= n;
+
+    // Recenter and compute bounding-sphere radius
+    let maxR = 0;
+    for (let i = 0; i < verts.length; i += 3) {
+      verts[i] -= cx;
+      verts[i + 1] -= cy;
+      verts[i + 2] -= cz;
+      const r = Math.hypot(verts[i], verts[i + 1], verts[i + 2]);
+      if (r > maxR) maxR = r;
+    }
+
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
+    g.computeVertexNormals();
+    g.computeBoundingSphere();
+
+    out.set(id, {
+      geometry: g,
+      centroid: new THREE.Vector3(cx, cy, cz),
+      scale: maxR,
+    });
+  }
+  return out;
+}
+
+/** Region IDs whose anatomy is on the cortical surface (partitioned from cortex.glb). */
+export const CORTICAL_IDS: ReadonlySet<string> = new Set([
+  'pfc', 'sma', 'broca',
+  'visual', 'auditory', 'wernicke',
+  'motor_voice', 'atl',
+  'insula', 'acc',
+]);
+
+/** Region IDs that share the procedural cerebellum mesh (partitioned in half). */
+export const CEREBELLAR_IDS: ReadonlySet<string> = new Set([
+  'cerebellum', 'cerebellum_skill',
+]);
+
+/** Build a single procedural cerebellum mesh that spans both halves, ready
+ *  to be Voronoi-partitioned by `cerebellum` and `cerebellum_skill` centers. */
+export function buildCerebellumMesh(): THREE.BufferGeometry {
+  const geom = new THREE.IcosahedronGeometry(1, 5);
+  const pos = geom.attributes.position;
+  const v = new THREE.Vector3();
+  // Stretch laterally; tucked under the back of the brain
+  const SX = 2.4;
+  const SY = 1.2;
+  const SZ = 1.6;
+  for (let i = 0; i < pos.count; i++) {
+    v.fromBufferAttribute(pos, i);
+    v.x *= SX;
+    v.y *= SY;
+    v.z *= SZ;
+    // Foliated horizontal ridges
+    const dir = v.clone().normalize();
+    const r1 = 1 - Math.abs(noise(v.x * 1.6, v.y * 1.6 * 2, v.z * 1.6));
+    const r2 = (1 - Math.abs(noise(v.x * 3.5, v.y * 7, v.z * 3.5))) * 0.4;
+    const ridges = (r1 + r2) / 1.4 - 0.5;
+    v.addScaledVector(dir, ridges * 0.2);
+    // Anatomical position (under the back of cerebrum)
+    v.y -= 2.0;
+    v.z -= 4.0;
+    pos.setXYZ(i, v.x, v.y, v.z);
+  }
+  pos.needsUpdate = true;
+  if (geom.getAttribute('uv')) geom.deleteAttribute('uv');
+  geom.computeVertexNormals();
+  return geom;
+}
