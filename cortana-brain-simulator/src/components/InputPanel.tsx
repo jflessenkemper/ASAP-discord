@@ -2,11 +2,13 @@ import { INPUTS } from '../data/inputs';
 import { useBrainStore } from '../store';
 
 export function InputPanel() {
+  // Legacy panel — no longer mounted by App in v0.2 (explore mode), kept
+  // for reference / future feature toggle.
   const fireInput = useBrainStore(s => s.fireInput);
   const reset = useBrainStore(s => s.reset);
   const total = useBrainStore(s => s.totalActivations);
-  const exploded = useBrainStore(s => s.exploded);
-  const setExploded = useBrainStore(s => s.setExploded);
+  const exploded = false;
+  const setExploded = (_: boolean) => {};
 
   return (
     <div className="input-panel">

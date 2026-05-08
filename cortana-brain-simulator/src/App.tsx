@@ -1,6 +1,5 @@
 import { BrainScene } from './components/BrainScene';
-import { InputPanel } from './components/InputPanel';
-import { Telemetry } from './components/Telemetry';
+import { DetailPanel } from './components/DetailPanel';
 
 export function App() {
   return (
@@ -11,20 +10,15 @@ export function App() {
           CORTANA · BRAIN SIMULATOR
           <span className="title-bracket">]</span>
         </div>
-        <div className="subtitle">v0.1 — open-source neural map · brain-mapped Discord agent</div>
+        <div className="subtitle">v0.2 — click any cube to inspect · ASAP Discord interface</div>
       </header>
 
-      <main className="app-main">
-        <aside className="left-panel">
-          <InputPanel />
-        </aside>
-        <section className="brain-canvas">
+      <main className="app-main app-main-explore">
+        <DetailPanel />
+        <section className="brain-canvas brain-canvas-full">
           <BrainScene />
-          <div className="canvas-hint">drag to rotate · scroll to zoom · click region for details</div>
+          <div className="canvas-hint">drag to rotate · scroll to zoom · click any cube</div>
         </section>
-        <aside className="right-panel">
-          <Telemetry />
-        </aside>
       </main>
     </div>
   );

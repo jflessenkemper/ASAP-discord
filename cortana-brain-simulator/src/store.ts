@@ -2,6 +2,14 @@ import { create } from 'zustand';
 import type { RegionId, Connection } from './data/regions';
 import { ACTIVATIONS, INPUTS } from './data/inputs';
 import type { InputId } from './data/inputs';
+import type { IOBoxId } from './data/ioBoxes';
+
+/** Anything clickable in the scene — a brain region or an I/O cube. */
+export type SelectionKind = 'region' | 'io';
+export interface Selection {
+  kind: SelectionKind;
+  id: RegionId | IOBoxId;
+}
 
 export interface SignalTrace {
   id: string;
@@ -38,18 +46,18 @@ export interface BrainState {
   active: Map<RegionId, ActiveRegion>;
   signals: SignalTrace[];
   log: LogEntry[];
-  selectedRegion: RegionId | null;
+  selection: Selection | null;
   neuromod: NeuromodState;
   vlmLoaded: boolean;       // is the VLM currently resident?
   swapInProgress: boolean;  // are we mid-swap?
   totalActivations: number;
   faultsDetected: string[];
-  exploded: boolean;        // toggle: false = solid anatomical brain, true = regions split apart
-  explodeT: number;         // animated 0..1 (lerps toward exploded ? 1 : 0)
+  explodeT: number;         // animated 0..1 — auto-driven by selection
 
   fireInput: (inputId: InputId) => void;
   selectRegion: (id: RegionId | null) => void;
-  setExploded: (v: boolean) => void;
+  selectIO: (id: IOBoxId | null) => void;
+  clearSelection: () => void;
   tick: () => void;             // called every animation frame to expire activations + decay neuromod
   reset: () => void;
 }
@@ -78,13 +86,12 @@ export const useBrainStore = create<BrainState>((set, get) => ({
   active: new Map(),
   signals: [],
   log: [],
-  selectedRegion: null,
+  selection: null,
   neuromod: { ...NEUROMOD_BASELINE },
   vlmLoaded: false,
   swapInProgress: false,
   totalActivations: 0,
   faultsDetected: [],
-  exploded: false,
   explodeT: 0,
 
   fireInput: (inputId: InputId) => {
@@ -176,16 +183,16 @@ export const useBrainStore = create<BrainState>((set, get) => ({
     }));
   },
 
-  selectRegion: (id) => set({ selectedRegion: id }),
-
-  setExploded: (v) => set({ exploded: !!v }),
+  selectRegion: (id) => set({ selection: id ? { kind: 'region', id } : null }),
+  selectIO: (id) => set({ selection: id ? { kind: 'io', id } : null }),
+  clearSelection: () => set({ selection: null }),
 
   tick: () => {
     const now = performance.now();
     const s = get();
 
     // Bail if nothing to update — avoids hammering React with new refs every frame.
-    const explodeTarget = s.exploded ? 1 : 0;
+    const explodeTarget = s.selection ? 1 : 0;
     const explodeSettled = Math.abs(s.explodeT - explodeTarget) < 0.001;
     const idle =
       s.active.size === 0 &&
@@ -220,8 +227,8 @@ export const useBrainStore = create<BrainState>((set, get) => ({
       nm.ach = lerp(nm.ach, NEUROMOD_BASELINE.ach, NEUROMOD_DECAY.ach);
       nm.ser = lerp(nm.ser, NEUROMOD_BASELINE.ser, NEUROMOD_DECAY.ser);
 
-      // Animate explode toggle: ~0.6s to fully open / close
-      const target = state.exploded ? 1 : 0;
+      // Animate explode: open when something is selected, collapse when not.
+      const target = state.selection ? 1 : 0;
       const explodeT = state.explodeT + (target - state.explodeT) * 0.06;
 
       // Reuse refs for unchanged collections to avoid spurious re-renders.
@@ -232,17 +239,16 @@ export const useBrainStore = create<BrainState>((set, get) => ({
     });
   },
 
-  reset: () => set(s => ({
+  reset: () => set({
     active: new Map(),
     signals: [],
     log: [],
-    selectedRegion: null,
+    selection: null,
     neuromod: { ...NEUROMOD_BASELINE },
     vlmLoaded: false,
     swapInProgress: false,
     totalActivations: 0,
     faultsDetected: [],
-    exploded: s.exploded,    // preserve user's view setting
-    explodeT: s.explodeT,
-  })),
+    explodeT: 0,
+  }),
 }));

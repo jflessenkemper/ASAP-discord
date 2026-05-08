@@ -3,8 +3,10 @@ import { Canvas, useFrame } from '@react-three/fiber';
 import { OrbitControls, Stars } from '@react-three/drei';
 import * as THREE from 'three';
 import { REGIONS, CONNECTIONS } from '../data/regions';
+import { IO_BOXES } from '../data/ioBoxes';
 import { buildBlockyBrainPartition } from '../data/brainGeometry';
 import { BrainRegion } from './BrainRegion';
+import { IOBox } from './IOBox';
 import { SignalEdge } from './SignalEdge';
 import { useBrainStore } from '../store';
 
@@ -88,13 +90,13 @@ function BrainAnatomy() {
 
 export function BrainScene() {
   const controlsRef = useRef<any>(null);
-  const selectRegion = useBrainStore(s => s.selectRegion);
+  const clearSelection = useBrainStore(s => s.clearSelection);
 
   return (
     <Canvas
-      camera={{ position: [11, 4, 14], fov: 38 }}
+      camera={{ position: [13, 4, 16], fov: 40 }}
       style={{ background: 'radial-gradient(ellipse at center, #0a1628 0%, #02060d 100%)' }}
-      onPointerMissed={() => selectRegion(null)}
+      onPointerMissed={() => clearSelection()}
     >
       <ambientLight intensity={0.55} />
       <pointLight position={[10, 10, 10]} intensity={0.7} color="#4ec9ff" />
@@ -108,12 +110,16 @@ export function BrainScene() {
 
       <BrainAnatomy />
 
+      {IO_BOXES.map(b => (
+        <IOBox key={b.id} box={b} />
+      ))}
+
       <OrbitControls
         ref={controlsRef}
         enableDamping
         dampingFactor={0.08}
-        minDistance={6}
-        maxDistance={28}
+        minDistance={8}
+        maxDistance={36}
         target={[0, 0, 0]}
       />
     </Canvas>

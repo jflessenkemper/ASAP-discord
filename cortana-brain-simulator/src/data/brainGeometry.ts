@@ -323,46 +323,25 @@ export const CEREBELLAR_IDS: ReadonlySet<string> = new Set([
 
 export function buildBlockyBrainPartition(
   centers: Array<{ id: string; position: [number, number, number] }>,
-  cubeSize = 0.82,
+  cubeSize = 0.7,
   fill = 0.98,
+  half = 5.0,                // cube envelope: ±half on each axis
 ): Map<string, PartitionedSlice> {
   if (centers.length === 0) return new Map();
 
-  // Brain envelope: union of three primitives in scene coords
-  // (+X right, +Y up/dorsal, +Z anterior/front).
-  const inCerebrum = (x: number, y: number, z: number) => {
-    const dx = x / 5.0;
-    const dy = (y - 0.4) / 3.7;
-    const dz = z / 5.6;
-    return dx * dx + dy * dy + dz * dz <= 1;
-  };
-  const inCerebellum = (x: number, y: number, z: number) => {
-    const dx = x / 3.0;
-    const dy = (y + 2.5) / 1.5;
-    const dz = (z + 3.6) / 1.8;
-    return dx * dx + dy * dy + dz * dz <= 1;
-  };
-  const inBrainstem = (x: number, y: number, z: number) => {
-    const dx = x / 0.95;
-    const dy = (y + 2.2) / 1.5;
-    const dz = (z + 1.4) / 1.0;
-    return dx * dx + dy * dy + dz * dz <= 1;
-  };
-  const inBrain = (x: number, y: number, z: number) =>
-    inCerebrum(x, y, z) || inCerebellum(x, y, z) || inBrainstem(x, y, z);
+  // Brain envelope is a cube — region positions are kept anatomical so the
+  // Voronoi partition still mirrors brain layout, but the outer silhouette
+  // is a clean (10×10×10) cube.
 
   // Bucket cube positions by closest region center
   const buckets = new Map<string, Array<[number, number, number]>>();
   for (const c of centers) buckets.set(c.id, []);
 
-  const minX = -5.5, maxX = 5.5;
-  const minY = -4.2, maxY = 4.5;
-  const minZ = -5.8, maxZ = 5.8;
-
-  for (let x = minX; x <= maxX; x += cubeSize) {
-    for (let y = minY; y <= maxY; y += cubeSize) {
-      for (let z = minZ; z <= maxZ; z += cubeSize) {
-        if (!inBrain(x, y, z)) continue;
+  // Sample on cube-aligned grid centered at the origin
+  const start = -half + cubeSize / 2;
+  for (let x = start; x <= half; x += cubeSize) {
+    for (let y = start; y <= half; y += cubeSize) {
+      for (let z = start; z <= half; z += cubeSize) {
         let bestId = centers[0].id;
         let bestD = Infinity;
         for (const c of centers) {

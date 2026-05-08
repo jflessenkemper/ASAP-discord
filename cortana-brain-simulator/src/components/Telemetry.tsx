@@ -28,8 +28,8 @@ export function Telemetry() {
   const faults = useBrainStore(s => s.faultsDetected);
   const swap = useBrainStore(s => s.swapInProgress);
   const vlmLoaded = useBrainStore(s => s.vlmLoaded);
-  const selected = useBrainStore(s => s.selectedRegion);
-  const region = selected ? REGION_BY_ID[selected] : null;
+  const selection = useBrainStore(s => s.selection);
+  const region = selection?.kind === 'region' ? REGION_BY_ID[selection.id] : null;
 
   return (
     <div className="telemetry">

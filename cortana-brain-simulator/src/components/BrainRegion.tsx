@@ -29,7 +29,9 @@ export function BrainRegion({ region, slice }: Props) {
   const labelRef = useRef<HTMLDivElement>(null);
 
   const active = useBrainStore(s => s.active.get(region.id));
-  const selected = useBrainStore(s => s.selectedRegion === region.id);
+  const selected = useBrainStore(
+    s => s.selection?.kind === 'region' && s.selection.id === region.id,
+  );
   const swap = useBrainStore(s => s.swapInProgress);
   const explodeT = useBrainStore(s => s.explodeT);
   const selectRegion = useBrainStore(s => s.selectRegion);
