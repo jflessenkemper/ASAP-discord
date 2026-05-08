@@ -1,11 +1,10 @@
-import { useRef, useMemo, Suspense } from 'react';
+import { useRef, useMemo } from 'react';
 import { Canvas, useFrame } from '@react-three/fiber';
 import { OrbitControls, Stars } from '@react-three/drei';
 import * as THREE from 'three';
 import { REGIONS, CONNECTIONS } from '../data/regions';
 import { BrainRegion } from './BrainRegion';
 import { SignalEdge } from './SignalEdge';
-import { BrainShell } from './BrainShell';
 import { useBrainStore } from '../store';
 
 const CONN_TYPE_COLORS: Record<string, string> = {
@@ -78,9 +77,6 @@ export function BrainScene() {
 
       <Ticker />
 
-      <Suspense fallback={null}>
-        <BrainShell />
-      </Suspense>
       <StaticConnections />
       <ActiveSignals />
 

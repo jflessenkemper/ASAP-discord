@@ -5,12 +5,30 @@ export function InputPanel() {
   const fireInput = useBrainStore(s => s.fireInput);
   const reset = useBrainStore(s => s.reset);
   const total = useBrainStore(s => s.totalActivations);
+  const explode = useBrainStore(s => s.explode);
+  const setExplode = useBrainStore(s => s.setExplode);
 
   return (
     <div className="input-panel">
       <div className="panel-header">
         <h2>DISCORD INPUTS</h2>
         <div className="panel-sub">Trigger an event → watch the brain fire</div>
+      </div>
+
+      <div className="explode-row">
+        <div className="explode-label">
+          <span>EXPLODED VIEW</span>
+          <span className="explode-pct">{Math.round(explode * 100)}%</span>
+        </div>
+        <input
+          type="range"
+          className="explode-slider"
+          min={0}
+          max={1}
+          step={0.01}
+          value={explode}
+          onChange={e => setExplode(parseFloat(e.target.value))}
+        />
       </div>
 
       <div className="input-list">

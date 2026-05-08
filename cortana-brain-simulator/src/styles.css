@@ -136,6 +136,58 @@ button {
   letter-spacing: 0.05em;
 }
 
+.explode-row {
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border);
+  background: rgba(12, 28, 51, 0.4);
+}
+
+.explode-label {
+  display: flex;
+  justify-content: space-between;
+  font-size: 10px;
+  letter-spacing: 0.2em;
+  color: var(--cyan);
+  margin-bottom: 6px;
+}
+
+.explode-pct {
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0;
+}
+
+.explode-slider {
+  width: 100%;
+  -webkit-appearance: none;
+  appearance: none;
+  height: 3px;
+  background: rgba(78, 201, 255, 0.18);
+  border-radius: 1px;
+  outline: none;
+  cursor: pointer;
+}
+
+.explode-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 14px;
+  height: 14px;
+  background: var(--cyan);
+  border-radius: 50%;
+  cursor: pointer;
+  box-shadow: 0 0 8px var(--cyan-glow);
+}
+
+.explode-slider::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  background: var(--cyan);
+  border-radius: 50%;
+  cursor: pointer;
+  border: none;
+  box-shadow: 0 0 8px var(--cyan-glow);
+}
+
 .input-list {
   display: flex;
   flex-direction: column;

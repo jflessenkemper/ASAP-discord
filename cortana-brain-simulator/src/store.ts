@@ -44,9 +44,11 @@ export interface BrainState {
   swapInProgress: boolean;  // are we mid-swap?
   totalActivations: number;
   faultsDetected: string[];
+  explode: number;          // 0 = anatomical, 1 = exploded view
 
   fireInput: (inputId: InputId) => void;
   selectRegion: (id: RegionId | null) => void;
+  setExplode: (v: number) => void;
   tick: () => void;             // called every animation frame to expire activations + decay neuromod
   reset: () => void;
 }
@@ -81,6 +83,7 @@ export const useBrainStore = create<BrainState>((set, get) => ({
   swapInProgress: false,
   totalActivations: 0,
   faultsDetected: [],
+  explode: 0,
 
   fireInput: (inputId: InputId) => {
     const activation = ACTIVATIONS[inputId];
@@ -173,6 +176,8 @@ export const useBrainStore = create<BrainState>((set, get) => ({
 
   selectRegion: (id) => set({ selectedRegion: id }),
 
+  setExplode: (v) => set({ explode: Math.max(0, Math.min(1, v)) }),
+
   tick: () => {
     const now = performance.now();
     const s = get();
@@ -218,7 +223,7 @@ export const useBrainStore = create<BrainState>((set, get) => ({
     });
   },
 
-  reset: () => set({
+  reset: () => set(s => ({
     active: new Map(),
     signals: [],
     log: [],
@@ -228,5 +233,6 @@ export const useBrainStore = create<BrainState>((set, get) => ({
     swapInProgress: false,
     totalActivations: 0,
     faultsDetected: [],
-  }),
+    explode: s.explode,   // preserve user's view setting
+  })),
 }));
